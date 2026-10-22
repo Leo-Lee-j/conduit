@@ -960,14 +960,45 @@ impl ConduitApp {
             })
             .into_any_element()
     }
+    fn reload_all_models_async(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Reading the CLI config files and the cc-switch SQLite database must
+        // not block the first frame of the settings dialog (or the UI thread at
+        // all); publish the result when the background read finishes.
+        cx.spawn_in(window, async move |this, cx| {
+            let loaded = cx
+                .background_executor()
+                .spawn(async move {
+                    (
+                        models::load(Provider::Claude),
+                        models::load(Provider::Codex),
+                        ccs::load(),
+                    )
+                })
+                .await;
+            let _ = this.update_in(cx, |this, _, cx| {
+                this.catalogs.insert(Provider::Claude, loaded.0);
+                this.catalogs.insert(Provider::Codex, loaded.1);
+                this.ccs = loaded.2;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
     fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.reload_all_models(cx);
+        self.reload_all_models_async(window, cx);
         let view = cx.entity();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, window, _| {
             let view = view.clone();
+            // Center the dialog vertically. The content follows the viewport
+            // height (see settings_modal_content), so the same formula keeps
+            // top and bottom margins equal and still fits the minimum window.
+            let viewport_height = f32::from(window.viewport_size().height);
+            let modal_height = (viewport_height - 96.).clamp(360., 560.);
+            let margin_top = ((viewport_height - modal_height) * 0.5).max(24.);
             dialog
                 .w(px(840.))
-                .margin_top(px(56.))
+                .margin_top(px(margin_top))
+                .entrance(gpui_kit::component::dialog::DialogEntrance::Fade)
                 .p_0()
                 .gap(px(0.))
                 .rounded(px(16.))
@@ -2266,69 +2297,14 @@ impl Render for ConduitApp {
         let mut sidebar = v_flex()
             .id("sidebar")
             .h_full()
-            .w(px(248.))
-            .flex_shrink_0()
+            .w_full()
             .bg(rgb(SIDEBAR_BG))
-            .border_r_1()
-            .border_color(rgb(BORDER))
             .p_2()
             .gap_1()
-            .child(
-                h_flex()
-                    .h(px(40.))
-                    .px_2()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                h_flex()
-                                    .w(px(24.))
-                                    .h(px(24.))
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(px(7.))
-                                    .bg(rgb(TEXT))
-                                    .text_xs()
-                                    .font_bold()
-                                    .text_color(rgb(0x111113))
-                                    .child("C"),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_bold()
-                                    .text_color(rgb(TEXT))
-                                    .child("Conduit"),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .id("add-workspace")
-                            .w(px(28.))
-                            .h(px(28.))
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(8.))
-                            .when(can_edit, |button| {
-                                button
-                                    .cursor_pointer()
-                                    .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                                    .on_click(cx.listener(Self::add_workspace))
-                            })
-                            .child(
-                                Icon::new(IconName::Plus)
-                                    .small()
-                                    .text_color(rgb(if can_edit { MUTED } else { FAINT })),
-                            ),
-                    ),
-            )
             .when(has_workspace, |sidebar| {
                 sidebar.child(
                     v_flex()
-                        .pt_2()
+                        .pt_1()
                         .gap_1()
                         .child(
                             div()
@@ -2405,16 +2381,39 @@ impl Render for ConduitApp {
             .overflow_y_scroll()
             .pt_3()
             .gap_1();
-        if !self.store.workspaces.is_empty() {
-            list = list.child(
-                div()
-                    .px_2()
-                    .pb_1()
-                    .text_size(px(11.))
-                    .text_color(rgb(FAINT))
-                    .child("工作区"),
-            );
-        }
+        list = list.child(
+            h_flex()
+                .px_2()
+                .pb_1()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(FAINT))
+                        .child("工作区"),
+                )
+                .child(
+                    h_flex()
+                        .id("add-workspace")
+                        .w(px(22.))
+                        .h(px(22.))
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.))
+                        .when(can_edit, |button| {
+                            button
+                                .cursor_pointer()
+                                .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                .on_click(cx.listener(Self::add_workspace))
+                        })
+                        .child(
+                            Icon::new(IconName::Plus)
+                                .small()
+                                .text_color(rgb(if can_edit { MUTED } else { FAINT })),
+                        ),
+                ),
+        );
         for (index, workspace) in self.store.workspaces.iter().enumerate() {
             let last = workspace.sessions.last().map(|s| s.id);
             let workspace_selected = self.selected_workspace == Some(index);
@@ -2520,7 +2519,7 @@ impl Render for ConduitApp {
                         div()
                             .text_size(px(11.))
                             .text_color(rgb(FAINT))
-                            .child("点击右上角 + 添加一个本地目录"),
+                            .child("点击上方 + 添加一个本地目录"),
                     ),
             );
         }
@@ -2883,65 +2882,133 @@ impl Render for ConduitApp {
             let id = self.selected_session.unwrap();
             let allow_id = approval.id.clone();
             let deny_id = approval.id;
+            let queue_label = if approval_count > 1 {
+                format!("第 {} / {} 项", index + 1, approval_count)
+            } else {
+                String::new()
+            };
             conversation = conversation.child(
-                v_flex()
-                    .mx_6()
-                    .mb_3()
-                    .p_4()
-                    .gap_2()
-                    .rounded_xl()
-                    .border_1()
-                    .border_color(rgb(0x5a4728))
-                    .bg(rgb(0x231f18))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(0xf0d49b))
-                            .child(format!("{} · 待审批 {} 项", approval.title, approval_count)),
-                    )
-                    .child(
-                        div()
-                            .id(("approval-detail", index))
-                            .max_h(px(
-                                (f32::from(window.viewport_size().height) * 0.4).clamp(120., 360.)
-                            ))
-                            .overflow_y_scroll()
-                            .text_xs()
-                            .text_color(rgb(0xd9d3c7))
-                            .child(approval.detail),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(
-                                Button::new(("allow", index))
-                                    .label("允许本次")
-                                    .small()
-                                    .primary()
-                                    .disabled(self.closing || submitted || !approval.allow_once)
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.decide(id, allow_id.clone(), true, window, cx)
-                                    })),
-                            )
-                            .child(
-                                Button::new(("deny", index))
-                                    .label("拒绝")
-                                    .small()
-                                    .ghost()
-                                    .disabled(self.closing || submitted)
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.decide(id, deny_id.clone(), false, window, cx)
-                                    })),
-                            ),
-                    )
-                    .when(!approval.allow_once, |panel| {
-                        panel.child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(0xd6a75a))
-                                .child("CLI 未提供「允许本次」选项，此请求只能拒绝。"),
+                div().w_full().px_6().mb_4().child(
+                    v_flex()
+                        .w_full()
+                        .max_w(px(840.))
+                        .mx_auto()
+                        .p_4()
+                        .gap_3()
+                        .rounded(px(14.))
+                        .border_1()
+                        .border_color(rgb(0x4a3b22))
+                        .bg(rgb(0x1d1a14))
+                        .child(
+                            h_flex()
+                                .items_start()
+                                .gap_3()
+                                .child(
+                                    h_flex()
+                                        .w(px(28.))
+                                        .h(px(28.))
+                                        .flex_shrink_0()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded(px(8.))
+                                        .bg(rgb(0x2a2317))
+                                        .child(
+                                            Icon::new(IconName::TriangleAlert)
+                                                .small()
+                                                .text_color(rgb(0xe3b96b)),
+                                        ),
+                                )
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .gap_1()
+                                        .child(
+                                            h_flex()
+                                                .items_center()
+                                                .gap_2()
+                                                .child(
+                                                    div()
+                                                        .text_size(px(13.))
+                                                        .font_semibold()
+                                                        .text_color(rgb(0xf0d49b))
+                                                        .child(approval.title.clone()),
+                                                )
+                                                .when(!queue_label.is_empty(), |row| {
+                                                    row.child(
+                                                        h_flex()
+                                                            .h(px(18.))
+                                                            .px_2()
+                                                            .items_center()
+                                                            .rounded_full()
+                                                            .bg(rgb(0x332b1b))
+                                                            .text_size(px(10.))
+                                                            .text_color(rgb(0xd6b26b))
+                                                            .child(queue_label.clone()),
+                                                    )
+                                                }),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .line_height(relative(1.4))
+                                                .text_color(rgb(0x9c9284))
+                                                .child("CLI 请求授权，仅对本次操作生效。"),
+                                        ),
+                                ),
                         )
-                    }),
+                        .child(
+                            div()
+                                .id(("approval-detail", index))
+                                .max_h(px((f32::from(window.viewport_size().height) * 0.4)
+                                    .clamp(120., 360.)))
+                                .overflow_y_scroll()
+                                .p_3()
+                                .rounded(px(10.))
+                                .border_1()
+                                .border_color(rgb(0x352c1b))
+                                .bg(rgb(0x15130e))
+                                .text_xs()
+                                .line_height(relative(1.5))
+                                .text_color(rgb(0xd9d3c7))
+                                .child(approval.detail),
+                        )
+                        .child(
+                            h_flex()
+                                .items_center()
+                                .gap_2()
+                                .when(!approval.allow_once, |row| {
+                                    row.child(
+                                        div()
+                                            .flex_1()
+                                            .text_size(px(11.))
+                                            .text_color(rgb(0xd6a75a))
+                                            .child("CLI 未提供「允许本次」选项，此请求只能拒绝。"),
+                                    )
+                                })
+                                .when(approval.allow_once, |row| row.child(div().flex_1()))
+                                .child(
+                                    Button::new(("deny", index))
+                                        .label("拒绝")
+                                        .small()
+                                        .ghost()
+                                        .disabled(self.closing || submitted)
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.decide(id, deny_id.clone(), false, window, cx)
+                                        })),
+                                )
+                                .child(
+                                    Button::new(("allow", index))
+                                        .label("允许本次")
+                                        .small()
+                                        .primary()
+                                        .disabled(self.closing || submitted || !approval.allow_once)
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.decide(id, allow_id.clone(), true, window, cx)
+                                        })),
+                                ),
+                        ),
+                ),
             );
         }
         if let Some(message) = &self.message {
@@ -2971,6 +3038,9 @@ impl Render for ConduitApp {
                 .map(|session| session.id)
                 .unwrap_or_default();
             let selected_model = selected.as_ref().and_then(|session| session.model.clone());
+            let has_messages = selected
+                .as_ref()
+                .is_some_and(|session| !session.messages.is_empty());
             let model_picker = provider
                 .map(|provider| {
                     self.composer_model_picker(
@@ -2985,7 +3055,7 @@ impl Render for ConduitApp {
             let footer_text = if self.closing {
                 "正在清理进程…".into()
             } else if active {
-                status.unwrap_or_else(|| "正在执行…".into())
+                status.clone().unwrap_or_else(|| "正在执行…".into())
             } else {
                 "Enter 换行 · Ctrl+Enter 发送".into()
             };
@@ -3037,7 +3107,30 @@ impl Render for ConduitApp {
                                 .text_size(px(11.))
                                 .text_color(rgb(FAINT))
                                 .child(provider_label),
-                        ),
+                        )
+                        .when(has_messages, |row| {
+                            row.child(
+                                h_flex()
+                                    .id("latest")
+                                    .h(px(22.))
+                                    .px_2()
+                                    .gap_1()
+                                    .items_center()
+                                    .rounded(px(6.))
+                                    .cursor_pointer()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(FAINT))
+                                    .hover(|style| {
+                                        style.bg(rgb(SURFACE_HOVER)).text_color(rgb(TEXT))
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.scroll_to_end();
+                                        cx.notify();
+                                    }))
+                                    .child(Icon::new(IconName::ArrowDown).small())
+                                    .child("最新消息"),
+                            )
+                        }),
                 )
                 .child(
                     div().px_2().pt_2().child(
@@ -3274,45 +3367,67 @@ impl Render for ConduitApp {
                 .into_any_element()
         };
         conversation = conversation.child(div().px_6().pt_3().pb_2().child(composer));
-        if selected.is_some() {
-            let has_messages = selected
-                .as_ref()
-                .is_some_and(|session| !session.messages.is_empty());
-            if has_messages {
-                conversation = conversation.child(
-                    h_flex().px_6().pb_3().justify_center().child(
-                        div()
-                            .id("latest")
-                            .cursor_pointer()
-                            .text_size(px(11.))
-                            .text_color(rgb(FAINT))
-                            .hover(|style| style.text_color(rgb(TEXT)))
-                            .child("↓ 最新消息")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.scroll_to_end();
-                                cx.notify();
-                            })),
-                    ),
-                );
-            }
+        // Reserved horizontal toolbar below the composer. Future chat actions
+        // (attachments, context pickers, git actions) belong here so the
+        // message list and composer keep their current footprint.
+        let toolbar_hint: String = if self.closing {
+            "正在清理进程…".into()
+        } else if active {
+            status.clone().unwrap_or_else(|| "正在执行…".into())
         } else {
-            conversation = conversation.child(
-                h_flex()
-                    .px_6()
-                    .pb_3()
-                    .justify_center()
-                    .text_xs()
-                    .text_color(rgb(FAINT))
-                    .child("本地 CLI · 文件保留在你的机器上"),
-            );
-        }
-        let mut root = h_flex()
-            .relative()
-            .size_full()
+            "本地 CLI · 文件保留在你的机器上".into()
+        };
+        conversation = conversation.child(
+            h_flex()
+                .h(px(34.))
+                .px_6()
+                .gap_3()
+                .items_center()
+                .border_t_1()
+                .border_color(rgb(BORDER))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(FAINT))
+                        .child(toolbar_hint),
+                )
+                .child(div().flex_1()),
+        );
+        let title_bar = TitleBar::new()
             .bg(rgb(CANVAS))
-            .text_color(rgb(TEXT))
-            .child(sidebar)
-            .child(conversation);
+            .border_color(rgb(BORDER))
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        h_flex()
+                            .w(px(20.))
+                            .h(px(20.))
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(6.))
+                            .bg(rgb(TEXT))
+                            .text_size(px(11.))
+                            .font_bold()
+                            .text_color(rgb(0x111113))
+                            .child("C"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_semibold()
+                            .text_color(rgb(TEXT))
+                            .child("Conduit"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(rgb(FAINT))
+                            .child("Chat M0 · Preview"),
+                    ),
+            );
+        let mut detail_panel: Option<AnyElement> = None;
         if self.details {
             let native_id = selected
                 .as_ref()
@@ -3322,15 +3437,43 @@ impl Render for ConduitApp {
                 .selected_workspace
                 .map(|i| display_path(&self.store.workspaces[i].path))
                 .unwrap_or_default();
+            let content = self
+                .detail_text
+                .as_ref()
+                .and_then(|key| selected.as_ref()?.messages.iter().find(|m| &m.key == key))
+                .map(|item| {
+                    format!(
+                        "输入\n{}\n\n输出 / 结果\n{}",
+                        if item.input.is_empty() {
+                            "未提供"
+                        } else {
+                            &item.input
+                        },
+                        if item.detail.is_empty() {
+                            "尚未返回"
+                        } else {
+                            &item.detail
+                        }
+                    )
+                })
+                .unwrap_or_else(|| "点击工具调用卡片查看输入、命令输出或文件变更。".into());
             let panel = v_flex()
-                .w(px(300.))
-                .flex_shrink_0()
                 .h_full()
+                .flex_shrink_0()
                 .bg(rgb(SIDEBAR_BG))
                 .p_4()
                 .gap_4()
-                .border_l_1()
-                .border_color(rgb(BORDER))
+                .when(narrow, |panel| {
+                    panel
+                        .w(px(300.))
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .bottom_0()
+                        .border_l_1()
+                        .border_color(rgb(BORDER))
+                })
+                .when(!narrow, |panel| panel.w_full())
                 .child(
                     h_flex()
                         .items_center()
@@ -3358,37 +3501,47 @@ impl Render for ConduitApp {
                         .id("detail-content")
                         .overflow_y_scroll()
                         .text_xs()
-                        .child(
-                            self.detail_text
-                                .as_ref()
-                                .and_then(|key| {
-                                    selected.as_ref()?.messages.iter().find(|m| &m.key == key)
-                                })
-                                .map(|item| {
-                                    format!(
-                                        "输入\n{}\n\n输出 / 结果\n{}",
-                                        if item.input.is_empty() {
-                                            "未提供"
-                                        } else {
-                                            &item.input
-                                        },
-                                        if item.detail.is_empty() {
-                                            "尚未返回"
-                                        } else {
-                                            &item.detail
-                                        }
-                                    )
-                                })
-                                .unwrap_or_else(|| {
-                                    "点击工具调用卡片查看输入、命令输出或文件变更。".into()
-                                }),
-                        ),
+                        .child(content),
                 );
-            root = root.child(panel.when(narrow, |panel| {
-                panel.absolute().top_0().right_0().bottom_0()
-            }));
+            detail_panel = Some(panel.into_any_element());
         }
-        root
+        // The sidebar and the execution detail are both drag-resizable; the
+        // conversation keeps the flexible panel. On narrow windows the detail
+        // panel overlays the conversation instead of shrinking it further.
+        let mut body = h_resizable("body")
+            .child(
+                resizable_panel()
+                    .size(px(248.))
+                    .size_range(px(200.)..px(420.))
+                    .flex_none()
+                    .child(sidebar),
+            )
+            .child(resizable_panel().child(conversation));
+        let mut overlay: Option<AnyElement> = None;
+        if let Some(panel) = detail_panel {
+            if narrow {
+                overlay = Some(panel);
+            } else {
+                body = body.child(
+                    resizable_panel()
+                        .size(px(300.))
+                        .size_range(px(240.)..px(480.))
+                        .flex_none()
+                        .child(panel),
+                );
+            }
+        }
+        let mut main_area = div().relative().flex_1().min_h_0().child(body);
+        if let Some(panel) = overlay {
+            main_area = main_area.child(panel);
+        }
+        v_flex()
+            .relative()
+            .size_full()
+            .bg(rgb(CANVAS))
+            .text_color(rgb(TEXT))
+            .child(title_bar)
+            .child(main_area)
     }
 }
 
