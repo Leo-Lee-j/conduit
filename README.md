@@ -2,7 +2,7 @@
 
 Windows 本地 AI 编程 Chat 工作台，使用 **Rust + GPUI + GPUI Kit**，底层运行 Claude Code CLI / Codex CLI。
 
-当前是 **Chat M0 原型**：工作区、会话历史、流式回复、工具卡片、审批映射、取消、原生对话续接和会话级模型选择已接通。两款 CLI 的真实对话与续接测试已通过；审批协议层的允许、拒绝和待审批取消回归已通过，界面输入、审批弹窗交互与长时间使用仍需验收。不是完整的 Codex 桌面端复刻。
+当前是 **Chat M0 原型**：工作区、会话历史、流式回复、工具卡片、审批映射、取消、原生对话续接和会话级模型选择已接通。两款 CLI 的真实对话与续接测试已通过；审批协议层的允许、拒绝和待审批取消回归已通过，已完成一轮 UI 自动预验并修复设置弹窗窄窗裁切；界面输入、审批弹窗交互与长时间使用仍需验收。不是完整的 Codex 桌面端复刻。
 
 ## 运行
 
@@ -78,6 +78,9 @@ cargo build --locked
 # 分别检查 Chat 页、设置页能否启动响应窗口
 ./scripts/smoke.ps1 -View chat
 ./scripts/smoke.ps1 -View settings
+# 人工验收前的自动预验：隔离数据 + 窗口截图 + UIA 快照（不替代人工签署）
+./scripts/ui-acceptance.ps1 -Action seed
+./scripts/ui-acceptance.ps1 -Action capture -Name chat-markdown -DataDir target/ui-acceptance/data-claude
 ```
 
 启动冒烟只确认窗口出现并保持响应，不覆盖输入、点击、输入法或 DPI。逐项人工验收步骤见[验证记录的手工 UI 验收清单](docs/m0-validation.md#手工-ui-验收清单)。
@@ -94,6 +97,7 @@ cargo test --locked real_codex_file_change_approval_allow_and_deny -- --ignored 
 cargo test --locked real_codex_cancel_during_pending_approval -- --ignored --nocapture --test-threads=1
 $env:CONDUIT_CLAUDE_TEST_MODEL='<available-model>'
 cargo test --locked real_claude_tool_approval_allow_and_deny -- --ignored --nocapture --test-threads=1
+cargo test --locked real_claude_cancel_during_pending_approval -- --ignored --nocapture --test-threads=1
 ```
 
 ## 当前边界
@@ -101,7 +105,7 @@ cargo test --locked real_claude_tool_approval_allow_and_deny -- --ignored --noca
 - Windows 后端已实现；macOS / Linux 尚未实现。
 - 原生会话恢复依赖 CLI 本地记录；历史消息不能替代原生上下文。恢复报错须显式处理。
 - 取消采用结束 Job 的方式，模型服务端请求停止与 CLI 历史完整落盘无法保证；本地消息保留最近一次落盘内容。
-- Codex 命令与文件修改审批、Claude `can_use_tool` 允许/拒绝、Codex 待审批取消已有真实回归。审批弹窗点击与视觉、Claude 待审批取消、真实 CLI 多审批并发排队和中文输入仍待人工验收；多审批排队目前由运行时协议夹具覆盖，不等同真实 CLI 并发。
+- Codex 命令与文件修改审批、Claude `can_use_tool` 允许/拒绝、Codex 待审批取消、Claude 待审批取消已有真实回归；Codex `item/permissions/requestApproval` 权限扩展映射目前只有单测，真实触发待回归。审批弹窗点击与视觉、真实 CLI 多审批并发排队和中文输入仍待人工验收；多审批排队目前由运行时协议夹具覆盖，不等同真实 CLI 并发。
 - 2026-10-22 已修复：Ctrl+Enter 被输入框换行绑定抢占；切换会话、发送、审批和取消后的输入焦点丢失；后台会话事件拉动当前会话滚动；审批详情过小及只可拒绝时缺少说明；只读存储仍允许输入。新增双运行时取消隔离回归。以上通过编译、单测和启动检查，但实际按键、输入法、复制与弹窗点击仍须按验证记录手工验收。
 - 中文输入法、最小窗口、多屏 DPI、长对话性能、跨工作区并行压力待人工验收。
 - 模型同步只读取上述 CLI 配置与 cc-switch `providers` 中的模型字段；不查询凭证、不改写配置、不切换 cc-switch Provider。其他 CCS Provider 的模型只展示，不自动搬运其端点或账号。模型可用性和计费仍由 CLI 与账户决定。
@@ -113,8 +117,10 @@ cargo test --locked real_claude_tool_approval_allow_and_deny -- --ignored --noca
 - [产品设计](docs/product-design.md)
 - [技术设计](docs/technical-design.md)
 - [验证记录及待验收项](docs/m0-validation.md)
+- [UI 自动预验记录](docs/m0-ui-acceptance-run.md)
 - `build.rs`：Windows MSVC 可执行文件的主线程栈预留。
 - `scripts/smoke.ps1`：使用隔离数据检查两种启动页面，不调用模型。
+- `scripts/ui-acceptance.ps1`：隔离数据下启动界面、截图与 UIA 证据采集，供人工验收前预验。
 - `src/app.rs`：Chat 界面、草稿、工作区互斥、事件合并与退出屏障。
 - `src/protocol.rs`：Codex / Claude 各自协议及审批映射。
 - `src/chat_runtime.rs`：每轮任务、管道读写、取消与清理。

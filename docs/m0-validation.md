@@ -1,6 +1,6 @@
 # Chat M0 验证记录
 
-更新日期：2026-10-22。结论：**双 CLI Chat、原生续接、审批协议回归、CLI / cc-switch 模型只读同步已验证；会话级模型选择已接通协议层；审批弹窗点击、模型同步页与选择器交互、中文输入、复制与 DPI 等界面项仍未人工验收。**
+更新日期：2026-10-22。结论：**双 CLI Chat、原生续接、审批协议回归（含 Claude 待审批取消与 Codex 权限扩展审批映射）、CLI / cc-switch 模型只读同步已验证；会话级模型选择已接通协议层；已完成一轮 UI 自动预验并修复设置弹窗窄窗裁切；审批弹窗点击与视觉、中文输入、复制、滚动跟随与 DPI 等界面项仍未人工验收。**
 
 本记录取代旧终端原型验证记录。旧 ConPTY 测试、终端截图与 ANSI 能力不作为当前 Chat 实现的验收证据。产品、技术范围分别见 [产品设计](product-design.md) 和 [技术设计](technical-design.md)。
 
@@ -26,7 +26,7 @@
 | 构建 | 通过 | `cargo build --locked`，生成 `target/debug/conduit.exe` |
 | 格式 | 通过 | `cargo fmt --check` |
 | 静态检查 | 通过 | `cargo clippy --locked --all-targets -- -D warnings` |
-| 常规测试 | 通过 | 33 passed，0 failed，8 ignored；ignored 为需要本机 CLI 的集成测试 |
+| 常规测试 | 通过 | 34 passed，0 failed，9 ignored（2026-10-22 本轮）；ignored 为需要本机 CLI 的集成测试 |
 | 模型配置只读同步 | 单测与界面冒烟通过；交互待人工验收 | 解析 Claude settings 与 Codex config/catalog，验证去重、相对目录、隐藏项、缺失/损坏配置；不读取密钥。新增设置“模型同步”菜单，分别展示 CLI 当前模型与 CCS Provider 模型；输入区选择 `gpt-6.1-sol[1M]` 后写入隔离 `state.json`，标签与弹窗状态更新。仅 UI 自动化观察，未人工点击 |
 | cc-switch 模型目录 | 单测与真实数据库查询通过；界面待人工验收 | 只读打开 `~/.cc-switch/cc-switch.db`，仅投影模型 ID、显示名、上下文与可见性；本机读回 Claude 6 个 Provider / 11 个模型、Codex 3 个 Provider / 12 个模型，正确标记 anyrouter 与公司为当前 Provider。夹具含伪造 Token 与端点，断言未进入结果；未修改数据库 |
 | 模型目录合并 | 单测通过 | CCS 当前 Provider 模型并入会话选择器；同名模型合并备注，新增模型带 `CCS · Provider` 来源，其他 Provider 不进入选择器 |
@@ -53,6 +53,9 @@
 | 存储与迁移 | 单测通过 | 原子替换、坏文件保留、重复 ID 拒绝、v1 仅迁移元数据、native ID / 中文内容 / CLI 配置保留、重启中断提示不会重复落盘 |
 | 启动失败 | 单测通过 | 不存在的 exe 产生 Finished(error)，不会伪装为模型回复 |
 | Chat 与设置页启动 | 启动检查通过 | `scripts/smoke.ps1` 的 chat / settings 模式均通过：隔离数据、非零窗口句柄、Responding=True，首帧后继续存活。另保留此前合成历史启动检查；不等同视觉、点击或输入验收 |
+| UI 自动预验 | 部分通过 | 隔离数据 + `PrintWindow` 截图 + UI Automation 驱动，覆盖清单 3/4/7/10/11/12 中可自动观察的部分；发现设置弹窗窄窗底部裁切并修复；清单 1/2/5/6/8/9 仍需人工。证据与方法见 [UI 自动预验记录](m0-ui-acceptance-run.md) |
+| Claude 待审批取消 | 通过，2026-10-22 | 真实 CLI 测试专用 `manual` 模式 + 显式 `claude-haiku-4-5-20251001`；收到 `can_use_tool` 后取消，Finished(cancelled)、无 ApprovalResolved、临时目录无变化；约 12 秒 |
+| Codex 权限扩展审批映射 | 单测通过 | `item/permissions/requestApproval` 映射为审批；允许回传请求的 profile 且 `scope=turn`，拒绝回空 profile（协议无 deny 枚举，空 profile 为安全拒绝）；真实 CLI 触发未回归 |
 
 真实对话测试各发送两个合成提示，不包含用户项目内容：第一轮要求回复 `CONDUIT_CHAT_OK`，第二轮在新进程恢复同一原生会话并询问上一轮 token。未授予工具权限，未修改实际项目文件或认证信息。本次收尾未重复执行这些模型请求。
 
@@ -79,6 +82,7 @@ cargo test --locked real_codex_file_change_approval_allow_and_deny -- --ignored 
 cargo test --locked real_codex_cancel_during_pending_approval -- --ignored --nocapture --test-threads=1
 $env:CONDUIT_CLAUDE_TEST_MODEL='<available-model>'
 cargo test --locked real_claude_tool_approval_allow_and_deny -- --ignored --nocapture --test-threads=1
+cargo test --locked real_claude_cancel_during_pending_approval -- --ignored --nocapture --test-threads=1
 # 本轮合并回归：4 个审批测试通过，327.54 秒
 $env:CONDUIT_CLAUDE_TEST_MODEL='claude-haiku-4-5-20251001'
 cargo test --locked approval -- --ignored --nocapture --test-threads=1
@@ -88,7 +92,7 @@ cargo test --locked approval -- --ignored --nocapture --test-threads=1
 
 ## 手工 UI 验收清单
 
-截至本记录，以下项目**尚未执行**，不得预先标记为通过。建议在隔离 `CONDUIT_DATA_DIR` 下逐项执行，记录构建时间、实际缩放和结果；涉及 CLI 时只使用临时工作区与合成提示。
+截至本记录，以下项目**尚未执行**，不得预先标记为通过。建议在隔离 `CONDUIT_DATA_DIR` 下逐项执行，记录构建时间、实际缩放和结果；涉及 CLI 时只使用临时工作区与合成提示。2026-10-22 的可自动观察部分已先行预验（见 [UI 自动预验记录](m0-ui-acceptance-run.md)），但本清单仍需逐项人工执行与签署。
 
 | # | 场景 | 操作 | 通过标准 |
 | --- | --- | --- | --- |
@@ -128,14 +132,17 @@ cargo test --locked approval -- --ignored --nocapture --test-threads=1
 - Claude 审批测试增加测试专用模型与 `manual` 权限模式参数，用 Write 工具落盘验证允许/拒绝；生产启动参数不变。
 - 新增 Codex 文件修改审批允许/拒绝、待审批取消和运行时双审批排队回归。
 - 新设置页引入后实际启动暴露 Debug 主线程栈溢出。检查 PE 头确认原栈预留为 1MiB；通过 Windows MSVC 链接参数设为 8MiB，重新核对 PE 头，Chat 与设置页启动冒烟均通过。编译和单测通过不能替代实际启动检查。
+- UI 自动预验发现：设置弹窗固定 560px 高，对话框层在 850×500 最小窗口下会裁切超出视口的内容，底部“完成”按钮不可见。改为按视口高度自适应（`视口高度 - 96px`，限制 360–560px），正文区域自行滚动；窄窗与常窗截图均复验通过。
+- Claude 待审批取消补齐真实回归：收到 `can_use_tool` 后取消，任务以 cancelled 结束、审批不会被迟到解析、目录无变化。
+- Codex `item/permissions/requestApproval` 纳入审批队列：这是 0.163.0 协议中除命令/文件修改之外的权限扩展请求；允许时按请求 profile 授予本轮权限，拒绝时回空 profile，未知请求仍返回 `-32601` 而不自动放行。
 
 ## 未完成验收与具体限制
 
-1. **真实工具审批**：Codex 命令拒绝、文件修改允许/拒绝、待审批取消，以及 Claude `can_use_tool` 允许/拒绝均已通过。仍需审批弹窗的点击与视觉人工验收、Claude 待审批取消、真实 CLI 并发多审批排队、Codex 网络/权限扩展请求类型；Claude 回归使用测试专用 `manual` 模式，生产默认模式仍依赖本机 CLI 权限配置。
-2. **UI 输入与渲染**：Ctrl+Enter 的绑定抢占已修复，焦点恢复、后台滚动隔离、审批详情高度与只可拒绝提示也已补齐；仍需按上表人工验证实际按键、微软拼音、emoji、文本复制、Markdown 代码块、滚动跟随、最小窗口和 100%–200% DPI。
+1. **真实工具审批**：Codex 命令拒绝、文件修改允许/拒绝、待审批取消，Claude `can_use_tool` 允许/拒绝与待审批取消均已通过。仍需审批弹窗的点击与视觉人工验收、真实 CLI 并发多审批排队、Codex 网络/权限扩展请求类型的真实回归（`item/permissions/requestApproval` 目前仅单测映射）；Claude 回归使用测试专用 `manual` 模式，生产默认模式仍依赖本机 CLI 权限配置。
+2. **UI 输入与渲染**：Ctrl+Enter 的绑定抢占已修复，焦点恢复、后台滚动隔离、审批详情高度与只可拒绝提示也已补齐；设置弹窗窄窗裁切已修复。自动预验只覆盖可自动观察部分，仍需按上表人工验证实际按键、微软拼音、emoji、文本复制、Markdown 代码块、滚动跟随、最小窗口和 100%–200% DPI。
 3. **并行与稳定性**：运行时取消隔离已有自动回归；仍需人工验证双工作区持续运行、同工作区互斥、高输出、长对话内存、应用快速关闭和异常终止后清理。
 4. **恢复异常**：CLI 原生历史被删除、登录过期、升级改变协议、本地磁盘满及断电后的实际体验。
-5. **界面功能**：历史删除 / 归档 / 搜索、只读 Git Diff、模型启动参数设置、更多交互类型尚未实现。图形化 CLI 路径配置、版本检测、CLI / CCS 模型同步已实现，点击、文件选择、模型同步页、模型选择器与布局尚待人工验收。
+5. **界面功能**：历史删除 / 归档 / 搜索、只读 Git Diff、模型启动参数设置、更多交互类型尚未实现。图形化 CLI 路径配置、版本检测、CLI / CCS 模型同步已实现；设置页与模型同步页的自动预验通过，点击、文件选择、模型选择器交互与布局仍待人工验收。
 6. **平台**：macOS、Linux、WSL、npm 包装脚本未实现。
 
 Windows Computer Use 的 native pipe 连续连接失败；按恢复流程重试并重置会话后仍返回“系统找不到指定的文件 (os error 2)”。因此没有使用旧坐标或其他 UI 自动化绕过，也没有把界面验收标为通过。可运行 `cargo run --locked` 手工完成上述 UI 验证。
@@ -144,4 +151,4 @@ Windows Computer Use 的 native pipe 连续连接失败；按恢复流程重试�
 
 ## 进入日用试验的门槛
 
-自动侧已补 Ctrl+Enter 绑定、焦点恢复、后台滚动隔离、审批详情可读性和运行时取消隔离；手工侧仍需完成上表全部项目，重点是审批弹窗点击与视觉、取消与正常关窗、多工作区隔离、中文输入和阅读。任何错目录、串上下文、错授权或受管进程残留均阻断扩展。通过后再开展两周个人试用，不把本次自动测试等同完整 MVP 验收。
+自动侧已补 Ctrl+Enter 绑定、焦点恢复、后台滚动隔离、审批详情可读性、运行时取消隔离、Claude 待审批取消回归，并完成一轮 UI 自动预验（含设置弹窗窄窗修复）；手工侧仍需完成上表全部项目，重点是审批弹窗点击与视觉、取消与正常关窗、多工作区隔离、中文输入和阅读。任何错目录、串上下文、错授权或受管进程残留均阻断扩展。通过后再开展两周个人试用，不把本次自动测试等同完整 MVP 验收。

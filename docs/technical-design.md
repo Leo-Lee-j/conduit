@@ -85,7 +85,7 @@ CLI 设置作为 v2 存储的可选 `cli` 字段，字段缺失时使用默认�
 
 线程参数请求 `approvalPolicy=on-request`、`approvalsReviewer=user`、`sandbox=workspace-write`。有会话模型覆盖时，`thread/start`、`thread/resume` 与 `turn/start` 都携带 `model`。不使用 bypass，也不把 cwd 当沙箱边界。CLI / 平台如何落实权限仍取决于本机版本和配置；初始化失败不自动降低权限要求。
 
-支持 `item/commandExecution/requestApproval` 与 `item/fileChange/requestApproval`：保留 JSON 原始请求 ID，响应 accept / decline，仅限本次。适配器给 UI 分配本轮唯一 ticket，避免 wire ID 重用导致迟到点击误授权；Codex `serverRequest/resolved` 和 Claude `control_cancel_request` 都会撤销 ticket。`availableDecisions` 不包含 accept 时禁用允许按钮。Codex 命令拒绝已在真实 CLI 通过；Claude 本机配置自动允许一次工具调用，明确拒绝策略仍需单独回归。未知 server request 返回 -32601，并在 UI 留 Notice。暂不实现所有表单输入、动态工具、MCP 认证或实验性功能。
+支持 `item/commandExecution/requestApproval`、`item/fileChange/requestApproval` 与 `item/permissions/requestApproval`：保留 JSON 原始请求 ID，命令与文件修改响应 accept / decline，仅限本次；权限扩展请求（0.163.0 协议中除前两者之外的显式提权）允许时回传请求的 profile 并限定 `scope=turn`，拒绝时回传空 profile——该响应没有 deny 枚举，空 profile 是协议内的安全拒绝，伪造未知 scope 可能导致 CLI 侧反序列化失败。适配器给 UI 分配本轮唯一 ticket，避免 wire ID 重用导致迟到点击误授权；Codex `serverRequest/resolved` 和 Claude `control_cancel_request` 都会撤销 ticket。`availableDecisions` 不包含 accept 时禁用允许按钮。Codex 命令拒绝、文件修改允许/拒绝、待审批取消与 Claude `can_use_tool` 允许/拒绝/待审批取消已在真实 CLI 通过；权限扩展请求与真实并发多审批仍只有夹具覆盖。未知 server request 返回 -32601，并在 UI 留 Notice。暂不实现所有表单输入、动态工具、MCP 认证或实验性功能。
 
 ## 6. Claude Code 适配
 
@@ -105,7 +105,7 @@ CLI 设置作为 v2 存储的可选 `cli` 字段，字段缺失时使用默认�
 
 stream_event 的 message ID + block index 作为文本键；assistant 完整快照替换同键增量，防止重复。tool_use / tool_result 合并到工具卡片。不展示私有推理。
 
-`can_use_tool` 映射审批；允许仅回传原输入 updatedInput 和 allow，不写 updatedPermissions；拒绝回 deny。未知控制类型回错误，取消请求移除其待审批项。`result` 是任务完成依据。
+`can_use_tool` 映射审批；允许仅回传原输入 updatedInput 和 allow，不写 updatedPermissions；拒绝回 deny。未知控制类型回错误，取消请求移除其待审批项。允许、拒绝与待审批取消均已在真实 CLI（测试专用 `manual` 模式）通过。
 
 适配依据是官方 Agent SDK 的 subprocess transport 与 control query 实现，而非 CLI TUI 文本。当前 Rust 实现没有 Python / Node SDK 运行时依赖，但承担 wire protocol 的版本维护风险。不能把 SDK 内部控制格式当成永久稳定的跨版本公共协议。
 
@@ -149,11 +149,13 @@ v1→v2 保留身份及元数据，加迁移 Notice，不生成假 native_id。i
 
 ## 10. 验证与后续实施
 
-常规：fmt、严格 Clippy、单测、locked build，并执行 `scripts/smoke.ps1 -View chat` / `-View settings` 检查实际响应窗口。启动参数 `--settings` 可直接进入诊断页面。冒烟脚本使用隔离数据、结束自己的无任务实例，不代替按钮、输入和正常关闭测试。单测覆盖恢复 ID 校验、命令与文件修改审批、决策约束、多 ticket 隔离与撤销、未知请求拒绝、回复去重、工具输入 / 输出分离、跨轮隔离、进程树清理、Unicode 参数、存储与迁移。真实 Codex 命令拒绝与 Claude 工具路径测试按 ignored 集成测试运行。
+常规：fmt、严格 Clippy、单测、locked build，并执行 `scripts/smoke.ps1 -View chat` / `-View settings` 检查实际响应窗口。启动参数 `--settings` 可直接进入诊断页面。冒烟脚本使用隔离数据、结束自己的无任务实例，不代替按钮、输入和正常关闭测试。单测覆盖恢复 ID 校验、命令与文件修改审批、权限扩展审批、决策约束、多 ticket 隔离与撤销、未知请求拒绝、回复去重、工具输入 / 输出分离、跨轮隔离、进程树清理、Unicode 参数、存储与迁移。真实 Codex 命令拒绝与 Claude 工具路径测试按 ignored 集成测试运行。
+
+`scripts/ui-acceptance.ps1` 以隔离数据驱动界面并抓取窗口截图与 UIA 快照，用于人工验收前的自动预验（限制与覆盖范围见 [UI 自动预验记录](m0-ui-acceptance-run.md)）；它只产生证据，不替代人工签署。
 
 集成测试采用本机 CLI；握手不调用模型，真实对话测试用合成提示并明确标为 ignored。测试不自动授予工具权限，也不把模型生成回复当单元测试。
 
-下一步按风险排序：真实权限允许/拒绝与取消验证 → GPUI 输入/布局/滚动及模型选择器人工验收 → 双工作区压力及异常退出 → 用户连续日用 → 历史整理和只读 Diff。任一错目录、错上下文或错授权先阻断新功能。
+下一步按风险排序：GPUI 输入/布局/滚动、审批弹窗与模型选择器人工验收（自动预验证据已备）→ 双工作区压力及异常退出 → 用户连续日用 → 历史整理和只读 Diff。任一错目录、错上下文或错授权先阻断新功能。
 
 ## 11. 核实依据
 
