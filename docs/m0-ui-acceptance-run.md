@@ -39,18 +39,52 @@ cargo build --locked
 pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action seed
 pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -Name chat-markdown -DataDir target/ui-acceptance/data-claude
 pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -Name chat-model-picker -DataDir target/ui-acceptance/data-claude -ClickButton '选择模型'
-pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -Name settings-models -AppArgs '--settings' -ClickAt '251,378'
-pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -Name settings-models-codex -AppArgs '--settings' -ClickAt '251,378' -ScrollAt '700,500,20'
-pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -Name settings-detect -AppArgs '--settings' -ClickAt '243,273;933,394' -SettleMs 5000
+pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -Name settings-models -AppArgs '--settings' -ClickAt '251,446'
+pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -Name settings-models-codex -AppArgs '--settings' -ClickAt '251,446' -ScrollAt '700,500,20'
+pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -Name settings-detect -AppArgs '--settings' -ClickAt '243,338;933,462' -SettleMs 5000
 pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -Name settings-narrow -AppArgs '--settings' -Width 850 -Height 500
+# 面板拖拽（侧栏）/ 详情面板拖拽（先点“详情”再拖边界）
+pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -Name sidebar-resize -DataDir target/ui-acceptance/data-claude -DragAt '256,400,360,400'
+pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -Name detail-resize -DataDir target/ui-acceptance/data-claude -ClickAt '1162,60' -DragAt '908,400,820,400'
+# 真实审批弹窗（需 Codex 已登录；先在隔离工作区种子一个空会话，见记录正文）
+Set-Clipboard -Value 'Use a shell command to write the file C:\Users\<you>\conduit-approval-probe.txt with the text ok, then reply exactly APPROVAL_TEST_DONE. Do not use apply_patch.'
+pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -DataDir target/ui-acceptance/data-approval -Name approval-pending -ClickAt '600,655' -SendKeys '^v' -SendClickAt '1120,732' -WaitSeconds 50
 ./scripts/smoke.ps1 -View chat
 ./scripts/smoke.ps1 -View settings
 ```
 
-`ui-acceptance.ps1` 以 UTF-8 BOM 保存；用 Windows PowerShell 5.1 执行时改为 `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\ui-acceptance.ps1 ...`，否则会因中文编码或执行策略解析失败（2026-10-22 已修复并双版本验证）。
+`ui-acceptance.ps1` 以 UTF-8 BOM 保存；用 Windows PowerShell 5.1 执行时改为 `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\ui-acceptance.ps1 ...`，否则会因中文编码或执行策略解析失败（2026-10-22 已修复并双版本验证）。脚本支持 UIA 按名点击、窗口坐标点击/拖拽/滚动、剪贴板文本注入、分阶段点击与等待，用于在隔离数据下生成截图与 UIA 证据；它不改变生产数据，也不替代人工签署。
 
-坐标参数与 1216×839 窗口（100% 缩放）对应；不同缩放下需按截图重新定位。脚本只做截图与点击证据，不改变生产数据。
+坐标参数与 1216×808 窗口（100% 缩放）对应；不同缩放或窗口尺寸下需按截图重新定位。审批流示例中的发送按钮坐标、审批按钮坐标、探针路径均为本机 100% 缩放下的实测值，换机器需重测。
+## 第二轮：2026-10-22 UI 改进与生产参数审批自动预验
 
+本轮按反馈完成五项界面改进，并用同一套隔离脚本复验：
+
+| 改进 | 实现 | 证据 |
+| --- | --- | --- |
+| 自定义标题栏 | 移除 Windows 原生标题栏，改用 gpui-kit `TitleBar`：品牌区 + 窗口拖动/双击最大化 + 最小化/最大化/关闭命中区；侧栏品牌行并入标题栏，工作区“+”移到分区标题 | [ui-v2-main-window.png](screenshots/acceptance/ui-v2-main-window.png) |
+| 审批卡片 | 宽度改为与对话文字列一致（最大 840px 居中），重做为警示图标 + 标题/队列序号 + 说明 + 可滚动详情 + 右对齐“拒绝 / 允许本次” | [ui-v2-approval-pending.png](screenshots/acceptance/ui-v2-approval-pending.png) |
+| 左右面板 | 侧栏与执行详情改为可拖拽调宽（侧栏 200–420px，详情 240–480px）；窄窗时详情仍以覆盖层显示 | [ui-v2-sidebar-resized.png](screenshots/acceptance/ui-v2-sidebar-resized.png)、[ui-v2-detail-resized.png](screenshots/acceptance/ui-v2-detail-resized.png) |
+| 最新消息与底部工具栏 | “最新消息”移到输入区右上角；底部新增横向预留工具栏（当前显示状态提示），供后续功能扩展 | [ui-v2-main-window.png](screenshots/acceptance/ui-v2-main-window.png)、[ui-v2-narrow.png](screenshots/acceptance/ui-v2-narrow.png) |
+| 设置弹窗 | 垂直居中；模型目录与 cc-switch 读取改到后台线程，打开不再阻塞首帧；入场动画改为轻量 fade | [ui-v2-settings-centered.png](screenshots/acceptance/ui-v2-settings-centered.png) |
+
+### 生产参数审批链路自动预验（新增）
+
+此前只有测试专用 `untrusted + read-only` 夹具；本轮用**生产参数**（`on-request` + `workspace-write`）在隔离工作区跑真实 Codex 0.163.0 任务，脚本通过 UI Automation、剪贴板输入与合成点击完成：
+
+| 场景 | 结果 |
+| --- | --- |
+| 请求越界写文件 | 收到真实 `item/commandExecution/requestApproval`，界面显示“请求执行命令”审批卡片（[ui-v2-approval-pending.png](screenshots/acceptance/ui-v2-approval-pending.png)） |
+| 点击“拒绝” | 状态由“等待你的审批”变为“已提交拒绝本次操作”；模型回复确认未写入；探针文件不存在；本轮完成（[ui-v2-approval-denied.png](screenshots/acceptance/ui-v2-approval-denied.png)） |
+| 点击“允许本次” | 状态变为“已提交允许本次操作”；探针文件内容为 `ok`，模型回复 `APPROVAL_TEST_DONE`；本轮完成（[ui-v2-approval-allowed.png](screenshots/acceptance/ui-v2-approval-allowed.png)） |
+
+以上为脚本点击，不代替人工点击手感与视觉确认；生产默认权限模式下的 Claude 审批仍依赖本机 CLI 配置。
+
+### 设置弹窗打开时序
+
+在 Debug 构建、隔离数据下重复 3 次测量：窗口句柄出现 593–698 ms，设置弹窗“完成”按钮可被 UI Automation 检出 789–861 ms（均从进程启动起算）。模型目录读取已移出 UI 线程，首帧不再等待配置与 cc-switch 查询。
 ## 仍未覆盖，必须人工完成
 
 清单 1、2、5、6、8、9 全项；3 的复制一致性；4 的动态滚动跟随；7 的 100%–200% DPI 与多屏；10 的取消检测与文件选择；5 的真实审批允许/拒绝与多审批队列。人工完成后把结果写回 [验证记录](m0-validation.md#手工-ui-验收清单)，不得用本预验代替。
+
+

@@ -55,6 +55,7 @@
 | Chat 与设置页启动 | 启动检查通过 | `scripts/smoke.ps1` 的 chat / settings 模式均通过：隔离数据、非零窗口句柄、Responding=True，首帧后继续存活。另保留此前合成历史启动检查；不等同视觉、点击或输入验收 |
 | UI 自动预验 | 部分通过 | 隔离数据 + `PrintWindow` 截图 + UI Automation 驱动，覆盖清单 3/4/7/10/11/12 中可自动观察的部分；发现设置弹窗窄窗底部裁切并修复；清单 1/2/5/6/8/9 仍需人工。证据与方法见 [UI 自动预验记录](m0-ui-acceptance-run.md) |
 | Claude 待审批取消 | 通过，2026-10-22 | 真实 CLI 测试专用 `manual` 模式 + 显式 `claude-haiku-4-5-20251001`；收到 `can_use_tool` 后取消，Finished(cancelled)、无 ApprovalResolved、临时目录无变化；约 12 秒 |
+| 生产参数 Codex 审批弹窗 | 自动预验通过，2026-10-22 | 真实 Codex 0.163.0 在生产参数 `on-request` + `workspace-write` 下请求越界写文件，界面显示审批卡片；脚本点击“拒绝”后探针文件不存在，点击“允许本次”后文件内容为 `ok`、模型回复 `APPROVAL_TEST_DONE`；均为 UI Automation 合成点击，人工点击手感与视觉仍待确认。证据见 [UI 自动预验记录](m0-ui-acceptance-run.md) |
 | Codex 权限扩展审批映射 | 单测通过 | `item/permissions/requestApproval` 映射为审批；允许回传请求的 profile 且 `scope=turn`，拒绝回空 profile（协议无 deny 枚举，空 profile 为安全拒绝）；真实 CLI 触发未回归 |
 
 真实对话测试各发送两个合成提示，不包含用户项目内容：第一轮要求回复 `CONDUIT_CHAT_OK`，第二轮在新进程恢复同一原生会话并询问上一轮 token。未授予工具权限，未修改实际项目文件或认证信息。本次收尾未重复执行这些模型请求。
@@ -92,7 +93,7 @@ cargo test --locked approval -- --ignored --nocapture --test-threads=1
 
 ## 手工 UI 验收清单
 
-截至本记录，以下项目**尚未执行**，不得预先标记为通过。建议在隔离 `CONDUIT_DATA_DIR` 下逐项执行，记录构建时间、实际缩放和结果；涉及 CLI 时只使用临时工作区与合成提示。2026-10-22 的可自动观察部分已先行预验（见 [UI 自动预验记录](m0-ui-acceptance-run.md)），但本清单仍需逐项人工执行与签署；可照 [人工验收交接单](m0-manual-acceptance-guide.md) 一次走完。
+截至本记录，以下项目**尚未执行**，不得预先标记为通过。建议在隔离 `CONDUIT_DATA_DIR` 下逐项执行，记录构建时间、实际缩放和结果；涉及 CLI 时只使用临时工作区与合成提示。2026-10-22 的可自动观察部分已先行预验（见 [UI 自动预验记录](m0-ui-acceptance-run.md)），但本清单仍需逐项人工执行与签署；可照 [人工验收交接单](m0-manual-acceptance-guide.md) 一次走完。2026-10-22 起主窗口为自定义标题栏、左右面板可拖拽调宽，验收 7/8 项时按当前布局核对。
 
 | # | 场景 | 操作 | 通过标准 |
 | --- | --- | --- | --- |
@@ -135,6 +136,8 @@ cargo test --locked approval -- --ignored --nocapture --test-threads=1
 - UI 自动预验发现：设置弹窗固定 560px 高，对话框层在 850×500 最小窗口下会裁切超出视口的内容，底部“完成”按钮不可见。改为按视口高度自适应（`视口高度 - 96px`，限制 360–560px），正文区域自行滚动；窄窗与常窗截图均复验通过。
 - Claude 待审批取消补齐真实回归：收到 `can_use_tool` 后取消，任务以 cancelled 结束、审批不会被迟到解析、目录无变化。
 - Codex `item/permissions/requestApproval` 纳入审批队列：这是 0.163.0 协议中除命令/文件修改之外的权限扩展请求；允许时按请求 profile 授予本轮权限，拒绝时回空 profile，未知请求仍返回 `-32601` 而不自动放行。
+- 界面按反馈完成一轮改进：移除 Windows 原生标题栏改用自定义标题栏（品牌区、拖动与最小化/最大化/关闭命中区）；侧栏与执行详情改为可拖拽面板（侧栏 200–420px，详情 240–480px，窄窗详情覆盖）；审批卡片宽度对齐对话文字列并重做视觉；输入区右上角“最新消息”、底部新增横向预留工具栏；设置弹窗垂直居中，模型目录与 cc-switch 读取移到后台线程，打开不再阻塞首帧，入场动画改为轻量 fade。
+- 用生产参数（`on-request` + `workspace-write`）在隔离工作区跑真实 Codex 审批：越界写文件触发真实审批请求，脚本点击拒绝后无文件落盘，点击允许后探针文件内容正确；此前“生产参数可能不产生审批”的未知项已获得一次真实证据（合成点击，非人工）。
 
 ## 未完成验收与具体限制
 
