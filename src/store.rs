@@ -251,6 +251,7 @@ mod tests {
             created_at: 1,
             exit_code: Some(7),
             title: "Test".into(),
+            archived: false,
             native_id: None,
             model: None,
             messages: vec![],
@@ -299,6 +300,28 @@ mod tests {
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].text, "Hello");
         assert_eq!(messages[1].text, "boom");
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(directory).unwrap();
+    }
+    #[test]
+    fn archived_flag_defaults_to_false_and_roundtrips() {
+        let directory =
+            std::env::temp_dir().join(format!("conduit-archived-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("state.json");
+        let value = serde_json::json!({"version":2,"workspaces":[{"path":directory,"sessions":[
+            {"id":1,"provider":"Claude","created_at":0,"exit_code":null,"title":"t"},
+            {"id":2,"provider":"Codex","created_at":0,"exit_code":null,"title":"u","archived":true}
+        ]}]});
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let mut restored = Store::load_from(&path).unwrap();
+        assert!(!restored.workspaces[0].sessions[0].archived);
+        assert!(restored.workspaces[0].sessions[1].archived);
+        restored.workspaces[0].sessions[0].archived = true;
+        restored.save_to(&path).unwrap();
+        let reloaded = Store::load_from(&path).unwrap();
+        assert!(reloaded.workspaces[0].sessions[0].archived);
+        assert!(reloaded.workspaces[0].sessions[1].archived);
         fs::remove_file(path).unwrap();
         fs::remove_dir(directory).unwrap();
     }

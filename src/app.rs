@@ -11,7 +11,7 @@ use crate::{
 use gpui_kit::{
     component::{
         button::*,
-        input::{Textarea, TextareaState},
+        input::{Input, InputEvent, InputState, Textarea, TextareaState},
         popover::Popover,
         text::TextView,
         *,
@@ -77,6 +77,35 @@ fn settings_label(text: &'static str) -> impl IntoElement {
         .child(text)
 }
 
+/// Whether a session matches the sidebar search query (title or message text).
+fn session_matches(session: &SessionRecord, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    session.title.to_lowercase().contains(query)
+        || session
+            .messages
+            .iter()
+            .any(|message| message.text.to_lowercase().contains(query))
+}
+
+fn session_menu_button(id: (&'static str, u64), label: &'static str, icon: IconName) -> Button {
+    Button::new(id)
+        .ghost()
+        .h(px(30.))
+        .w_full()
+        .px_2()
+        .rounded(px(6.))
+        .child(
+            h_flex()
+                .w_full()
+                .gap_2()
+                .items_center()
+                .child(Icon::new(icon).small().text_color(rgb(FAINT)))
+                .child(div().text_size(px(12.)).text_color(rgb(MUTED)).child(label)),
+        )
+}
+
 pub struct ConduitApp {
     store: Store,
     writable: bool,
@@ -97,6 +126,14 @@ pub struct ConduitApp {
     detail_text: Option<String>,
     /// Approval tickets whose raw request detail the user expanded.
     approval_details: HashSet<String>,
+    /// Sidebar session search filter.
+    search: Entity<InputState>,
+    search_query: String,
+    show_archived: bool,
+    rename_target: Option<u64>,
+    rename_input: Option<Entity<InputState>>,
+    delete_target: Option<u64>,
+    _subscriptions: Vec<Subscription>,
     dirty: bool,
     last_save: Instant,
     scroll: ScrollHandle,
@@ -126,12 +163,19 @@ impl ConduitApp {
         let selected_session = store
             .workspaces
             .first()
-            .and_then(|w| w.sessions.last())
+            .and_then(|w| w.sessions.iter().rev().find(|session| !session.archived))
             .map(|s| s.id);
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder("描述任务，或继续提问…")
                 .auto_grow(3, 8)
+        });
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索会话"));
+        let search_subscription = cx.subscribe(&search, |this, search, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                this.search_query = search.read(cx).value().to_string();
+                cx.notify();
+            }
         });
         if selected_session.is_some() {
             input.read(cx).focus_handle(cx).focus(window, cx);
@@ -199,6 +243,13 @@ impl ConduitApp {
             details: false,
             detail_text: None,
             approval_details: HashSet::new(),
+            search,
+            search_query: String::new(),
+            show_archived: false,
+            rename_target: None,
+            rename_input: None,
+            delete_target: None,
+            _subscriptions: vec![search_subscription],
             dirty: false,
             last_save: Instant::now(),
             scroll: ScrollHandle::new(),
@@ -217,6 +268,252 @@ impl ConduitApp {
             .iter_mut()
             .flat_map(|w| &mut w.sessions)
             .find(|s| s.id == id)
+    }
+    fn select_fallback_session(&mut self) {
+        if self
+            .selected_session
+            .is_some_and(|id| self.session(id).is_some_and(|session| !session.archived))
+        {
+            return;
+        }
+        for (index, workspace) in self.store.workspaces.iter().enumerate() {
+            if let Some(session) = workspace.sessions.iter().rev().find(|s| !s.archived) {
+                self.selected_workspace = Some(index);
+                self.selected_session = Some(session.id);
+                return;
+            }
+        }
+        self.selected_session = None;
+        if self.store.workspaces.is_empty() {
+            self.selected_workspace = None;
+        }
+    }
+    fn toggle_archive(&mut self, id: u64, cx: &mut Context<Self>) {
+        if let Some(session) = self.session_mut(id) {
+            session.archived = !session.archived;
+        }
+        self.select_fallback_session();
+        self.persist();
+        cx.notify();
+    }
+    fn open_rename_dialog(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(current) = self.session(id).map(|session| session.title.clone()) else {
+            return;
+        };
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(current));
+        input.read(cx).focus_handle(cx).focus(window, cx);
+        self.rename_target = Some(id);
+        self.rename_input = Some(input);
+        cx.notify();
+        let view = cx.entity();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let view = view.clone();
+            dialog
+                .w(px(420.))
+                .margin_top(px(120.))
+                .title("重命名会话")
+                .content(move |content, _, cx| {
+                    let Some(input) = view.read(cx).rename_input.clone() else {
+                        return content;
+                    };
+                    let confirm = view.clone();
+                    let cancel = view.clone();
+                    content.child(
+                        v_flex().gap_3().child(Input::new(&input).h(px(32.))).child(
+                            h_flex()
+                                .justify_end()
+                                .gap_2()
+                                .child(
+                                    Button::new("rename-cancel")
+                                        .label("取消")
+                                        .small()
+                                        .ghost()
+                                        .on_click(move |_, window, cx| {
+                                            cancel.update(cx, |this, cx| {
+                                                this.rename_target = None;
+                                                this.rename_input = None;
+                                                cx.notify();
+                                            });
+                                            window.close_dialog(cx);
+                                        }),
+                                )
+                                .child(
+                                    Button::new("rename-confirm")
+                                        .label("保存")
+                                        .small()
+                                        .primary()
+                                        .on_click(move |_, window, cx| {
+                                            let value = confirm
+                                                .read(cx)
+                                                .rename_input
+                                                .as_ref()
+                                                .map(|input| input.read(cx).value().to_string())
+                                                .unwrap_or_default();
+                                            confirm.update(cx, |this, cx| {
+                                                this.apply_rename(value, cx)
+                                            });
+                                            window.close_dialog(cx);
+                                        }),
+                                ),
+                        ),
+                    )
+                })
+        });
+    }
+    fn apply_rename(&mut self, title: String, cx: &mut Context<Self>) {
+        let Some(id) = self.rename_target.take() else {
+            return;
+        };
+        self.rename_input = None;
+        let title = title.trim().to_string();
+        if title.is_empty() {
+            self.message = Some("会话名不能为空。".into());
+            cx.notify();
+            return;
+        }
+        if let Some(session) = self.session_mut(id) {
+            session.title = title.chars().take(80).collect();
+        }
+        self.persist();
+        cx.notify();
+    }
+    fn open_delete_dialog(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(title) = self.session(id).map(|session| {
+            if session.title.is_empty() {
+                "未命名会话".to_string()
+            } else {
+                session.title.clone()
+            }
+        }) else {
+            return;
+        };
+        self.delete_target = Some(id);
+        let view = cx.entity();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let view = view.clone();
+            let title = title.clone();
+            dialog
+                .w(px(420.))
+                .margin_top(px(120.))
+                .title("删除会话")
+                .content(move |content, _, _| {
+                    let confirm = view.clone();
+                    let cancel = view.clone();
+                    content.child(
+                        v_flex()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .line_height(relative(1.5))
+                                    .text_color(rgb(MUTED))
+                                    .child(format!(
+                                        "将永久删除「{title}」及其消息记录，无法恢复。"
+                                    )),
+                            )
+                            .child(
+                                h_flex()
+                                    .justify_end()
+                                    .gap_2()
+                                    .child(
+                                        Button::new("delete-cancel")
+                                            .label("取消")
+                                            .small()
+                                            .ghost()
+                                            .on_click(move |_, window, cx| {
+                                                cancel.update(cx, |this, cx| {
+                                                    this.delete_target = None;
+                                                    cx.notify();
+                                                });
+                                                window.close_dialog(cx);
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new("delete-confirm")
+                                            .label("删除")
+                                            .small()
+                                            .primary()
+                                            .on_click(move |_, window, cx| {
+                                                let target = confirm.read(cx).delete_target;
+                                                if let Some(id) = target {
+                                                    confirm.update(cx, |this, cx| {
+                                                        this.delete_session(id, cx)
+                                                    });
+                                                }
+                                                window.close_dialog(cx);
+                                            }),
+                                    ),
+                            ),
+                    )
+                })
+        });
+    }
+    fn delete_session(&mut self, id: u64, cx: &mut Context<Self>) {
+        for workspace in &mut self.store.workspaces {
+            workspace.sessions.retain(|session| session.id != id);
+        }
+        self.drafts.remove(&id);
+        self.detail_text = None;
+        self.select_fallback_session();
+        self.delete_target = None;
+        self.persist();
+        cx.notify();
+    }
+    fn session_menu(&self, id: u64, app: Entity<Self>) -> AnyElement {
+        let archived = self.session(id).is_some_and(|session| session.archived);
+        let trigger = Button::new(("session-menu-trigger", id))
+            .ghost()
+            .small()
+            .compact()
+            .icon(IconName::Ellipsis)
+            .on_click(|_, _, cx| cx.stop_propagation());
+        Popover::new(("session-menu", id))
+            .anchor(Anchor::BottomRight)
+            .offset(px(6.))
+            .trigger(trigger)
+            .content(move |_, _, cx| {
+                let popover = cx.entity().downgrade();
+                let rename_app = app.clone();
+                let rename_popover = popover.clone();
+                let rename =
+                    session_menu_button(("session-rename", id), "重命名", IconName::Replace)
+                        .on_click(move |_, window, cx| {
+                            rename_app
+                                .update(cx, |this, cx| this.open_rename_dialog(id, window, cx));
+                            if let Some(popover) = rename_popover.clone().upgrade() {
+                                popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                            }
+                        });
+                let archive_app = app.clone();
+                let archive_popover = popover.clone();
+                let archive = session_menu_button(
+                    ("session-archive", id),
+                    if archived { "取消归档" } else { "归档" },
+                    IconName::Inbox,
+                )
+                .on_click(move |_, window, cx| {
+                    archive_app.update(cx, |this, cx| this.toggle_archive(id, cx));
+                    if let Some(popover) = archive_popover.clone().upgrade() {
+                        popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                    }
+                });
+                let delete_app = app.clone();
+                let delete_popover = popover.clone();
+                let delete = session_menu_button(("session-delete", id), "删除", IconName::Delete)
+                    .on_click(move |_, window, cx| {
+                        delete_app.update(cx, |this, cx| this.open_delete_dialog(id, window, cx));
+                        if let Some(popover) = delete_popover.clone().upgrade() {
+                            popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                        }
+                    });
+                v_flex()
+                    .w(px(150.))
+                    .gap(px(1.))
+                    .child(rename)
+                    .child(archive)
+                    .child(delete)
+            })
+            .into_any_element()
     }
     fn persist(&mut self) -> bool {
         if !self.writable {
@@ -337,6 +634,7 @@ impl ConduitApp {
                 .as_secs(),
             exit_code: None,
             title: "新会话".into(),
+            archived: false,
             native_id: None,
             model,
             messages: vec![],
@@ -2328,6 +2626,7 @@ pub fn apply_event(session: &mut SessionRecord, prefix: &str, event: Event) {
 impl Render for ConduitApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let narrow = window.viewport_size().width < px(1100.);
+        let app_entity = cx.entity();
         let selected = self
             .selected_session
             .and_then(|id| self.session(id))
@@ -2428,6 +2727,25 @@ impl Render for ConduitApp {
                         ),
                 )
             });
+        sidebar = sidebar.child(
+            div().px_2().pt_2().child(
+                h_flex()
+                    .h(px(30.))
+                    .px_2()
+                    .items_center()
+                    .rounded(px(8.))
+                    .bg(rgb(SURFACE))
+                    .child(
+                        Input::new(&self.search)
+                            .h(px(26.))
+                            .w_full()
+                            .appearance(false)
+                            .bordered(false)
+                            .cleanable(true)
+                            .prefix(Icon::new(IconName::Search).small().text_color(rgb(FAINT))),
+                    ),
+            ),
+        );
         let mut list = v_flex()
             .id("workspace-list")
             .flex_1()
@@ -2435,6 +2753,7 @@ impl Render for ConduitApp {
             .overflow_y_scroll()
             .pt_3()
             .gap_1();
+        let query = self.search_query.trim().to_lowercase();
         list = list.child(
             h_flex()
                 .px_2()
@@ -2449,28 +2768,71 @@ impl Render for ConduitApp {
                 )
                 .child(
                     h_flex()
-                        .id("add-workspace")
-                        .w(px(22.))
-                        .h(px(22.))
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(6.))
-                        .when(can_edit, |button| {
-                            button
-                                .cursor_pointer()
-                                .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                                .on_click(cx.listener(Self::add_workspace))
-                        })
+                        .gap_1()
                         .child(
-                            Icon::new(IconName::Plus)
-                                .small()
-                                .text_color(rgb(if can_edit { MUTED } else { FAINT })),
+                            h_flex()
+                                .id("toggle-archived")
+                                .h(px(22.))
+                                .px_2()
+                                .gap_1()
+                                .items_center()
+                                .rounded(px(6.))
+                                .text_size(px(10.))
+                                .text_color(rgb(if self.show_archived { TEXT } else { FAINT }))
+                                .when(self.show_archived, |row| row.bg(rgb(SURFACE_HOVER)))
+                                .cursor_pointer()
+                                .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(TEXT)))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.show_archived = !this.show_archived;
+                                    cx.notify();
+                                }))
+                                .child(Icon::new(IconName::Inbox).small())
+                                .child("已归档"),
+                        )
+                        .child(
+                            h_flex()
+                                .id("add-workspace")
+                                .w(px(22.))
+                                .h(px(22.))
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(6.))
+                                .when(can_edit, |button| {
+                                    button
+                                        .cursor_pointer()
+                                        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                        .on_click(cx.listener(Self::add_workspace))
+                                })
+                                .child(
+                                    Icon::new(IconName::Plus)
+                                        .small()
+                                        .text_color(rgb(if can_edit { MUTED } else { FAINT })),
+                                ),
                         ),
                 ),
         );
         for (index, workspace) in self.store.workspaces.iter().enumerate() {
-            let last = workspace.sessions.last().map(|s| s.id);
+            let sessions: Vec<&SessionRecord> = workspace
+                .sessions
+                .iter()
+                .rev()
+                .filter(|session| {
+                    (self.show_archived || !session.archived) && session_matches(session, &query)
+                })
+                .collect();
+            if !query.is_empty() && sessions.is_empty() {
+                continue;
+            }
+            let last = sessions
+                .first()
+                .map(|session| session.id)
+                .or_else(|| workspace.sessions.last().map(|session| session.id));
             let workspace_selected = self.selected_workspace == Some(index);
+            let count = if query.is_empty() {
+                workspace.sessions.len()
+            } else {
+                sessions.len()
+            };
             list =
                 list.child(
                     h_flex()
@@ -2494,24 +2856,32 @@ impl Render for ConduitApp {
                             div()
                                 .text_size(px(10.))
                                 .text_color(rgb(FAINT))
-                                .child(workspace.sessions.len().to_string()),
+                                .child(count.to_string()),
                         ),
                 );
-            for session in workspace.sessions.iter().rev() {
+            for session in sessions {
                 let id = session.id;
                 let active = self.selected_session == Some(id);
                 let run_status = self.runs.get(&id).map(|r| r.status.clone());
+                let archived = session.archived;
+                let menu = self.session_menu(id, app_entity.clone());
                 list = list.child(
                     h_flex()
                         .id(("session", id))
                         .h(px(30.))
                         .pl(px(24.))
-                        .pr_2()
+                        .pr(px(4.))
                         .gap_2()
                         .items_center()
                         .rounded(px(8.))
                         .text_size(px(13.))
-                        .text_color(rgb(if active { TEXT } else { MUTED }))
+                        .text_color(rgb(if archived {
+                            FAINT
+                        } else if active {
+                            TEXT
+                        } else {
+                            MUTED
+                        }))
                         .when(active, |row| row.bg(rgb(SURFACE_HOVER)))
                         .cursor_pointer()
                         .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(TEXT)))
@@ -2535,6 +2905,14 @@ impl Render for ConduitApp {
                                     session.title.clone()
                                 }),
                         )
+                        .when(archived, |row| {
+                            row.child(
+                                div()
+                                    .text_size(px(9.))
+                                    .text_color(rgb(FAINT))
+                                    .child("已归档"),
+                            )
+                        })
                         .when_some(run_status, |row, status| {
                             row.child(
                                 div()
@@ -2542,7 +2920,8 @@ impl Render for ConduitApp {
                                     .text_color(rgb(FAINT))
                                     .child(status),
                             )
-                        }),
+                        })
+                        .child(menu),
                 );
             }
         }
@@ -3614,9 +3993,9 @@ impl Render for ConduitApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_event, finish_tool_cards, same_failure};
+    use super::{apply_event, finish_tool_cards, same_failure, session_matches};
     use crate::{
-        domain::{ItemKind, Provider, SessionRecord},
+        domain::{ChatItem, ItemKind, Provider, SessionRecord},
         protocol::Event,
     };
     fn session() -> SessionRecord {
@@ -3626,6 +4005,7 @@ mod tests {
             created_at: 0,
             exit_code: None,
             title: String::new(),
+            archived: false,
             native_id: None,
             model: None,
             messages: vec![],
@@ -3744,5 +4124,23 @@ mod tests {
         ));
         assert!(!same_failure("ok", "boom"));
         assert!(!same_failure("", "boom"));
+    }
+    #[test]
+    fn session_search_matches_title_and_message_text() {
+        let mut s = session();
+        s.title = "Rust 重构计划".into();
+        s.messages.push(ChatItem {
+            key: "m1".into(),
+            kind: ItemKind::Assistant,
+            text: "let me check the ALPHA dependency".into(),
+            input: String::new(),
+            detail: String::new(),
+            status: String::new(),
+        });
+        assert!(session_matches(&s, ""));
+        assert!(session_matches(&s, "rust"));
+        assert!(session_matches(&s, "alpha"));
+        assert!(!session_matches(&s, "beta"));
+        assert!(!session_matches(&s, "已归档"));
     }
 }

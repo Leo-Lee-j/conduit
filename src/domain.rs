@@ -31,6 +31,9 @@ pub struct SessionRecord {
     pub exit_code: Option<u32>,
     #[serde(default)]
     pub title: String,
+    /// Hidden from the sidebar unless archived sessions are shown.
+    #[serde(default)]
+    pub archived: bool,
     #[serde(default)]
     pub native_id: Option<String>,
     #[serde(default)]
