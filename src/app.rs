@@ -89,6 +89,98 @@ fn session_matches(session: &SessionRecord, query: &str) -> bool {
             .any(|message| message.text.to_lowercase().contains(query))
 }
 
+struct SearchHit {
+    workspace: usize,
+    session: u64,
+    provider: Provider,
+    workspace_name: String,
+    title: String,
+    archived: bool,
+    snippet: String,
+}
+
+/// Byte ranges of `query` occurrences in `text`, matched case-insensitively
+/// while keeping ranges aligned to the original text's char boundaries.
+fn highlight_ranges(text: &str, query: &str) -> Vec<(usize, usize)> {
+    let query = query.to_lowercase();
+    if query.is_empty() {
+        return Vec::new();
+    }
+    // One shadow byte maps back to the original char's byte start. Lowercasing
+    // can change a char's UTF-8 length (e.g. 'İ'), so the map must be per byte.
+    let mut shadow = String::new();
+    let mut map: Vec<usize> = Vec::new();
+    for (index, ch) in text.char_indices() {
+        let lowered = ch.to_lowercase().collect::<String>();
+        for _ in lowered.bytes() {
+            map.push(index);
+        }
+        shadow.push_str(&lowered);
+    }
+    map.push(text.len());
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    while let Some(position) = shadow[start..].find(&query) {
+        let begin = start + position;
+        let end = begin + query.len();
+        let (from, to) = (map[begin], map[end]);
+        if from < to {
+            ranges.push((from, to));
+        }
+        start = end;
+    }
+    ranges
+}
+
+fn search_snippet(text: &str, query: &str) -> String {
+    let ranges = highlight_ranges(text, query);
+    let fallback = |text: &str| -> String {
+        let mut snippet: String = text.chars().take(160).collect();
+        if text.chars().count() > 160 {
+            snippet.push('…');
+        }
+        snippet.replace(['\r', '\n'], " ")
+    };
+    let Some((match_start, match_end)) = ranges.first().copied() else {
+        return fallback(text);
+    };
+    let char_position = text[..match_start].chars().count();
+    let match_chars = text[match_start..match_end].chars().count();
+    let chars: Vec<char> = text.chars().collect();
+    let start = char_position.saturating_sub(40);
+    let end = (char_position + match_chars + 120).min(chars.len());
+    let mut snippet: String = chars[start..end].iter().collect();
+    if start > 0 {
+        snippet.insert(0, '…');
+    }
+    if end < chars.len() {
+        snippet.push('…');
+    }
+    snippet.replace(['\r', '\n'], " ")
+}
+
+fn highlighted_text(text: &str, query: &str, size: f32, color: u32) -> AnyElement {
+    let ranges = highlight_ranges(text, query);
+    let mut styled = StyledText::new(text.to_string());
+    if !ranges.is_empty() {
+        styled = styled.with_highlights(ranges.into_iter().map(|(start, end)| {
+            (
+                start..end,
+                HighlightStyle {
+                    color: Some(Hsla::from(rgb(0xf0d49b))),
+                    background_color: Some(Hsla::from(rgb(0x3a3220))),
+                    ..Default::default()
+                },
+            )
+        }));
+    }
+    div()
+        .text_size(px(size))
+        .text_color(rgb(color))
+        .child(styled)
+        .into_any_element()
+}
+
 fn session_menu_button(id: (&'static str, u64), label: &'static str, icon: IconName) -> Button {
     Button::new(id)
         .ghost()
@@ -130,9 +222,12 @@ pub struct ConduitApp {
     search: Entity<InputState>,
     search_query: String,
     show_archived: bool,
+    /// Engine used by the sidebar + button and the search dialog's empty state.
+    new_session_provider: Provider,
     rename_target: Option<u64>,
     rename_input: Option<Entity<InputState>>,
     delete_target: Option<u64>,
+    remove_workspace_target: Option<usize>,
     _subscriptions: Vec<Subscription>,
     dirty: bool,
     last_save: Instant,
@@ -165,6 +260,16 @@ impl ConduitApp {
             .first()
             .and_then(|w| w.sessions.iter().rev().find(|session| !session.archived))
             .map(|s| s.id);
+        let new_session_provider = selected_session
+            .and_then(|id| {
+                store
+                    .workspaces
+                    .iter()
+                    .flat_map(|w| &w.sessions)
+                    .find(|s| s.id == id)
+                    .map(|s| s.provider)
+            })
+            .unwrap_or(Provider::Claude);
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder("描述任务，或继续提问…")
@@ -246,9 +351,11 @@ impl ConduitApp {
             search,
             search_query: String::new(),
             show_archived: false,
+            new_session_provider,
             rename_target: None,
             rename_input: None,
             delete_target: None,
+            remove_workspace_target: None,
             _subscriptions: vec![search_subscription],
             dirty: false,
             last_save: Instant::now(),
@@ -286,6 +393,11 @@ impl ConduitApp {
         self.selected_session = None;
         if self.store.workspaces.is_empty() {
             self.selected_workspace = None;
+        } else if self
+            .selected_workspace
+            .is_none_or(|index| index >= self.store.workspaces.len())
+        {
+            self.selected_workspace = Some(0);
         }
     }
     fn toggle_archive(&mut self, id: u64, cx: &mut Context<Self>) {
@@ -459,6 +571,315 @@ impl ConduitApp {
         self.persist();
         cx.notify();
     }
+    fn new_session_here(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let provider = self.new_session_provider;
+        self.new_session(index, provider, window, cx);
+    }
+    fn set_new_session_provider(&mut self, provider: Provider, cx: &mut Context<Self>) {
+        self.new_session_provider = provider;
+        cx.notify();
+    }
+    fn open_remove_workspace_dialog(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(name) = self
+            .store
+            .workspaces
+            .get(index)
+            .map(|workspace| workspace.name())
+        else {
+            return;
+        };
+        self.remove_workspace_target = Some(index);
+        let view = cx.entity();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let view = view.clone();
+            let name = name.clone();
+            dialog
+                .w(px(440.))
+                .margin_top(px(120.))
+                .title("移除工作区")
+                .content(move |content, _, _| {
+                    let confirm = view.clone();
+                    let cancel = view.clone();
+                    content.child(
+                        v_flex()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .line_height(relative(1.5))
+                                    .text_color(rgb(MUTED))
+                                    .child(format!(
+                                        "从 Conduit 移除「{name}」？磁盘上的文件与 CLI 自带历史不会被删除；应用内该工作区的会话记录将不再显示。"
+                                    )),
+                            )
+                            .child(
+                                h_flex()
+                                    .justify_end()
+                                    .gap_2()
+                                    .child(
+                                        Button::new("remove-workspace-cancel")
+                                            .label("取消")
+                                            .small()
+                                            .ghost()
+                                            .on_click(move |_, window, cx| {
+                                                cancel.update(cx, |this, cx| {
+                                                    this.remove_workspace_target = None;
+                                                    cx.notify();
+                                                });
+                                                window.close_dialog(cx);
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new("remove-workspace-confirm")
+                                            .label("移除")
+                                            .small()
+                                            .primary()
+                                            .on_click(move |_, window, cx| {
+                                                let target =
+                                                    confirm.read(cx).remove_workspace_target;
+                                                if let Some(index) = target {
+                                                    confirm.update(cx, |this, cx| {
+                                                        this.remove_workspace(index, cx)
+                                                    });
+                                                }
+                                                window.close_dialog(cx);
+                                            }),
+                                    ),
+                            ),
+                    )
+                })
+        });
+    }
+    fn remove_workspace(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.remove_workspace_target = None;
+        if index >= self.store.workspaces.len() {
+            return;
+        }
+        if self.workspace_busy(index) {
+            self.message = Some("该工作区仍有任务运行，请先取消后再移除。".into());
+            cx.notify();
+            return;
+        }
+        let removed = self.store.workspaces.remove(index);
+        for session in &removed.sessions {
+            self.drafts.remove(&session.id);
+        }
+        if self.selected_workspace == Some(index) || self.selected_session.is_none() {
+            self.selected_workspace = None;
+            self.selected_session = None;
+            self.select_fallback_session();
+        } else if let Some(selected) = self.selected_workspace
+            && selected > index
+        {
+            self.selected_workspace = Some(selected - 1);
+        }
+        self.detail_text = None;
+        self.persist();
+        cx.notify();
+    }
+    fn workspace_menu(&self, index: usize, app: Entity<Self>) -> AnyElement {
+        let trigger = Button::new(("workspace-menu-trigger", index))
+            .ghost()
+            .small()
+            .compact()
+            .icon(IconName::Ellipsis)
+            .on_click(|_, _, cx| cx.stop_propagation());
+        Popover::new(("workspace-menu", index))
+            .anchor(Anchor::BottomRight)
+            .offset(px(6.))
+            .trigger(trigger)
+            .content(move |_, _, cx| {
+                let popover = cx.entity().downgrade();
+                let remove_app = app.clone();
+                let remove_popover = popover.clone();
+                let remove = session_menu_button(
+                    ("workspace-remove", index as u64),
+                    "移除工作区",
+                    IconName::Delete,
+                )
+                .on_click(move |_, window, cx| {
+                    remove_app.update(cx, |this, cx| {
+                        this.open_remove_workspace_dialog(index, window, cx)
+                    });
+                    if let Some(popover) = remove_popover.clone().upgrade() {
+                        popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                    }
+                });
+                v_flex().w(px(170.)).gap(px(1.)).child(remove)
+            })
+            .into_any_element()
+    }
+    fn collect_search_results(&self, query: &str) -> Vec<SearchHit> {
+        let mut hits = Vec::new();
+        'outer: for (workspace_index, workspace) in self.store.workspaces.iter().enumerate() {
+            let workspace_name = workspace.name();
+            for session in workspace.sessions.iter().rev() {
+                let title_matches =
+                    !query.is_empty() && session.title.to_lowercase().contains(query);
+                let matching_message = if query.is_empty() {
+                    None
+                } else {
+                    session
+                        .messages
+                        .iter()
+                        .find(|message| message.text.to_lowercase().contains(query))
+                };
+                if !query.is_empty() && !title_matches && matching_message.is_none() {
+                    continue;
+                }
+                let snippet_source = matching_message
+                    .map(|message| message.text.as_str())
+                    .or_else(|| {
+                        session
+                            .messages
+                            .iter()
+                            .find(|message| message.kind == ItemKind::User)
+                            .map(|message| message.text.as_str())
+                    })
+                    .or_else(|| {
+                        session
+                            .messages
+                            .first()
+                            .map(|message| message.text.as_str())
+                    })
+                    .unwrap_or("");
+                hits.push(SearchHit {
+                    workspace: workspace_index,
+                    session: session.id,
+                    provider: session.provider,
+                    workspace_name: workspace_name.clone(),
+                    title: if session.title.is_empty() {
+                        "新会话".into()
+                    } else {
+                        session.title.clone()
+                    },
+                    archived: session.archived,
+                    snippet: search_snippet(snippet_source, query),
+                });
+                if hits.len() >= 40 {
+                    break 'outer;
+                }
+            }
+        }
+        hits
+    }
+    fn open_search_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search.read(cx).focus_handle(cx).focus(window, cx);
+        let view = cx.entity();
+        window.open_dialog(cx, move |dialog, window, _| {
+            let view = view.clone();
+            let viewport_height = f32::from(window.viewport_size().height);
+            let height = (viewport_height - 160.).clamp(320., 560.);
+            let margin_top = ((viewport_height - height) * 0.5).max(24.);
+            dialog
+                .w(px(640.))
+                .margin_top(px(margin_top))
+                .title("搜索会话")
+                .content(move |content, _, cx| {
+                    let this = view.read(cx);
+                    let input = this.search.clone();
+                    let query = this.search_query.trim().to_lowercase();
+                    let hits = this.collect_search_results(&query);
+                    let mut body = v_flex().w_full().gap_2();
+                    body = body.child(
+                        Input::new(&input)
+                            .h(px(34.))
+                            .prefix(Icon::new(IconName::Search).small().text_color(rgb(FAINT))),
+                    );
+                    if hits.is_empty() {
+                        body = body.child(
+                            div()
+                                .py_2()
+                                .text_size(px(12.))
+                                .text_color(rgb(FAINT))
+                                .child(if query.is_empty() {
+                                    "输入会话标题或消息内容开始搜索"
+                                } else {
+                                    "没有匹配的会话"
+                                }),
+                        );
+                    } else {
+                        let mut list = v_flex()
+                            .id("search-results")
+                            .w_full()
+                            .max_h(px((height - 150.).max(160.)))
+                            .overflow_y_scroll()
+                            .gap(px(1.));
+                        for hit in hits {
+                            let SearchHit {
+                                workspace,
+                                session,
+                                provider,
+                                workspace_name,
+                                title,
+                                archived,
+                                snippet,
+                            } = hit;
+                            let app = view.clone();
+                            list = list.child(
+                                div()
+                                    .id(("search-hit", session))
+                                    .w_full()
+                                    .px_2()
+                                    .py_2()
+                                    .gap_1()
+                                    .rounded(px(8.))
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                    .on_click(move |_, window, cx| {
+                                        app.update(cx, |this, cx| {
+                                            this.switch(workspace, Some(session), window, cx)
+                                        });
+                                        window.close_dialog(cx);
+                                    })
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .w(px(6.))
+                                                    .h(px(6.))
+                                                    .rounded_full()
+                                                    .bg(rgb(provider_tint(provider))),
+                                            )
+                                            .child(
+                                                div().flex_1().min_w_0().child(highlighted_text(
+                                                    &title, &query, 13., TEXT,
+                                                )),
+                                            )
+                                            .when(archived, |row| {
+                                                row.child(
+                                                    div()
+                                                        .text_size(px(9.))
+                                                        .text_color(rgb(FAINT))
+                                                        .child("已归档"),
+                                                )
+                                            })
+                                            .child(
+                                                div()
+                                                    .text_size(px(10.))
+                                                    .text_color(rgb(FAINT))
+                                                    .child(workspace_name),
+                                            ),
+                                    )
+                                    .when(!snippet.is_empty(), |row| {
+                                        row.child(highlighted_text(&snippet, &query, 11., MUTED))
+                                    }),
+                            );
+                        }
+                        body = body.child(list);
+                    }
+                    content.child(body)
+                })
+        });
+        cx.notify();
+    }
     fn session_menu(&self, id: u64, app: Entity<Self>) -> AnyElement {
         let archived = self.session(id).is_some_and(|session| session.archived);
         let trigger = Button::new(("session-menu-trigger", id))
@@ -556,6 +977,12 @@ impl ConduitApp {
             self.input.read(cx).focus_handle(cx).focus(window, cx);
         }
         self.scroll.set_offset(point(px(0.), px(0.)));
+        if let Some(provider) = session
+            .and_then(|id| self.session(id))
+            .map(|session| session.provider)
+        {
+            self.new_session_provider = provider;
+        }
         cx.notify();
     }
     fn workspace_busy(&self, index: usize) -> bool {
@@ -610,13 +1037,16 @@ impl ConduitApp {
         })
         .detach();
     }
-    fn new_session(&mut self, provider: Provider, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.writable || self.closing {
+    fn new_session(
+        &mut self,
+        index: usize,
+        provider: Provider,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.writable || self.closing || index >= self.store.workspaces.len() {
             return;
         }
-        let Some(index) = self.selected_workspace else {
-            return;
-        };
         let id = self.next_id;
         self.next_id += 1;
         self.catalogs.insert(provider, models::load(provider));
@@ -2654,98 +3084,39 @@ impl Render for ConduitApp {
             .bg(rgb(SIDEBAR_BG))
             .p_2()
             .gap_1()
-            .when(has_workspace, |sidebar| {
-                sidebar.child(
-                    v_flex()
-                        .pt_1()
-                        .gap_1()
-                        .child(
-                            div()
-                                .px_2()
-                                .pb_1()
-                                .text_size(px(11.))
-                                .text_color(rgb(FAINT))
-                                .child("新建会话"),
-                        )
-                        .child(
-                            h_flex()
-                                .id("new-claude")
-                                .h(px(32.))
-                                .px_2()
-                                .gap_2()
-                                .items_center()
-                                .rounded(px(8.))
-                                .text_size(px(13.))
-                                .text_color(rgb(MUTED))
-                                .when(can_edit, |row| {
-                                    row.cursor_pointer()
-                                        .hover(|style| {
-                                            style.bg(rgb(SURFACE_HOVER)).text_color(rgb(TEXT))
-                                        })
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.new_session(Provider::Claude, window, cx)
-                                        }))
-                                })
-                                .child(
-                                    div()
-                                        .w(px(6.))
-                                        .h(px(6.))
-                                        .rounded_full()
-                                        .bg(rgb(provider_tint(Provider::Claude))),
-                                )
-                                .child(div().flex_1().child("Claude Code"))
-                                .child(Icon::new(IconName::Plus).small().text_color(rgb(FAINT))),
-                        )
-                        .child(
-                            h_flex()
-                                .id("new-codex")
-                                .h(px(32.))
-                                .px_2()
-                                .gap_2()
-                                .items_center()
-                                .rounded(px(8.))
-                                .text_size(px(13.))
-                                .text_color(rgb(MUTED))
-                                .when(can_edit, |row| {
-                                    row.cursor_pointer()
-                                        .hover(|style| {
-                                            style.bg(rgb(SURFACE_HOVER)).text_color(rgb(TEXT))
-                                        })
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.new_session(Provider::Codex, window, cx)
-                                        }))
-                                })
-                                .child(
-                                    div()
-                                        .w(px(6.))
-                                        .h(px(6.))
-                                        .rounded_full()
-                                        .bg(rgb(provider_tint(Provider::Codex))),
-                                )
-                                .child(div().flex_1().child("Codex"))
-                                .child(Icon::new(IconName::Plus).small().text_color(rgb(FAINT))),
-                        ),
-                )
-            });
-        sidebar = sidebar.child(
-            div().px_2().pt_2().child(
+            .child(
                 h_flex()
-                    .h(px(30.))
+                    .h(px(36.))
                     .px_2()
+                    .gap_1()
                     .items_center()
-                    .rounded(px(8.))
-                    .bg(rgb(SURFACE))
                     .child(
-                        Input::new(&self.search)
-                            .h(px(26.))
-                            .w_full()
-                            .appearance(false)
-                            .bordered(false)
-                            .cleanable(true)
-                            .prefix(Icon::new(IconName::Search).small().text_color(rgb(FAINT))),
-                    ),
-            ),
-        );
+                        Button::new("sidebar-new-session")
+                            .ghost()
+                            .small()
+                            .compact()
+                            .icon(IconName::Plus)
+                            .tooltip(format!("新建 {} 会话", self.new_session_provider.label()))
+                            .disabled(!can_edit || self.selected_workspace.is_none())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if let Some(index) = this.selected_workspace {
+                                    this.new_session_here(index, window, cx);
+                                }
+                            })),
+                    )
+                    .child(
+                        Button::new("sidebar-search")
+                            .ghost()
+                            .small()
+                            .compact()
+                            .icon(IconName::Search)
+                            .tooltip("搜索会话")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_search_dialog(window, cx)
+                            })),
+                    )
+                    .child(div().flex_1()),
+            );
         let mut list = v_flex()
             .id("workspace-list")
             .flex_1()
@@ -2857,7 +3228,20 @@ impl Render for ConduitApp {
                                 .text_size(px(10.))
                                 .text_color(rgb(FAINT))
                                 .child(count.to_string()),
-                        ),
+                        )
+                        .child(
+                            Button::new(("workspace-new-session", index))
+                                .ghost()
+                                .small()
+                                .compact()
+                                .icon(IconName::Plus)
+                                .tooltip("在此工作区新建会话")
+                                .disabled(!can_edit)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.new_session_here(index, window, cx)
+                                })),
+                        )
+                        .child(self.workspace_menu(index, app_entity.clone())),
                 );
             for session in sessions {
                 let id = session.id;
@@ -3692,7 +4076,7 @@ impl Render for ConduitApp {
                         div()
                             .text_size(px(14.))
                             .text_color(rgb(FAINT))
-                            .child("选择执行引擎，创建会话后开始输入"),
+                            .child("在窗口底部切换引擎，然后新建会话开始输入"),
                     ),
                 )
                 .child(
@@ -3703,48 +4087,16 @@ impl Render for ConduitApp {
                         .gap_2()
                         .items_center()
                         .child(
-                            h_flex()
-                                .id("composer-new-claude")
-                                .h(px(34.))
-                                .px_3()
-                                .gap_2()
-                                .items_center()
-                                .rounded_full()
-                                .bg(rgb(SURFACE_HOVER))
-                                .text_size(px(12.))
-                                .text_color(rgb(TEXT))
-                                .when(can_edit, |pill| {
-                                    pill.cursor_pointer()
-                                        .hover(|style| style.bg(rgb(BORDER)))
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.new_session(Provider::Claude, window, cx)
-                                        }))
-                                })
-                                .child(dot(provider_tint(Provider::Claude)))
-                                .child("Claude Code")
-                                .child(Icon::new(IconName::Plus).small().text_color(rgb(FAINT))),
-                        )
-                        .child(
-                            h_flex()
-                                .id("composer-new-codex")
-                                .h(px(34.))
-                                .px_3()
-                                .gap_2()
-                                .items_center()
-                                .rounded_full()
-                                .bg(rgb(SURFACE_HOVER))
-                                .text_size(px(12.))
-                                .text_color(rgb(TEXT))
-                                .when(can_edit, |pill| {
-                                    pill.cursor_pointer()
-                                        .hover(|style| style.bg(rgb(BORDER)))
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.new_session(Provider::Codex, window, cx)
-                                        }))
-                                })
-                                .child(dot(provider_tint(Provider::Codex)))
-                                .child("Codex")
-                                .child(Icon::new(IconName::Plus).small().text_color(rgb(FAINT))),
+                            Button::new("composer-new-session")
+                                .label(format!("新建 {} 会话", self.new_session_provider.label()))
+                                .small()
+                                .primary()
+                                .disabled(!can_edit)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    if let Some(index) = this.selected_workspace {
+                                        this.new_session_here(index, window, cx);
+                                    }
+                                })),
                         )
                         .child(div().flex_1())
                         .child(
@@ -3823,6 +4175,36 @@ impl Render for ConduitApp {
         } else {
             "本地 CLI · 文件保留在你的机器上".into()
         };
+        let engine_tab = |provider: Provider, active: bool| -> AnyElement {
+            let active_color = if active { TEXT } else { FAINT };
+            h_flex()
+                .id(match provider {
+                    Provider::Claude => "new-session-engine-claude",
+                    Provider::Codex => "new-session-engine-codex",
+                })
+                .h(px(22.))
+                .px_2()
+                .gap_1()
+                .items_center()
+                .rounded(px(6.))
+                .text_size(px(10.))
+                .text_color(rgb(active_color))
+                .when(active, |tab| tab.bg(rgb(SURFACE_HOVER)))
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(TEXT)))
+                .on_click(
+                    cx.listener(move |this, _, _, cx| this.set_new_session_provider(provider, cx)),
+                )
+                .child(
+                    div()
+                        .w(px(5.))
+                        .h(px(5.))
+                        .rounded_full()
+                        .bg(rgb(provider_tint(provider))),
+                )
+                .child(provider.label())
+                .into_any_element()
+        };
         conversation = conversation.child(
             h_flex()
                 .h(px(34.))
@@ -3832,12 +4214,32 @@ impl Render for ConduitApp {
                 .border_t_1()
                 .border_color(rgb(BORDER))
                 .child(
+                    h_flex()
+                        .gap_1()
+                        .items_center()
+                        .child(
+                            div()
+                                .pr_1()
+                                .text_size(px(10.))
+                                .text_color(rgb(FAINT))
+                                .child("新建会话引擎"),
+                        )
+                        .child(engine_tab(
+                            Provider::Claude,
+                            self.new_session_provider == Provider::Claude,
+                        ))
+                        .child(engine_tab(
+                            Provider::Codex,
+                            self.new_session_provider == Provider::Codex,
+                        )),
+                )
+                .child(div().flex_1())
+                .child(
                     div()
                         .text_size(px(11.))
                         .text_color(rgb(FAINT))
                         .child(toolbar_hint),
-                )
-                .child(div().flex_1()),
+                ),
         );
         let title_bar = TitleBar::new()
             .bg(rgb(CANVAS))
@@ -3993,7 +4395,10 @@ impl Render for ConduitApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_event, finish_tool_cards, same_failure, session_matches};
+    use super::{
+        apply_event, finish_tool_cards, highlight_ranges, same_failure, search_snippet,
+        session_matches,
+    };
     use crate::{
         domain::{ChatItem, ItemKind, Provider, SessionRecord},
         protocol::Event,
@@ -4142,5 +4547,28 @@ mod tests {
         assert!(session_matches(&s, "alpha"));
         assert!(!session_matches(&s, "beta"));
         assert!(!session_matches(&s, "已归档"));
+    }
+    #[test]
+    fn highlight_ranges_handle_unicode_and_case() {
+        assert_eq!(
+            highlight_ranges("Hello hello HELLO", "hello"),
+            vec![(0, 5), (6, 11), (12, 17)]
+        );
+        // "中文" is 6 bytes, so Markdown starts at byte 6 and ends at 14.
+        assert_eq!(
+            highlight_ranges("中文Markdown测试", "markdown"),
+            vec![(6, 14)]
+        );
+        assert_eq!(highlight_ranges("多字节中文测试", "中文"), vec![(9, 15)]);
+        assert!(highlight_ranges("", "x").is_empty());
+        assert!(highlight_ranges("abc", "").is_empty());
+        assert!(highlight_ranges("İstanbul", "i").iter().all(|(a, b)| a < b));
+    }
+    #[test]
+    fn search_snippet_keeps_match_visible_for_multibyte_text() {
+        let text = "这是很多中文内容，然后出现 Markdown 关键词，后面继续一些内容。";
+        let snippet = search_snippet(text, "markdown");
+        assert!(snippet.to_lowercase().contains("markdown"));
+        assert!(snippet.chars().count() <= 162);
     }
 }
