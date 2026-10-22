@@ -92,7 +92,7 @@ pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -DataDir target/
 | 标题栏拖动“一帧一帧”、跟手延迟 | Debug 构建下窗口移动会触发整窗重绘，而依赖未优化导致重绘过慢。为 dev profile 的依赖启用 `opt-level = 2`、应用本体 `opt-level = 1`（保留 debug 信息），不改变 release 行为 | 全量重建通过、`cargo test` 36 passed、`clippy -D warnings` 通过、双视图冒烟通过；帧率/手感需真实鼠标复验 |
 | 审批卡片默认收起命令内容，可展开 | 新增审批详情折叠状态：默认只显示标题、说明与操作按钮；点“展开详情/收起”切换，滚动区域只在展开时构建 | 折叠态截图 [ui-v3-approval-collapsed.png](screenshots/acceptance/ui-v3-approval-collapsed.png)；展开路径编译通过，自动预验脚本在此轮前台/剪贴板限制下未能稳定复现，需人工点一次确认 |
 | 设置弹窗直接呈现、无动画 | 之前的淡入是为规避同步读取卡顿；模型目录读取已在后台线程，恢复组件默认的滑入入场 | 最终帧截图 [ui-v3-settings.png](screenshots/acceptance/ui-v3-settings.png)；动画流畅度需人工观察 |
-| AI 内容重复呈现 | 失败信息同时出现在助手文本与结果事件时只在助手消息保留一次；相邻重复的 completed 助手文本块合并<br>新增单测 `failure_echoed_as_assistant_text_is_detected`、`adjacent_duplicate_completed_blocks_are_collapsed` | `cargo test` 36 passed |
+| AI 内容重复呈现 | 根因：流式事件含隐藏 thinking 块，文本块的 stream index 与 assistant 快照的可视块序号错位，同一文本被存成 `...-1` 与 `...-0` 两条。协议改为按文本块序号对齐流式增量与快照；加载旧数据时清理相邻重复助手文本与已由助手文本承载的失败通知；另加失败信息去重与相邻重复块合并 | `cargo test` 38 passed（含 `claude_hidden_thinking_block_does_not_duplicate_visible_text`、`restored_duplicate_assistant_blocks_and_failure_notices_are_cleaned`、`failure_echoed_as_assistant_text_is_detected`） |
 
 界面当前状态见 [ui-v3-main-window.png](screenshots/acceptance/ui-v3-main-window.png)。
 ## 仍未覆盖，必须人工完成

@@ -26,7 +26,7 @@
 | 构建 | 通过 | `cargo build --locked`，生成 `target/debug/conduit.exe` |
 | 格式 | 通过 | `cargo fmt --check` |
 | 静态检查 | 通过 | `cargo clippy --locked --all-targets -- -D warnings` |
-| 常规测试 | 通过 | 36 passed，0 failed，9 ignored（2026-10-22 本轮）；ignored 为需要本机 CLI 的集成测试 |
+| 常规测试 | 通过 | 38 passed，0 failed，9 ignored（2026-10-22 本轮）；ignored 为需要本机 CLI 的集成测试 |
 | 模型配置只读同步 | 单测与界面冒烟通过；交互待人工验收 | 解析 Claude settings 与 Codex config/catalog，验证去重、相对目录、隐藏项、缺失/损坏配置；不读取密钥。新增设置“模型同步”菜单，分别展示 CLI 当前模型与 CCS Provider 模型；输入区选择 `gpt-6.1-sol[1M]` 后写入隔离 `state.json`，标签与弹窗状态更新。仅 UI 自动化观察，未人工点击 |
 | cc-switch 模型目录 | 单测与真实数据库查询通过；界面待人工验收 | 只读打开 `~/.cc-switch/cc-switch.db`，仅投影模型 ID、显示名、上下文与可见性；本机读回 Claude 6 个 Provider / 11 个模型、Codex 3 个 Provider / 12 个模型，正确标记 anyrouter 与公司为当前 Provider。夹具含伪造 Token 与端点，断言未进入结果；未修改数据库 |
 | 模型目录合并 | 单测通过 | CCS 当前 Provider 模型并入会话选择器；同名模型合并备注，新增模型带 `CCS · Provider` 来源，其他 Provider 不进入选择器 |
@@ -139,6 +139,7 @@ cargo test --locked approval -- --ignored --nocapture --test-threads=1
 - 界面按反馈完成一轮改进：移除 Windows 原生标题栏改用自定义标题栏（品牌区、拖动与最小化/最大化/关闭命中区）；侧栏与执行详情改为可拖拽面板（侧栏 200–420px，详情 240–480px，窄窗详情覆盖）；审批卡片宽度对齐对话文字列并重做视觉；输入区右上角“最新消息”、底部新增横向预留工具栏；设置弹窗垂直居中，模型目录与 cc-switch 读取移到后台线程，打开不再阻塞首帧，入场动画改为轻量 fade。
 - 用生产参数（`on-request` + `workspace-write`）在隔离工作区跑真实 Codex 审批：越界写文件触发真实审批请求，脚本点击拒绝后无文件落盘，点击允许后探针文件内容正确；此前“生产参数可能不产生审批”的未知项已获得一次真实证据（合成点击，非人工）。
 - 针对第二轮反馈继续修正：Debug 构建下窗口拖动会整窗重绘，依赖未优化导致逐帧卡顿，dev profile 改为依赖 `opt-level = 2`、应用本体 `opt-level = 1`；审批卡片详情默认折叠并可用“展开详情/收起”切换；设置弹窗在模型读取移出 UI 线程后恢复默认滑入入场动画；失败信息若已出现在助手文本中则不再重复追加结果通知，相邻重复的 completed 助手文本块合并（新增两个单测）。
+- 定位“AI 回复重复”的真实原因：自定义网关的流式事件包含隐藏 thinking 块，使文本块的 stream index 与 assistant 快照中的可视块序号错位，同一段文本被存成 `...-1` 与 `...-0` 两条（工具卡片与审批通知随之成对出现）。协议改为按“文本块序号”对齐流式增量与快照；加载旧数据时清理相邻重复助手文本和已由助手文本承载的失败通知。新增 3 个协议/存储测试（共 38 passed），旧会话在下次加载时即不再重复显示。
 
 ## 未完成验收与具体限制
 
