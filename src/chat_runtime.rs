@@ -375,6 +375,7 @@ mod tests {
             wire_id: serde_json::json!(id),
             input: Value::Null,
             allow_once: true,
+            kind: crate::protocol::ApprovalKind::Command,
         }
     }
 
@@ -1062,6 +1063,58 @@ mod tests {
         assert!(content.contains("CONDUIT_CLAUDE_ALLOWED"));
 
         std::fs::remove_file(&allowed).unwrap();
+        cleanup_temp_dir(&cwd);
+    }
+
+    #[test]
+    #[ignore = "sends one small Write-tool prompt through installed Claude CLI and cancels while approval is pending; set CONDUIT_CLAUDE_TEST_MODEL if the configured model is unavailable"]
+    fn real_claude_cancel_during_pending_approval() {
+        let cwd =
+            std::env::temp_dir().join(format!("conduit-claude-cancel-{}", std::process::id()));
+        std::fs::create_dir_all(&cwd).unwrap();
+        let target = cwd.join("cancel.txt");
+        let executable = crate::cli::resolve(Provider::Claude, &crate::cli::CliSettings::default())
+            .unwrap()
+            .path;
+        let model = std::env::var("CONDUIT_CLAUDE_TEST_MODEL")
+            .ok()
+            .filter(|value| !value.is_empty());
+        // Manual mode forces can_use_tool instead of relying on local allow rules.
+        let runtime = ChatRuntime::start_for_approval_test(
+            Provider::Claude,
+            executable,
+            cwd.clone(),
+            "Use the Write tool to create cancel.txt containing exactly CONDUIT_CANCEL_SHOULD_NOT_EXIST. Do not use any other tool. If the tool is denied, reply exactly CONDUIT_CANCEL_CONFIRMED and stop.".into(),
+            model,
+            Some("manual".into()),
+        );
+        let deadline = Instant::now() + Duration::from_secs(180);
+        let mut approval = false;
+        let mut resolved = false;
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "Claude did not request can_use_tool before cancellation timeout"
+            );
+            match runtime.events.recv_timeout(Duration::from_secs(3)) {
+                Ok(Event::Approval(_)) => {
+                    approval = true;
+                    runtime.cancel();
+                }
+                Ok(Event::ApprovalResolved { .. }) => resolved = true,
+                Ok(Event::Finished { error, cancelled }) => {
+                    assert!(cancelled, "approval cancellation did not cancel the turn");
+                    assert!(error.is_none(), "{error:?}");
+                    break;
+                }
+                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(error) => panic!("event channel closed: {error}"),
+            }
+        }
+        assert!(approval, "Claude did not request tool approval");
+        assert!(!resolved, "cancelled Claude approval was still resolved");
+        assert!(!target.exists(), "cancelled Write changed the workspace");
+        drop(runtime);
         cleanup_temp_dir(&cwd);
     }
 }
