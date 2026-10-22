@@ -20,7 +20,7 @@ use gpui_kit::{
     *,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -95,6 +95,8 @@ pub struct ConduitApp {
     closing: bool,
     details: bool,
     detail_text: Option<String>,
+    /// Approval tickets whose raw request detail the user expanded.
+    approval_details: HashSet<String>,
     dirty: bool,
     last_save: Instant,
     scroll: ScrollHandle,
@@ -196,6 +198,7 @@ impl ConduitApp {
             closing: false,
             details: false,
             detail_text: None,
+            approval_details: HashSet::new(),
             dirty: false,
             last_save: Instant::now(),
             scroll: ScrollHandle::new(),
@@ -530,6 +533,7 @@ impl ConduitApp {
                     }
                 }
                 Event::ApprovalCancelled(request) => {
+                    self.approval_details.remove(&request);
                     if let Some(run) = self.runs.get_mut(&id) {
                         run.approvals.remove(&request);
                         if run.approvals.is_empty() && !run.runtime.is_cancelled() {
@@ -538,6 +542,7 @@ impl ConduitApp {
                     }
                 }
                 Event::ApprovalResolved { id: request, allow } => {
+                    self.approval_details.remove(&request);
                     let approval = self.runs.get_mut(&id).and_then(|run| {
                         let approval = run.approvals.remove(&request);
                         run.status = if run.approvals.is_empty() {
@@ -581,20 +586,37 @@ impl ConduitApp {
                                 "未返回结果"
                             },
                         );
-                        session.messages.push(ChatItem {
-                            key: format!("{prefix}-finish"),
-                            kind: ItemKind::Notice,
-                            text: if cancelled {
-                                "已取消；不会自动重试。".into()
-                            } else if let Some(error) = error {
-                                format!("执行失败：{error}")
-                            } else {
-                                "本轮已完成".into()
-                            },
-                            input: String::new(),
-                            detail: String::new(),
-                            status: String::new(),
+                        // Some CLIs print the failure as assistant text and then
+                        // also report it through the result event. Do not show the
+                        // same failure twice: the assistant message already carries
+                        // the explanation.
+                        let already_shown = error.as_deref().is_some_and(|error| {
+                            session
+                                .messages
+                                .iter()
+                                .rev()
+                                .filter(|item| {
+                                    matches!(item.kind, ItemKind::Assistant | ItemKind::Tool)
+                                })
+                                .take(3)
+                                .any(|item| same_failure(&item.text, error))
                         });
+                        if !already_shown {
+                            session.messages.push(ChatItem {
+                                key: format!("{prefix}-finish"),
+                                kind: ItemKind::Notice,
+                                text: if cancelled {
+                                    "已取消；不会自动重试。".into()
+                                } else if let Some(error) = error {
+                                    format!("执行失败：{error}")
+                                } else {
+                                    "本轮已完成".into()
+                                },
+                                input: String::new(),
+                                detail: String::new(),
+                                status: String::new(),
+                            });
+                        }
                     }
                 }
                 Event::NativeId(native_id) => {
@@ -998,7 +1020,6 @@ impl ConduitApp {
             dialog
                 .w(px(840.))
                 .margin_top(px(margin_top))
-                .entrance(gpui_kit::component::dialog::DialogEntrance::Fade)
                 .p_0()
                 .gap(px(0.))
                 .rounded(px(16.))
@@ -2150,6 +2171,12 @@ impl ConduitApp {
             .child(right)
             .into_any_element()
     }
+    fn toggle_approval_detail(&mut self, id: String, cx: &mut Context<Self>) {
+        if !self.approval_details.remove(&id) {
+            self.approval_details.insert(id);
+        }
+        cx.notify();
+    }
     fn decide(
         &mut self,
         session: u64,
@@ -2173,6 +2200,19 @@ impl ConduitApp {
             cx.notify();
         }
     }
+}
+
+/// Whether a failure notice repeats text an earlier assistant/tool message
+/// already shows. CLI wrappers often echo the same provider error in both the
+/// assistant output and the task result, and showing it twice reads as a
+/// duplicated reply.
+fn same_failure(message: &str, error: &str) -> bool {
+    let message = message.trim();
+    let error = error.trim();
+    if message.is_empty() || error.is_empty() {
+        return false;
+    }
+    message == error || message.contains(error) || error.contains(message)
 }
 
 fn finish_tool_cards(session: &mut SessionRecord, prefix: &str, status: &str) {
@@ -2260,14 +2300,28 @@ pub fn apply_event(session: &mut SessionRecord, prefix: &str, event: Event) {
             item.status = status;
         }
     } else {
-        session.messages.push(ChatItem {
-            key,
-            kind,
-            text,
-            input: String::new(),
-            detail,
-            status,
-        });
+        // Guard against a provider resending the same completed block under a
+        // new item key; keep one visible copy per consecutive run.
+        let duplicate_text = kind == ItemKind::Assistant
+            && !text.trim().is_empty()
+            && session.messages.last().is_some_and(|last| {
+                last.kind == ItemKind::Assistant && last.text.trim() == text.trim()
+            });
+        let duplicate_notice = kind == ItemKind::Notice
+            && session
+                .messages
+                .last()
+                .is_some_and(|last| last.kind == ItemKind::Notice && last.text == text);
+        if !duplicate_text && !duplicate_notice {
+            session.messages.push(ChatItem {
+                key,
+                kind,
+                text,
+                input: String::new(),
+                detail,
+                status,
+            });
+        }
     }
 }
 
@@ -2882,6 +2936,8 @@ impl Render for ConduitApp {
             let id = self.selected_session.unwrap();
             let allow_id = approval.id.clone();
             let deny_id = approval.id;
+            let toggle_id = deny_id.clone();
+            let expanded = self.approval_details.contains(&deny_id);
             let queue_label = if approval_count > 1 {
                 format!("第 {} / {} 项", index + 1, approval_count)
             } else {
@@ -2955,24 +3011,35 @@ impl Render for ConduitApp {
                                                 .text_color(rgb(0x9c9284))
                                                 .child("CLI 请求授权，仅对本次操作生效。"),
                                         ),
+                                )
+                                .child(
+                                    Button::new(("approval-toggle", index))
+                                        .label(if expanded { "收起" } else { "展开详情" })
+                                        .small()
+                                        .ghost()
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.toggle_approval_detail(toggle_id.clone(), cx)
+                                        })),
                                 ),
                         )
-                        .child(
-                            div()
-                                .id(("approval-detail", index))
-                                .max_h(px((f32::from(window.viewport_size().height) * 0.4)
-                                    .clamp(120., 360.)))
-                                .overflow_y_scroll()
-                                .p_3()
-                                .rounded(px(10.))
-                                .border_1()
-                                .border_color(rgb(0x352c1b))
-                                .bg(rgb(0x15130e))
-                                .text_xs()
-                                .line_height(relative(1.5))
-                                .text_color(rgb(0xd9d3c7))
-                                .child(approval.detail),
-                        )
+                        .when(expanded, |column| {
+                            column.child(
+                                div()
+                                    .id(("approval-detail", index))
+                                    .max_h(px((f32::from(window.viewport_size().height) * 0.4)
+                                        .clamp(120., 360.)))
+                                    .overflow_y_scroll()
+                                    .p_3()
+                                    .rounded(px(10.))
+                                    .border_1()
+                                    .border_color(rgb(0x352c1b))
+                                    .bg(rgb(0x15130e))
+                                    .text_xs()
+                                    .line_height(relative(1.5))
+                                    .text_color(rgb(0xd9d3c7))
+                                    .child(approval.detail.clone()),
+                            )
+                        })
                         .child(
                             h_flex()
                                 .items_center()
@@ -3547,7 +3614,7 @@ impl Render for ConduitApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_event, finish_tool_cards};
+    use super::{apply_event, finish_tool_cards, same_failure};
     use crate::{
         domain::{ItemKind, Provider, SessionRecord},
         protocol::Event,
@@ -3649,5 +3716,33 @@ mod tests {
         assert_eq!(s.messages[1].status, "completed");
         assert_eq!(s.messages[2].status, "已取消");
         assert_eq!(s.messages[2].detail, "partial result");
+    }
+    #[test]
+    fn adjacent_duplicate_completed_blocks_are_collapsed() {
+        let mut s = session();
+        for (key, text) in [("a", "duplicate"), ("b", "duplicate"), ("c", "next")] {
+            apply_event(
+                &mut s,
+                "turn-0",
+                Event::Text {
+                    key: key.into(),
+                    text: text.into(),
+                },
+            );
+        }
+        assert_eq!(s.messages.len(), 2);
+        assert_eq!(s.messages[0].text, "duplicate");
+        assert_eq!(s.messages[1].text, "next");
+    }
+    #[test]
+    fn failure_echoed_as_assistant_text_is_detected() {
+        assert!(same_failure("执行失败：boom", "boom"));
+        assert!(same_failure("boom", "执行失败：boom"));
+        assert!(same_failure(
+            "Failed to authenticate. API Error: 403\nmore detail",
+            "Failed to authenticate. API Error: 403\nmore detail"
+        ));
+        assert!(!same_failure("ok", "boom"));
+        assert!(!same_failure("", "boom"));
     }
 }
