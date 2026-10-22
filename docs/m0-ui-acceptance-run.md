@@ -124,6 +124,19 @@ pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -DataDir target/
 
 仍待人工确认：图标 tooltip/点击手感、引擎切换后新建会话是否符合使用习惯、搜索弹窗长列表滚动。
 
+## 第六轮：2026-10-22 输入与引擎交互细节
+
+| 反馈 | 实现 | 证据 |
+| --- | --- | --- |
+| 工作区右侧菜单向右弹出 | 工作区菜单锚点改为 `Anchor::LeftCenter`，菜单出现在行右侧 | [ui-v6-workspace-menu-right.png](screenshots/acceptance/ui-v6-workspace-menu-right.png) |
+| 每个工作区默认展示最近 N 条会话，设置可调 | `UiSettings.sessions_per_workspace`（默认 5，范围 1–30）；侧栏超出显示“显示更多（还有 X 条）”并可展开/收起；设置 → 通用 → 界面提供步进器，点击“+”后 `state.json` 持久化为 6 | [ui-v6-session-limit.png](screenshots/acceptance/ui-v6-session-limit.png)、[ui-v6-session-expanded.png](screenshots/acceptance/ui-v6-session-expanded.png)、[ui-v6-settings-session-limit.png](screenshots/acceptance/ui-v6-settings-session-limit.png) |
+| Enter 发送、Ctrl/Shift+Enter 换行 | 在 `ConduitComposer > Input` 与 `ConduitComposer` 绑定 Enter→SendPrompt、Ctrl/Shift+Enter→Newline；合成按键验证 Ctrl+Enter 插入换行（两行草稿），Enter 在新会话中发送成功并生成用户消息 | [ui-v6-ctrl-enter-newline.png](screenshots/acceptance/ui-v6-ctrl-enter-newline.png)、[ui-v6-enter-send.png](screenshots/acceptance/ui-v6-enter-send.png) |
+| 去掉快捷键提示，引擎下拉移到该位置、向上弹出并同步右上角模型选择器 | 输入区左下角引擎下拉（`Anchor::BottomLeft` 向上弹出）；切换后切到该工作区该引擎最近的未归档会话，右上角模型选择器随会话同步（截图中切到 Codex 后模型选择器显示 GPT-5.6-Sol + Codex） | [ui-v6-composer-engine.png](screenshots/acceptance/ui-v6-composer-engine.png)、[ui-v6-engine-popup.png](screenshots/acceptance/ui-v6-engine-popup.png)、[ui-v6-engine-sync.png](screenshots/acceptance/ui-v6-engine-sync.png) |
+
+预验中发现并修复：工作区行“+”按钮点击冒泡到行选择，导致新建会话后选中被覆盖；已停止该按钮的点击传播。`cargo test` 43 passed。
+
+仍待人工确认：Enter/Ctrl+Enter 在真实中文输入法组合态下的行为（合成按键不等同 IME）、模型选择器与引擎下拉的手感、会话数上限在长列表下的滚动表现。
+
 ## 仍未覆盖，必须人工完成
 
 清单 1、2、5、6、8、9 全项；3 的复制一致性；4 的动态滚动跟随；7 的 100%–200% DPI 与多屏；10 的取消检测与文件选择；5 的真实审批允许/拒绝与多审批队列。人工完成后把结果写回 [验证记录](m0-validation.md#手工-ui-验收清单)，不得用本预验代替。
