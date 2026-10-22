@@ -7,12 +7,33 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct UiSettings {
+    /// How many recent sessions a workspace shows before "show more".
+    #[serde(default = "default_sessions_per_workspace")]
+    pub sessions_per_workspace: usize,
+}
+
+fn default_sessions_per_workspace() -> usize {
+    5
+}
+
+impl Default for UiSettings {
+    fn default() -> Self {
+        Self {
+            sessions_per_workspace: default_sessions_per_workspace(),
+        }
+    }
+}
+
 #[derive(Default, Serialize, Deserialize)]
 pub struct Store {
     pub version: u32,
     pub workspaces: Vec<Workspace>,
     #[serde(default)]
     pub cli: crate::cli::CliSettings,
+    #[serde(default)]
+    pub ui: UiSettings,
 }
 
 impl Store {
@@ -35,6 +56,7 @@ impl Store {
                 version: 2,
                 workspaces: vec![],
                 cli: Default::default(),
+                ui: Default::default(),
             });
         }
         let mut state: Self = serde_json::from_slice(&fs::read(path)?)
@@ -239,6 +261,7 @@ mod tests {
         let mut store = Store {
             version: 2,
             cli: Default::default(),
+            ui: Default::default(),
             workspaces: vec![Workspace {
                 path: directory.clone(),
                 sessions: vec![],
@@ -324,5 +347,25 @@ mod tests {
         assert!(reloaded.workspaces[0].sessions[1].archived);
         fs::remove_file(path).unwrap();
         fs::remove_dir(directory).unwrap();
+    }
+    #[test]
+    fn ui_settings_default_to_five_sessions_and_roundtrip() {
+        let value = serde_json::json!({"version":2,"workspaces":[]});
+        let path = std::env::temp_dir().join(format!(
+            "conduit-ui-settings-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let mut store = Store::load_from(&path).unwrap();
+        assert_eq!(store.ui.sessions_per_workspace, 5);
+        store.ui.sessions_per_workspace = 8;
+        store.save_to(&path).unwrap();
+        let reloaded = Store::load_from(&path).unwrap();
+        assert_eq!(reloaded.ui.sessions_per_workspace, 8);
+        fs::remove_file(path).unwrap();
     }
 }

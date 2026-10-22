@@ -38,7 +38,7 @@ enum SettingsTab {
     Models,
 }
 
-actions!(conduit, [SendPrompt]);
+actions!(conduit, [SendPrompt, Newline]);
 
 const CANVAS: u32 = 0x0e0e10;
 const SIDEBAR_BG: u32 = 0x131315;
@@ -218,6 +218,8 @@ pub struct ConduitApp {
     detail_text: Option<String>,
     /// Approval tickets whose raw request detail the user expanded.
     approval_details: HashSet<String>,
+    /// Workspaces whose session list was expanded past the configured limit.
+    expanded_workspaces: HashSet<usize>,
     /// Sidebar session search filter.
     search: Entity<InputState>,
     search_query: String,
@@ -237,10 +239,15 @@ pub struct ConduitApp {
 impl ConduitApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>, start_in_settings: bool) -> Self {
         cx.bind_keys([
-            // The input binds secondary-enter itself; a binding at the same
-            // depth is needed to keep Ctrl+Enter from inserting a newline.
-            KeyBinding::new("ctrl-enter", SendPrompt, Some("ConduitComposer > Input")),
-            KeyBinding::new("ctrl-enter", SendPrompt, Some("ConduitComposer")),
+            // Enter sends from the composer; Ctrl/Shift+Enter insert a newline.
+            // Bind at the input depth (wins over the textarea's own Enter
+            // handling) and at composer depth for when focus is nearby.
+            KeyBinding::new("enter", SendPrompt, Some("ConduitComposer > Input")),
+            KeyBinding::new("enter", SendPrompt, Some("ConduitComposer")),
+            KeyBinding::new("ctrl-enter", Newline, Some("ConduitComposer > Input")),
+            KeyBinding::new("ctrl-enter", Newline, Some("ConduitComposer")),
+            KeyBinding::new("shift-enter", Newline, Some("ConduitComposer > Input")),
+            KeyBinding::new("shift-enter", Newline, Some("ConduitComposer")),
         ]);
         let (store, message, writable) = match Store::load() {
             Ok(store) => (store, None, true),
@@ -348,6 +355,7 @@ impl ConduitApp {
             details: false,
             detail_text: None,
             approval_details: HashSet::new(),
+            expanded_workspaces: HashSet::new(),
             search,
             search_query: String::new(),
             show_archived: false,
@@ -575,9 +583,102 @@ impl ConduitApp {
         let provider = self.new_session_provider;
         self.new_session(index, provider, window, cx);
     }
-    fn set_new_session_provider(&mut self, provider: Provider, cx: &mut Context<Self>) {
+    fn select_engine(&mut self, provider: Provider, window: &mut Window, cx: &mut Context<Self>) {
         self.new_session_provider = provider;
-        cx.notify();
+        if let Some(index) = self.selected_workspace
+            && index < self.store.workspaces.len()
+        {
+            let target = self.store.workspaces[index]
+                .sessions
+                .iter()
+                .rev()
+                .find(|session| !session.archived && session.provider == provider)
+                .map(|session| session.id);
+            match target {
+                Some(id) => self.switch(index, Some(id), window, cx),
+                None => {
+                    // No session of that engine yet: clear the selection so the
+                    // composer offers to create one with the chosen engine.
+                    if let Some(current) = self.selected_session {
+                        self.drafts
+                            .insert(current, self.input.read(cx).value().to_string());
+                    }
+                    self.selected_session = None;
+                    self.detail_text = None;
+                    self.message = None;
+                    self.input
+                        .update(cx, |input, cx| input.set_value("", window, cx));
+                    cx.notify();
+                }
+            }
+        } else {
+            cx.notify();
+        }
+    }
+    fn engine_picker(&self, view: Entity<Self>) -> AnyElement {
+        let provider = self.new_session_provider;
+        let trigger = Button::new("engine-picker-trigger")
+            .ghost()
+            .small()
+            .h(px(22.))
+            .px_1()
+            .tooltip("切换引擎")
+            .child(
+                h_flex()
+                    .gap_1()
+                    .items_center()
+                    .child(
+                        div()
+                            .w(px(5.))
+                            .h(px(5.))
+                            .rounded_full()
+                            .bg(rgb(provider_tint(provider))),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(MUTED))
+                            .child(provider.label()),
+                    )
+                    .child(
+                        Icon::new(IconName::ChevronDown)
+                            .small()
+                            .text_color(rgb(FAINT)),
+                    ),
+            );
+        Popover::new("engine-picker")
+            .anchor(Anchor::BottomLeft)
+            .offset(px(6.))
+            .trigger(trigger)
+            .content(move |_, _, cx| {
+                let popover = cx.entity().downgrade();
+                let mut list = v_flex().w(px(180.)).gap(px(1.));
+                for option in [Provider::Claude, Provider::Codex] {
+                    let app = view.clone();
+                    let popover = popover.clone();
+                    let active = option == provider;
+                    list = list.child(
+                        session_menu_button(
+                            if option == Provider::Claude {
+                                ("engine-option-claude", 0)
+                            } else {
+                                ("engine-option-codex", 1)
+                            },
+                            option.label(),
+                            IconName::Cpu,
+                        )
+                        .when(active, |button| button.bg(rgb(SURFACE_HOVER)))
+                        .on_click(move |_, window, cx| {
+                            app.update(cx, |this, cx| this.select_engine(option, window, cx));
+                            if let Some(popover) = popover.clone().upgrade() {
+                                popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                            }
+                        }),
+                    );
+                }
+                list
+            })
+            .into_any_element()
     }
     fn open_remove_workspace_dialog(
         &mut self,
@@ -666,6 +767,7 @@ impl ConduitApp {
             return;
         }
         let removed = self.store.workspaces.remove(index);
+        self.expanded_workspaces.clear();
         for session in &removed.sessions {
             self.drafts.remove(&session.id);
         }
@@ -690,8 +792,8 @@ impl ConduitApp {
             .icon(IconName::Ellipsis)
             .on_click(|_, _, cx| cx.stop_propagation());
         Popover::new(("workspace-menu", index))
-            .anchor(Anchor::BottomRight)
-            .offset(px(6.))
+            .anchor(Anchor::LeftCenter)
+            .offset(px(8.))
             .trigger(trigger)
             .content(move |_, _, cx| {
                 let popover = cx.entity().downgrade();
@@ -2557,7 +2659,7 @@ impl ConduitApp {
             .child(ccs_card)
             .into_any_element()
     }
-    fn settings_general_content(&self) -> AnyElement {
+    fn settings_general_content(&self, view: Entity<Self>) -> AnyElement {
         let state_path = Store::path();
         let data_dir = state_path
             .parent()
@@ -2652,6 +2754,97 @@ impl ConduitApp {
                     )
                     .child(row("数据目录", data_dir, false))
                     .child(row("配置文件", state_file, true)),
+            )
+            .child(
+                v_flex()
+                    .w_full()
+                    .overflow_hidden()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .bg(rgb(SURFACE_STRONG))
+                    .child(
+                        h_flex()
+                            .px_4()
+                            .py_3()
+                            .items_center()
+                            .border_b_1()
+                            .border_color(rgb(BORDER))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_semibold()
+                                    .text_color(rgb(TEXT))
+                                    .child("界面"),
+                            ),
+                    )
+                    .child({
+                        let value = self.store.ui.sessions_per_workspace.clamp(1, 50);
+                        let decrease = view.clone();
+                        let increase = view.clone();
+                        h_flex()
+                            .px_4()
+                            .py_3()
+                            .gap_4()
+                            .items_center()
+                            .child(settings_label("每个工作区会话数"))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(MUTED))
+                                    .child("默认 5 条，超出时侧栏可展开"),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .child(
+                                        Button::new("sessions-limit-minus")
+                                            .label("−")
+                                            .small()
+                                            .ghost()
+                                            .disabled(value <= 1)
+                                            .on_click(move |_, _, cx| {
+                                                decrease.update(cx, |this, cx| {
+                                                    this.store.ui.sessions_per_workspace = this
+                                                        .store
+                                                        .ui
+                                                        .sessions_per_workspace
+                                                        .saturating_sub(1)
+                                                        .max(1);
+                                                    this.persist();
+                                                    cx.notify();
+                                                });
+                                            }),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .w(px(26.))
+                                            .justify_center()
+                                            .text_size(px(12.))
+                                            .text_color(rgb(TEXT))
+                                            .child(value.to_string()),
+                                    )
+                                    .child(
+                                        Button::new("sessions-limit-plus")
+                                            .label("+")
+                                            .small()
+                                            .ghost()
+                                            .disabled(value >= 30)
+                                            .on_click(move |_, _, cx| {
+                                                increase.update(cx, |this, cx| {
+                                                    this.store.ui.sessions_per_workspace =
+                                                        (this.store.ui.sessions_per_workspace + 1)
+                                                            .min(30);
+                                                    this.persist();
+                                                    cx.notify();
+                                                });
+                                            }),
+                                    ),
+                            )
+                    }),
             )
             .child(
                 div()
@@ -2795,7 +2988,7 @@ impl ConduitApp {
                     .child("本地 CLI · Windows"),
             );
         let page = match self.settings_tab {
-            SettingsTab::General => self.settings_general_content(),
+            SettingsTab::General => self.settings_general_content(view.clone()),
             SettingsTab::Provider(provider) => {
                 self.settings_provider_content(provider, view.clone())
             }
@@ -3199,11 +3392,10 @@ impl Render for ConduitApp {
                 .map(|session| session.id)
                 .or_else(|| workspace.sessions.last().map(|session| session.id));
             let workspace_selected = self.selected_workspace == Some(index);
-            let count = if query.is_empty() {
-                workspace.sessions.len()
-            } else {
-                sessions.len()
-            };
+            let count = sessions.len();
+            let limit = self.store.ui.sessions_per_workspace.clamp(1, 50);
+            let expanded = self.expanded_workspaces.contains(&index);
+            let total = sessions.len();
             list =
                 list.child(
                     h_flex()
@@ -3238,12 +3430,16 @@ impl Render for ConduitApp {
                                 .tooltip("在此工作区新建会话")
                                 .disabled(!can_edit)
                                 .on_click(cx.listener(move |this, _, window, cx| {
+                                    // Keep the workspace row's own click
+                                    // handler from reselecting the previous
+                                    // session right after creation.
+                                    cx.stop_propagation();
                                     this.new_session_here(index, window, cx)
                                 })),
                         )
                         .child(self.workspace_menu(index, app_entity.clone())),
                 );
-            for session in sessions {
+            for session in sessions.iter().take(if expanded { total } else { limit }) {
                 let id = session.id;
                 let active = self.selected_session == Some(id);
                 let run_status = self.runs.get(&id).map(|r| r.status.clone());
@@ -3306,6 +3502,39 @@ impl Render for ConduitApp {
                             )
                         })
                         .child(menu),
+                );
+            }
+            if total > limit {
+                let toggle_app = app_entity.clone();
+                let more_label = if expanded {
+                    "收起".to_string()
+                } else {
+                    format!("显示更多（还有 {} 条）", total - limit)
+                };
+                list = list.child(
+                    h_flex()
+                        .id(("workspace-more", index))
+                        .h(px(24.))
+                        .pl(px(24.))
+                        .pr(px(4.))
+                        .items_center()
+                        .rounded(px(6.))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                        .on_click(move |_, _, cx| {
+                            toggle_app.update(cx, |this, cx| {
+                                if !this.expanded_workspaces.insert(index) {
+                                    this.expanded_workspaces.remove(&index);
+                                }
+                                cx.notify();
+                            });
+                        })
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(rgb(FAINT))
+                                .child(more_label),
+                        ),
                 );
             }
         }
@@ -3882,19 +4111,18 @@ impl Render for ConduitApp {
                     )
                 })
                 .unwrap_or_else(|| div().into_any_element());
-            let footer_text = if self.closing {
-                "正在清理进程…".into()
-            } else if active {
-                status.clone().unwrap_or_else(|| "正在执行…".into())
-            } else {
-                "Enter 换行 · Ctrl+Enter 发送".into()
-            };
             v_flex()
                 .id("composer")
                 .key_context("ConduitComposer")
                 .on_action(cx.listener(|this, _: &SendPrompt, window, cx| {
                     cx.stop_propagation();
                     this.send_prompt(window, cx)
+                }))
+                .on_action(cx.listener(|this, _: &Newline, window, cx| {
+                    cx.stop_propagation();
+                    this.input
+                        .update(cx, |input, cx| input.insert("\n", window, cx));
+                    cx.notify();
                 }))
                 .w_full()
                 .max_w(px(840.))
@@ -3978,15 +4206,8 @@ impl Render for ConduitApp {
                         .pt_1()
                         .gap_2()
                         .items_center()
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(px(11.))
-                                .text_color(rgb(FAINT))
-                                .child(footer_text),
-                        )
+                        .child(self.engine_picker(app_entity.clone()))
+                        .child(div().flex_1())
                         .child(if active {
                             h_flex()
                                 .id("stop")
@@ -4076,7 +4297,7 @@ impl Render for ConduitApp {
                         div()
                             .text_size(px(14.))
                             .text_color(rgb(FAINT))
-                            .child("在窗口底部切换引擎，然后新建会话开始输入"),
+                            .child("选择引擎后新建会话开始输入"),
                     ),
                 )
                 .child(
@@ -4086,6 +4307,8 @@ impl Render for ConduitApp {
                         .pt_1()
                         .gap_2()
                         .items_center()
+                        .child(self.engine_picker(app_entity.clone()))
+                        .child(div().flex_1())
                         .child(
                             Button::new("composer-new-session")
                                 .label(format!("新建 {} 会话", self.new_session_provider.label()))
@@ -4097,13 +4320,6 @@ impl Render for ConduitApp {
                                         this.new_session_here(index, window, cx);
                                     }
                                 })),
-                        )
-                        .child(div().flex_1())
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(rgb(FAINT))
-                                .child("沿用 CLI 已有登录状态"),
                         ),
                 )
                 .into_any_element()
@@ -4175,36 +4391,6 @@ impl Render for ConduitApp {
         } else {
             "本地 CLI · 文件保留在你的机器上".into()
         };
-        let engine_tab = |provider: Provider, active: bool| -> AnyElement {
-            let active_color = if active { TEXT } else { FAINT };
-            h_flex()
-                .id(match provider {
-                    Provider::Claude => "new-session-engine-claude",
-                    Provider::Codex => "new-session-engine-codex",
-                })
-                .h(px(22.))
-                .px_2()
-                .gap_1()
-                .items_center()
-                .rounded(px(6.))
-                .text_size(px(10.))
-                .text_color(rgb(active_color))
-                .when(active, |tab| tab.bg(rgb(SURFACE_HOVER)))
-                .cursor_pointer()
-                .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(TEXT)))
-                .on_click(
-                    cx.listener(move |this, _, _, cx| this.set_new_session_provider(provider, cx)),
-                )
-                .child(
-                    div()
-                        .w(px(5.))
-                        .h(px(5.))
-                        .rounded_full()
-                        .bg(rgb(provider_tint(provider))),
-                )
-                .child(provider.label())
-                .into_any_element()
-        };
         conversation = conversation.child(
             h_flex()
                 .h(px(34.))
@@ -4214,32 +4400,12 @@ impl Render for ConduitApp {
                 .border_t_1()
                 .border_color(rgb(BORDER))
                 .child(
-                    h_flex()
-                        .gap_1()
-                        .items_center()
-                        .child(
-                            div()
-                                .pr_1()
-                                .text_size(px(10.))
-                                .text_color(rgb(FAINT))
-                                .child("新建会话引擎"),
-                        )
-                        .child(engine_tab(
-                            Provider::Claude,
-                            self.new_session_provider == Provider::Claude,
-                        ))
-                        .child(engine_tab(
-                            Provider::Codex,
-                            self.new_session_provider == Provider::Codex,
-                        )),
-                )
-                .child(div().flex_1())
-                .child(
                     div()
                         .text_size(px(11.))
                         .text_color(rgb(FAINT))
                         .child(toolbar_hint),
-                ),
+                )
+                .child(div().flex_1()),
         );
         let title_bar = TitleBar::new()
             .bg(rgb(CANVAS))
