@@ -1,0 +1,441 @@
+//! Read-only model catalogs from local CLI configuration.
+//!
+//! Only model identifiers and non-secret endpoint information are read. No
+//! credentials are inspected, and neither configuration file is modified.
+use crate::domain::Provider;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModelOption {
+    pub id: String,
+    pub label: String,
+    pub note: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ModelCatalog {
+    pub config_path: PathBuf,
+    pub catalog_path: Option<PathBuf>,
+    pub current: Option<String>,
+    pub models: Vec<ModelOption>,
+    pub endpoint: Option<String>,
+    pub detail: Option<String>,
+    pub note: Option<String>,
+    pub error: Option<String>,
+}
+
+impl ModelCatalog {
+    pub fn option(&self, id: &str) -> Option<&ModelOption> {
+        self.models.iter().find(|model| model.id == id)
+    }
+    pub fn label(&self, id: &str) -> String {
+        self.option(id)
+            .map(|model| model.label.clone())
+            .unwrap_or_else(|| id.to_string())
+    }
+    pub fn with_synced(&self, source: &str, synced: &[ModelOption]) -> Self {
+        let mut catalog = self.clone();
+        for model in synced {
+            let note = match (model.note.as_str(), source) {
+                ("", "") => String::new(),
+                ("", source) => source.to_string(),
+                (note, "") => note.to_string(),
+                (note, source) => format!("{note} · {source}"),
+            };
+            push_model(&mut catalog.models, &model.id, &model.label, &note);
+        }
+        catalog
+    }
+}
+
+pub fn load(provider: Provider) -> ModelCatalog {
+    let home = std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    load_from(provider, &home)
+}
+
+pub fn load_from(provider: Provider, home: &Path) -> ModelCatalog {
+    match provider {
+        Provider::Claude => claude(home),
+        Provider::Codex => codex(home),
+    }
+}
+
+pub(crate) fn push_model(models: &mut Vec<ModelOption>, id: &str, label: &str, note: &str) {
+    let id = id.trim();
+    if id.is_empty() {
+        return;
+    }
+    let label = label.trim();
+    if let Some(existing) = models.iter_mut().find(|model| model.id == id) {
+        for part in note.split(" · ").filter(|part| !part.is_empty()) {
+            if !existing.note.split(" · ").any(|current| current == part) {
+                if !existing.note.is_empty() {
+                    existing.note.push_str(" · ");
+                }
+                existing.note.push_str(part);
+            }
+        }
+        if (existing.label.is_empty() || existing.label == existing.id)
+            && !label.is_empty()
+            && label != id
+        {
+            existing.label = label.to_string();
+        }
+        return;
+    }
+    models.push(ModelOption {
+        id: id.to_string(),
+        label: if label.is_empty() { id } else { label }.to_string(),
+        note: note.to_string(),
+    });
+}
+
+fn read_text(path: &Path, label: &str) -> Result<String, String> {
+    let bytes = fs::read(path).map_err(|error| format!("无法读取{label}：{error}"))?;
+    let text = String::from_utf8_lossy(&bytes);
+    Ok(text.trim_start_matches('\u{feff}').to_string())
+}
+
+fn claude(home: &Path) -> ModelCatalog {
+    let path = home.join(".claude").join("settings.json");
+    let mut catalog = ModelCatalog {
+        config_path: path.clone(),
+        ..Default::default()
+    };
+    if !path.exists() {
+        catalog.note = Some("未找到 Claude 配置；将使用 CLI 自身默认模型。".into());
+        return catalog;
+    }
+    let text = match read_text(&path, " Claude 配置") {
+        Ok(text) => text,
+        Err(error) => {
+            catalog.error = Some(error);
+            return catalog;
+        }
+    };
+    let value: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(value) => value,
+        Err(error) => {
+            catalog.error = Some(format!("Claude 配置不是有效 JSON：{error}"));
+            return catalog;
+        }
+    };
+    let env = value.get("env");
+    let env_text = |key: &str| {
+        env.and_then(|env| env.get(key))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+    };
+    let top_text = |key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+    };
+    catalog.current = env_text("ANTHROPIC_MODEL")
+        .or_else(|| top_text("model"))
+        .map(str::to_string);
+    catalog.endpoint = env_text("ANTHROPIC_BASE_URL").map(str::to_string);
+    if let Some(current) = &catalog.current {
+        push_model(&mut catalog.models, current, current, "当前默认");
+    }
+    for (key, role) in [
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "Opus"),
+        ("ANTHROPIC_DEFAULT_SONNET_MODEL", "Sonnet"),
+        ("ANTHROPIC_DEFAULT_HAIKU_MODEL", "Haiku"),
+        ("ANTHROPIC_DEFAULT_FABLE_MODEL", "Fable"),
+        ("CLAUDE_CODE_SUBAGENT_MODEL", "子代理"),
+    ] {
+        if let Some(id) = env_text(key) {
+            push_model(&mut catalog.models, id, id, role);
+        }
+    }
+    if catalog.models.is_empty() {
+        catalog.note = Some("配置中未声明模型；将使用 CLI 自身默认模型。".into());
+    }
+    catalog
+}
+
+fn codex(home: &Path) -> ModelCatalog {
+    let directory = home.join(".codex");
+    let path = directory.join("config.toml");
+    let mut catalog = ModelCatalog {
+        config_path: path.clone(),
+        ..Default::default()
+    };
+    if !path.exists() {
+        catalog.note = Some("未找到 Codex 配置；将使用 CLI 自身默认模型。".into());
+        return catalog;
+    }
+    let text = match read_text(&path, " Codex 配置") {
+        Ok(text) => text,
+        Err(error) => {
+            catalog.error = Some(error);
+            return catalog;
+        }
+    };
+    let value: toml::Value = match text.parse() {
+        Ok(value) => value,
+        Err(error) => {
+            catalog.error = Some(format!("Codex 配置不是有效 TOML：{error}"));
+            return catalog;
+        }
+    };
+    let table = value.as_table();
+    let text_value = |key: &str| {
+        table
+            .and_then(|table| table.get(key))
+            .and_then(toml::Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+    };
+    catalog.current = text_value("model").map(str::to_string);
+    let provider = text_value("model_provider");
+    let effort = text_value("model_reasoning_effort");
+    catalog.endpoint = provider
+        .and_then(|provider| {
+            table?
+                .get("model_providers")?
+                .get(provider)?
+                .get("base_url")
+        })
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string);
+    catalog.detail = {
+        let mut parts = vec![];
+        if let Some(provider) = provider {
+            parts.push(format!("provider {provider}"));
+        }
+        if let Some(effort) = effort {
+            parts.push(format!("推理 {effort}"));
+        }
+        (!parts.is_empty()).then(|| parts.join(" · "))
+    };
+    if let Some(relative) = text_value("model_catalog_json") {
+        let catalog_path = PathBuf::from(relative);
+        let catalog_path = if catalog_path.is_absolute() {
+            catalog_path
+        } else {
+            directory.join(catalog_path)
+        };
+        catalog.catalog_path = Some(catalog_path.clone());
+        match fs::read(&catalog_path) {
+            Ok(bytes) => {
+                let text = String::from_utf8_lossy(&bytes);
+                match serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}'))
+                {
+                    Ok(value) => {
+                        let entries = value
+                            .get("models")
+                            .and_then(serde_json::Value::as_array)
+                            .or_else(|| value.as_array());
+                        if let Some(entries) = entries {
+                            for entry in entries {
+                                let Some(slug) = entry
+                                    .get("slug")
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(str::trim)
+                                    .filter(|slug| !slug.is_empty())
+                                else {
+                                    continue;
+                                };
+                                if entry
+                                    .get("visibility")
+                                    .and_then(serde_json::Value::as_str)
+                                    .is_some_and(|visibility| visibility == "hide")
+                                {
+                                    continue;
+                                }
+                                let label = entry
+                                    .get("display_name")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or(slug);
+                                let note = entry
+                                    .get("default_reasoning_level")
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(|level| format!("推理 {level}"))
+                                    .unwrap_or_default();
+                                push_model(&mut catalog.models, slug, label, &note);
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        catalog.note =
+                            Some(format!("模型目录不是有效 JSON，仅显示当前配置：{error}"));
+                    }
+                }
+            }
+            Err(error) => {
+                catalog.note = Some(format!(
+                    "未读取模型目录 {}：{error}",
+                    catalog_path.display()
+                ));
+            }
+        }
+    }
+    if let Some(current) = &catalog.current {
+        push_model(&mut catalog.models, current, current, "当前配置");
+    }
+    if catalog.models.is_empty() {
+        catalog.note = Some("未发现模型定义；将使用 CLI 自身默认模型。".into());
+    }
+    catalog
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn home(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "conduit-models-{name}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn claude_models_dedupe_mappings_and_ignore_secrets() {
+        let home = home("claude");
+        let directory = home.join(".claude");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join("settings.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "env": {
+                    "ANTHROPIC_AUTH_TOKEN": "must-not-be-read",
+                    "ANTHROPIC_BASE_URL": "https://example.invalid",
+                    "ANTHROPIC_MODEL": "proxy-model",
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL": "proxy-model",
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-model",
+                    "CLAUDE_CODE_SUBAGENT_MODEL": "subagent-model"
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let catalog = load_from(Provider::Claude, &home);
+        assert_eq!(catalog.current.as_deref(), Some("proxy-model"));
+        assert_eq!(catalog.endpoint.as_deref(), Some("https://example.invalid"));
+        assert_eq!(catalog.models.len(), 3);
+        assert_eq!(catalog.models[0].id, "proxy-model");
+        assert!(catalog.models[0].note.contains("当前默认"));
+        assert!(catalog.models[0].note.contains("Opus"));
+        assert_eq!(catalog.label("sonnet-model"), "sonnet-model");
+        assert_eq!(catalog.label("unknown"), "unknown");
+        assert!(catalog.error.is_none());
+    }
+
+    #[test]
+    fn codex_catalog_resolves_relative_path_and_hides_hidden_models() {
+        let home = home("codex");
+        let directory = home.join(".codex");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join("config.toml"),
+            r#"model = "gpt-current"
+model_provider = "custom"
+model_reasoning_effort = "high"
+model_catalog_json = "catalog.json"
+[model_providers.custom]
+base_url = "https://example.invalid"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            directory.join("catalog.json"),
+            serde_json::to_vec(&serde_json::json!({"models": [
+                {"slug": "gpt-current", "display_name": "GPT Current", "default_reasoning_level": "high"},
+                {"slug": "gpt-other", "display_name": "GPT Other", "default_reasoning_level": "low"},
+                {"slug": "gpt-hidden", "display_name": "Hidden", "visibility": "hide"}
+            ]}))
+            .unwrap(),
+        )
+        .unwrap();
+        let catalog = load_from(Provider::Codex, &home);
+        assert_eq!(catalog.current.as_deref(), Some("gpt-current"));
+        assert_eq!(catalog.endpoint.as_deref(), Some("https://example.invalid"));
+        assert_eq!(
+            catalog.catalog_path.as_deref(),
+            Some(directory.join("catalog.json").as_path())
+        );
+        assert_eq!(catalog.models.len(), 2);
+        assert_eq!(catalog.label("gpt-current"), "GPT Current");
+        assert_eq!(catalog.models[0].note, "推理 high · 当前配置");
+        assert!(catalog.models.iter().all(|model| model.id != "gpt-hidden"));
+        assert!(
+            catalog
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("provider custom")
+        );
+        assert!(catalog.error.is_none());
+    }
+
+    #[test]
+    fn synced_models_merge_without_losing_cli_notes() {
+        let mut catalog = ModelCatalog {
+            current: Some("shared-model".into()),
+            ..Default::default()
+        };
+        push_model(
+            &mut catalog.models,
+            "shared-model",
+            "Shared Model",
+            "当前配置",
+        );
+        let merged = catalog.with_synced(
+            "CCS · anyrouter",
+            &[
+                ModelOption {
+                    id: "shared-model".into(),
+                    label: "Shared Model".into(),
+                    note: "上下文 1.1M".into(),
+                },
+                ModelOption {
+                    id: "ccs-only".into(),
+                    label: "CCS Only".into(),
+                    note: String::new(),
+                },
+            ],
+        );
+        assert_eq!(merged.models.len(), 2);
+        assert!(merged.models[0].note.contains("当前配置"));
+        assert!(merged.models[0].note.contains("上下文 1.1M"));
+        assert!(merged.models[0].note.contains("CCS · anyrouter"));
+        assert_eq!(merged.label("ccs-only"), "CCS Only");
+        assert_eq!(merged.models[1].note, "CCS · anyrouter");
+    }
+
+    #[test]
+    fn missing_and_invalid_configs_are_reported_without_models() {
+        let home = home("missing");
+        let claude = load_from(Provider::Claude, &home);
+        assert!(claude.models.is_empty());
+        assert!(claude.note.is_some());
+        assert!(claude.error.is_none());
+
+        let directory = home.join(".codex");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("config.toml"), "model = [").unwrap();
+        let codex = load_from(Provider::Codex, &home);
+        assert!(codex.models.is_empty());
+        assert!(codex.error.as_deref().unwrap().contains("TOML"));
+    }
+}

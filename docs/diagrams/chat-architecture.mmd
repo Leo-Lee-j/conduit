@@ -1,0 +1,13 @@
+flowchart TD
+    UI["GPUI Chat UI"] --> APP["Workspace and Session Controller"]
+    APP --> STORE["Version 2 Local Chat Store"]
+    APP --> RUN["Per-turn Chat Runtime"]
+    RUN --> PROTO["Provider Protocol Adapter"]
+    PROTO --> CODEX["Codex app-server stdio"]
+    PROTO --> CLAUDE["Claude stream-json stdio"]
+    RUN --> JOB["Windows Pipes and Job Supervisor"]
+    JOB --> CODEX
+    JOB --> CLAUDE
+    CODEX --> EVENTS["Normalized Chat and Approval Events"]
+    CLAUDE --> EVENTS
+    EVENTS --> APP
