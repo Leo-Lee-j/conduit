@@ -26,7 +26,7 @@
 | 构建 | 通过 | `cargo build --locked`，生成 `target/debug/conduit.exe` |
 | 格式 | 通过 | `cargo fmt --check` |
 | 静态检查 | 通过 | `cargo clippy --locked --all-targets -- -D warnings` |
-| 常规测试 | 通过 | 34 passed，0 failed，9 ignored（2026-10-22 本轮）；ignored 为需要本机 CLI 的集成测试 |
+| 常规测试 | 通过 | 36 passed，0 failed，9 ignored（2026-10-22 本轮）；ignored 为需要本机 CLI 的集成测试 |
 | 模型配置只读同步 | 单测与界面冒烟通过；交互待人工验收 | 解析 Claude settings 与 Codex config/catalog，验证去重、相对目录、隐藏项、缺失/损坏配置；不读取密钥。新增设置“模型同步”菜单，分别展示 CLI 当前模型与 CCS Provider 模型；输入区选择 `gpt-6.1-sol[1M]` 后写入隔离 `state.json`，标签与弹窗状态更新。仅 UI 自动化观察，未人工点击 |
 | cc-switch 模型目录 | 单测与真实数据库查询通过；界面待人工验收 | 只读打开 `~/.cc-switch/cc-switch.db`，仅投影模型 ID、显示名、上下文与可见性；本机读回 Claude 6 个 Provider / 11 个模型、Codex 3 个 Provider / 12 个模型，正确标记 anyrouter 与公司为当前 Provider。夹具含伪造 Token 与端点，断言未进入结果；未修改数据库 |
 | 模型目录合并 | 单测通过 | CCS 当前 Provider 模型并入会话选择器；同名模型合并备注，新增模型带 `CCS · Provider` 来源，其他 Provider 不进入选择器 |
@@ -138,6 +138,7 @@ cargo test --locked approval -- --ignored --nocapture --test-threads=1
 - Codex `item/permissions/requestApproval` 纳入审批队列：这是 0.163.0 协议中除命令/文件修改之外的权限扩展请求；允许时按请求 profile 授予本轮权限，拒绝时回空 profile，未知请求仍返回 `-32601` 而不自动放行。
 - 界面按反馈完成一轮改进：移除 Windows 原生标题栏改用自定义标题栏（品牌区、拖动与最小化/最大化/关闭命中区）；侧栏与执行详情改为可拖拽面板（侧栏 200–420px，详情 240–480px，窄窗详情覆盖）；审批卡片宽度对齐对话文字列并重做视觉；输入区右上角“最新消息”、底部新增横向预留工具栏；设置弹窗垂直居中，模型目录与 cc-switch 读取移到后台线程，打开不再阻塞首帧，入场动画改为轻量 fade。
 - 用生产参数（`on-request` + `workspace-write`）在隔离工作区跑真实 Codex 审批：越界写文件触发真实审批请求，脚本点击拒绝后无文件落盘，点击允许后探针文件内容正确；此前“生产参数可能不产生审批”的未知项已获得一次真实证据（合成点击，非人工）。
+- 针对第二轮反馈继续修正：Debug 构建下窗口拖动会整窗重绘，依赖未优化导致逐帧卡顿，dev profile 改为依赖 `opt-level = 2`、应用本体 `opt-level = 1`；审批卡片详情默认折叠并可用“展开详情/收起”切换；设置弹窗在模型读取移出 UI 线程后恢复默认滑入入场动画；失败信息若已出现在助手文本中则不再重复追加结果通知，相邻重复的 completed 助手文本块合并（新增两个单测）。
 
 ## 未完成验收与具体限制
 
@@ -155,3 +156,4 @@ Windows Computer Use 的 native pipe 连续连接失败；按恢复流程重试�
 ## 进入日用试验的门槛
 
 自动侧已补 Ctrl+Enter 绑定、焦点恢复、后台滚动隔离、审批详情可读性、运行时取消隔离、Claude 待审批取消回归，并完成一轮 UI 自动预验（含设置弹窗窄窗修复）；手工侧仍需完成上表全部项目，重点是审批弹窗点击与视觉、取消与正常关窗、多工作区隔离、中文输入和阅读。任何错目录、串上下文、错授权或受管进程残留均阻断扩展。通过后再开展两周个人试用，不把本次自动测试等同完整 MVP 验收。
+

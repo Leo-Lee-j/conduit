@@ -41,12 +41,14 @@ param(
     [string[]]$ClickButton = @(),
     [string[]]$ClickAt = @(),
     [string[]]$PostClickAt = @(),
+    [string[]]$PostClickButton = @(),
     [string[]]$SendClickAt = @(),
     [string[]]$ScrollAt = @(),
     [string[]]$DragAt = @(),
     [string]$TypeText = '',
     [string]$UiaSetText = '',
     [string]$SendKeys = '',
+    [switch]$PasteClipboard,
     [int]$Width = 0,
     [int]$Height = 0,
     [int]$SettleMs = 800,
@@ -218,6 +220,22 @@ function Get-ElementName($element) {
     try { return [string]$element.Current.Name } catch { return '' }
 }
 
+function Set-TargetForeground($handle) {
+    [ConduitWin]::ShowWindow($handle, 9) | Out-Null
+    # HWND_TOP, SWP_NOMOVE | SWP_NOSIZE
+    [ConduitWin]::SetWindowPos($handle, [IntPtr]::Zero, 0, 0, 0, 0, 0x0003) | Out-Null
+    if ([ConduitWin]::GetForegroundWindow() -ne $handle) {
+        $foregroundPid = [uint32]0
+        $foregroundThread = [ConduitWin]::GetWindowThreadProcessId([ConduitWin]::GetForegroundWindow(), [ref]$foregroundPid)
+        $currentThread = [ConduitWin]::GetCurrentThreadId()
+        [ConduitWin]::AttachThreadInput($currentThread, $foregroundThread, $true) | Out-Null
+        [ConduitWin]::SetForegroundWindow($handle) | Out-Null
+        [ConduitWin]::SetFocus($handle) | Out-Null
+        [ConduitWin]::AttachThreadInput($currentThread, $foregroundThread, $false) | Out-Null
+    }
+    Start-Sleep -Milliseconds 200
+}
+
 if ($Action -eq 'seed' -or $Seed) { Invoke-Seed }
 if ($Action -eq 'seed') { exit 0 }
 
@@ -225,6 +243,7 @@ if ($Action -eq 'seed') { exit 0 }
 $ClickButton = @($ClickButton | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $ClickAt = @($ClickAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $PostClickAt = @($PostClickAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
+$PostClickButton = @($PostClickButton | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $ScrollAt = @($ScrollAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $DragAt = @($DragAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 
@@ -250,6 +269,12 @@ public class ConduitWin {
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
     [DllImport("user32.dll")] public static extern int GetSystemMetrics(int nIndex);
     [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, int dwData, UIntPtr dwExtraInfo);
+    [DllImport("user32.dll")] public static extern void keybd_event(uint bVk, uint bScan, uint dwFlags, UIntPtr dwExtraInfo);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
+    [DllImport("user32.dll")] public static extern IntPtr SetFocus(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
 }
 "@
@@ -268,13 +293,10 @@ try {
     $process = Start-Process @launch
     $handle = Wait-MainWindow $process
     Start-Sleep -Milliseconds 600
-    # Foreground activation can be refused by the shell while the previous
-    # instance is still closing; retry before sending any synthetic input.
-    for ($attempt = 0; $attempt -lt 20; $attempt++) {
-        [ConduitWin]::SetForegroundWindow($handle) | Out-Null
-        if ([ConduitWin]::GetForegroundWindow() -eq $handle) { break }
-        Start-Sleep -Milliseconds 150
-    }
+    # Foreground activation can be refused by the shell while another window
+    # owns the foreground lock; attach to its thread to force activation so
+    # synthetic clicks and keyboard events reach the app under test.
+    Set-TargetForeground $handle
     # A settings modal or popover needs the first frame to settle before
     # synthetic clicks can hit its widgets reliably.
     Start-Sleep -Milliseconds 900
@@ -342,7 +364,7 @@ try {
         if ($parts.Count -ne 2) { throw "ClickAt must be 'x,y': $position" }
         $x = $rect.Left + [int]$parts[0]
         $y = $rect.Top + [int]$parts[1]
-        [ConduitWin]::SetForegroundWindow($handle) | Out-Null
+        Set-TargetForeground $handle
         [ConduitWin]::SetCursorPos($x, $y) | Out-Null
         Start-Sleep -Milliseconds 150
         # MOUSEEVENTF_LEFTDOWN / LEFTUP
@@ -357,7 +379,7 @@ try {
         $x = $rect.Left + [int]$parts[0]
         $y = $rect.Top + [int]$parts[1]
         $notches = [int]$parts[2]
-        [ConduitWin]::SetForegroundWindow($handle) | Out-Null
+        Set-TargetForeground $handle
         [ConduitWin]::SetCursorPos($x, $y) | Out-Null
         Start-Sleep -Milliseconds 150
         # A positive notch count scrolls the content down; MOUSEEVENTF_WHEEL
@@ -377,7 +399,7 @@ try {
         $y1 = $rect.Top + [int]$parts[1]
         $x2 = $rect.Left + [int]$parts[2]
         $y2 = $rect.Top + [int]$parts[3]
-        [ConduitWin]::SetForegroundWindow($handle) | Out-Null
+        Set-TargetForeground $handle
         # Drag detection needs real pointer-move messages; SetCursorPos alone
         # does not reliably produce them, so move through mouse_event with
         # MOUSEEVENTF_MOVE|MOUSEEVENTF_ABSOLUTE (normalized screen coords).
@@ -405,16 +427,43 @@ try {
         Start-Sleep -Milliseconds 500
     }
 
+    if ($PasteClipboard) {
+        Set-TargetForeground $handle
+        Start-Sleep -Milliseconds 250
+        # Ctrl+V through keybd_event: .NET SendKeys is unreliable under pwsh and
+        # can throw "operation completed successfully" without sending anything.
+        [ConduitWin]::keybd_event(0x11, 0, 0, [UIntPtr]::Zero)
+        [ConduitWin]::keybd_event(0x56, 0, 0, [UIntPtr]::Zero)
+        [ConduitWin]::keybd_event(0x56, 0, 2, [UIntPtr]::Zero)
+        [ConduitWin]::keybd_event(0x11, 0, 2, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 500
+    }
+
     if ($TypeText -ne '' -or $SendKeys -ne '') {
         Add-Type -AssemblyName System.Windows.Forms
-        [ConduitWin]::SetForegroundWindow($handle) | Out-Null
+        Set-TargetForeground $handle
         Start-Sleep -Milliseconds 250
         if ($TypeText -ne '') {
-            [System.Windows.Forms.SendKeys]::SendWait($TypeText)
+            try { [System.Windows.Forms.SendKeys]::SendWait($TypeText) } catch { }
             Start-Sleep -Milliseconds 300
         }
         if ($SendKeys -ne '') {
-            [System.Windows.Forms.SendKeys]::SendWait($SendKeys)
+            # SendWait occasionally throws a spurious WOULDBLOCK-ish error when
+            # the target did not own the foreground yet; retry a few times and
+            # report the last error so a failed paste is visible in the log.
+            $keyError = ''
+            for ($attempt = 0; $attempt -lt 4; $attempt++) {
+                try {
+                    [System.Windows.Forms.SendKeys]::SendWait($SendKeys)
+                    $keyError = ''
+                    break
+                } catch {
+                    $keyError = $_.Exception.Message
+                    Set-TargetForeground $handle
+                    Start-Sleep -Milliseconds 300
+                }
+            }
+            if ($keyError -ne '') { Write-Output "SENDKEYS_ERROR=$keyError" }
             Start-Sleep -Milliseconds 500
         }
     }
@@ -435,6 +484,22 @@ try {
         Start-Sleep -Milliseconds 800
     }
     if ($WaitSeconds -gt 0) { Start-Sleep -Seconds $WaitSeconds }
+
+    if ($PostClickButton.Count -gt 0) {
+        Set-TargetForeground $handle
+        foreach ($wanted in $PostClickButton) {
+            $buttons = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $buttonCondition)
+            $target = $null
+            for ($i = 0; $i -lt $buttons.Count; $i++) {
+                if ((Get-ElementName $buttons.Item($i)) -like "*$wanted*") { $target = $buttons.Item($i); break }
+            }
+            if ($null -eq $target) { Write-Output "POST_BUTTON_NOT_FOUND=$wanted"; continue }
+            $pattern = $target.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+            $pattern.Invoke()
+            Start-Sleep -Milliseconds 700
+        }
+        Start-Sleep -Milliseconds 800
+    }
 
     if ($PostClickAt.Count -gt 0) {
         [ConduitWin]::GetWindowRect($handle, [ref]$rect) | Out-Null

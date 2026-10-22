@@ -83,8 +83,22 @@ pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -DataDir target/
 ### 设置弹窗打开时序
 
 在 Debug 构建、隔离数据下重复 3 次测量：窗口句柄出现 593–698 ms，设置弹窗“完成”按钮可被 UI Automation 检出 789–861 ms（均从进程启动起算）。模型目录读取已移出 UI 线程，首帧不再等待配置与 cc-switch 查询。
+## 第三轮：2026-10-22 反馈修复
+
+针对使用反馈做了四项修正，均已完成编译、单测与启动冒烟，具体手感需人工复验：
+
+| 反馈 | 处理 | 验证 |
+| --- | --- | --- |
+| 标题栏拖动“一帧一帧”、跟手延迟 | Debug 构建下窗口移动会触发整窗重绘，而依赖未优化导致重绘过慢。为 dev profile 的依赖启用 `opt-level = 2`、应用本体 `opt-level = 1`（保留 debug 信息），不改变 release 行为 | 全量重建通过、`cargo test` 36 passed、`clippy -D warnings` 通过、双视图冒烟通过；帧率/手感需真实鼠标复验 |
+| 审批卡片默认收起命令内容，可展开 | 新增审批详情折叠状态：默认只显示标题、说明与操作按钮；点“展开详情/收起”切换，滚动区域只在展开时构建 | 折叠态截图 [ui-v3-approval-collapsed.png](screenshots/acceptance/ui-v3-approval-collapsed.png)；展开路径编译通过，自动预验脚本在此轮前台/剪贴板限制下未能稳定复现，需人工点一次确认 |
+| 设置弹窗直接呈现、无动画 | 之前的淡入是为规避同步读取卡顿；模型目录读取已在后台线程，恢复组件默认的滑入入场 | 最终帧截图 [ui-v3-settings.png](screenshots/acceptance/ui-v3-settings.png)；动画流畅度需人工观察 |
+| AI 内容重复呈现 | 失败信息同时出现在助手文本与结果事件时只在助手消息保留一次；相邻重复的 completed 助手文本块合并<br>新增单测 `failure_echoed_as_assistant_text_is_detected`、`adjacent_duplicate_completed_blocks_are_collapsed` | `cargo test` 36 passed |
+
+界面当前状态见 [ui-v3-main-window.png](screenshots/acceptance/ui-v3-main-window.png)。
 ## 仍未覆盖，必须人工完成
 
 清单 1、2、5、6、8、9 全项；3 的复制一致性；4 的动态滚动跟随；7 的 100%–200% DPI 与多屏；10 的取消检测与文件选择；5 的真实审批允许/拒绝与多审批队列。人工完成后把结果写回 [验证记录](m0-validation.md#手工-ui-验收清单)，不得用本预验代替。
+
+
 
 
