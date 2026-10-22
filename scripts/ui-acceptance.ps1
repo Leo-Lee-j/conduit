@@ -46,6 +46,7 @@ param(
     [string[]]$PostClickButton = @(),
     [string[]]$SendClickAt = @(),
     [string[]]$ScrollAt = @(),
+    [string[]]$ClickAtAfterScroll = @(),
     [string[]]$DragAt = @(),
     [string]$TypeText = '',
     [string]$UiaSetText = '',
@@ -249,6 +250,7 @@ $PreClickAt = @($PreClickAt | ForEach-Object { $_ -split ';' } | Where-Object { 
 $PostClickAt = @($PostClickAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $PostClickButton = @($PostClickButton | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $ScrollAt = @($ScrollAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
+$ClickAtAfterScroll = @($ClickAtAfterScroll | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $DragAt = @($DragAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 
 $exe = Join-Path $root 'target\debug\conduit.exe'
@@ -435,6 +437,21 @@ try {
             Start-Sleep -Milliseconds 120
         }
         Start-Sleep -Milliseconds 600
+    }
+
+    # Clicks that only make sense after the view has been scrolled (e.g. a
+    # stepper below the settings fold). Same coordinate space as ClickAt.
+    foreach ($position in $ClickAtAfterScroll) {
+        $parts = $position.Split(',')
+        if ($parts.Count -ne 2) { throw "ClickAtAfterScroll must be 'x,y': $position" }
+        $x = $rect.Left + [int]$parts[0]
+        $y = $rect.Top + [int]$parts[1]
+        Set-TargetForeground $handle
+        [ConduitWin]::SetCursorPos($x, $y) | Out-Null
+        Start-Sleep -Milliseconds 200
+        [ConduitWin]::mouse_event(0x02, 0, 0, 0, [UIntPtr]::Zero)
+        [ConduitWin]::mouse_event(0x04, 0, 0, 0, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 500
     }
 
     foreach ($drag in $DragAt) {
