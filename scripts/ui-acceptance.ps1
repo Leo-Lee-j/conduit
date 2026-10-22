@@ -1,3 +1,5 @@
+﻿# NOTE: Save this file as UTF-8 with BOM. Windows PowerShell 5.1 otherwise reads the
+# Chinese seed strings in the system ANSI code page and fails to parse the script.
 <#
 .SYNOPSIS
   Repeatable UI acceptance harness for the Conduit Chat M0 prototype.

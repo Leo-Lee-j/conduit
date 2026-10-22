@@ -79,9 +79,11 @@ cargo build --locked
 ./scripts/smoke.ps1 -View chat
 ./scripts/smoke.ps1 -View settings
 # 人工验收前的自动预验：隔离数据 + 窗口截图 + UIA 快照（不替代人工签署）
-./scripts/ui-acceptance.ps1 -Action seed
-./scripts/ui-acceptance.ps1 -Action capture -Name chat-markdown -DataDir target/ui-acceptance/data-claude
+pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action seed
+pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -Name chat-markdown -DataDir target/ui-acceptance/data-claude
 ```
+
+`ui-acceptance.ps1` 以 UTF-8 BOM 保存。Windows PowerShell 5.1 直接执行时需带执行策略参数（`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\ui-acceptance.ps1 -Action seed`）；PowerShell 7（`pwsh`）无需额外参数。自行编辑脚本时请保留 BOM，否则 5.1 会按系统 ANSI 读取中文而解析失败。
 
 启动冒烟只确认窗口出现并保持响应，不覆盖输入、点击、输入法或 DPI。逐项人工验收步骤见[验证记录的手工 UI 验收清单](docs/m0-validation.md#手工-ui-验收清单)。
 

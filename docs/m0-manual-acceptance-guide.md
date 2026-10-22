@@ -7,8 +7,12 @@
 ```powershell
 cd D:\m\conduit
 cargo build --locked
-./scripts/ui-acceptance.ps1 -Action seed          # 生成隔离数据 target/ui-acceptance/data
+pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action seed   # 生成隔离数据 target/ui-acceptance/data
+# Windows PowerShell 5.1 用：
+# powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\ui-acceptance.ps1 -Action seed
 ```
+
+脚本以 UTF-8 BOM 保存；自行编辑时请保留 BOM，否则 Windows PowerShell 5.1 会按 ANSI 解析中文并报“字符串缺少终止符”。
 
 - 全程使用隔离 `CONDUIT_DATA_DIR`，不写 `%LOCALAPPDATA%\Conduit`。
 - 记录：构建时间、Windows 缩放比例、每项实际结果；截图可存 `target/ui-acceptance/out/`。
@@ -23,7 +27,7 @@ cargo build --locked
 | 3 | 用 Win+. 输入 emoji；发送含标题、列表、行内代码、围栏代码块的回复；选择回复 Ctrl+C；点代码块复制 | Emoji 正常；选区与剪贴板一致；代码块复制内容精确、不含围栏 |
 | 6 | 依次切换会话、发送消息、允许/拒绝审批、取消任务后直接打字 | 每次按键都进入输入框，无需再次点击 |
 
-建议启动：`./scripts/ui-acceptance.ps1 -Action capture -Name manual-chat -DataDir target/ui-acceptance/data-claude -KeepRunning`（复用种子数据），或直接 `cargo run -- --settings`。
+建议启动：`pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -Name manual-chat -DataDir target/ui-acceptance/data-claude -KeepRunning`（复用种子数据），或直接 `cargo run -- --settings`。
 
 ## 2. 阅读与布局（需人：约 10 分钟）
 
@@ -33,7 +37,7 @@ cargo build --locked
 | 7 | 窗口缩至 850×500；在 100%、125%、150%、200% 缩放下检查会话列表、输入框、审批覆盖层、设置页 | 无控件裁切、重叠或不可点击；文字与审批详情可读；滚动可用。设置弹窗窄窗裁切已在本轮修复，仍需人眼确认 |
 | 8 | 两个工作区各启动会话并行；A 中上滚阅读，等 B 完成；再取消 A | B 完成不改变 A 的滚动位置；取消 A 不影响 B；侧栏状态与各自任务一致 |
 
-850×500 可直接用脚本开窗：`./scripts/ui-acceptance.ps1 -Action capture -Name manual-narrow -DataDir target/ui-acceptance/data -Width 850 -Height 500 -KeepRunning`。DPI 缩放需在系统显示设置中切换后重新启动应用。
+850×500 可直接用脚本开窗：`pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -Name manual-narrow -DataDir target/ui-acceptance/data -Width 850 -Height 500 -KeepRunning`。DPI 缩放需在系统显示设置中切换后重新启动应用。
 
 ## 3. 审批、关闭与设置（需人：约 20 分钟）
 
