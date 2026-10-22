@@ -40,6 +40,7 @@ param(
     [string]$AppArgs = '',
     [string[]]$ClickButton = @(),
     [int[]]$ClickButtonIndex = @(),
+    [string[]]$PreClickAt = @(),
     [string[]]$ClickAt = @(),
     [string[]]$PostClickAt = @(),
     [string[]]$PostClickButton = @(),
@@ -244,6 +245,7 @@ if ($Action -eq 'seed') { exit 0 }
 # -File argument parsing joins comma lists; allow "x,y;x,y" in one value.
 $ClickButton = @($ClickButton | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $ClickAt = @($ClickAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
+$PreClickAt = @($PreClickAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $PostClickAt = @($PostClickAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $PostClickButton = @($PostClickButton | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $ScrollAt = @($ScrollAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
@@ -290,6 +292,9 @@ try {
         WorkingDirectory = $root
         WindowStyle      = 'Normal'
         PassThru         = $true
+        # Keep child stdout/stderr for diagnosing crashes during automation.
+        RedirectStandardOutput = (Join-Path $OutDir ($Name + '-stdout.log'))
+        RedirectStandardError  = (Join-Path $OutDir ($Name + '-stderr.log'))
     }
     if ($AppArgs -ne '') { $launch.ArgumentList = $AppArgs }
     $process = Start-Process @launch
@@ -364,6 +369,19 @@ try {
     for ($attempt = 0; $attempt -lt 20 -and $buttons.Count -eq 0; $attempt++) {
         Start-Sleep -Milliseconds 100
         $buttons = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $buttonCondition)
+    }
+
+    foreach ($position in $PreClickAt) {
+        $parts = $position.Split(',')
+        if ($parts.Count -ne 2) { throw "PreClickAt must be 'x,y': $position" }
+        $x = $rect.Left + [int]$parts[0]
+        $y = $rect.Top + [int]$parts[1]
+        Set-TargetForeground $handle
+        [ConduitWin]::SetCursorPos($x, $y) | Out-Null
+        Start-Sleep -Milliseconds 150
+        [ConduitWin]::mouse_event(0x02, 0, 0, 0, [UIntPtr]::Zero)
+        [ConduitWin]::mouse_event(0x04, 0, 0, 0, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 500
     }
 
     foreach ($index in $ClickButtonIndex) {
