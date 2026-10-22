@@ -88,6 +88,7 @@ impl Store {
                     });
                     session.interrupted = false;
                 }
+                dedupe_restored_messages(session);
             }
         }
         state.version = 2;
@@ -129,6 +130,45 @@ impl Store {
         fs::rename(temp, path)?;
         Ok(())
     }
+}
+
+/// Older builds keyed Claude stream deltas by the raw stream block index while
+/// the assistant snapshot keyed by the visible block index. A hidden thinking
+/// block shifted one side by one, and the same answer was stored twice. Repair
+/// that on load: drop adjacent assistant blocks with identical text and failure
+/// notices already carried by the preceding assistant text.
+fn dedupe_restored_messages(session: &mut crate::domain::SessionRecord) {
+    let mut kept: Vec<crate::domain::ChatItem> = Vec::with_capacity(session.messages.len());
+    for item in session.messages.drain(..) {
+        let duplicate_assistant = item.kind == crate::domain::ItemKind::Assistant
+            && !item.text.trim().is_empty()
+            && kept.last().is_some_and(|previous| {
+                previous.kind == crate::domain::ItemKind::Assistant
+                    && previous.text.trim() == item.text.trim()
+            });
+        let duplicate_failure = item.kind == crate::domain::ItemKind::Notice
+            && item.text.starts_with("执行失败：")
+            && {
+                let error = item.text.trim_start_matches("执行失败：").trim();
+                kept.iter().rev().take(3).any(|previous| {
+                    previous.kind == crate::domain::ItemKind::Assistant
+                        && same_failure_text(&previous.text, error)
+                })
+            };
+        if !duplicate_assistant && !duplicate_failure {
+            kept.push(item);
+        }
+    }
+    session.messages = kept;
+}
+
+fn same_failure_text(message: &str, error: &str) -> bool {
+    let message = message.trim();
+    let error = error.trim();
+    if message.is_empty() || error.is_empty() {
+        return false;
+    }
+    message == error || message.contains(error) || error.contains(message)
 }
 
 #[cfg(test)]
@@ -240,5 +280,26 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(Store::load_from(&path).is_err());
         fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn restored_duplicate_assistant_blocks_and_failure_notices_are_cleaned() {
+        let directory = std::env::temp_dir().join(format!("conduit-dedupe-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("state.json");
+        let value = serde_json::json!({"version":2,"workspaces":[{"path":directory,"sessions":[
+        {"id":1,"provider":"Claude","created_at":0,"exit_code":null,"title":"t","messages":[
+            {"key":"turn-0-a","kind":"Assistant","text":"Hello"},
+            {"key":"turn-0-b","kind":"Assistant","text":"Hello"},
+            {"key":"turn-0-c","kind":"Assistant","text":"boom"},
+            {"key":"turn-0-notice","kind":"Notice","text":"执行失败：boom"}
+        ]}]}]});
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let restored = Store::load_from(&path).unwrap();
+        let messages = &restored.workspaces[0].sessions[0].messages;
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].text, "Hello");
+        assert_eq!(messages[1].text, "boom");
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(directory).unwrap();
     }
 }

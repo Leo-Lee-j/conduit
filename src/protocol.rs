@@ -80,6 +80,10 @@ pub struct Protocol {
     thread_id: Option<String>,
     turn_id: Option<String>,
     claude_message: String,
+    /// Stream block index → ordinal among text blocks of the current Claude
+    /// message. Hidden blocks (for example extended thinking) shift the raw
+    /// stream index, while the assistant snapshot only lists visible blocks.
+    claude_text_blocks: std::collections::HashMap<u64, usize>,
     tool_inputs: std::collections::HashMap<String, Value>,
     #[cfg(test)]
     pub approval_test: bool,
@@ -111,6 +115,7 @@ impl Protocol {
             thread_id: None,
             turn_id: None,
             claude_message: String::new(),
+            claude_text_blocks: Default::default(),
             tool_inputs: Default::default(),
             #[cfg(test)]
             approval_test: false,
@@ -476,18 +481,32 @@ impl Protocol {
             }
             "stream_event" => {
                 let event = &v["event"];
-                if text(event, "type") == "message_start" {
+                let event_type = text(event, "type");
+                let block_index = event["index"].as_u64().unwrap_or(0);
+                if event_type == "message_start" {
                     self.claude_message = text(&event["message"], "id").into();
+                    self.claude_text_blocks.clear();
                 }
-                let key = format!(
-                    "{}-{}",
-                    self.claude_message,
-                    event["index"].as_u64().unwrap_or(0)
-                );
-                match text(event, "type") {
+                if event_type == "content_block_start"
+                    && text(&event["content_block"], "type") == "text"
+                {
+                    let ordinal = self.claude_text_blocks.len();
+                    self.claude_text_blocks.insert(block_index, ordinal);
+                }
+                match event_type {
                     "content_block_delta" if text(&event["delta"], "type") == "text_delta" => {
+                        // Key by the ordinal among text blocks, not the raw
+                        // stream index: hidden blocks (thinking) occupy earlier
+                        // indices, while the assistant snapshot only lists the
+                        // visible blocks, which would otherwise create a second
+                        // message for the same text.
+                        let ordinal = self
+                            .claude_text_blocks
+                            .get(&block_index)
+                            .copied()
+                            .unwrap_or(block_index as usize);
                         step.events.push(Event::Delta {
-                            key,
+                            key: format!("{}-{}", self.claude_message, ordinal),
                             text: text(&event["delta"], "text").into(),
                         })
                     }
@@ -509,12 +528,16 @@ impl Protocol {
                 let message = &v["message"];
                 let id = text(message, "id");
                 if let Some(blocks) = message["content"].as_array() {
-                    for (index, block) in blocks.iter().enumerate() {
+                    let mut text_ordinal = 0usize;
+                    for block in blocks.iter() {
                         match text(block, "type") {
-                            "text" => step.events.push(Event::Text {
-                                key: format!("{id}-{index}"),
-                                text: text(block, "text").into(),
-                            }),
+                            "text" => {
+                                step.events.push(Event::Text {
+                                    key: format!("{id}-{text_ordinal}"),
+                                    text: text(block, "text").into(),
+                                });
+                                text_ordinal += 1;
+                            }
                             "tool_use" => step.events.push(Event::Tool {
                                 key: text(block, "id").into(),
                                 title: text(block, "name").into(),
@@ -830,5 +853,21 @@ mod tests {
             protocol.accept(json!({"method":"item/permissions/requestApproval","params":{}}));
         assert!(missing.done && missing.error.is_some());
         assert!(missing.writes.is_empty());
+    }
+    #[test]
+    fn claude_hidden_thinking_block_does_not_duplicate_visible_text() {
+        let mut protocol = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None);
+        protocol.accept(
+            json!({"type":"stream_event","event":{"type":"message_start","message":{"id":"m1"}}}),
+        );
+        // A hidden thinking block occupies stream index 0; the visible text is
+        // index 1. The assistant snapshot then lists only the visible block.
+        protocol.accept(json!({"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}}));
+        protocol.accept(json!({"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"text"}}}));
+        let delta = protocol.accept(json!({"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Hello"}}}));
+        assert!(matches!(&delta.events[0], Event::Delta { key, .. } if key == "m1-0"));
+        let snapshot = protocol.accept(json!({"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"Hello"}]}}));
+        assert_eq!(snapshot.events.len(), 1);
+        assert!(matches!(&snapshot.events[0], Event::Text { key, .. } if key == "m1-0"));
     }
 }
