@@ -20,3 +20,12 @@ gpui-fast = ["gpui-kit/gpui-fast"]
 
 [profile.dev]
 debug = "limited"
+# Keep app code with debug info but give it basic optimization; the GPUI
+# rendering/layout hot path lives in dependencies, which get opt-level 2 below.
+opt-level = 1
+
+[profile.dev.package."*"]
+# Debug builds otherwise repaint the whole UI at unoptimized speed, which makes
+# window dragging and animations visibly stutter. Optimizing dependencies keeps
+# iteration builds responsive without switching to a release build.
+opt-level = 2
