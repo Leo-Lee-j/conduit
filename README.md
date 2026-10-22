@@ -118,6 +118,7 @@ cargo test --locked real_claude_cancel_during_pending_approval -- --ignored --no
 - [技术设计](docs/technical-design.md)
 - [验证记录及待验收项](docs/m0-validation.md)
 - [UI 自动预验记录](docs/m0-ui-acceptance-run.md)
+- [人工验收交接单](docs/m0-manual-acceptance-guide.md)
 - `build.rs`：Windows MSVC 可执行文件的主线程栈预留。
 - `scripts/smoke.ps1`：使用隔离数据检查两种启动页面，不调用模型。
 - `scripts/ui-acceptance.ps1`：隔离数据下启动界面、截图与 UIA 证据采集，供人工验收前预验。
