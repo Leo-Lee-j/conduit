@@ -95,9 +95,23 @@ pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -DataDir target/
 | AI 内容重复呈现 | 根因：流式事件含隐藏 thinking 块，文本块的 stream index 与 assistant 快照的可视块序号错位，同一文本被存成 `...-1` 与 `...-0` 两条。协议改为按文本块序号对齐流式增量与快照；加载旧数据时清理相邻重复助手文本与已由助手文本承载的失败通知；另加失败信息去重与相邻重复块合并 | `cargo test` 38 passed（含 `claude_hidden_thinking_block_does_not_duplicate_visible_text`、`restored_duplicate_assistant_blocks_and_failure_notices_are_cleaned`、`failure_echoed_as_assistant_text_is_detected`） |
 
 界面当前状态见 [ui-v3-main-window.png](screenshots/acceptance/ui-v3-main-window.png)。
+## 第四轮：2026-10-22 历史整理（重命名 / 归档 / 删除 / 搜索）
+
+实现 P1 历史整理并通过界面预验：
+
+| 功能 | 实现 | 证据 |
+| --- | --- | --- |
+| 搜索 | 侧栏顶部搜索框（Ctrl+V 输入可用），按标题与消息正文实时过滤；无匹配的工作区整块隐藏 | [ui-v4-search-filter.png](screenshots/acceptance/ui-v4-search-filter.png)、[ui-v4-history-sidebar.png](screenshots/acceptance/ui-v4-history-sidebar.png) |
+| 操作菜单 | 每个会话行右侧“⋯”打开重命名/归档/删除菜单 | [ui-v4-session-menu.png](screenshots/acceptance/ui-v4-session-menu.png) |
+| 重命名 | 对话框预填当前标题，取消/保存；标题为空时拒绝并提示 | [ui-v4-rename-dialog.png](screenshots/acceptance/ui-v4-rename-dialog.png) |
+| 归档 | 菜单切换归档；默认从列表隐藏，工作区“已归档”按钮可显示并带“已归档”标记；归档状态写入 `state.json`（本轮以持久化文件核对） | [ui-v4-archived-view.png](screenshots/acceptance/ui-v4-archived-view.png) |
+| 删除 | 二次确认对话框，提示不可恢复 | [ui-v4-delete-dialog.png](screenshots/acceptance/ui-v4-delete-dialog.png) |
+
+数据层：`SessionRecord.archived` 为 v2 可选字段（缺省 false），保存/加载与搜索匹配均有单测；`cargo test` 40 passed。删除确认按钮的自动化点击链未稳定复现，删除逻辑与对话框视觉已验证，最终删除动作建议人工点一次确认。
 ## 仍未覆盖，必须人工完成
 
 清单 1、2、5、6、8、9 全项；3 的复制一致性；4 的动态滚动跟随；7 的 100%–200% DPI 与多屏；10 的取消检测与文件选择；5 的真实审批允许/拒绝与多审批队列。人工完成后把结果写回 [验证记录](m0-validation.md#手工-ui-验收清单)，不得用本预验代替。
+
 
 
 
