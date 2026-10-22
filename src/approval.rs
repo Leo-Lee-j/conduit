@@ -50,6 +50,7 @@ mod tests {
             wire_id: serde_json::json!(id),
             input: serde_json::Value::Null,
             allow_once: true,
+            kind: crate::protocol::ApprovalKind::Command,
         }
     }
     #[test]

@@ -2,6 +2,15 @@
 use crate::domain::Provider;
 use serde_json::{Value, json};
 
+/// Which wire request an approval answers. The response shape differs per
+/// request type, so the decision must not be inferred from the ticket text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ApprovalKind {
+    Command,
+    FileChange,
+    Permissions,
+    ClaudeTool,
+}
 #[derive(Clone, Debug)]
 pub struct Approval {
     pub id: String,
@@ -10,6 +19,7 @@ pub struct Approval {
     pub wire_id: Value,
     pub input: Value,
     pub allow_once: bool,
+    pub kind: ApprovalKind,
 }
 #[derive(Clone, Debug)]
 pub enum Event {
@@ -386,6 +396,39 @@ impl Protocol {
                         .is_none_or(|decisions| {
                             decisions.iter().any(|v| v.as_str() == Some("accept"))
                         }),
+                    kind: if method.contains("commandExecution") {
+                        ApprovalKind::Command
+                    } else {
+                        ApprovalKind::FileChange
+                    },
+                }));
+            }
+            "item/permissions/requestApproval" => {
+                if !v
+                    .get("id")
+                    .is_some_and(|v| v.is_string() || v.is_i64() || v.is_u64())
+                {
+                    step.done = true;
+                    step.error = Some("Codex 权限扩展请求缺少有效 ID，已停止".into());
+                    return step;
+                }
+                // Codex asks to extend the sandbox (additional network or
+                // filesystem access) beyond the current permission profile.
+                // Approving echoes the requested profile back for this turn;
+                // denying grants an empty profile (the schema has no deny enum
+                // and an unknown scope value would fail deserialization).
+                let mut details = p.clone();
+                if let Some(input) = self.tool_inputs.get(text(p, "itemId")) {
+                    details["toolInput"] = input.clone();
+                }
+                step.events.push(Event::Approval(Approval {
+                    id: id_text(&v["id"]),
+                    wire_id: v["id"].clone(),
+                    input: p.clone(),
+                    title: "请求扩展权限".into(),
+                    detail: pretty(&details),
+                    allow_once: true,
+                    kind: ApprovalKind::Permissions,
                 }));
             }
             _ if v.get("id").is_some() && !method.is_empty() => {
@@ -526,6 +569,7 @@ impl Protocol {
                         detail: pretty(request),
                         input: request["input"].clone(),
                         allow_once: true,
+                        kind: ApprovalKind::ClaudeTool,
                     }));
                 } else {
                     step.writes.push(json!({"type":"control_response","response":{"subtype":"error","request_id":id,"error":"Unsupported control request"}}));
@@ -556,9 +600,26 @@ impl Protocol {
     }
     pub fn approval_response(&self, approval: &Approval, allow: bool) -> Value {
         match self.provider {
-            Provider::Codex => {
-                json!({"id":approval.wire_id,"result":{"decision":if allow { "accept" } else { "decline" }}})
-            }
+            Provider::Codex => match approval.kind {
+                ApprovalKind::Command | ApprovalKind::FileChange => {
+                    json!({"id":approval.wire_id,"result":{"decision":if allow { "accept" } else { "decline" }}})
+                }
+                ApprovalKind::Permissions => {
+                    // Grant nothing on denial: the response schema has no deny
+                    // enum, an empty profile is the documented safe denial.
+                    let permissions = if allow {
+                        approval
+                            .input
+                            .get("permissions")
+                            .cloned()
+                            .unwrap_or_else(|| json!({}))
+                    } else {
+                        json!({})
+                    };
+                    json!({"id":approval.wire_id,"result":{"permissions":permissions,"scope":"turn"}})
+                }
+                ApprovalKind::ClaudeTool => unreachable!("Claude approvals are handled below"),
+            },
             Provider::Claude => {
                 json!({"type":"control_response","response":{"subtype":"success","request_id":approval.wire_id,
                 "response": if allow { json!({"behavior":"allow","updatedInput":approval.input}) } else { json!({"behavior":"deny","message":"用户拒绝了本次操作"}) }}})
@@ -720,5 +781,54 @@ mod tests {
             protocol.accept(json!({"type":"system","subtype":"init","session_id":"different"}));
         assert!(step.done && step.error.is_some());
         assert!(step.events.is_empty());
+    }
+    #[test]
+    fn codex_permissions_approval_grants_requested_profile_or_nothing() {
+        let mut protocol = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
+        // Shape follows PermissionsRequestApprovalParams from the 0.163.0
+        // app-server schema: additional filesystem/network access beyond the
+        // current sandbox profile.
+        let request = json!({
+            "id": 77,
+            "method": "item/permissions/requestApproval",
+            "params": {
+                "cwd": "C:\\work",
+                "itemId": "item-1",
+                "permissions": {
+                    "fileSystem": {"write": ["C:\\work\\logs"]},
+                    "network": {"enabled": true}
+                },
+                "reason": "write logs outside the sandbox",
+                "startedAtMs": 1,
+                "threadId": "thread-1",
+                "turnId": "turn-1"
+            }
+        });
+        let step = protocol.accept(request);
+        let Event::Approval(approval) = &step.events[0] else {
+            panic!("missing permissions approval");
+        };
+        assert_eq!(approval.wire_id, json!(77));
+        assert_eq!(approval.kind, ApprovalKind::Permissions);
+        assert_eq!(approval.title, "请求扩展权限");
+        let allowed = protocol.approval_response(approval, true);
+        assert_eq!(allowed["id"], 77);
+        assert_eq!(allowed["result"]["scope"], "turn");
+        assert_eq!(
+            allowed["result"]["permissions"],
+            approval.input["permissions"]
+        );
+        // Denying must grant an empty profile; the schema has no deny enum and
+        // an invented scope value would fail deserialization on the CLI side.
+        let denied = protocol.approval_response(approval, false);
+        assert_eq!(denied["id"], 77);
+        assert_eq!(denied["result"]["permissions"], json!({}));
+        assert_eq!(denied["result"]["scope"], "turn");
+        // A permissions request without an ID stops the run instead of being
+        // silently approved.
+        let missing =
+            protocol.accept(json!({"method":"item/permissions/requestApproval","params":{}}));
+        assert!(missing.done && missing.error.is_some());
+        assert!(missing.writes.is_empty());
     }
 }
