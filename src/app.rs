@@ -975,8 +975,8 @@ impl ConduitApp {
                 .border_color(rgb(BORDER))
                 .close_button(true)
                 .overlay_closable(true)
-                .content(move |content, _, cx| {
-                    let body = view.read(cx).settings_modal_content(view.clone());
+                .content(move |content, window, cx| {
+                    let body = view.read(cx).settings_modal_content(window, view.clone());
                     content.child(body)
                 })
         });
@@ -1882,7 +1882,7 @@ impl ConduitApp {
             )
             .into_any_element()
     }
-    fn settings_modal_content(&self, view: Entity<Self>) -> AnyElement {
+    fn settings_modal_content(&self, window: &Window, view: Entity<Self>) -> AnyElement {
         let (title, subtitle) = match self.settings_tab {
             SettingsTab::General => ("通用", "路径查找方式与本机数据位置"),
             SettingsTab::Provider(provider) => (provider.label(), "管理可执行文件路径与版本检测"),
@@ -2104,9 +2104,14 @@ impl ConduitApp {
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     ),
             );
+        // Keep the footer reachable at the documented minimum window size
+        // (850x500 client area). The dialog layer clips content taller than the
+        // viewport minus its edge margins, so the height follows the window and
+        // the body scrolls instead of losing the 完成 button.
+        let modal_height = (f32::from(window.viewport_size().height) - 96.).clamp(360., 560.);
         h_flex()
             .w_full()
-            .h(px(560.))
+            .h(px(modal_height))
             .items_stretch()
             .overflow_hidden()
             .rounded(px(16.))
