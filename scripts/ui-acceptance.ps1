@@ -39,6 +39,7 @@ param(
     [string]$WorkspacePath = '',
     [string]$AppArgs = '',
     [string[]]$ClickButton = @(),
+    [int[]]$ClickButtonIndex = @(),
     [string[]]$ClickAt = @(),
     [string[]]$PostClickAt = @(),
     [string[]]$PostClickButton = @(),
@@ -48,6 +49,7 @@ param(
     [string]$TypeText = '',
     [string]$UiaSetText = '',
     [string]$SendKeys = '',
+    [int]$FocusEditIndex = -1,
     [switch]$PasteClipboard,
     [int]$Width = 0,
     [int]$Height = 0,
@@ -335,6 +337,16 @@ try {
     $rect = New-Object ConduitWin+RECT
     [ConduitWin]::GetWindowRect($handle, [ref]$rect) | Out-Null
 
+    if ($FocusEditIndex -ge 0) {
+        if ($FocusEditIndex -ge $edits.Count) { throw "FocusEditIndex out of range: $FocusEditIndex" }
+        try {
+            $edits.Item($FocusEditIndex).SetFocus()
+        } catch {
+            Write-Output "FOCUS_EDIT_ERROR=$($_.Exception.Message)"
+        }
+        Start-Sleep -Milliseconds 300
+    }
+
     if ($UiaSetText -ne '') {
         if ($edits.Count -eq 0) { throw 'No Edit element found for -UiaSetText' }
         $edit = $edits.Item(0)
@@ -345,6 +357,21 @@ try {
             throw "The edit element does not expose ValuePattern: $($_.Exception.Message)"
         }
         Start-Sleep -Milliseconds 400
+    }
+
+    # The accessibility tree is occasionally empty right after the first frame;
+    # poll briefly so index-based and name-based clicks stay reliable.
+    for ($attempt = 0; $attempt -lt 20 -and $buttons.Count -eq 0; $attempt++) {
+        Start-Sleep -Milliseconds 100
+        $buttons = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $buttonCondition)
+    }
+
+    foreach ($index in $ClickButtonIndex) {
+        if ($index -lt 0 -or $index -ge $buttons.Count) { throw "UIA button index out of range: $index" }
+        $pattern = $buttons.Item($index).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+        $pattern.Invoke()
+        Start-Sleep -Milliseconds 700
+        $buttons = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $buttonCondition)
     }
 
     foreach ($wanted in $ClickButton) {
