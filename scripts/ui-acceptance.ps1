@@ -40,10 +40,17 @@ param(
     [string]$AppArgs = '',
     [string[]]$ClickButton = @(),
     [string[]]$ClickAt = @(),
+    [string[]]$PostClickAt = @(),
+    [string[]]$SendClickAt = @(),
     [string[]]$ScrollAt = @(),
+    [string[]]$DragAt = @(),
+    [string]$TypeText = '',
+    [string]$UiaSetText = '',
+    [string]$SendKeys = '',
     [int]$Width = 0,
     [int]$Height = 0,
     [int]$SettleMs = 800,
+    [int]$WaitSeconds = 0,
     [ValidateSet('all', 'claude', 'codex')]
     [string]$SeedProfile = 'all',
     [switch]$Seed,
@@ -217,7 +224,9 @@ if ($Action -eq 'seed') { exit 0 }
 # -File argument parsing joins comma lists; allow "x,y;x,y" in one value.
 $ClickButton = @($ClickButton | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $ClickAt = @($ClickAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
+$PostClickAt = @($PostClickAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $ScrollAt = @($ScrollAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
+$DragAt = @($DragAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 
 $exe = Join-Path $root 'target\debug\conduit.exe'
 if (-not (Test-Path -LiteralPath $exe)) { throw 'Run cargo build --locked first.' }
@@ -239,6 +248,7 @@ public class ConduitWin {
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int nIndex);
     [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, int dwData, UIntPtr dwExtraInfo);
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
 }
@@ -303,6 +313,18 @@ try {
     $rect = New-Object ConduitWin+RECT
     [ConduitWin]::GetWindowRect($handle, [ref]$rect) | Out-Null
 
+    if ($UiaSetText -ne '') {
+        if ($edits.Count -eq 0) { throw 'No Edit element found for -UiaSetText' }
+        $edit = $edits.Item(0)
+        try {
+            $valuePattern = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+            $valuePattern.SetValue($UiaSetText)
+        } catch {
+            throw "The edit element does not expose ValuePattern: $($_.Exception.Message)"
+        }
+        Start-Sleep -Milliseconds 400
+    }
+
     foreach ($wanted in $ClickButton) {
         $target = $null
         for ($i = 0; $i -lt $buttons.Count; $i++) {
@@ -346,6 +368,89 @@ try {
             Start-Sleep -Milliseconds 120
         }
         Start-Sleep -Milliseconds 600
+    }
+
+    foreach ($drag in $DragAt) {
+        $parts = $drag.Split(',')
+        if ($parts.Count -ne 4) { throw "DragAt must be 'x1,y1,x2,y2': $drag" }
+        $x1 = $rect.Left + [int]$parts[0]
+        $y1 = $rect.Top + [int]$parts[1]
+        $x2 = $rect.Left + [int]$parts[2]
+        $y2 = $rect.Top + [int]$parts[3]
+        [ConduitWin]::SetForegroundWindow($handle) | Out-Null
+        # Drag detection needs real pointer-move messages; SetCursorPos alone
+        # does not reliably produce them, so move through mouse_event with
+        # MOUSEEVENTF_MOVE|MOUSEEVENTF_ABSOLUTE (normalized screen coords).
+        $screenW = [ConduitWin]::GetSystemMetrics(0)
+        $screenH = [ConduitWin]::GetSystemMetrics(1)
+        if ($screenW -le 0) { $screenW = 1920 }
+        if ($screenH -le 0) { $screenH = 1080 }
+        $moveTo = {
+            param([int]$px, [int]$py)
+            $ax = [uint32][int](($px + 0.5) * 65535 / $screenW)
+            $ay = [uint32][int](($py + 0.5) * 65535 / $screenH)
+            [ConduitWin]::mouse_event(0x8001, $ax, $ay, 0, [UIntPtr]::Zero)
+        }
+        & $moveTo $x1 $y1
+        Start-Sleep -Milliseconds 200
+        [ConduitWin]::mouse_event(0x02, 0, 0, 0, [UIntPtr]::Zero)
+        # Move in small steps so the widget sees pointer movement, not a jump.
+        for ($step = 1; $step -le 12; $step++) {
+            $x = [int]($x1 + ($x2 - $x1) * $step / 12)
+            $y = [int]($y1 + ($y2 - $y1) * $step / 12)
+            & $moveTo $x $y
+            Start-Sleep -Milliseconds 30
+        }
+        [ConduitWin]::mouse_event(0x04, 0, 0, 0, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 500
+    }
+
+    if ($TypeText -ne '' -or $SendKeys -ne '') {
+        Add-Type -AssemblyName System.Windows.Forms
+        [ConduitWin]::SetForegroundWindow($handle) | Out-Null
+        Start-Sleep -Milliseconds 250
+        if ($TypeText -ne '') {
+            [System.Windows.Forms.SendKeys]::SendWait($TypeText)
+            Start-Sleep -Milliseconds 300
+        }
+        if ($SendKeys -ne '') {
+            [System.Windows.Forms.SendKeys]::SendWait($SendKeys)
+            Start-Sleep -Milliseconds 500
+        }
+    }
+    if ($SendClickAt.Count -gt 0) {
+        [ConduitWin]::GetWindowRect($handle, [ref]$rect) | Out-Null
+        foreach ($position in $SendClickAt) {
+            $parts = $position.Split(',')
+            if ($parts.Count -ne 2) { throw "SendClickAt must be 'x,y': $position" }
+            $x = $rect.Left + [int]$parts[0]
+            $y = $rect.Top + [int]$parts[1]
+            [ConduitWin]::SetForegroundWindow($handle) | Out-Null
+            [ConduitWin]::SetCursorPos($x, $y) | Out-Null
+            Start-Sleep -Milliseconds 150
+            [ConduitWin]::mouse_event(0x02, 0, 0, 0, [UIntPtr]::Zero)
+            [ConduitWin]::mouse_event(0x04, 0, 0, 0, [UIntPtr]::Zero)
+            Start-Sleep -Milliseconds 700
+        }
+        Start-Sleep -Milliseconds 800
+    }
+    if ($WaitSeconds -gt 0) { Start-Sleep -Seconds $WaitSeconds }
+
+    if ($PostClickAt.Count -gt 0) {
+        [ConduitWin]::GetWindowRect($handle, [ref]$rect) | Out-Null
+        foreach ($position in $PostClickAt) {
+            $parts = $position.Split(',')
+            if ($parts.Count -ne 2) { throw "PostClickAt must be 'x,y': $position" }
+            $x = $rect.Left + [int]$parts[0]
+            $y = $rect.Top + [int]$parts[1]
+            [ConduitWin]::SetForegroundWindow($handle) | Out-Null
+            [ConduitWin]::SetCursorPos($x, $y) | Out-Null
+            Start-Sleep -Milliseconds 150
+            [ConduitWin]::mouse_event(0x02, 0, 0, 0, [UIntPtr]::Zero)
+            [ConduitWin]::mouse_event(0x04, 0, 0, 0, [UIntPtr]::Zero)
+            Start-Sleep -Milliseconds 700
+        }
+        Start-Sleep -Milliseconds 800
     }
 
     Start-Sleep -Milliseconds $SettleMs
