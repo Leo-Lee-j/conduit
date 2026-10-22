@@ -26,7 +26,7 @@
 | 构建 | 通过 | `cargo build --locked`，生成 `target/debug/conduit.exe` |
 | 格式 | 通过 | `cargo fmt --check` |
 | 静态检查 | 通过 | `cargo clippy --locked --all-targets -- -D warnings` |
-| 常规测试 | 通过 | 40 passed，0 failed，9 ignored（2026-10-22 本轮）；ignored 为需要本机 CLI 的集成测试 |
+| 常规测试 | 通过 | 42 passed，0 failed，9 ignored（2026-10-22 本轮）；ignored 为需要本机 CLI 的集成测试 |
 | 模型配置只读同步 | 单测与界面冒烟通过；交互待人工验收 | 解析 Claude settings 与 Codex config/catalog，验证去重、相对目录、隐藏项、缺失/损坏配置；不读取密钥。新增设置“模型同步”菜单，分别展示 CLI 当前模型与 CCS Provider 模型；输入区选择 `gpt-6.1-sol[1M]` 后写入隔离 `state.json`，标签与弹窗状态更新。仅 UI 自动化观察，未人工点击 |
 | cc-switch 模型目录 | 单测与真实数据库查询通过；界面待人工验收 | 只读打开 `~/.cc-switch/cc-switch.db`，仅投影模型 ID、显示名、上下文与可见性；本机读回 Claude 6 个 Provider / 11 个模型、Codex 3 个 Provider / 12 个模型，正确标记 anyrouter 与公司为当前 Provider。夹具含伪造 Token 与端点，断言未进入结果；未修改数据库 |
 | 模型目录合并 | 单测通过 | CCS 当前 Provider 模型并入会话选择器；同名模型合并备注，新增模型带 `CCS · Provider` 来源，其他 Provider 不进入选择器 |
@@ -56,7 +56,7 @@
 | UI 自动预验 | 部分通过 | 隔离数据 + `PrintWindow` 截图 + UI Automation 驱动，覆盖清单 3/4/7/10/11/12 中可自动观察的部分；发现设置弹窗窄窗底部裁切并修复；清单 1/2/5/6/8/9 仍需人工。证据与方法见 [UI 自动预验记录](m0-ui-acceptance-run.md) |
 | Claude 待审批取消 | 通过，2026-10-22 | 真实 CLI 测试专用 `manual` 模式 + 显式 `claude-haiku-4-5-20251001`；收到 `can_use_tool` 后取消，Finished(cancelled)、无 ApprovalResolved、临时目录无变化；约 12 秒 |
 | 生产参数 Codex 审批弹窗 | 自动预验通过，2026-10-22 | 真实 Codex 0.163.0 在生产参数 `on-request` + `workspace-write` 下请求越界写文件，界面显示审批卡片；脚本点击“拒绝”后探针文件不存在，点击“允许本次”后文件内容为 `ok`、模型回复 `APPROVAL_TEST_DONE`；均为 UI Automation 合成点击，人工点击手感与视觉仍待确认。证据见 [UI 自动预验记录](m0-ui-acceptance-run.md) |
-| 历史整理 | 单测与界面预验通过，2026-10-22 | 会话可重命名（输入对话框）、归档/取消归档（侧栏“已归档”切换）、删除（二次确认）、按标题与消息内容搜索；`archived` 随 v2 状态保存，旧文件缺省为未归档。40 passed；界面证据见 [UI 自动预验记录](m0-ui-acceptance-run.md) |
+| 历史整理 | 单测与界面预验通过，2026-10-22 | 会话可重命名（输入对话框）、归档/取消归档（侧栏“已归档”切换）、删除（二次确认）；搜索为弹窗，按标题与消息内容匹配并在标题/摘要中高亮命中词；工作区行提供“在此工作区新建会话”与“移除工作区”（只移出应用路径，保留磁盘文件与 CLI 历史）。`archived` 随 v2 状态保存，旧文件缺省为未归档。42 passed；界面证据见 [UI 自动预验记录](m0-ui-acceptance-run.md) |
 | Codex 权限扩展审批映射 | 单测通过 | `item/permissions/requestApproval` 映射为审批；允许回传请求的 profile 且 `scope=turn`，拒绝回空 profile（协议无 deny 枚举，空 profile 为安全拒绝）；真实 CLI 触发未回归 |
 
 真实对话测试各发送两个合成提示，不包含用户项目内容：第一轮要求回复 `CONDUIT_CHAT_OK`，第二轮在新进程恢复同一原生会话并询问上一轮 token。未授予工具权限，未修改实际项目文件或认证信息。本次收尾未重复执行这些模型请求。
@@ -142,6 +142,7 @@ cargo test --locked approval -- --ignored --nocapture --test-threads=1
 - 针对第二轮反馈继续修正：Debug 构建下窗口拖动会整窗重绘，依赖未优化导致逐帧卡顿，dev profile 改为依赖 `opt-level = 2`、应用本体 `opt-level = 1`；审批卡片详情默认折叠并可用“展开详情/收起”切换；设置弹窗在模型读取移出 UI 线程后恢复默认滑入入场动画；失败信息若已出现在助手文本中则不再重复追加结果通知，相邻重复的 completed 助手文本块合并（新增两个单测）。
 - 定位“AI 回复重复”的真实原因：自定义网关的流式事件包含隐藏 thinking 块，使文本块的 stream index 与 assistant 快照中的可视块序号错位，同一段文本被存成 `...-1` 与 `...-0` 两条（工具卡片与审批通知随之成对出现）。协议改为按“文本块序号”对齐流式增量与快照；加载旧数据时清理相邻重复助手文本和已由助手文本承载的失败通知。新增 3 个协议/存储测试（共 38 passed），旧会话在下次加载时即不再重复显示。
 - 实现 P1 历史整理：侧栏新增会话搜索（标题与消息正文）、会话行操作菜单（重命名对话框、归档/取消归档、删除二次确认）和“已归档”显示开关；`SessionRecord.archived` 为兼容 v2 的可选字段（缺省 false）。新增搜索匹配与归档往返测试（共 40 passed）。
+- 侧栏信息架构调整：移除侧栏的 Claude/Codex 新建入口，改为顶部“新建会话/搜索”图标行；新建会话引擎切换到输入区底部工具栏左侧，切换不改变已打开会话；工作区行新增“在此工作区新建会话”图标与“移除工作区”菜单（只移除应用内路径）；搜索改为弹窗，命中列表在标题与摘要中高亮。自动预验捕获到多字节文本下高亮范围映射越界导致进程 panic，已改为逐字节映射并新增 Unicode/摘要测试（共 42 passed）。
 
 ## 未完成验收与具体限制
 

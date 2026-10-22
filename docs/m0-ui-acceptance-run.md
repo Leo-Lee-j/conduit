@@ -108,6 +108,22 @@ pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -DataDir target/
 | 删除 | 二次确认对话框，提示不可恢复 | [ui-v4-delete-dialog.png](screenshots/acceptance/ui-v4-delete-dialog.png) |
 
 数据层：`SessionRecord.archived` 为 v2 可选字段（缺省 false），保存/加载与搜索匹配均有单测；`cargo test` 40 passed。删除确认按钮的自动化点击链未稳定复现，删除逻辑与对话框视觉已验证，最终删除动作建议人工点一次确认。
+
+## 第五轮：2026-10-22 侧栏信息架构与搜索弹窗
+
+按反馈调整侧栏入口与搜索形态：
+
+| 反馈 | 实现 | 证据 |
+| --- | --- | --- |
+| 去掉侧栏 Claude Code / Codex 新建入口，保留新建会话为图标，顶部改为一行图标功能 | 侧栏顶部改为 [＋ 新建会话] [搜索] 图标行；新建会话使用当前“新建会话引擎” | [ui-v5-main-window.png](screenshots/acceptance/ui-v5-main-window.png) |
+| 引擎切换移到 chat 左下角 | 输入区底部工具栏左侧“新建会话引擎”Claude Code / Codex 切换，不改变已打开会话；无会话时输入区用该引擎新建 | [ui-v5-engine-switch.png](screenshots/acceptance/ui-v5-engine-switch.png)；切到 Claude 后新建，`state.json` 中新增会话 provider=Claude |
+| 工作区右侧菜单 + 新建会话图标 | 工作区行新增“+”与“⋯”；菜单含“移除工作区”（仅移除应用路径，二次确认） | [ui-v5-workspace-menu.png](screenshots/acceptance/ui-v5-workspace-menu.png)、[ui-v5-remove-workspace-dialog.png](screenshots/acceptance/ui-v5-remove-workspace-dialog.png)；实测确认后 state workspaces 由 1→0，磁盘文件未动 |
+| 搜索移到顶部图标旁，点击弹出搜索窗口 | 弹窗输入框 + 命中会话列表；标题与摘要高亮命中词，点击结果切换会话 | [ui-v5-search-highlight.png](screenshots/acceptance/ui-v5-search-highlight.png) |
+
+自动预验发现并修复：搜索高亮把字符数当作字节数映射，CJK 文本下范围越界导致进程 panic（窗口空白）。改为逐字节映射并在摘要中复用同一范围计算；新增 Unicode 与多字节摘要测试（42 passed）。
+
+仍待人工确认：图标 tooltip/点击手感、引擎切换后新建会话是否符合使用习惯、搜索弹窗长列表滚动。
+
 ## 仍未覆盖，必须人工完成
 
 清单 1、2、5、6、8、9 全项；3 的复制一致性；4 的动态滚动跟随；7 的 100%–200% DPI 与多屏；10 的取消检测与文件选择；5 的真实审批允许/拒绝与多审批队列。人工完成后把结果写回 [验证记录](m0-validation.md#手工-ui-验收清单)，不得用本预验代替。
