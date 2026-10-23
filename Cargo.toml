@@ -17,6 +17,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphic
 [features]
 default = []
 gpui-fast = ["gpui-kit/gpui-fast"]
+ui-tests = ["gpui-kit/test-support"]
 
 [profile.dev]
 debug = "limited"

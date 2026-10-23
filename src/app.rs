@@ -14,6 +14,7 @@ use gpui_kit::{
         button::*,
         input::{Input, InputEvent, InputState, Textarea, TextareaState},
         popover::Popover,
+        scroll::ScrollableElement,
         text::TextView,
         *,
     },
@@ -111,7 +112,6 @@ const SURFACE: u32 = 0x19191c;
 const SURFACE_HOVER: u32 = 0x232327;
 const SURFACE_STRONG: u32 = 0x202024;
 const BORDER: u32 = 0x29292e;
-const BORDER_STRONG: u32 = 0x3b3b42;
 const TEXT: u32 = 0xf3f3f4;
 const MUTED: u32 = 0xa1a1a8;
 const FAINT: u32 = 0x717179;
@@ -175,6 +175,155 @@ fn session_matches(session: &SessionRecord, query: &str) -> bool {
             .messages
             .iter()
             .any(|message| message.text.to_lowercase().contains(query))
+}
+
+struct MessageOutlineEntry {
+    key: String,
+    index: usize,
+    label: String,
+}
+
+fn outline_marker_width(label: &str) -> f32 {
+    // Keep short prompts visibly light while allowing longer prompts to form a
+    // stronger visual rhythm. The cap prevents one verbose message from
+    // pushing the outline into the chat column.
+    (8. + label.chars().count().min(20) as f32 * 0.8).min(24.)
+}
+
+fn message_outline_entries(session: &SessionRecord) -> Vec<MessageOutlineEntry> {
+    session
+        .messages
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.kind == ItemKind::User)
+        .map(|(index, item)| {
+            let label = item.text.split_whitespace().collect::<Vec<_>>().join(" ");
+            let mut preview: String = label.chars().take(100).collect();
+            if label.chars().count() > 100 {
+                preview.push('…');
+            }
+            MessageOutlineEntry {
+                key: item.key.clone(),
+                index,
+                label: if preview.is_empty() {
+                    "（空消息）".into()
+                } else {
+                    preview
+                },
+            }
+        })
+        .collect()
+}
+
+/// Tool output is literal text, never Markdown or HTML. Strip terminal control
+/// sequences and expand tabs so logs, JSON and code remain readable together.
+fn format_tool_text(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\u{1b}' => match chars.next() {
+                Some('[') => {
+                    for ch in chars.by_ref() {
+                        if ('@'..='~').contains(&ch) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    while let Some(ch) = chars.next() {
+                        if ch == '\u{7}' {
+                            break;
+                        }
+                        if ch == '\u{1b}' && chars.peek() == Some(&'\\') {
+                            chars.next();
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                plain.push('\n');
+            }
+            '\t' => plain.push_str("    "),
+            '\n' => plain.push(ch),
+            ch if !ch.is_control() => plain.push(ch),
+            _ => {}
+        }
+    }
+    if let Ok(value @ (serde_json::Value::Object(_) | serde_json::Value::Array(_))) =
+        serde_json::from_str(&plain)
+    {
+        return serde_json::to_string_pretty(&value).unwrap_or(plain);
+    }
+    plain
+}
+
+/// Use a block viewport around natural-height flex content. Constraining the
+/// flex column itself lets its text children shrink and erases scroll overflow.
+fn tool_content(tool_id: &str, item: &ChatItem, scroll: &ScrollHandle) -> (AnyElement, String) {
+    let input = format_tool_text(&item.input);
+    let output = format_tool_text(&item.detail);
+    let copy_text = format!("输入\n{input}\n\n输出 / 结果\n{output}");
+    let mut content = v_flex()
+        .w_full()
+        .min_w_0()
+        .flex_shrink_0()
+        .p_3()
+        .gap_2()
+        .font_family("Consolas")
+        .text_size(px(12.))
+        .line_height(relative(1.5))
+        .text_color(rgb(MUTED));
+    for (section, label, text, empty) in [
+        ("input", "输入", input, "未提供输入"),
+        (
+            "output",
+            "输出 / 结果",
+            output,
+            if matches!(item.status.as_str(), "运行中" | "输出中") {
+                "等待工具输出…"
+            } else {
+                "没有输出内容"
+            },
+        ),
+    ] {
+        content = content
+            .child(div().text_size(px(10.)).text_color(rgb(FAINT)).child(label))
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .child(gpui_kit::base::SelectableText::new(
+                        SharedString::from(format!("{tool_id}-{section}")),
+                        if text.trim().is_empty() {
+                            empty.into()
+                        } else {
+                            text
+                        },
+                    )),
+            );
+    }
+    let viewport = div()
+        .id(SharedString::from(format!("{tool_id}-content")))
+        .h(px(240.))
+        .min_h_0()
+        .flex_shrink_0()
+        .w_full()
+        .min_w_0()
+        .overflow_y_scroll()
+        .track_scroll(scroll)
+        // GPUI otherwise delivers the same wheel event to the chat viewport.
+        .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+        .relative()
+        .child(content)
+        .vertical_scrollbar(scroll)
+        .into_any_element();
+    (viewport, copy_text)
 }
 
 struct SearchHit {
@@ -387,8 +536,13 @@ pub struct ConduitApp {
     last_save: Instant,
     scroll: ScrollHandle,
     /// Whether the message list is scrolled to (or near) its end. Drives the
-    /// floating "jump to latest" pin so it only shows once the user scrolls up.
+    /// floating "jump to latest" arrow so it only shows once the user scrolls up.
     at_bottom: bool,
+    /// Scoped by session and tool key, independent of the right detail dock.
+    expanded_tools: HashSet<(u64, String)>,
+    tool_scrolls: HashMap<(u64, String), ScrollHandle>,
+    message_focus: Option<(u64, String, Instant)>,
+    pending_message_jump: bool,
 }
 
 impl ConduitApp {
@@ -584,6 +738,10 @@ impl ConduitApp {
             last_save: Instant::now(),
             scroll: ScrollHandle::new(),
             at_bottom: true,
+            expanded_tools: HashSet::new(),
+            tool_scrolls: HashMap::new(),
+            message_focus: None,
+            pending_message_jump: false,
         }
     }
     fn session(&self, id: u64) -> Option<&SessionRecord> {
@@ -794,6 +952,8 @@ impl ConduitApp {
             workspace.sessions.retain(|session| session.id != id);
         }
         self.drafts.remove(&id);
+        self.expanded_tools.retain(|(session, _)| *session != id);
+        self.tool_scrolls.retain(|(session, _), _| *session != id);
         self.detail_text = None;
         self.select_fallback_session();
         self.delete_target = None;
@@ -1161,6 +1321,8 @@ impl ConduitApp {
         self.expanded_workspaces.clear();
         for session in &removed.sessions {
             self.drafts.remove(&session.id);
+            self.expanded_tools.retain(|(id, _)| *id != session.id);
+            self.tool_scrolls.retain(|(id, _), _| *id != session.id);
         }
         if self.selected_workspace == Some(index) || self.selected_session.is_none() {
             self.selected_workspace = None;
@@ -1456,6 +1618,8 @@ impl ConduitApp {
         }
         self.selected_workspace = Some(workspace);
         self.selected_session = session;
+        self.message_focus = None;
+        self.pending_message_jump = false;
         self.detail_text = None;
         self.message = None;
         let draft = session
@@ -1469,7 +1633,7 @@ impl ConduitApp {
         }
         self.scroll.set_offset(point(px(0.), px(0.)));
         // The new list starts at its top; let the next poll re-evaluate whether
-        // that is already the end instead of keeping the previous session's pin.
+        // that is already the end instead of keeping the previous session's arrow.
         self.at_bottom = true;
         if let Some(provider) = session
             .and_then(|id| self.session(id))
@@ -1711,6 +1875,7 @@ impl ConduitApp {
             input: String::new(),
             detail: String::new(),
             status: String::new(),
+            approval: None,
         });
         session.interrupted = true;
         if !self.persist() {
@@ -1740,6 +1905,86 @@ impl ConduitApp {
     }
     fn scroll_to_end(&self) {
         self.scroll.scroll_to_bottom();
+    }
+    fn jump_to_message(&mut self, session: u64, key: &str, cx: &mut Context<Self>) {
+        if self.selected_session != Some(session) {
+            return;
+        }
+        let Some(index) = self.session(session).and_then(|session| {
+            session
+                .messages
+                .iter()
+                .position(|item| item.kind == ItemKind::User && item.key == key)
+        }) else {
+            return;
+        };
+        self.scroll.scroll_to_top_of_item(index);
+        self.at_bottom = false;
+        self.pending_message_jump = true;
+        self.message_focus = Some((session, key.into(), Instant::now()));
+        cx.notify();
+    }
+    fn message_outline(&self, session: &SessionRecord, cx: &mut Context<Self>) -> AnyElement {
+        let session_id = session.id;
+        let entries = message_outline_entries(session);
+        let top = self.scroll.top_item();
+        let current = entries
+            .iter()
+            .rev()
+            .find(|entry| entry.index <= top)
+            .or_else(|| entries.first())
+            .map(|entry| entry.index);
+        let mut rail = v_flex()
+            .id(("message-outline", session_id))
+            .w_full()
+            .max_h(relative(1.))
+            .min_h_0()
+            .overflow_y_scroll()
+            .items_end();
+        for (ordinal, entry) in entries.into_iter().enumerate() {
+            let active = current == Some(entry.index);
+            let marker_width = outline_marker_width(&entry.label);
+            rail = rail.child(
+                Button::new(SharedString::from(format!(
+                    "outline-{session_id}-{}",
+                    entry.key
+                )))
+                .ghost()
+                .w_full()
+                .h(px(26.))
+                .p_0()
+                .flex_shrink_0()
+                .cursor_pointer()
+                .tooltip(entry.label.clone())
+                .tooltip_placement(Placement::Left)
+                .accessibility_label(format!("跳转到用户消息 {}：{}", ordinal + 1, entry.label))
+                .child(
+                    h_flex().w_full().justify_end().child(
+                        div()
+                            .w(px(if active {
+                                (marker_width + 2.).min(26.)
+                            } else {
+                                marker_width
+                            }))
+                            .h(px(3.))
+                            .rounded_full()
+                            .bg(rgb(if active { TEXT } else { FAINT })),
+                    ),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.jump_to_message(session_id, &entry.key, cx);
+                })),
+            );
+        }
+        v_flex()
+            .w(px(32.))
+            .h_full()
+            .min_h_0()
+            .flex_shrink_0()
+            .py_4()
+            .justify_center()
+            .child(rail)
+            .into_any_element()
     }
     fn selected_workspace_path(&self) -> Option<PathBuf> {
         self.selected_workspace
@@ -2859,10 +3104,19 @@ impl ConduitApp {
         self.poll_branches(cx);
         self.poll_git(cx);
         self.poll_git_actions(window, cx);
+        if self
+            .message_focus
+            .as_ref()
+            .is_some_and(|(_, _, started)| started.elapsed() > Duration::from_secs(2))
+        {
+            self.message_focus = None;
+            cx.notify();
+        }
+        let navigating = std::mem::take(&mut self.pending_message_jump);
         let follow = f32::from(self.scroll.offset().y + self.scroll.max_offset().y).abs() < 60.;
         // Re-render when the scroll position crosses the "at the end" threshold
-        // so the floating pin appears/disappears without polling every frame.
-        if follow != self.at_bottom {
+        // so the floating arrow appears/disappears without polling every frame.
+        if !navigating && follow != self.at_bottom {
             self.at_bottom = follow;
             cx.notify();
         }
@@ -2880,21 +3134,44 @@ impl ConduitApp {
             visible |= Some(id) == self.selected_session;
             match event {
                 Event::Approval(approval) => {
+                    let accepted = self
+                        .runs
+                        .get(&id)
+                        .is_some_and(|run| !self.closing && !run.runtime.is_cancelled());
+                    if !accepted {
+                        continue;
+                    }
+                    if let Some(session) = self.session_mut(id) {
+                        session.record_tool_approval(
+                            &prefix,
+                            &approval.id,
+                            &approval.title,
+                            &approval.detail,
+                            "等待中",
+                        );
+                    }
                     if let Some(run) = self.runs.get_mut(&id) {
-                        if self.closing || run.runtime.is_cancelled() {
-                            continue;
-                        }
                         run.status = "等待你的审批".into();
                         run.approvals.push(approval);
                     }
                 }
                 Event::ApprovalCancelled(request) => {
                     self.approval_details.remove(&request);
+                    let mut approval = None;
                     if let Some(run) = self.runs.get_mut(&id) {
-                        run.approvals.remove(&request);
+                        approval = run.approvals.remove(&request);
                         if run.approvals.is_empty() && !run.runtime.is_cancelled() {
                             run.status = "正在执行…".into();
                         }
+                    }
+                    if let (Some(approval), Some(session)) = (approval, self.session_mut(id)) {
+                        session.record_tool_approval(
+                            &prefix,
+                            &request,
+                            &approval.title,
+                            &approval.detail,
+                            "已取消",
+                        );
                     }
                 }
                 Event::ApprovalResolved { id: request, allow } => {
@@ -2910,22 +3187,13 @@ impl ConduitApp {
                         approval
                     });
                     if let (Some(approval), Some(session)) = (approval, self.session_mut(id)) {
-                        session.messages.push(ChatItem {
-                            key: format!("{prefix}-approval-{}", session.messages.len()),
-                            kind: ItemKind::Notice,
-                            text: format!(
-                                "已提交{}：{}",
-                                if allow {
-                                    "允许本次操作"
-                                } else {
-                                    "拒绝本次操作"
-                                },
-                                approval.title
-                            ),
-                            input: String::new(),
-                            detail: approval.detail,
-                            status: String::new(),
-                        });
+                        session.record_tool_approval(
+                            &prefix,
+                            &request,
+                            &approval.title,
+                            &approval.detail,
+                            if allow { "已允许" } else { "已拒绝" },
+                        );
                     }
                 }
                 Event::Finished { error, cancelled } => {
@@ -2971,6 +3239,7 @@ impl ConduitApp {
                                 input: String::new(),
                                 detail: String::new(),
                                 status: String::new(),
+                                approval: None,
                             });
                         }
                     }
@@ -2998,7 +3267,7 @@ impl ConduitApp {
                 self.persist();
             }
             cx.notify();
-            if follow && visible {
+            if follow && visible && !navigating && self.message_focus.is_none() {
                 self.scroll_to_end();
             }
             // A finished turn can change workspace files; keep an open Git
@@ -4786,6 +5055,13 @@ fn finish_tool_cards(session: &mut SessionRecord, prefix: &str, status: &str) {
     for item in &mut session.messages {
         if item.kind == ItemKind::Tool
             && item.key.starts_with(&prefix)
+            && let Some(approval) = item.approval.as_mut()
+            && approval.status == "等待中"
+        {
+            approval.status = "已取消".into();
+        }
+        if item.kind == ItemKind::Tool
+            && item.key.starts_with(&prefix)
             && matches!(item.status.as_str(), "运行中" | "输出中")
         {
             item.status = status.into();
@@ -4806,6 +5082,7 @@ pub fn apply_event(session: &mut SessionRecord, prefix: &str, event: Event) {
                 input,
                 detail: String::new(),
                 status: "运行中".into(),
+                approval: None,
             });
         }
         return;
@@ -4886,6 +5163,7 @@ pub fn apply_event(session: &mut SessionRecord, prefix: &str, event: Event) {
                 input: String::new(),
                 detail,
                 status,
+                approval: None,
             });
         }
     }
@@ -5251,6 +5529,8 @@ impl Render for ConduitApp {
             .min_h_0()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
+            .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
+            .min_w_0()
             .px_6()
             .py_5()
             .gap_5();
@@ -5290,7 +5570,7 @@ impl Render for ConduitApp {
                         ),
                 );
             }
-            for (index, item) in session.messages.iter().enumerate() {
+            for item in &session.messages {
                 let element = match item.kind {
                     ItemKind::User => h_flex()
                         .w_full()
@@ -5332,30 +5612,53 @@ impl Render for ConduitApp {
                         )
                         .into_any_element(),
                     ItemKind::Tool => {
-                        let detail = item.key.clone();
-                        div()
-                            .id(("tool", index))
+                        let detail_key = (session.id, item.key.clone());
+                        let expanded = self.expanded_tools.contains(&detail_key);
+                        let tool_id = format!("tool-{}-{}", session.id, item.key);
+                        let tool_scroll = self
+                            .tool_scrolls
+                            .entry(detail_key.clone())
+                            .or_default()
+                            .clone();
+                        let header = Button::new(SharedString::from(format!("{tool_id}-toggle")))
+                            .ghost()
+                            .w_full()
+                            .h(px(36.))
                             .px_3()
-                            .py_2()
-                            .rounded(px(10.))
-                            .border_1()
-                            .border_color(rgb(BORDER))
-                            .bg(rgb(SURFACE))
                             .cursor_pointer()
-                            .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.details = true;
-                                this.detail_view = DetailView::Tool;
-                                this.detail_text = Some(detail.clone());
-                                cx.notify();
-                            }))
+                            .accessibility_label(format!(
+                                "{}工具调用：{}",
+                                if expanded { "收起" } else { "展开" },
+                                item.text
+                            ))
                             .child(
                                 h_flex()
+                                    .w_full()
+                                    .min_w_0()
                                     .items_center()
                                     .gap_2()
+                                    .when_some(item.approval.as_ref(), |header, approval| {
+                                        header.child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .px_2()
+                                                .py_1()
+                                                .rounded(px(5.))
+                                                .bg(rgb(SURFACE_STRONG))
+                                                .text_size(px(11.))
+                                                .text_color(rgb(match approval.status.as_str() {
+                                                    "已允许" => 0x91c7a0,
+                                                    "已拒绝" => 0xe3a0a0,
+                                                    _ => MUTED,
+                                                }))
+                                                .child(approval.status.clone()),
+                                        )
+                                    })
                                     .child(
                                         div()
                                             .flex_1()
+                                            .min_w_0()
+                                            .text_left()
                                             .text_size(px(13.))
                                             .truncate()
                                             .child(item.text.clone()),
@@ -5367,12 +5670,91 @@ impl Render for ConduitApp {
                                             .child(item.status.clone()),
                                     )
                                     .child(
-                                        Icon::new(IconName::ChevronRight)
-                                            .small()
-                                            .text_color(rgb(FAINT)),
+                                        Icon::new(if expanded {
+                                            IconName::ChevronDown
+                                        } else {
+                                            IconName::ChevronRight
+                                        })
+                                        .small()
+                                        .text_color(rgb(FAINT)),
                                     ),
                             )
-                            .into_any_element()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !this.expanded_tools.remove(&detail_key) {
+                                    this.expanded_tools.insert(detail_key.clone());
+                                }
+                                cx.notify();
+                            }));
+                        let mut card = v_flex()
+                            .w_full()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .rounded(px(10.))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .bg(rgb(SURFACE))
+                            .child(header);
+                        if expanded {
+                            let dock_key = item.key.clone();
+                            let (content, copy_text) = tool_content(&tool_id, item, &tool_scroll);
+                            card = card.child(
+                                v_flex()
+                                    .w_full()
+                                    .min_w_0()
+                                    .border_t_1()
+                                    .border_color(rgb(BORDER))
+                                    .child(
+                                        h_flex()
+                                            .px_3()
+                                            .pt_1()
+                                            .items_center()
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .text_size(px(10.))
+                                                    .text_color(rgb(FAINT))
+                                                    .child("工具调用内容"),
+                                            )
+                                            .child(
+                                                Button::new(SharedString::from(format!(
+                                                    "{tool_id}-dock"
+                                                )))
+                                                .ghost()
+                                                .small()
+                                                .compact()
+                                                .icon(gpui_kit::assets::IconName::PanelRight)
+                                                .tooltip("在右侧查看工具详情")
+                                                .cursor_pointer()
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.details = true;
+                                                    this.detail_view = DetailView::Tool;
+                                                    this.detail_text = Some(dock_key.clone());
+                                                    cx.notify();
+                                                })),
+                                            )
+                                            .child(
+                                                Button::new(SharedString::from(format!(
+                                                    "{tool_id}-copy"
+                                                )))
+                                                .ghost()
+                                                .small()
+                                                .compact()
+                                                .icon(gpui_kit::assets::IconName::Copy)
+                                                .tooltip("复制输入与输出")
+                                                .cursor_pointer()
+                                                .on_click(move |_, _, cx| {
+                                                    cx.write_to_clipboard(
+                                                        ClipboardItem::new_string(
+                                                            copy_text.clone(),
+                                                        ),
+                                                    )
+                                                }),
+                                            ),
+                                    )
+                                    .child(content),
+                            );
+                        }
+                        card.into_any_element()
                     }
                     ItemKind::Notice => div()
                         .text_size(px(11.))
@@ -5380,7 +5762,30 @@ impl Render for ConduitApp {
                         .child(item.text.clone())
                         .into_any_element(),
                 };
-                messages = messages.child(div().w_full().max_w(px(840.)).mx_auto().child(element));
+                let highlighted = self
+                    .message_focus
+                    .as_ref()
+                    .is_some_and(|(id, key, _)| *id == session.id && key == &item.key);
+                messages = messages.child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "message-{}-{}",
+                            session.id, item.key
+                        )))
+                        .w_full()
+                        .min_w_0()
+                        .max_w(px(840.))
+                        .mx_auto()
+                        .rounded(px(12.))
+                        .border_1()
+                        .border_color(if highlighted {
+                            rgb(FOCUS).into()
+                        } else {
+                            transparent_black()
+                        })
+                        .when(highlighted, |row| row.bg(rgb(SURFACE_HOVER)))
+                        .child(element),
+                );
             }
         } else if has_workspace {
             messages = messages.child(
@@ -5533,7 +5938,34 @@ impl Render for ConduitApp {
                         })),
                 ),
         );
-        conversation = conversation.child(messages);
+        // Keep the outline attached to the centered message column instead of
+        // the window edge. It stays outside the scrolling list, while the
+        // rail itself is vertically centered in the chat viewport.
+        let mut message_area = h_flex().flex_1().min_h_0().min_w_0().items_stretch();
+        if let Some(session) = selected.as_ref().filter(|session| {
+            session
+                .messages
+                .iter()
+                .any(|item| item.kind == ItemKind::User)
+        }) {
+            message_area = message_area.child(
+                h_flex()
+                    .w_full()
+                    .max_w(px(952.))
+                    .h_full()
+                    .min_h_0()
+                    .min_w_0()
+                    .mx_auto()
+                    .items_stretch()
+                    .child(self.message_outline(session, cx))
+                    .child(messages)
+                    // Balance the rail so messages stay aligned with the composer.
+                    .child(div().w(px(32.)).flex_shrink_0()),
+            );
+        } else {
+            message_area = message_area.child(messages);
+        }
+        conversation = conversation.child(message_area);
         let approval_count = self
             .selected_session
             .and_then(|id| self.runs.get(&id))
@@ -5719,9 +6151,9 @@ impl Render for ConduitApp {
         let input_focused = self.input.read(cx).focus_handle(cx).is_focused(window);
         let provider = selected.as_ref().map(|session| session.provider);
         let send_ready = can_edit && !busy && has_workspace;
-        // The floating pin replaces the old "最新消息" text button: it appears
+        // The latest-message arrow appears
         // only when the user has scrolled away from the end of the message list.
-        let show_latest_pin = !self.at_bottom
+        let show_latest_button = !self.at_bottom
             && selected
                 .as_ref()
                 .is_some_and(|session| !session.messages.is_empty());
@@ -5865,7 +6297,7 @@ impl Render for ConduitApp {
                     }),
             )
             .into_any_element();
-        // The "jump to latest" pin floats at the lower-right of the message
+        // The "jump to latest" arrow floats at the lower-right of the message
         // area, just above the composer's top-right corner, and only exists
         // while the list is scrolled away from its end.
         conversation = conversation.child(
@@ -5876,10 +6308,12 @@ impl Render for ConduitApp {
                     .max_w(px(840.))
                     .mx_auto()
                     .child(composer)
-                    .when(show_latest_pin, |area| {
+                    .when(show_latest_button, |area| {
                         area.child(
-                            h_flex()
-                                .id("scroll-to-latest")
+                            Button::new("scroll-to-latest")
+                                .ghost()
+                                .tooltip("转到最新消息")
+                                .accessibility_label("转到最新消息")
                                 .absolute()
                                 .top(px(-40.))
                                 .right(px(14.))
@@ -5892,18 +6326,15 @@ impl Render for ConduitApp {
                                 .border_color(rgb(BORDER))
                                 .bg(rgb(SURFACE_STRONG))
                                 .cursor_pointer()
-                                .hover(|style| {
-                                    style
-                                        .bg(rgb(SURFACE_HOVER))
-                                        .border_color(rgb(BORDER_STRONG))
-                                })
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.scroll_to_end();
                                     this.at_bottom = true;
+                                    this.message_focus = None;
+                                    this.pending_message_jump = false;
                                     cx.notify();
                                 }))
                                 .child(
-                                    Icon::new(gpui_kit::assets::IconName::Pin)
+                                    Icon::new(gpui_kit::assets::IconName::ArrowDown)
                                         .small()
                                         .text_color(rgb(MUTED)),
                                 ),
@@ -6033,7 +6464,9 @@ impl Render for ConduitApp {
                         }
                     )
                 })
-                .unwrap_or_else(|| "点击工具调用卡片查看输入、命令输出或文件变更。".into());
+                .unwrap_or_else(|| {
+                    "展开工具调用卡片后，点击右侧详情图标可在此查看完整输入与输出。".into()
+                });
             let tool_body: AnyElement = v_flex()
                 .flex_1()
                 .min_h_0()
@@ -6236,6 +6669,171 @@ mod tests {
         protocol::Event,
     };
     #[test]
+    fn message_outline_keeps_real_indices_and_keys_amid_tools_and_replies() {
+        let mut s = session();
+        for (key, kind, text) in [
+            ("user-1", ItemKind::User, "第一轮\n  修复\tbug"),
+            ("tool-1", ItemKind::Tool, "cargo check"),
+            ("assistant-1", ItemKind::Assistant, "完成"),
+            ("user-2", ItemKind::User, "第一轮\n  修复\tbug"),
+            ("notice", ItemKind::Notice, "notice"),
+            ("user-3", ItemKind::User, ""),
+        ] {
+            s.messages.push(ChatItem {
+                key: key.into(),
+                kind,
+                text: text.into(),
+                input: String::new(),
+                detail: String::new(),
+                status: String::new(),
+                approval: None,
+            });
+        }
+        let entries = super::message_outline_entries(&s);
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| (entry.index, entry.key.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(0, "user-1"), (3, "user-2"), (5, "user-3")]
+        );
+        assert_eq!(entries[0].label, "第一轮 修复 bug");
+        assert_eq!(entries[2].label, "（空消息）");
+        s.messages[0].text = "中🙂".repeat(90);
+        let entries = super::message_outline_entries(&s);
+        assert_eq!(entries[0].label.chars().count(), 101);
+        assert!(entries[0].label.ends_with('…'));
+    }
+
+    #[test]
+    fn tool_text_preserves_literal_logs_code_and_removes_terminal_escapes() {
+        let text = "\u{1b}[31m错误\u{1b}[0m\r\n\tcode();\rretry\n\u{1b}]8;;https://example.test\u{1b}\\label\u{1b}]8;;\u{7}\n<b>literal</b> **text**";
+        assert_eq!(
+            super::format_tool_text(text),
+            "错误\n    code();\nretry\nlabel\n<b>literal</b> **text**"
+        );
+        let json = "{\"command\":\"echo 中文\",\"args\":[1,2]}";
+        let formatted = super::format_tool_text(json);
+        assert!(formatted.contains('\n'));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&formatted).unwrap(),
+            serde_json::from_str::<serde_json::Value>(json).unwrap()
+        );
+        // A partial streaming JSON result remains useful text, never discarded.
+        assert_eq!(
+            super::format_tool_text("{\"output\":\"partial"),
+            "{\"output\":\"partial"
+        );
+    }
+    #[test]
+    fn tool_approval_matches_provider_id_and_survives_execution_updates() {
+        let mut s = session();
+        for key in ["first", "second"] {
+            apply_event(
+                &mut s,
+                "turn-1",
+                Event::Tool {
+                    key: key.into(),
+                    title: "same command".into(),
+                    detail: String::new(),
+                    status: "运行中".into(),
+                },
+            );
+        }
+        let detail = r#"{"itemId":"first"}"#;
+        s.record_tool_approval("turn-1", "ticket", "请求执行命令", detail, "等待中");
+        s.record_tool_approval("turn-1", "ticket", "请求执行命令", detail, "已允许");
+        apply_event(
+            &mut s,
+            "turn-1",
+            Event::Tool {
+                key: "first".into(),
+                title: "same command".into(),
+                detail: "done".into(),
+                status: "completed".into(),
+            },
+        );
+        assert_eq!(s.messages.len(), 2);
+        assert_eq!(s.messages[0].approval.as_ref().unwrap().status, "已允许");
+        assert_eq!(s.messages[0].status, "completed");
+        assert!(s.messages[1].approval.is_none());
+        assert!(s.messages.iter().all(|item| item.kind == ItemKind::Tool));
+    }
+    #[test]
+    fn permission_before_tool_start_merges_and_pending_cancellation_is_scoped() {
+        let mut s = session();
+        for prefix in ["turn-0", "turn-1"] {
+            s.record_tool_approval(
+                prefix,
+                "ticket",
+                "请求使用 WebSearch",
+                r#"{"tool_use_id":"search"}"#,
+                "等待中",
+            );
+            apply_event(
+                &mut s,
+                prefix,
+                Event::Tool {
+                    key: "search".into(),
+                    title: "WebSearch".into(),
+                    detail: String::new(),
+                    status: "运行中".into(),
+                },
+            );
+        }
+        finish_tool_cards(&mut s, "turn-1", "已取消");
+        assert_eq!(s.messages.len(), 2);
+        assert_eq!(s.messages[0].approval.as_ref().unwrap().status, "等待中");
+        assert_eq!(s.messages[1].approval.as_ref().unwrap().status, "已取消");
+        s.record_tool_approval(
+            "turn-1",
+            "ticket",
+            "请求使用 WebSearch",
+            r#"{"tool_use_id":"search"}"#,
+            "已拒绝",
+        );
+        assert_eq!(s.messages[1].approval.as_ref().unwrap().status, "已拒绝");
+    }
+    #[test]
+    fn claude_approval_without_id_matches_input_and_never_another_turn() {
+        let mut s = session();
+        for (prefix, key, query) in [
+            ("old", "a", "one"),
+            ("now", "b", "one"),
+            ("now", "c", "two"),
+        ] {
+            apply_event(
+                &mut s,
+                prefix,
+                Event::Tool {
+                    key: key.into(),
+                    title: "WebSearch".into(),
+                    detail: String::new(),
+                    status: "运行中".into(),
+                },
+            );
+            apply_event(
+                &mut s,
+                prefix,
+                Event::ToolInput {
+                    key: key.into(),
+                    input: format!(r#"{{"query":"{query}"}}"#),
+                },
+            );
+        }
+        s.record_tool_approval(
+            "now",
+            "request",
+            "请求使用 WebSearch",
+            r#"{"input":{"query":"one"}}"#,
+            "已允许",
+        );
+        assert_eq!(s.messages.len(), 3);
+        assert!(s.messages[0].approval.is_none());
+        assert_eq!(s.messages[1].approval.as_ref().unwrap().status, "已允许");
+        assert!(s.messages[2].approval.is_none());
+    }
+    #[test]
     fn commit_generation_snapshot_replaces_stream_without_duplicate_text() {
         let mut parts = vec![];
         super::update_commit_text(&mut parts, "msg".into(), "feat: ".into(), false);
@@ -6388,6 +6986,7 @@ mod tests {
             input: String::new(),
             detail: String::new(),
             status: String::new(),
+            approval: None,
         });
         assert!(session_matches(&s, ""));
         assert!(session_matches(&s, "rust"));
@@ -6417,5 +7016,105 @@ mod tests {
         let snippet = search_snippet(text, "markdown");
         assert!(snippet.to_lowercase().contains("markdown"));
         assert!(snippet.chars().count() <= 162);
+    }
+}
+
+#[cfg(all(test, feature = "ui-tests"))]
+mod ui_tests {
+    use super::{ChatItem, tool_content};
+    use gpui_kit::{
+        Context, InteractiveElement, IntoElement, ParentElement, Render, ScrollDelta, ScrollHandle,
+        ScrollWheelEvent, StatefulInteractiveElement, Styled, TestAppContext, Window,
+        component::v_flex, div, point, px,
+    };
+
+    struct ToolScrollFixture {
+        outer: ScrollHandle,
+        inner: ScrollHandle,
+        sibling: ScrollHandle,
+        item: ChatItem,
+    }
+
+    impl Render for ToolScrollFixture {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            // Exercise the production tool body inside another scrolling list.
+            div().size_full().child(
+                div()
+                    .id("outer")
+                    .w(px(600.))
+                    .h(px(320.))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.outer)
+                    .child(
+                        v_flex()
+                            .gap_4()
+                            .child(tool_content("first", &self.item, &self.inner).0)
+                            .child(tool_content("second", &self.item, &self.sibling).0),
+                    ),
+            )
+        }
+    }
+
+    #[gpui_kit::test]
+    fn expanded_tool_long_text_scrolls_inside_its_fixed_viewport(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let outer = ScrollHandle::new();
+        let inner = ScrollHandle::new();
+        let sibling = ScrollHandle::new();
+        let (_, cx) = cx.add_window_view(|_, _| ToolScrollFixture {
+            outer: outer.clone(),
+            inner: inner.clone(),
+            sibling: sibling.clone(),
+            item: serde_json::from_value(serde_json::json!({
+                "key":"tool", "kind":"Tool", "text":"Bash", "input":"{\"command\":\"test\"}",
+                "detail": (0..200).map(|i| format!("line {i}: 中文 output\n")).collect::<String>(),
+                "status":"完成"
+            }))
+            .unwrap(),
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert_eq!(inner.bounds().size.height, px(240.));
+        assert!(
+            inner.max_offset().y > px(1000.),
+            "long output must retain its natural height"
+        );
+        let outer_before = outer.offset();
+        let sibling_before = sibling.offset();
+        cx.simulate_event(ScrollWheelEvent {
+            position: inner.bounds().center(),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-120.))),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(inner.offset().y < px(0.), "wheel must scroll tool text");
+        assert_eq!(
+            outer.offset(),
+            outer_before,
+            "tool scrolling must leave chat in place"
+        );
+        assert_eq!(
+            sibling.offset(),
+            sibling_before,
+            "other tools have independent scroll state"
+        );
+        let inner_before = inner.offset();
+        cx.simulate_event(ScrollWheelEvent {
+            // The gap between cards belongs to the outer chat viewport.
+            position: point(px(30.), px(248.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-80.))),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(outer.offset().y < outer_before.y);
+        assert_eq!(inner.offset(), inner_before);
     }
 }

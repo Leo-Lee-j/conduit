@@ -132,10 +132,16 @@ impl Store {
                         input: String::new(),
                         detail: String::new(),
                         status: String::new(),
+                        approval: None,
                     });
                 }
                 if session.interrupted {
                     for item in &mut session.messages {
+                        if let Some(approval) = item.approval.as_mut()
+                            && approval.status == "等待中"
+                        {
+                            approval.status = "已中断".into();
+                        }
                         if item.kind == crate::domain::ItemKind::Tool
                             && matches!(item.status.as_str(), "运行中" | "输出中")
                         {
@@ -149,9 +155,11 @@ impl Store {
                         input: String::new(),
                         detail: String::new(),
                         status: String::new(),
+                        approval: None,
                     });
                     session.interrupted = false;
                 }
+                session.migrate_approval_notices();
                 dedupe_restored_messages(session);
             }
         }
@@ -388,6 +396,38 @@ mod tests {
         let reloaded = Store::load_from(&path).unwrap();
         assert!(reloaded.workspaces[0].sessions[0].archived);
         assert!(reloaded.workspaces[0].sessions[1].archived);
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(directory).unwrap();
+    }
+    #[test]
+    fn restored_approval_notices_move_to_the_preceding_tool_and_roundtrip() {
+        let directory =
+            std::env::temp_dir().join(format!("conduit-approval-migration-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("state.json");
+        let value = serde_json::json!({"version":2,"workspaces":[{"path":directory,"sessions":[
+            {"id":1,"provider":"Claude","created_at":0,"exit_code":null,"interrupted":true,"messages":[
+                {"key":"turn-0-a","kind":"Tool","text":"WebSearch","status":"完成"},
+                {"key":"turn-0-approval-1","kind":"Notice","text":"已提交允许本次操作：请求使用 WebSearch"},
+                {"key":"turn-0-b","kind":"Tool","text":"WebSearch","status":"失败"},
+                {"key":"turn-0-approval-3","kind":"Notice","text":"已提交拒绝本次操作：请求使用 WebSearch"},
+                {"key":"turn-1-c","kind":"Tool","text":"Bash","status":"运行中","approval":{"request":"ticket","status":"等待中"}}
+            ]}
+        ]}]});
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let restored = Store::load_from(&path).unwrap();
+        let messages = &restored.workspaces[0].sessions[0].messages;
+        assert_eq!(messages.len(), 4); // Three tools and the existing restart notice.
+        for (item, state) in messages.iter().zip(["已允许", "已拒绝", "已中断"]) {
+            assert_eq!(item.kind, crate::domain::ItemKind::Tool);
+            assert_eq!(item.approval.as_ref().unwrap().status, state);
+        }
+        restored.save_to(&path).unwrap();
+        let reloaded = Store::load_from(&path).unwrap();
+        assert_eq!(
+            serde_json::to_value(&restored).unwrap(),
+            serde_json::to_value(&reloaded).unwrap()
+        );
         fs::remove_file(path).unwrap();
         fs::remove_dir(directory).unwrap();
     }
