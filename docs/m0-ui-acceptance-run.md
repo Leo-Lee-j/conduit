@@ -175,6 +175,22 @@ pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -DataDir target/
 
 仍待人工确认：真实大仓库 / 宽 diff 的渲染与滚动流畅度、真实 CLI 任务结束后的自动刷新、Windows 未安装 Git 环境的提示，以及只读行为在真实仓库上的手工核对。
 
+## 第九轮：2026-10-23 输入区与侧边栏重构
+
+| 反馈 | 实现 | 证据 |
+| --- | --- | --- |
+| 不在会话中时 chat 无法输入；未选工作区时左上角应能快速选择；已选工作区时新会话默认上次使用的引擎；不再在右下角显示“新建会话”；chat 宽高一致 | 输入区收敛为同一个 composer：会话 / 无会话 / 无工作区三种状态宽度、高度、内边距一致；左上角新增工作区选择器（切换已有工作区或添加目录）；无会话时发送会按 `UiSettings.last_provider` 自动新建会话；移除右下角“新建会话”按钮 | [ui-v9-chat.png](screenshots/acceptance/ui-v9-chat.png)、[ui-v9-nosession.png](screenshots/acceptance/ui-v9-nosession.png)、[ui-v9-empty.png](screenshots/acceptance/ui-v9-empty.png)、[ui-v9-workspace-picker.png](screenshots/acceptance/ui-v9-workspace-picker.png) |
+| 会话内的“变更 / 详情”按钮改成一个侧边栏图标，两个功能收进侧边栏，类似 tab 并支持 split；右侧侧边栏最大宽度为内容区一半 | 会话标题右侧改为单个侧边栏图标；面板内保留“工具详情 / Git 变更”页签，split 时两页并排显示；宽度上限按剩余内容区的一半计算 | [ui-v9-sidebar.png](screenshots/acceptance/ui-v9-sidebar.png)、[ui-v9-split.png](screenshots/acceptance/ui-v9-split.png) |
+| 右侧侧边栏拖动不跟手（向左拖先变宽再变窄） | 右侧侧边栏改为应用自管宽度：拖动左边缘按指针位置 1:1 更新，最小 260px、最大为剩余内容区一半；不再使用会重排的 resizable 面板组 | [ui-v9-drag-follow.png](screenshots/acceptance/ui-v9-drag-follow.png)、[ui-v9-drag-max.png](screenshots/acceptance/ui-v9-drag-max.png)（拖动 65px 后宽度 408px；继续拖到上限 481px） |
+| 右侧侧边栏关闭时聊天内容居中 | 保持以左侧工作区栏右侧的整个内容区为基准居中（用户确认该基准正确） | [ui-v9-chat.png](screenshots/acceptance/ui-v9-chat.png) |
+| 窄窗 | 右侧侧边栏改为覆盖层，页签可用、split 按钮隐藏 | [ui-v9-narrow.png](screenshots/acceptance/ui-v9-narrow.png) |
+
+实现细节：`UiSettings.last_provider` 随状态保存上次选择的引擎；无会话发送在解析 CLI 路径、检查工作目录之后才创建会话，失败不会留下空会话。右侧侧边栏的宽度和 split 状态只在内存中维护；拖动使用 `on_drag` / `on_drag_move`，宽度按“起始宽度 + 指针位移”计算并夹在 `[260, 内容区一半]`。
+
+验证：`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked -- --test-threads=1`（48 passed）、`cargo build --locked` 与双视图启动冒烟通过。
+
+仍待人工确认：真实输入法下无会话直接发送、上次引擎在重启后的默认值、侧边栏拖动跟手度与 split 下两侧内容滚动、工作区选择器长列表。
+
 ## 仍未覆盖，必须人工完成
 
 清单 1、2、5、6、8、9 全项；3 的复制一致性；4 的动态滚动跟随；7 的 100%–200% DPI 与多屏；10 的取消检测与文件选择；5 的真实审批允许/拒绝与多审批队列。人工完成后把结果写回 [验证记录](m0-validation.md#手工-ui-验收清单)，不得用本预验代替。
