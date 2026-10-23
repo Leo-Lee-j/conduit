@@ -4,6 +4,7 @@ use crate::{
     chat_runtime::ChatRuntime,
     cli::{self, VersionProbe},
     domain::{ChatItem, ItemKind, Provider, SessionRecord, Workspace},
+    git::{self, GitProbe},
     models::{self, ModelCatalog},
     protocol::Event,
     store::Store,
@@ -21,6 +22,7 @@ use gpui_kit::{
 };
 use std::{
     collections::{HashMap, HashSet},
+    path::PathBuf,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -37,6 +39,13 @@ enum SettingsTab {
     Cli,
     Provider(Provider),
     Models,
+}
+
+/// Which read-only view the right-side detail panel shows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DetailView {
+    Tool,
+    Git,
 }
 
 actions!(conduit, [SendPrompt, Newline]);
@@ -201,6 +210,47 @@ fn highlighted_text(text: &str, query: &str, size: f32, color: u32) -> AnyElemen
         .into_any_element()
 }
 
+/// Render a Git patch as one highlighted monospace text block, so large diffs
+/// stay a single text layout instead of thousands of per-line elements.
+fn diff_element(diff: &str) -> AnyElement {
+    let mut styled = StyledText::new(diff.to_string());
+    let highlights: Vec<_> = git::diff_highlights(diff)
+        .into_iter()
+        .map(|(range, kind)| {
+            let (color, background) = match kind {
+                git::DiffLine::Added => (0x9fdcab, Some(0x18261c)),
+                git::DiffLine::Removed => (0xe6a1a1, Some(0x2a1a1a)),
+                git::DiffLine::Hunk => (0x8fb8e6, None),
+                git::DiffLine::Header => (FAINT, None),
+            };
+            (
+                range,
+                HighlightStyle {
+                    color: Some(Hsla::from(rgb(color))),
+                    background_color: background.map(|background| Hsla::from(rgb(background))),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
+    if !highlights.is_empty() {
+        styled = styled.with_highlights(highlights);
+    }
+    div()
+        .w_full()
+        .p_2()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(rgb(BORDER))
+        .bg(rgb(0x141417))
+        .font_family("Consolas")
+        .text_size(px(10.))
+        .line_height(relative(1.35))
+        .text_color(rgb(MUTED))
+        .child(styled)
+        .into_any_element()
+}
+
 fn session_menu_button(id: (&'static str, u64), label: &'static str, icon: IconName) -> Button {
     Button::new(id)
         .ghost()
@@ -236,7 +286,12 @@ pub struct ConduitApp {
     next_id: u64,
     closing: bool,
     details: bool,
+    detail_view: DetailView,
     detail_text: Option<String>,
+    /// Read-only Git snapshot for the selected workspace and its in-flight probe.
+    git_probe: Option<GitProbe>,
+    git_snapshot: Option<git::Snapshot>,
+    git_error: Option<String>,
     /// Approval tickets whose raw request detail the user expanded.
     approval_details: HashSet<String>,
     /// Workspaces whose session list was expanded past the configured limit.
@@ -377,7 +432,11 @@ impl ConduitApp {
             next_id,
             closing: false,
             details: false,
+            detail_view: DetailView::Tool,
             detail_text: None,
+            git_probe: None,
+            git_snapshot: None,
+            git_error: None,
             approval_details: HashSet::new(),
             expanded_workspaces: HashSet::new(),
             search,
@@ -439,6 +498,9 @@ impl ConduitApp {
         }
         self.select_fallback_session();
         self.persist();
+        if self.details && self.detail_view == DetailView::Git {
+            self.refresh_git(cx);
+        }
         cx.notify();
     }
     fn open_rename_dialog(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
@@ -606,6 +668,9 @@ impl ConduitApp {
         self.select_fallback_session();
         self.delete_target = None;
         self.persist();
+        if self.details && self.detail_view == DetailView::Git {
+            self.refresh_git(cx);
+        }
         cx.notify();
     }
     fn new_session_here(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -814,6 +879,9 @@ impl ConduitApp {
         }
         self.detail_text = None;
         self.persist();
+        if self.details && self.detail_view == DetailView::Git {
+            self.refresh_git(cx);
+        }
         cx.notify();
     }
     fn workspace_menu(&self, index: usize, app: Entity<Self>) -> AnyElement {
@@ -1122,6 +1190,11 @@ impl ConduitApp {
         {
             self.new_session_provider = provider;
         }
+        // Switching workspaces while the Git panel is open must not keep the
+        // previous directory's snapshot on screen.
+        if self.details && self.detail_view == DetailView::Git {
+            self.refresh_git(cx);
+        }
         cx.notify();
     }
     fn workspace_busy(&self, index: usize) -> bool {
@@ -1338,6 +1411,251 @@ impl ConduitApp {
     fn scroll_to_end(&self) {
         self.scroll.scroll_to_bottom();
     }
+    fn selected_workspace_path(&self) -> Option<PathBuf> {
+        self.selected_workspace
+            .and_then(|index| self.store.workspaces.get(index))
+            .map(|workspace| workspace.path.clone())
+    }
+    /// Start a background read-only Git snapshot for the selected workspace.
+    fn refresh_git(&mut self, cx: &mut Context<Self>) {
+        self.git_probe = None;
+        self.git_snapshot = None;
+        let Some(path) = self.selected_workspace_path() else {
+            self.git_error = Some("未选择工作区".into());
+            cx.notify();
+            return;
+        };
+        self.git_error = None;
+        self.git_probe = Some(GitProbe::start(path));
+        cx.notify();
+    }
+    /// Collect a finished Git probe; stale snapshots for another workspace are
+    /// dropped so switching sessions cannot show the previous directory's diff.
+    fn poll_git(&mut self, cx: &mut Context<Self>) {
+        let update = self
+            .git_probe
+            .as_ref()
+            .and_then(|probe| match probe.events.try_recv() {
+                Ok(result) => Some((probe.path.clone(), result)),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some((
+                    probe.path.clone(),
+                    Err("Git 读取线程已退出，请重试".to_string()),
+                )),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            });
+        let Some((path, result)) = update else {
+            return;
+        };
+        self.git_probe = None;
+        match result {
+            Ok(snapshot) => {
+                if self.selected_workspace_path().as_deref() == Some(path.as_path()) {
+                    self.git_snapshot = Some(snapshot);
+                    self.git_error = None;
+                }
+            }
+            Err(error) => {
+                self.git_snapshot = None;
+                self.git_error = Some(error);
+            }
+        }
+        cx.notify();
+    }
+    /// Read-only Git view for the right-side detail panel.
+    fn git_panel(&self, view: Entity<Self>) -> AnyElement {
+        let refresh = |label: &'static str, id: &'static str| -> AnyElement {
+            let app = view.clone();
+            Button::new(id)
+                .label(label)
+                .small()
+                .ghost()
+                .cursor_pointer()
+                .on_click(move |_, _, cx| {
+                    app.update(cx, |this, cx| this.refresh_git(cx));
+                })
+                .into_any_element()
+        };
+        let mut body = v_flex()
+            .id("git-panel-body")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .gap_3();
+        if self.git_probe.is_some() {
+            return body
+                .child(
+                    h_flex().child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(MUTED))
+                            .child("正在读取工作区 Git 状态…"),
+                    ),
+                )
+                .child(h_flex().child(refresh("重新读取", "git-refresh-loading")))
+                .into_any_element();
+        }
+        if let Some(error) = &self.git_error {
+            return body
+                .child(
+                    v_flex()
+                        .w_full()
+                        .p_3()
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(rgb(0x5c332c))
+                        .bg(rgb(0x2a1d1a))
+                        .text_size(px(11.))
+                        .line_height(relative(1.4))
+                        .text_color(rgb(0xe6b4a8))
+                        .child(error.clone()),
+                )
+                .child(h_flex().child(refresh("重新读取", "git-refresh-error")))
+                .into_any_element();
+        }
+        let Some(snapshot) = &self.git_snapshot else {
+            return body
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(FAINT))
+                        .child("打开面板时读取工作区 Git 状态"),
+                )
+                .into_any_element();
+        };
+        body = body
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        Icon::new(gpui_kit::assets::IconName::GitBranch)
+                            .small()
+                            .text_color(rgb(FAINT)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(11.))
+                            .font_semibold()
+                            .text_color(rgb(TEXT))
+                            .child(snapshot.branch.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(9.))
+                            .text_color(rgb(FAINT))
+                            .child("只读"),
+                    )
+                    .child(refresh("刷新", "git-refresh")),
+            )
+            .child(
+                div()
+                    .text_size(px(10.))
+                    .text_color(rgb(FAINT))
+                    .child(format!(
+                        "暂存 {} · 未暂存 {} · 未跟踪 {}",
+                        snapshot.staged_count(),
+                        snapshot.unstaged_count(),
+                        snapshot.untracked_count()
+                    )),
+            );
+        if snapshot.is_clean() {
+            body = body.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(rgb(MUTED))
+                    .child("工作区没有未提交变更"),
+            );
+        } else {
+            let mut list = v_flex().w_full().gap(px(1.));
+            for file in &snapshot.files {
+                let color = match file.label() {
+                    "新增" => 0x8fd694,
+                    "删除" => 0xe6a1a1,
+                    "冲突" => 0xe3b96b,
+                    "未跟踪" => FAINT,
+                    _ => MUTED,
+                };
+                list = list.child(
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .items_center()
+                        .py(px(2.))
+                        .child(
+                            div()
+                                .w(px(48.))
+                                .flex_shrink_0()
+                                .text_size(px(10.))
+                                .text_color(rgb(color))
+                                .child(file.label()),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(11.))
+                                .text_color(rgb(TEXT))
+                                .child(file.path.clone()),
+                        )
+                        .when_some(file.original.clone(), |row, original| {
+                            row.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_size(px(9.))
+                                    .text_color(rgb(FAINT))
+                                    .child(format!("← {original}")),
+                            )
+                        }),
+                );
+            }
+            body = body.child(list);
+        }
+        for (title, diff) in [
+            ("暂存变更", snapshot.staged_diff.as_str()),
+            ("未暂存变更", snapshot.unstaged_diff.as_str()),
+        ] {
+            if diff.is_empty() {
+                continue;
+            }
+            body = body
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap_2()
+                        .pt_1()
+                        .child(
+                            div()
+                                .text_size(px(10.))
+                                .font_semibold()
+                                .text_color(rgb(MUTED))
+                                .child(title),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(9.))
+                                .text_color(rgb(FAINT))
+                                .child(format!("{} 行", diff.lines().count())),
+                        ),
+                )
+                .child(diff_element(diff));
+        }
+        for note in &snapshot.notes {
+            body = body.child(
+                div()
+                    .text_size(px(10.))
+                    .line_height(relative(1.4))
+                    .text_color(rgb(FAINT))
+                    .child(note.clone()),
+            );
+        }
+        body.into_any_element()
+    }
     fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut completed = vec![];
         for (provider, probe) in &self.probes {
@@ -1376,6 +1694,7 @@ impl ConduitApp {
             self.diagnostics.insert(provider, text);
             cx.notify();
         }
+        self.poll_git(cx);
         let follow = f32::from(self.scroll.offset().y + self.scroll.max_offset().y).abs() < 60.;
         // Re-render when the scroll position crosses the "at the end" threshold
         // so the floating pin appears/disappears without polling every frame.
@@ -1517,6 +1836,15 @@ impl ConduitApp {
             cx.notify();
             if follow && visible {
                 self.scroll_to_end();
+            }
+            // A finished turn can change workspace files; keep an open Git
+            // panel current without requiring the user to press 刷新.
+            if terminal
+                && self.details
+                && self.detail_view == DetailView::Git
+                && self.git_probe.is_none()
+            {
+                self.refresh_git(cx);
             }
         }
         if self.closing && self.runs.is_empty() && self.probes.is_empty() {
@@ -3828,6 +4156,7 @@ impl Render for ConduitApp {
                             .hover(|style| style.bg(rgb(SURFACE_HOVER)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.details = true;
+                                this.detail_view = DetailView::Tool;
                                 this.detail_text = Some(detail.clone());
                                 cx.notify();
                             }))
@@ -4009,13 +4338,36 @@ impl Render for ConduitApp {
                         )
                     })
                     .child(
+                        Button::new("git-changes")
+                            .label("变更")
+                            .small()
+                            .ghost()
+                            .cursor_pointer()
+                            .tooltip("查看工作区 Git 变更（只读）")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if this.details && this.detail_view == DetailView::Git {
+                                    this.details = false;
+                                } else {
+                                    this.details = true;
+                                    this.detail_view = DetailView::Git;
+                                    this.refresh_git(cx);
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .child(
                         Button::new("details")
                             .label("详情")
                             .small()
                             .ghost()
                             .cursor_pointer()
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.details = !this.details;
+                                if this.details && this.detail_view == DetailView::Tool {
+                                    this.details = false;
+                                } else {
+                                    this.details = true;
+                                    this.detail_view = DetailView::Tool;
+                                }
                                 cx.notify();
                             })),
                     ),
@@ -4586,7 +4938,7 @@ impl Render for ConduitApp {
                 .selected_workspace
                 .map(|i| display_path(&self.store.workspaces[i].path))
                 .unwrap_or_default();
-            let content = self
+            let tool_content = self
                 .detail_text
                 .as_ref()
                 .and_then(|key| selected.as_ref()?.messages.iter().find(|m| &m.key == key))
@@ -4606,6 +4958,54 @@ impl Render for ConduitApp {
                     )
                 })
                 .unwrap_or_else(|| "点击工具调用卡片查看输入、命令输出或文件变更。".into());
+            let tab = |label: &'static str, id: &'static str, view: DetailView| -> AnyElement {
+                let active = self.detail_view == view;
+                let app = app_entity.clone();
+                Button::new(id)
+                    .label(label)
+                    .small()
+                    .ghost()
+                    .cursor_pointer()
+                    .when(active, |button| {
+                        button.bg(rgb(SURFACE_HOVER)).text_color(rgb(TEXT))
+                    })
+                    .on_click(move |_, _, cx| {
+                        app.update(cx, |this, cx| {
+                            if this.detail_view != view {
+                                this.detail_view = view;
+                                if view == DetailView::Git
+                                    && this.git_snapshot.is_none()
+                                    && this.git_probe.is_none()
+                                {
+                                    this.refresh_git(cx);
+                                }
+                            }
+                            cx.notify();
+                        });
+                    })
+                    .into_any_element()
+            };
+            let body: AnyElement = match self.detail_view {
+                DetailView::Tool => v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .gap_4()
+                    .child(div().text_xs().text_color(rgb(MUTED)).child("工作目录"))
+                    .child(div().text_sm().text_color(rgb(TEXT)).child(path))
+                    .child(div().text_xs().text_color(rgb(MUTED)).child("原生会话 ID"))
+                    .child(div().text_xs().child(native_id))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .id("detail-content")
+                            .overflow_y_scroll()
+                            .text_xs()
+                            .child(tool_content),
+                    )
+                    .into_any_element(),
+                DetailView::Git => self.git_panel(app_entity.clone()),
+            };
             let panel = v_flex()
                 .h_full()
                 .flex_shrink_0()
@@ -4626,8 +5026,10 @@ impl Render for ConduitApp {
                 .child(
                     h_flex()
                         .items_center()
-                        .justify_between()
-                        .child(div().font_bold().child("执行详情"))
+                        .gap_1()
+                        .child(tab("工具详情", "detail-tab-tool", DetailView::Tool))
+                        .child(tab("Git 变更", "detail-tab-git", DetailView::Git))
+                        .child(div().flex_1())
                         .child(
                             Button::new("close-details")
                                 .label("关闭")
@@ -4640,19 +5042,7 @@ impl Render for ConduitApp {
                                 })),
                         ),
                 )
-                .child(div().text_xs().text_color(rgb(MUTED)).child("工作目录"))
-                .child(div().text_sm().text_color(rgb(TEXT)).child(path))
-                .child(div().text_xs().text_color(rgb(MUTED)).child("原生会话 ID"))
-                .child(div().text_xs().child(native_id))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .id("detail-content")
-                        .overflow_y_scroll()
-                        .text_xs()
-                        .child(content),
-                );
+                .child(body);
             detail_panel = Some(panel.into_any_element());
         }
         // The sidebar and the execution detail are both drag-resizable; the

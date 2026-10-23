@@ -6,6 +6,7 @@ mod chat_runtime;
 mod child;
 mod cli;
 mod domain;
+mod git;
 mod models;
 mod protocol;
 mod store;
