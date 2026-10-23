@@ -7,6 +7,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppearanceMode {
+    System,
+    Light,
+    #[default]
+    Dark,
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct UiSettings {
     /// How many recent sessions a workspace shows before "show more".
@@ -18,6 +27,9 @@ pub struct UiSettings {
     /// Shows the in-app performance monitor and collects its samples.
     #[serde(default = "default_performance_monitor")]
     pub performance_monitor: bool,
+    /// Follow the system appearance or force one of the bundled palettes.
+    #[serde(default)]
+    pub appearance: AppearanceMode,
 }
 
 fn default_sessions_per_workspace() -> usize {
@@ -34,6 +46,7 @@ impl Default for UiSettings {
             sessions_per_workspace: default_sessions_per_workspace(),
             last_provider: None,
             performance_monitor: default_performance_monitor(),
+            appearance: AppearanceMode::default(),
         }
     }
 }
@@ -98,6 +111,15 @@ impl Store {
     pub fn load() -> Result<Self> {
         let path = Self::path();
         Self::load_from(&path)
+    }
+    /// Reads just the persisted UI preferences, used before the first window
+    /// exists so the initial frame already uses the selected appearance.
+    pub fn load_ui_settings() -> UiSettings {
+        fs::read(Self::path())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Self>(&bytes).ok())
+            .map(|store| store.ui)
+            .unwrap_or_default()
     }
     fn load_from(path: &Path) -> Result<Self> {
         if !path.exists() {
@@ -455,10 +477,12 @@ mod tests {
         assert_eq!(store.ui.sessions_per_workspace, 5);
         assert_eq!(store.ui.last_provider, None);
         assert!(store.ui.performance_monitor);
+        assert_eq!(store.ui.appearance, AppearanceMode::Dark);
         assert_eq!(store.git.commit_message_prompt, DEFAULT_COMMIT_PROMPT);
         store.ui.sessions_per_workspace = 8;
         store.ui.last_provider = Some(crate::domain::Provider::Codex);
         store.ui.performance_monitor = false;
+        store.ui.appearance = AppearanceMode::System;
         store.git.commit_message_prompt =
             "Write an English subject followed by a body.\nKeep it under 72 columns.".into();
         store.save_to(&path).unwrap();
@@ -473,6 +497,7 @@ mod tests {
             Some(crate::domain::Provider::Codex)
         );
         assert!(!reloaded.ui.performance_monitor);
+        assert_eq!(reloaded.ui.appearance, AppearanceMode::System);
         fs::remove_file(path).unwrap();
     }
     #[test]

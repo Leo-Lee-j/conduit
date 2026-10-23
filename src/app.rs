@@ -8,7 +8,7 @@ use crate::{
     models::{self, ModelCatalog},
     performance::PerformanceMonitor,
     protocol::Event,
-    store::Store,
+    store::{AppearanceMode, Store},
 };
 use gpui_kit::{
     component::{
@@ -127,6 +127,7 @@ fn update_commit_text(
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SettingsTab {
     General,
+    Appearance,
     Git,
     Cli,
     Provider(Provider),
@@ -152,16 +153,136 @@ impl Render for DetailResize {
 
 actions!(conduit, [SendPrompt, Newline]);
 
-const CANVAS: u32 = 0x0e0e10;
-const SIDEBAR_BG: u32 = 0x131315;
-const SURFACE: u32 = 0x19191c;
-const SURFACE_HOVER: u32 = 0x232327;
-const SURFACE_STRONG: u32 = 0x202024;
-const BORDER: u32 = 0x29292e;
-const TEXT: u32 = 0xf3f3f4;
-const MUTED: u32 = 0xa1a1a8;
-const FAINT: u32 = 0x717179;
-const FOCUS: u32 = 0x4b4b54;
+/// Application colors that are not owned by the component theme. The dark
+/// values preserve the original palette; the light variant is derived from the
+/// same roles so both modes stay consistent.
+struct Palette {
+    canvas: u32,
+    sidebar_bg: u32,
+    surface: u32,
+    surface_hover: u32,
+    surface_strong: u32,
+    border: u32,
+    text: u32,
+    muted: u32,
+    faint: u32,
+    focus: u32,
+    on_text: u32,
+    control_hover: u32,
+    code_bg: u32,
+    highlight_text: u32,
+    highlight_bg: u32,
+    diff_add_text: u32,
+    diff_add_bg: u32,
+    diff_remove_text: u32,
+    diff_remove_bg: u32,
+    diff_hunk_text: u32,
+    danger_border: u32,
+    danger_bg: u32,
+    danger_text: u32,
+    warning_border: u32,
+    warning_bg: u32,
+    warning_icon_bg: u32,
+    warning_text: u32,
+    warning_chip_bg: u32,
+    warning_chip_text: u32,
+    warning_muted: u32,
+    warning_inner_border: u32,
+    warning_code_bg: u32,
+    warning_code_text: u32,
+    warning_accent: u32,
+    error_text: u32,
+}
+
+static DARK_PALETTE: Palette = Palette {
+    canvas: 0x0e0e10,
+    sidebar_bg: 0x131315,
+    surface: 0x19191c,
+    surface_hover: 0x232327,
+    surface_strong: 0x202024,
+    border: 0x29292e,
+    text: 0xf3f3f4,
+    muted: 0xa1a1a8,
+    faint: 0x717179,
+    focus: 0x4b4b54,
+    on_text: 0x111113,
+    control_hover: 0xffffff,
+    code_bg: 0x141417,
+    highlight_text: 0xf0d49b,
+    highlight_bg: 0x3a3220,
+    diff_add_text: 0x9fdcab,
+    diff_add_bg: 0x18261c,
+    diff_remove_text: 0xe6a1a1,
+    diff_remove_bg: 0x2a1a1a,
+    diff_hunk_text: 0x8fb8e6,
+    danger_border: 0x5c332c,
+    danger_bg: 0x2a1d1a,
+    danger_text: 0xe6b4a8,
+    warning_border: 0x4a3b22,
+    warning_bg: 0x1d1a14,
+    warning_icon_bg: 0x2a2317,
+    warning_text: 0xe3b96b,
+    warning_chip_bg: 0x332b1b,
+    warning_chip_text: 0xd6b26b,
+    warning_muted: 0x9c9284,
+    warning_inner_border: 0x352c1b,
+    warning_code_bg: 0x15130e,
+    warning_code_text: 0xd9d3c7,
+    warning_accent: 0xd6a75a,
+    error_text: 0xe6a1a1,
+};
+
+static LIGHT_PALETTE: Palette = Palette {
+    canvas: 0xf7f7f8,
+    sidebar_bg: 0xf1f1f3,
+    surface: 0xffffff,
+    surface_hover: 0xe9e9ee,
+    surface_strong: 0xf7f7f9,
+    border: 0xe4e4e9,
+    text: 0x1c1c20,
+    muted: 0x5f5f68,
+    faint: 0x8e8e97,
+    focus: 0xb4b4bd,
+    on_text: 0xffffff,
+    control_hover: 0xe8e8ec,
+    code_bg: 0xf4f4f6,
+    highlight_text: 0x6b4a00,
+    highlight_bg: 0xfff0bf,
+    diff_add_text: 0x1e6631,
+    diff_add_bg: 0xe9f7ed,
+    diff_remove_text: 0xa43636,
+    diff_remove_bg: 0xfdecec,
+    diff_hunk_text: 0x2c5f9e,
+    danger_border: 0xe7b8b1,
+    danger_bg: 0xfdf1ef,
+    danger_text: 0x8f2f29,
+    warning_border: 0xe5cf9f,
+    warning_bg: 0xfff8e9,
+    warning_icon_bg: 0xf9eed2,
+    warning_text: 0x8a5b00,
+    warning_chip_bg: 0xf5e8c8,
+    warning_chip_text: 0x785200,
+    warning_muted: 0x8c7c5d,
+    warning_inner_border: 0xe8d8b2,
+    warning_code_bg: 0xf8f2e6,
+    warning_code_text: 0x4b4336,
+    warning_accent: 0x9a6a00,
+    error_text: 0xb03b3b,
+};
+
+static DARK_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+fn palette() -> &'static Palette {
+    if DARK_MODE.load(std::sync::atomic::Ordering::Relaxed) {
+        &DARK_PALETTE
+    } else {
+        &LIGHT_PALETTE
+    }
+}
+
+pub(crate) fn set_palette(mode: gpui_kit::component::ThemeMode) {
+    DARK_MODE.store(mode.is_dark(), std::sync::atomic::Ordering::Relaxed);
+}
 
 impl Render for PerformanceMonitor {
     fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -228,10 +349,10 @@ impl Render for PerformanceMonitor {
             .gap_2()
             .rounded(px(10.))
             .border_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(SURFACE))
+            .border_color(rgb(palette().border))
+            .bg(rgb(palette().surface))
             .shadow_md()
-            .text_color(rgb(TEXT))
+            .text_color(rgb(palette().text))
             .child(
                 h_flex()
                     .items_center()
@@ -239,18 +360,21 @@ impl Render for PerformanceMonitor {
                     .child(Icon::new(gpui_kit::assets::IconName::Activity).small())
                     .child(div().text_size(px(13.)).font_semibold().child("性能检测"))
                     .child(div().flex_1())
-                    .child(div().text_size(px(11.)).text_color(rgb(MUTED)).child(
-                        if cfg!(debug_assertions) {
-                            "开发构建"
-                        } else {
-                            "发布构建"
-                        },
-                    )),
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette().muted))
+                            .child(if cfg!(debug_assertions) {
+                                "开发构建"
+                            } else {
+                                "发布构建"
+                            }),
+                    ),
             )
             .child(
                 div()
                     .text_size(px(11.))
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(palette().muted))
                     .child(format!(
                         "Conduit · PID {} · {} 逻辑处理器",
                         std::process::id(),
@@ -263,14 +387,14 @@ impl Render for PerformanceMonitor {
                     .py_2()
                     .border_t_1()
                     .border_b_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(palette().border))
                     .children(rows.into_iter().map(|(label, value)| {
                         h_flex()
                             .items_center()
                             .justify_between()
                             .gap_3()
                             .text_size(px(12.))
-                            .child(div().text_color(rgb(MUTED)).child(label))
+                            .child(div().text_color(rgb(palette().muted)).child(label))
                             .child(div().flex_shrink_0().child(value))
                     })),
             )
@@ -278,7 +402,7 @@ impl Render for PerformanceMonitor {
                 v_flex()
                     .gap_1()
                     .text_size(px(11.))
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(palette().muted))
                     .child("仅统计 Conduit 主进程，CLI / Git 子进程不计入")
                     .child("工作集含共享页；私有提交不等于实际驻留内存")
                     .child("构建耗时不含布局、GPU 绘制，不代表帧率")
@@ -291,7 +415,7 @@ impl Render for PerformanceMonitor {
 fn provider_icon(provider: Provider) -> Icon {
     let (data, color): (&[u8], u32) = match provider {
         Provider::Claude => (include_bytes!("../assets/icons/claude.svg"), 0xd97757),
-        Provider::Codex => (include_bytes!("../assets/icons/openai.svg"), TEXT),
+        Provider::Codex => (include_bytes!("../assets/icons/openai.svg"), palette().text),
     };
     Icon::default()
         .data(data)
@@ -313,7 +437,7 @@ fn settings_label(text: &'static str) -> impl IntoElement {
         .w(px(84.))
         .flex_shrink_0()
         .text_size(px(11.))
-        .text_color(rgb(FAINT))
+        .text_color(rgb(palette().faint))
         .child(text)
 }
 
@@ -321,7 +445,7 @@ fn settings_label(text: &'static str) -> impl IntoElement {
 fn settings_row(label: &'static str, value: String, divider: bool) -> AnyElement {
     let mut row = h_flex().px_4().py_3().gap_4().items_center();
     if divider {
-        row = row.border_t_1().border_color(rgb(BORDER));
+        row = row.border_t_1().border_color(rgb(palette().border));
     }
     row.child(settings_label(label))
         .child(
@@ -330,7 +454,7 @@ fn settings_row(label: &'static str, value: String, divider: bool) -> AnyElement
                 .min_w_0()
                 .truncate()
                 .text_size(px(11.))
-                .text_color(rgb(MUTED))
+                .text_color(rgb(palette().muted))
                 .child(value),
         )
         .into_any_element()
@@ -483,7 +607,7 @@ fn tool_content(tool_id: &str, item: &ChatItem, scroll: &ScrollHandle) -> (AnyEl
         .font_family("Consolas")
         .text_size(px(12.))
         .line_height(relative(1.5))
-        .text_color(rgb(MUTED));
+        .text_color(rgb(palette().muted));
     for (section, label, text, empty) in [
         ("input", "输入", input, "未提供输入"),
         (
@@ -498,7 +622,12 @@ fn tool_content(tool_id: &str, item: &ChatItem, scroll: &ScrollHandle) -> (AnyEl
         ),
     ] {
         content = content
-            .child(div().text_size(px(10.)).text_color(rgb(FAINT)).child(label))
+            .child(
+                div()
+                    .text_size(px(10.))
+                    .text_color(rgb(palette().faint))
+                    .child(label),
+            )
             .child(
                 div()
                     .w_full()
@@ -609,8 +738,8 @@ fn highlighted_text(text: &str, query: &str, size: f32, color: u32) -> AnyElemen
             (
                 start..end,
                 HighlightStyle {
-                    color: Some(Hsla::from(rgb(0xf0d49b))),
-                    background_color: Some(Hsla::from(rgb(0x3a3220))),
+                    color: Some(Hsla::from(rgb(palette().highlight_text))),
+                    background_color: Some(Hsla::from(rgb(palette().highlight_bg))),
                     ..Default::default()
                 },
             )
@@ -631,10 +760,12 @@ fn diff_element(diff: &str) -> AnyElement {
         .into_iter()
         .map(|(range, kind)| {
             let (color, background) = match kind {
-                git::DiffLine::Added => (0x9fdcab, Some(0x18261c)),
-                git::DiffLine::Removed => (0xe6a1a1, Some(0x2a1a1a)),
-                git::DiffLine::Hunk => (0x8fb8e6, None),
-                git::DiffLine::Header => (FAINT, None),
+                git::DiffLine::Added => (palette().diff_add_text, Some(palette().diff_add_bg)),
+                git::DiffLine::Removed => {
+                    (palette().diff_remove_text, Some(palette().diff_remove_bg))
+                }
+                git::DiffLine::Hunk => (palette().diff_hunk_text, None),
+                git::DiffLine::Header => (palette().faint, None),
             };
             (
                 range,
@@ -654,12 +785,12 @@ fn diff_element(diff: &str) -> AnyElement {
         .p_2()
         .rounded(px(8.))
         .border_1()
-        .border_color(rgb(BORDER))
-        .bg(rgb(0x141417))
+        .border_color(rgb(palette().border))
+        .bg(rgb(palette().code_bg))
         .font_family("Consolas")
         .text_size(px(10.))
         .line_height(relative(1.35))
-        .text_color(rgb(MUTED))
+        .text_color(rgb(palette().muted))
         .child(styled)
         .into_any_element()
 }
@@ -677,8 +808,13 @@ fn session_menu_button(id: (&'static str, u64), label: &'static str, icon: IconN
                 .w_full()
                 .gap_2()
                 .items_center()
-                .child(Icon::new(icon).small().text_color(rgb(FAINT)))
-                .child(div().text_size(px(12.)).text_color(rgb(MUTED)).child(label)),
+                .child(Icon::new(icon).small().text_color(rgb(palette().faint)))
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(palette().muted))
+                        .child(label),
+                ),
         )
 }
 
@@ -776,6 +912,13 @@ impl ConduitApp {
             Ok(store) => (store, None, true),
             Err(error) => (Store::default(), Some(format!("{error:#}")), false),
         };
+        let initial_mode = match store.ui.appearance {
+            AppearanceMode::System => gpui_kit::component::ThemeMode::from(window.appearance()),
+            AppearanceMode::Light => gpui_kit::component::ThemeMode::Light,
+            AppearanceMode::Dark => gpui_kit::component::ThemeMode::Dark,
+        };
+        set_palette(initial_mode);
+        gpui_kit::component::Theme::change(initial_mode, Some(window), cx);
         let next_id = store
             .workspaces
             .iter()
@@ -789,9 +932,8 @@ impl ConduitApp {
         // native id already exists are refreshed instead of duplicated.
         let imported_total = {
             let mut next_id = next_id;
-            let mut total = 0;
             for workspace in &mut store.workspaces {
-                total += crate::history::merge_into(workspace, &mut next_id);
+                crate::history::merge_into(workspace, &mut next_id);
             }
             next_id
         };
@@ -901,6 +1043,11 @@ impl ConduitApp {
             }
         })
         .detach();
+        let appearance_subscription = cx.observe_window_appearance(window, |this, window, cx| {
+            if this.store.ui.appearance == AppearanceMode::System {
+                this.apply_appearance(window, cx);
+            }
+        });
         Self {
             store,
             writable,
@@ -953,7 +1100,11 @@ impl ConduitApp {
             rename_input: None,
             delete_target: None,
             remove_workspace_target: None,
-            _subscriptions: vec![search_subscription, git_prompt_subscription],
+            _subscriptions: vec![
+                search_subscription,
+                git_prompt_subscription,
+                appearance_subscription,
+            ],
             dirty: false,
             last_save: Instant::now(),
             scroll: gpui_kit::ListState::new(0, ListAlignment::Bottom, px(240.)),
@@ -1127,7 +1278,7 @@ impl ConduitApp {
                                 div()
                                     .text_size(px(13.))
                                     .line_height(relative(1.5))
-                                    .text_color(rgb(MUTED))
+                                    .text_color(rgb(palette().muted))
                                     .child(format!(
                                         "将永久删除「{title}」及其消息记录，无法恢复。"
                                     )),
@@ -1238,13 +1389,13 @@ impl ConduitApp {
                     .child(
                         div()
                             .text_size(px(11.))
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(palette().muted))
                             .child(provider.label()),
                     )
                     .child(
                         Icon::new(IconName::ChevronDown)
                             .small()
-                            .text_color(rgb(FAINT)),
+                            .text_color(rgb(palette().faint)),
                     ),
             );
         Popover::new("engine-picker")
@@ -1279,11 +1430,11 @@ impl ConduitApp {
                                 .child(
                                     div()
                                         .text_size(px(12.))
-                                        .text_color(rgb(MUTED))
+                                        .text_color(rgb(palette().muted))
                                         .child(option.label()),
                                 ),
                         )
-                        .when(active, |button| button.bg(rgb(SURFACE_HOVER)))
+                        .when(active, |button| button.bg(rgb(palette().surface_hover)))
                         .on_click(move |_, window, cx| {
                             app.update(cx, |this, cx| this.select_engine(option, window, cx));
                             if let Some(popover) = popover.clone().upgrade() {
@@ -1335,19 +1486,27 @@ impl ConduitApp {
                 h_flex()
                     .gap_1()
                     .items_center()
-                    .child(Icon::new(IconName::Folder).small().text_color(rgb(FAINT)))
+                    .child(
+                        Icon::new(IconName::Folder)
+                            .small()
+                            .text_color(rgb(palette().faint)),
+                    )
                     .child(
                         div()
                             .max_w(px(180.))
                             .truncate()
                             .text_size(px(12.))
-                            .text_color(rgb(if current.is_some() { TEXT } else { MUTED }))
+                            .text_color(rgb(if current.is_some() {
+                                palette().text
+                            } else {
+                                palette().muted
+                            }))
                             .child(label),
                     )
                     .child(
                         Icon::new(IconName::ChevronDown)
                             .small()
-                            .text_color(rgb(FAINT)),
+                            .text_color(rgb(palette().faint)),
                     ),
             );
         let content_view = view.clone();
@@ -1370,7 +1529,7 @@ impl ConduitApp {
                             .px_2()
                             .rounded(px(6.))
                             .cursor_pointer()
-                            .when(active, |button| button.bg(rgb(SURFACE_HOVER)))
+                            .when(active, |button| button.bg(rgb(palette().surface_hover)))
                             .on_click(move |_, window, cx| {
                                 select_app
                                     .update(cx, |this, cx| this.switch(index, session, window, cx));
@@ -1384,7 +1543,9 @@ impl ConduitApp {
                                     .gap_2()
                                     .items_center()
                                     .child(
-                                        Icon::new(IconName::Folder).small().text_color(rgb(FAINT)),
+                                        Icon::new(IconName::Folder)
+                                            .small()
+                                            .text_color(rgb(palette().faint)),
                                     )
                                     .child(
                                         v_flex()
@@ -1395,14 +1556,14 @@ impl ConduitApp {
                                                 div()
                                                     .truncate()
                                                     .text_size(px(12.))
-                                                    .text_color(rgb(TEXT))
+                                                    .text_color(rgb(palette().text))
                                                     .child(name),
                                             )
                                             .child(
                                                 div()
                                                     .truncate()
                                                     .text_size(px(10.))
-                                                    .text_color(rgb(FAINT))
+                                                    .text_color(rgb(palette().faint))
                                                     .child(path),
                                             ),
                                     )
@@ -1410,14 +1571,14 @@ impl ConduitApp {
                                         row.child(
                                             Icon::new(IconName::Check)
                                                 .small()
-                                                .text_color(rgb(MUTED)),
+                                                .text_color(rgb(palette().muted)),
                                         )
                                     }),
                             ),
                     );
                 }
                 if !rows.is_empty() {
-                    list = list.child(div().h(px(1.)).my(px(3.)).bg(rgb(BORDER)));
+                    list = list.child(div().h(px(1.)).my(px(3.)).bg(rgb(palette().border)));
                 }
                 let add_app = app.clone();
                 let add_popover = popover.clone();
@@ -1440,11 +1601,15 @@ impl ConduitApp {
                                 .w_full()
                                 .gap_2()
                                 .items_center()
-                                .child(Icon::new(IconName::Plus).small().text_color(rgb(FAINT)))
+                                .child(
+                                    Icon::new(IconName::Plus)
+                                        .small()
+                                        .text_color(rgb(palette().faint)),
+                                )
                                 .child(
                                     div()
                                         .text_size(px(12.))
-                                        .text_color(rgb(MUTED))
+                                        .text_color(rgb(palette().muted))
                                         .child("添加目录…"),
                                 ),
                         ),
@@ -1486,7 +1651,7 @@ impl ConduitApp {
                                 div()
                                     .text_size(px(13.))
                                     .line_height(relative(1.5))
-                                    .text_color(rgb(MUTED))
+                                    .text_color(rgb(palette().muted))
                                     .child(format!(
                                         "从 Conduit 移除「{name}」？磁盘上的文件与 CLI 自带历史不会被删除；应用内该工作区的会话记录将不再显示。"
                                     )),
@@ -1668,16 +1833,18 @@ impl ConduitApp {
                     let hits = this.collect_search_results(&query);
                     let mut body = v_flex().w_full().gap_2();
                     body = body.child(
-                        Input::new(&input)
-                            .h(px(34.))
-                            .prefix(Icon::new(IconName::Search).small().text_color(rgb(FAINT))),
+                        Input::new(&input).h(px(34.)).prefix(
+                            Icon::new(IconName::Search)
+                                .small()
+                                .text_color(rgb(palette().faint)),
+                        ),
                     );
                     if hits.is_empty() {
                         body = body.child(
                             div()
                                 .py_2()
                                 .text_size(px(12.))
-                                .text_color(rgb(FAINT))
+                                .text_color(rgb(palette().faint))
                                 .child(if query.is_empty() {
                                     "输入会话标题或消息内容开始搜索"
                                 } else {
@@ -1711,7 +1878,7 @@ impl ConduitApp {
                                     .gap_1()
                                     .rounded(px(8.))
                                     .cursor_pointer()
-                                    .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                    .hover(|style| style.bg(rgb(palette().surface_hover)))
                                     .on_click(move |_, window, cx| {
                                         app.update(cx, |this, cx| {
                                             this.switch(workspace, Some(session), window, cx)
@@ -1723,28 +1890,36 @@ impl ConduitApp {
                                             .items_center()
                                             .gap_2()
                                             .child(provider_icon(provider))
-                                            .child(
-                                                div().flex_1().min_w_0().child(highlighted_text(
-                                                    &title, &query, 13., TEXT,
-                                                )),
-                                            )
+                                            .child(div().flex_1().min_w_0().child(
+                                                highlighted_text(
+                                                    &title,
+                                                    &query,
+                                                    13.,
+                                                    palette().text,
+                                                ),
+                                            ))
                                             .when(archived, |row| {
                                                 row.child(
                                                     div()
                                                         .text_size(px(9.))
-                                                        .text_color(rgb(FAINT))
+                                                        .text_color(rgb(palette().faint))
                                                         .child("已归档"),
                                                 )
                                             })
                                             .child(
                                                 div()
                                                     .text_size(px(10.))
-                                                    .text_color(rgb(FAINT))
+                                                    .text_color(rgb(palette().faint))
                                                     .child(workspace_name),
                                             ),
                                     )
                                     .when(!snippet.is_empty(), |row| {
-                                        row.child(highlighted_text(&snippet, &query, 11., MUTED))
+                                        row.child(highlighted_text(
+                                            &snippet,
+                                            &query,
+                                            11.,
+                                            palette().muted,
+                                        ))
                                     }),
                             );
                         }
@@ -1828,6 +2003,18 @@ impl ConduitApp {
                 false
             }
         }
+    }
+    fn apply_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mode = match self.store.ui.appearance {
+            AppearanceMode::System => gpui_kit::component::ThemeMode::from(window.appearance()),
+            AppearanceMode::Light => gpui_kit::component::ThemeMode::Light,
+            AppearanceMode::Dark => gpui_kit::component::ThemeMode::Dark,
+        };
+        set_palette(mode);
+        if gpui_kit::component::Theme::global(cx).mode != mode {
+            gpui_kit::component::Theme::change(mode, Some(window), cx);
+        }
+        cx.notify();
     }
     fn switch(
         &mut self,
@@ -2153,9 +2340,9 @@ impl ConduitApp {
                         .rounded(px(18.))
                         .px_4()
                         .py_3()
-                        .bg(rgb(SURFACE))
+                        .bg(rgb(palette().surface))
                         .text_size(px(14.))
-                        .text_color(rgb(TEXT))
+                        .text_color(rgb(palette().text))
                         .child(item.text.clone()),
                 )
                 .into_any_element(),
@@ -2170,7 +2357,7 @@ impl ConduitApp {
                         .child(
                             div()
                                 .text_size(px(11.))
-                                .text_color(rgb(FAINT))
+                                .text_color(rgb(palette().faint))
                                 .child(provider.label()),
                         ),
                 )
@@ -2211,12 +2398,12 @@ impl ConduitApp {
                                         .px_2()
                                         .py_1()
                                         .rounded(px(5.))
-                                        .bg(rgb(SURFACE_STRONG))
+                                        .bg(rgb(palette().surface_strong))
                                         .text_size(px(11.))
                                         .text_color(rgb(match approval.status.as_str() {
-                                            "已允许" => 0x91c7a0,
-                                            "已拒绝" => 0xe3a0a0,
-                                            _ => MUTED,
+                                            "已允许" => palette().diff_add_text,
+                                            "已拒绝" => palette().diff_remove_text,
+                                            _ => palette().muted,
                                         }))
                                         .child(approval.status.clone()),
                                 )
@@ -2233,7 +2420,7 @@ impl ConduitApp {
                             .child(
                                 div()
                                     .text_size(px(11.))
-                                    .text_color(rgb(FAINT))
+                                    .text_color(rgb(palette().faint))
                                     .child(item.status.clone()),
                             )
                             .child(
@@ -2243,7 +2430,7 @@ impl ConduitApp {
                                     IconName::ChevronRight
                                 })
                                 .small()
-                                .text_color(rgb(FAINT)),
+                                .text_color(rgb(palette().faint)),
                             ),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -2259,8 +2446,8 @@ impl ConduitApp {
                     .overflow_hidden()
                     .rounded(px(10.))
                     .border_1()
-                    .border_color(rgb(BORDER))
-                    .bg(rgb(SURFACE))
+                    .border_color(rgb(palette().border))
+                    .bg(rgb(palette().surface))
                     .child(header);
                 if expanded {
                     let tool_scroll = self
@@ -2275,7 +2462,7 @@ impl ConduitApp {
                             .w_full()
                             .min_w_0()
                             .border_t_1()
-                            .border_color(rgb(BORDER))
+                            .border_color(rgb(palette().border))
                             .child(
                                 h_flex()
                                     .px_3()
@@ -2285,7 +2472,7 @@ impl ConduitApp {
                                         div()
                                             .flex_1()
                                             .text_size(px(10.))
-                                            .text_color(rgb(FAINT))
+                                            .text_color(rgb(palette().faint))
                                             .child("工具调用内容"),
                                     )
                                     .child(
@@ -2325,7 +2512,7 @@ impl ConduitApp {
             }
             ItemKind::Notice => div()
                 .text_size(px(11.))
-                .text_color(rgb(MUTED))
+                .text_color(rgb(palette().muted))
                 .child(item.text.clone())
                 .into_any_element(),
         };
@@ -2346,11 +2533,11 @@ impl ConduitApp {
                 .rounded(px(12.))
                 .border_1()
                 .border_color(if highlighted {
-                    rgb(FOCUS).into()
+                    rgb(palette().focus).into()
                 } else {
                     transparent_black()
                 })
-                .when(highlighted, |row| row.bg(rgb(SURFACE_HOVER)))
+                .when(highlighted, |row| row.bg(rgb(palette().surface_hover)))
                 .child(element),
         );
         if self.store.ui.performance_monitor {
@@ -2433,7 +2620,11 @@ impl ConduitApp {
                                             }))
                                             .h(px(3.))
                                             .rounded_full()
-                                            .bg(rgb(if active { TEXT } else { FAINT })),
+                                            .bg(rgb(if active {
+                                                palette().text
+                                            } else {
+                                                palette().faint
+                                            })),
                                     ),
                                 )
                                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -2633,9 +2824,9 @@ impl ConduitApp {
                                 .h(px(16.))
                                 .px_1()
                                 .rounded_full()
-                                .bg(rgb(SURFACE_HOVER))
+                                .bg(rgb(palette().surface_hover))
                                 .text_size(px(10.))
-                                .text_color(rgb(TEXT))
+                                .text_color(rgb(palette().text))
                                 .child(repository.ahead.to_string()),
                         ),
                 )
@@ -2944,7 +3135,7 @@ impl ConduitApp {
             .pt_3()
             .gap_2()
             .border_t_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(palette().border))
             .child(
                 h_flex()
                     .items_center()
@@ -2995,9 +3186,9 @@ impl ConduitApp {
                     .p_2()
                     .gap_2()
                     .rounded(px(8.))
-                    .bg(rgb(SURFACE))
+                    .bg(rgb(palette().surface))
                     .border_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(palette().border))
                     .child(
                         Textarea::new(&draft.input)
                             .appearance(false)
@@ -3041,7 +3232,7 @@ impl ConduitApp {
             .child(
                 div()
                     .text_size(px(10.))
-                    .text_color(rgb(FAINT))
+                    .text_color(rgb(palette().faint))
                     .child(if !self.runs.is_empty() {
                         "CLI 任务运行中，结束后可提交"
                     } else if self
@@ -3067,7 +3258,11 @@ impl ConduitApp {
                     .max_h(px(60.))
                     .overflow_y_scroll()
                     .text_size(px(11.))
-                    .text_color(rgb(if feedback.error { 0xe6a1a1 } else { MUTED }))
+                    .text_color(rgb(if feedback.error {
+                        palette().error_text
+                    } else {
+                        palette().muted
+                    }))
                     .child(feedback.text.clone()),
             );
         }
@@ -3161,7 +3356,7 @@ impl ConduitApp {
                     .child(
                         Icon::new(IconName::ChevronDown)
                             .small()
-                            .text_color(rgb(FAINT)),
+                            .text_color(rgb(palette().faint)),
                     ),
             );
         Popover::new(SharedString::from(format!(
@@ -3188,7 +3383,7 @@ impl ConduitApp {
                         .px_2()
                         .py_1()
                         .text_size(px(10.))
-                        .text_color(rgb(FAINT))
+                        .text_color(rgb(palette().faint))
                         .child("工作区分支 · 只读"),
                 );
             if repository.detached {
@@ -3197,7 +3392,7 @@ impl ConduitApp {
                         .px_2()
                         .py_1()
                         .text_size(px(11.))
-                        .text_color(rgb(MUTED))
+                        .text_color(rgb(palette().muted))
                         .child(format!("分离 HEAD · {}", repository.current)),
                 );
             }
@@ -3214,7 +3409,7 @@ impl ConduitApp {
                         .px_2()
                         .pt_2()
                         .text_size(px(10.))
-                        .text_color(rgb(FAINT))
+                        .text_color(rgb(palette().faint))
                         .child(if remote {
                             "远程分支（本地记录）"
                         } else {
@@ -3236,21 +3431,21 @@ impl ConduitApp {
                             .py_1()
                             .gap_2()
                             .rounded(px(4.))
-                            .when(current, |row| row.bg(rgb(SURFACE_HOVER)))
+                            .when(current, |row| row.bg(rgb(palette().surface_hover)))
                             .child(
                                 div()
                                     .flex_1()
                                     .min_w_0()
                                     .truncate()
                                     .text_size(px(11.))
-                                    .text_color(rgb(TEXT))
+                                    .text_color(rgb(palette().text))
                                     .child(branch.name.clone()),
                             )
                             .when(current, |row| {
                                 row.child(
                                     div()
                                         .text_size(px(10.))
-                                        .text_color(rgb(MUTED))
+                                        .text_color(rgb(palette().muted))
                                         .child("当前"),
                                 )
                             }),
@@ -3262,7 +3457,7 @@ impl ConduitApp {
                     div()
                         .px_2()
                         .text_size(px(10.))
-                        .text_color(rgb(FAINT))
+                        .text_color(rgb(palette().faint))
                         .child("分支过多，列表已截断"),
                 );
             }
@@ -3270,7 +3465,7 @@ impl ConduitApp {
                 h_flex()
                     .pt_2()
                     .border_t_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(palette().border))
                     .child(
                         Button::new("git-branches-refresh")
                             .label("刷新分支")
@@ -3363,7 +3558,7 @@ impl ConduitApp {
                     h_flex().child(
                         div()
                             .text_size(px(11.))
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(palette().muted))
                             .child("正在读取工作区 Git 状态…"),
                     ),
                 )
@@ -3378,11 +3573,11 @@ impl ConduitApp {
                         .p_3()
                         .rounded(px(8.))
                         .border_1()
-                        .border_color(rgb(0x5c332c))
-                        .bg(rgb(0x2a1d1a))
+                        .border_color(rgb(palette().danger_border))
+                        .bg(rgb(palette().danger_bg))
                         .text_size(px(11.))
                         .line_height(relative(1.4))
-                        .text_color(rgb(0xe6b4a8))
+                        .text_color(rgb(palette().danger_text))
                         .child(error.clone()),
                 )
                 .child(h_flex().child(refresh("重新读取", "git-refresh-error")))
@@ -3393,7 +3588,7 @@ impl ConduitApp {
                 .child(
                     div()
                         .text_size(px(11.))
-                        .text_color(rgb(FAINT))
+                        .text_color(rgb(palette().faint))
                         .child("打开面板时读取工作区 Git 状态"),
                 )
                 .into_any_element();
@@ -3407,7 +3602,7 @@ impl ConduitApp {
                     .child(
                         Icon::new(gpui_kit::assets::IconName::GitBranch)
                             .small()
-                            .text_color(rgb(FAINT)),
+                            .text_color(rgb(palette().faint)),
                     )
                     .child(
                         div()
@@ -3416,14 +3611,14 @@ impl ConduitApp {
                             .truncate()
                             .text_size(px(11.))
                             .font_semibold()
-                            .text_color(rgb(TEXT))
+                            .text_color(rgb(palette().text))
                             .child(snapshot.branch.clone()),
                     )
                     .child(
                         div()
                             .flex_shrink_0()
                             .text_size(px(9.))
-                            .text_color(rgb(FAINT))
+                            .text_color(rgb(palette().faint))
                             .child("变更预览"),
                     )
                     .child(refresh("刷新", "git-refresh")),
@@ -3431,7 +3626,7 @@ impl ConduitApp {
             .child(
                 div()
                     .text_size(px(10.))
-                    .text_color(rgb(FAINT))
+                    .text_color(rgb(palette().faint))
                     .child(format!(
                         "暂存 {} · 未暂存 {} · 未跟踪 {}",
                         snapshot.staged_count(),
@@ -3443,18 +3638,18 @@ impl ConduitApp {
             body = body.child(
                 div()
                     .text_size(px(11.))
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(palette().muted))
                     .child("工作区没有未提交变更"),
             );
         } else {
             let mut list = v_flex().w_full().gap(px(1.));
             for file in &snapshot.files {
                 let color = match file.label() {
-                    "新增" => 0x8fd694,
-                    "删除" => 0xe6a1a1,
-                    "冲突" => 0xe3b96b,
-                    "未跟踪" => FAINT,
-                    _ => MUTED,
+                    "新增" => palette().diff_add_text,
+                    "删除" => palette().diff_remove_text,
+                    "冲突" => palette().warning_text,
+                    "未跟踪" => palette().faint,
+                    _ => palette().muted,
                 };
                 list = list.child(
                     h_flex()
@@ -3476,7 +3671,7 @@ impl ConduitApp {
                                 .min_w_0()
                                 .truncate()
                                 .text_size(px(11.))
-                                .text_color(rgb(TEXT))
+                                .text_color(rgb(palette().text))
                                 .child(file.path.clone()),
                         )
                         .when_some(file.original.clone(), |row, original| {
@@ -3484,7 +3679,7 @@ impl ConduitApp {
                                 div()
                                     .flex_shrink_0()
                                     .text_size(px(9.))
-                                    .text_color(rgb(FAINT))
+                                    .text_color(rgb(palette().faint))
                                     .child(format!("← {original}")),
                             )
                         }),
@@ -3509,13 +3704,13 @@ impl ConduitApp {
                             div()
                                 .text_size(px(10.))
                                 .font_semibold()
-                                .text_color(rgb(MUTED))
+                                .text_color(rgb(palette().muted))
                                 .child(title),
                         )
                         .child(
                             div()
                                 .text_size(px(9.))
-                                .text_color(rgb(FAINT))
+                                .text_color(rgb(palette().faint))
                                 .child(format!("{} 行", diff.lines().count())),
                         ),
                 )
@@ -3526,7 +3721,7 @@ impl ConduitApp {
                 div()
                     .text_size(px(10.))
                     .line_height(relative(1.4))
-                    .text_color(rgb(FAINT))
+                    .text_color(rgb(palette().faint))
                     .child(note.clone()),
             );
         }
@@ -3759,14 +3954,13 @@ impl ConduitApp {
                         .get_mut(&id)
                         .map(|run| std::mem::take(&mut run.message_index))
                         .unwrap_or_default();
-                    if let Some(session) = self.session_mut(id) {
-                        if let Some(changed_index) =
+                    let selected = Some(id) == self.selected_session;
+                    if let Some(session) = self.session_mut(id)
+                        && let Some(changed_index) =
                             apply_event_indexed(session, &prefix, other, &mut index)
-                        {
-                            if Some(id) == self.selected_session {
-                                dirty_messages.push(changed_index);
-                            }
-                        }
+                        && selected
+                    {
+                        dirty_messages.push(changed_index);
                     }
                     if let Some(run) = self.runs.get_mut(&id) {
                         run.message_index = index;
@@ -3953,19 +4147,23 @@ impl ConduitApp {
                 h_flex()
                     .gap_1()
                     .items_center()
-                    .child(Icon::new(IconName::Cpu).small().text_color(rgb(FAINT)))
+                    .child(
+                        Icon::new(IconName::Cpu)
+                            .small()
+                            .text_color(rgb(palette().faint)),
+                    )
                     .child(
                         div()
                             .max_w(px(160.))
                             .truncate()
                             .text_size(px(11.))
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(palette().muted))
                             .child(trigger_label),
                     )
                     .child(
                         Icon::new(IconName::ChevronDown)
                             .small()
-                            .text_color(rgb(FAINT)),
+                            .text_color(rgb(palette().faint)),
                     ),
             );
         Popover::new("composer-model-popover")
@@ -3987,81 +4185,84 @@ impl ConduitApp {
                             div()
                                 .text_size(px(11.))
                                 .font_semibold()
-                                .text_color(rgb(TEXT))
+                                .text_color(rgb(palette().text))
                                 .child("会话模型"),
                         )
                         .child(div().flex_1())
                         .child(
                             div()
                                 .text_size(px(10.))
-                                .text_color(rgb(FAINT))
+                                .text_color(rgb(palette().faint))
                                 .child(format!("{provider_label} · {model_count} 个")),
                         ),
                 );
-                let option =
-                    |index: usize,
-                     id: Option<String>,
-                     label: String,
-                     note: String,
-                     selected: bool|
-                     -> AnyElement {
-                        let view = view.clone();
-                        let popover = popover.clone();
-                        Button::new(("model-option", index))
-                            .ghost()
-                            .h(px(38.))
-                            .w_full()
-                            .px_2()
-                            .rounded(px(8.))
-                            .cursor_pointer()
-                            .accessibility_label(format!("模型 {label}"))
-                            .when(selected, |button| button.bg(rgb(SURFACE_HOVER)))
-                            .on_click(move |_, window, cx| {
-                                let id = id.clone();
-                                view.update(cx, |this, cx| {
-                                    this.set_session_model(session_id, id, cx);
-                                });
-                                if let Some(state) = popover.clone().upgrade() {
-                                    state.update(cx, |state, cx| state.dismiss(window, cx));
-                                }
-                            })
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .gap_2()
-                                    .items_center()
-                                    .child(
-                                        v_flex()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .gap(px(1.))
-                                            .child(
+                let option = |index: usize,
+                              id: Option<String>,
+                              label: String,
+                              note: String,
+                              selected: bool|
+                 -> AnyElement {
+                    let view = view.clone();
+                    let popover = popover.clone();
+                    Button::new(("model-option", index))
+                        .ghost()
+                        .h(px(38.))
+                        .w_full()
+                        .px_2()
+                        .rounded(px(8.))
+                        .cursor_pointer()
+                        .accessibility_label(format!("模型 {label}"))
+                        .when(selected, |button| button.bg(rgb(palette().surface_hover)))
+                        .on_click(move |_, window, cx| {
+                            let id = id.clone();
+                            view.update(cx, |this, cx| {
+                                this.set_session_model(session_id, id, cx);
+                            });
+                            if let Some(state) = popover.clone().upgrade() {
+                                state.update(cx, |state, cx| state.dismiss(window, cx));
+                            }
+                        })
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .gap_2()
+                                .items_center()
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .gap(px(1.))
+                                        .child(
+                                            div()
+                                                .truncate()
+                                                .text_size(px(12.))
+                                                .text_color(rgb(if selected {
+                                                    palette().text
+                                                } else {
+                                                    palette().muted
+                                                }))
+                                                .child(label),
+                                        )
+                                        .when(!note.is_empty(), |column| {
+                                            column.child(
                                                 div()
                                                     .truncate()
-                                                    .text_size(px(12.))
-                                                    .text_color(rgb(if selected {
-                                                        TEXT
-                                                    } else {
-                                                        MUTED
-                                                    }))
-                                                    .child(label),
+                                                    .text_size(px(10.))
+                                                    .text_color(rgb(palette().faint))
+                                                    .child(note),
                                             )
-                                            .when(!note.is_empty(), |column| {
-                                                column.child(
-                                                    div()
-                                                        .truncate()
-                                                        .text_size(px(10.))
-                                                        .text_color(rgb(FAINT))
-                                                        .child(note),
-                                                )
-                                            }),
-                                    )
-                                    .child(Icon::new(IconName::Check).small().text_color(rgb(
-                                        if selected { TEXT } else { SURFACE_HOVER },
-                                    ))),
-                            )
-                            .into_any_element()
-                    };
+                                        }),
+                                )
+                                .child(Icon::new(IconName::Check).small().text_color(rgb(
+                                    if selected {
+                                        palette().text
+                                    } else {
+                                        palette().surface_hover
+                                    },
+                                ))),
+                        )
+                        .into_any_element()
+                };
                 list = list.child(option(
                     0,
                     None,
@@ -4091,7 +4292,7 @@ impl ConduitApp {
                             .px_2()
                             .py_2()
                             .text_size(px(10.))
-                            .text_color(rgb(FAINT))
+                            .text_color(rgb(palette().faint))
                             .child("未发现模型定义；可在左下角「设置」中重新读取。"),
                     );
                 }
@@ -4102,7 +4303,7 @@ impl ConduitApp {
                             .pt_1()
                             .text_size(px(10.))
                             .line_height(relative(1.4))
-                            .text_color(rgb(FAINT))
+                            .text_color(rgb(palette().faint))
                             .child(note.clone()),
                     );
                 }
@@ -4115,12 +4316,12 @@ impl ConduitApp {
                         .gap_2()
                         .items_center()
                         .border_t_1()
-                        .border_color(rgb(BORDER))
+                        .border_color(rgb(palette().border))
                         .child(
                             div()
                                 .flex_1()
                                 .text_size(px(10.))
-                                .text_color(rgb(FAINT))
+                                .text_color(rgb(palette().faint))
                                 .child("仅影响本会话，下一条消息生效"),
                         )
                         .child(
@@ -4130,8 +4331,8 @@ impl ConduitApp {
                                 .rounded(px(4.))
                                 .px_1()
                                 .text_size(px(10.))
-                                .text_color(rgb(MUTED))
-                                .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                .text_color(rgb(palette().muted))
+                                .hover(|style| style.bg(rgb(palette().surface_hover)))
                                 .on_click(move |_, window, cx| {
                                     refresh_view.update(cx, |this, cx| {
                                         this.reload_models(provider, cx);
@@ -4187,8 +4388,8 @@ impl ConduitApp {
                 .p_0()
                 .gap(px(0.))
                 .rounded(px(16.))
-                .bg(rgb(SURFACE))
-                .border_color(rgb(BORDER))
+                .bg(rgb(palette().surface))
+                .border_color(rgb(palette().border))
                 .close_button(true)
                 .overlay_closable(true)
                 .content(move |content, window, cx| {
@@ -4205,7 +4406,7 @@ impl ConduitApp {
                 .w(px(84.))
                 .flex_shrink_0()
                 .text_size(px(11.))
-                .text_color(rgb(FAINT))
+                .text_color(rgb(palette().faint))
                 .child(text)
         };
         let index: usize = match provider {
@@ -4236,7 +4437,7 @@ impl ConduitApp {
             .gap_2()
             .justify_end()
             .border_t_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(palette().border))
             .child(
                 Button::new(("settings-clear", index))
                     .label("清除配置")
@@ -4293,8 +4494,8 @@ impl ConduitApp {
             .overflow_hidden()
             .rounded(px(12.))
             .border_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(SURFACE_STRONG))
+            .border_color(rgb(palette().border))
+            .bg(rgb(palette().surface_strong))
             .child(
                 h_flex()
                     .px_4()
@@ -4302,20 +4503,20 @@ impl ConduitApp {
                     .gap_2()
                     .items_center()
                     .border_b_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(palette().border))
                     .child(provider_icon(provider))
                     .child(
                         div()
                             .text_size(px(13.))
                             .font_semibold()
-                            .text_color(rgb(TEXT))
+                            .text_color(rgb(palette().text))
                             .child("可执行文件"),
                     )
                     .child(div().flex_1())
                     .child(
                         div()
                             .text_size(px(10.))
-                            .text_color(rgb(FAINT))
+                            .text_color(rgb(palette().faint))
                             .child(format!("已验证版本 {}", cli::tested_version(provider))),
                     ),
             )
@@ -4332,7 +4533,7 @@ impl ConduitApp {
                             .min_w_0()
                             .truncate()
                             .text_size(px(12.))
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(palette().muted))
                             .child(configured),
                     )
                     .child(
@@ -4356,7 +4557,7 @@ impl ConduitApp {
                     .gap_4()
                     .items_center()
                     .border_t_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(palette().border))
                     .child(label("本次启动"))
                     .child(
                         div()
@@ -4364,7 +4565,7 @@ impl ConduitApp {
                             .min_w_0()
                             .truncate()
                             .text_size(px(11.))
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(palette().muted))
                             .child(effective),
                     ),
             )
@@ -4375,13 +4576,13 @@ impl ConduitApp {
                     .gap_4()
                     .items_start()
                     .border_t_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(palette().border))
                     .child(label("状态"))
                     .child(
                         div()
                             .flex_1()
                             .text_size(px(11.))
-                            .text_color(rgb(FAINT))
+                            .text_color(rgb(palette().faint))
                             .child(diagnostic),
                     ),
             )
@@ -4410,7 +4611,7 @@ impl ConduitApp {
                     div()
                         .truncate()
                         .text_size(px(12.))
-                        .text_color(rgb(TEXT))
+                        .text_color(rgb(palette().text))
                         .child(model.label.clone()),
                 );
                 if show_id {
@@ -4418,7 +4619,7 @@ impl ConduitApp {
                         div()
                             .truncate()
                             .text_size(px(10.))
-                            .text_color(rgb(FAINT))
+                            .text_color(rgb(palette().faint))
                             .child(model.id.clone()),
                     );
                 }
@@ -4429,14 +4630,14 @@ impl ConduitApp {
                         .gap_3()
                         .items_center()
                         .border_t_1()
-                        .border_color(rgb(BORDER))
+                        .border_color(rgb(palette().border))
                         .child(value)
                         .when(!model.note.is_empty(), |row| {
                             row.child(
                                 div()
                                     .flex_shrink_0()
                                     .text_size(px(10.))
-                                    .text_color(rgb(FAINT))
+                                    .text_color(rgb(palette().faint))
                                     .child(model.note.clone()),
                             )
                         })
@@ -4446,9 +4647,9 @@ impl ConduitApp {
                                     .px_2()
                                     .py(px(2.))
                                     .rounded(px(4.))
-                                    .bg(rgb(SURFACE_HOVER))
+                                    .bg(rgb(palette().surface_hover))
                                     .text_size(px(9.))
-                                    .text_color(rgb(MUTED))
+                                    .text_color(rgb(palette().muted))
                                     .child("CLI 当前"),
                             )
                         }),
@@ -4460,9 +4661,9 @@ impl ConduitApp {
                         .px_4()
                         .py_3()
                         .border_t_1()
-                        .border_color(rgb(BORDER))
+                        .border_color(rgb(palette().border))
                         .text_size(px(11.))
-                        .text_color(rgb(FAINT))
+                        .text_color(rgb(palette().faint))
                         .child("未发现模型定义，可在 CLI 中配置后重新读取。"),
                 );
             }
@@ -4470,7 +4671,7 @@ impl ConduitApp {
         let sync_row = |label: &'static str, value: String, divider: bool| -> AnyElement {
             let mut row = h_flex().px_4().py_3().gap_4().items_center();
             if divider {
-                row = row.border_t_1().border_color(rgb(BORDER));
+                row = row.border_t_1().border_color(rgb(palette().border));
             }
             row.child(settings_label(label))
                 .child(
@@ -4479,7 +4680,7 @@ impl ConduitApp {
                         .min_w_0()
                         .truncate()
                         .text_size(px(11.))
-                        .text_color(rgb(MUTED))
+                        .text_color(rgb(palette().muted))
                         .child(value),
                 )
                 .into_any_element()
@@ -4490,8 +4691,8 @@ impl ConduitApp {
             .overflow_hidden()
             .rounded(px(12.))
             .border_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(SURFACE_STRONG))
+            .border_color(rgb(palette().border))
+            .bg(rgb(palette().surface_strong))
             .child(
                 h_flex()
                     .px_4()
@@ -4499,12 +4700,12 @@ impl ConduitApp {
                     .gap_2()
                     .items_center()
                     .border_b_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(palette().border))
                     .child(
                         div()
                             .text_size(px(13.))
                             .font_semibold()
-                            .text_color(rgb(TEXT))
+                            .text_color(rgb(palette().text))
                             .child("当前模型"),
                     )
                     .child(
@@ -4512,9 +4713,9 @@ impl ConduitApp {
                             .px_2()
                             .py(px(2.))
                             .rounded(px(4.))
-                            .bg(rgb(SURFACE_HOVER))
+                            .bg(rgb(palette().surface_hover))
                             .text_size(px(9.))
-                            .text_color(rgb(FAINT))
+                            .text_color(rgb(palette().faint))
                             .child("CLI"),
                     )
                     .child(div().flex_1())
@@ -4552,9 +4753,9 @@ impl ConduitApp {
                         .px_4()
                         .py_2()
                         .border_t_1()
-                        .border_color(rgb(BORDER))
+                        .border_color(rgb(palette().border))
                         .text_size(px(10.))
-                        .text_color(rgb(0xe6b4a8))
+                        .text_color(rgb(palette().danger_text))
                         .child(error.clone()),
                 );
             } else if let Some(note) = &catalog.note {
@@ -4563,9 +4764,9 @@ impl ConduitApp {
                         .px_4()
                         .py_2()
                         .border_t_1()
-                        .border_color(rgb(BORDER))
+                        .border_color(rgb(palette().border))
                         .text_size(px(10.))
-                        .text_color(rgb(FAINT))
+                        .text_color(rgb(palette().faint))
                         .child(note.clone()),
                 );
             }
@@ -4579,14 +4780,14 @@ impl ConduitApp {
                 div()
                     .text_size(px(11.))
                     .line_height(relative(1.5))
-                    .text_color(rgb(FAINT))
+                    .text_color(rgb(palette().faint))
                     .child("版本检测只运行 --version，不调用模型，也不验证登录状态；请先在官方 CLI 中完成登录。"),
             )
             .child(
                 div()
                     .text_size(px(11.))
                     .line_height(relative(1.5))
-                    .text_color(rgb(FAINT))
+                    .text_color(rgb(palette().faint))
                     .child("此处只显示 CLI 当前模型；完整来源与 CCS 同步见左侧「模型同步」。不读取或显示密钥，也不会写回 CLI 配置。"),
             )
             .into_any_element()
@@ -4596,7 +4797,7 @@ impl ConduitApp {
         let source_row = |label: &'static str, value: String, divider: bool| -> AnyElement {
             let mut row = h_flex().px_4().py_3().gap_4().items_center();
             if divider {
-                row = row.border_t_1().border_color(rgb(BORDER));
+                row = row.border_t_1().border_color(rgb(palette().border));
             }
             row.child(settings_label(label))
                 .child(
@@ -4605,7 +4806,7 @@ impl ConduitApp {
                         .min_w_0()
                         .truncate()
                         .text_size(px(11.))
-                        .text_color(rgb(MUTED))
+                        .text_color(rgb(palette().muted))
                         .child(value),
                 )
                 .into_any_element()
@@ -4632,8 +4833,8 @@ impl ConduitApp {
             .overflow_hidden()
             .rounded(px(12.))
             .border_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(SURFACE_STRONG))
+            .border_color(rgb(palette().border))
+            .bg(rgb(palette().surface_strong))
             .child(
                 h_flex()
                     .px_4()
@@ -4641,12 +4842,12 @@ impl ConduitApp {
                     .gap_2()
                     .items_center()
                     .border_b_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(palette().border))
                     .child(
                         div()
                             .text_size(px(13.))
                             .font_semibold()
-                            .text_color(rgb(TEXT))
+                            .text_color(rgb(palette().text))
                             .child("模型来源"),
                     )
                     .child(
@@ -4654,16 +4855,16 @@ impl ConduitApp {
                             .px_2()
                             .py(px(2.))
                             .rounded(px(4.))
-                            .bg(rgb(SURFACE_HOVER))
+                            .bg(rgb(palette().surface_hover))
                             .text_size(px(9.))
-                            .text_color(rgb(FAINT))
+                            .text_color(rgb(palette().faint))
                             .child("只读"),
                     )
                     .child(div().flex_1())
                     .child(
                         div()
                             .text_size(px(10.))
-                            .text_color(rgb(FAINT))
+                            .text_color(rgb(palette().faint))
                             .child(format!(
                                 "CCS {} 个 Provider · {} 个模型",
                                 self.ccs.providers.len(),
@@ -4697,12 +4898,12 @@ impl ConduitApp {
                     .px_4()
                     .py_2()
                     .border_t_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(palette().border))
                     .text_size(px(10.))
                     .text_color(rgb(if self.ccs.error.is_some() {
-                        0xe6b4a8
+                        palette().danger_text
                     } else {
-                        FAINT
+                        palette().faint
                     }))
                     .child(note),
             );
@@ -4714,7 +4915,7 @@ impl ConduitApp {
                 div()
                     .text_size(px(11.))
                     .line_height(relative(1.5))
-                    .text_color(rgb(FAINT))
+                    .text_color(rgb(palette().faint))
                     .child("当前模型来自 CLI 正在使用的配置；CCS 模型来自 cc-switch 的 Provider 目录。只读取模型名与上下文信息，不查询凭证，也不修改任一配置。"),
             )
             .child(source_card);
@@ -4737,9 +4938,9 @@ impl ConduitApp {
                 .px_2()
                 .py(px(2.))
                 .rounded(px(4.))
-                .bg(rgb(SURFACE_HOVER))
+                .bg(rgb(palette().surface_hover))
                 .text_size(px(9.))
-                .text_color(rgb(MUTED))
+                .text_color(rgb(palette().muted))
                 .child(text)
                 .into_any_element()
         };
@@ -4749,7 +4950,7 @@ impl ConduitApp {
                     div()
                         .truncate()
                         .text_size(px(12.))
-                        .text_color(rgb(TEXT))
+                        .text_color(rgb(palette().text))
                         .child(label.clone()),
                 );
                 if label != id {
@@ -4757,7 +4958,7 @@ impl ConduitApp {
                         div()
                             .truncate()
                             .text_size(px(10.))
-                            .text_color(rgb(FAINT))
+                            .text_color(rgb(palette().faint))
                             .child(id),
                     );
                 }
@@ -4767,14 +4968,14 @@ impl ConduitApp {
                     .gap_3()
                     .items_center()
                     .border_t_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(palette().border))
                     .child(value)
                     .when(!note.is_empty(), |row| {
                         row.child(
                             div()
                                 .flex_shrink_0()
                                 .text_size(px(10.))
-                                .text_color(rgb(FAINT))
+                                .text_color(rgb(palette().faint))
                                 .child(note),
                         )
                     })
@@ -4786,8 +4987,8 @@ impl ConduitApp {
             .overflow_hidden()
             .rounded(px(12.))
             .border_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(SURFACE_STRONG))
+            .border_color(rgb(palette().border))
+            .bg(rgb(palette().surface_strong))
             .child(
                 h_flex()
                     .px_4()
@@ -4795,12 +4996,12 @@ impl ConduitApp {
                     .gap_2()
                     .items_center()
                     .border_b_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(palette().border))
                     .child(
                         div()
                             .text_size(px(12.))
                             .font_semibold()
-                            .text_color(rgb(TEXT))
+                            .text_color(rgb(palette().text))
                             .child("当前 CLI 模型"),
                     )
                     .child(badge("CLI"))
@@ -4808,7 +5009,7 @@ impl ConduitApp {
                     .child(
                         div()
                             .text_size(px(10.))
-                            .text_color(rgb(FAINT))
+                            .text_color(rgb(palette().faint))
                             .child(format!("{model_count} 个")),
                     ),
             )
@@ -4825,7 +5026,7 @@ impl ConduitApp {
                             .min_w_0()
                             .truncate()
                             .text_size(px(11.))
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(palette().muted))
                             .child(config_path),
                     ),
             );
@@ -4844,9 +5045,9 @@ impl ConduitApp {
                         .px_4()
                         .py_3()
                         .border_t_1()
-                        .border_color(rgb(BORDER))
+                        .border_color(rgb(palette().border))
                         .text_size(px(11.))
-                        .text_color(rgb(FAINT))
+                        .text_color(rgb(palette().faint))
                         .child("未发现模型定义，可在 CLI 中配置后重新读取。"),
                 );
             }
@@ -4856,9 +5057,9 @@ impl ConduitApp {
                         .px_4()
                         .py_2()
                         .border_t_1()
-                        .border_color(rgb(BORDER))
+                        .border_color(rgb(palette().border))
                         .text_size(px(10.))
-                        .text_color(rgb(0xe6b4a8))
+                        .text_color(rgb(palette().danger_text))
                         .child(error.clone()),
                 );
             } else if let Some(note) = &catalog.note {
@@ -4867,9 +5068,9 @@ impl ConduitApp {
                         .px_4()
                         .py_2()
                         .border_t_1()
-                        .border_color(rgb(BORDER))
+                        .border_color(rgb(palette().border))
                         .text_size(px(10.))
-                        .text_color(rgb(FAINT))
+                        .text_color(rgb(palette().faint))
                         .child(note.clone()),
                 );
             }
@@ -4881,8 +5082,8 @@ impl ConduitApp {
             .overflow_hidden()
             .rounded(px(12.))
             .border_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(SURFACE_STRONG))
+            .border_color(rgb(palette().border))
+            .bg(rgb(palette().surface_strong))
             .child(
                 h_flex()
                     .px_4()
@@ -4890,12 +5091,12 @@ impl ConduitApp {
                     .gap_2()
                     .items_center()
                     .border_b_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(palette().border))
                     .child(
                         div()
                             .text_size(px(12.))
                             .font_semibold()
-                            .text_color(rgb(TEXT))
+                            .text_color(rgb(palette().text))
                             .child("CCS 同步"),
                     )
                     .child(badge("只读"))
@@ -4903,7 +5104,7 @@ impl ConduitApp {
                     .child(
                         div()
                             .text_size(px(10.))
-                            .text_color(rgb(FAINT))
+                            .text_color(rgb(palette().faint))
                             .child(format!(
                                 "{} 个 Provider · {ccs_count} 个模型",
                                 providers.len()
@@ -4918,8 +5119,8 @@ impl ConduitApp {
                     .gap_2()
                     .items_center()
                     .border_t_1()
-                    .border_color(rgb(BORDER))
-                    .bg(rgb(SURFACE))
+                    .border_color(rgb(palette().border))
+                    .bg(rgb(palette().surface))
                     .child(
                         div()
                             .flex_1()
@@ -4927,7 +5128,7 @@ impl ConduitApp {
                             .truncate()
                             .text_size(px(11.))
                             .font_semibold()
-                            .text_color(rgb(TEXT))
+                            .text_color(rgb(palette().text))
                             .child(entry.name.clone()),
                     )
                     .when(entry.current, |row| row.child(badge("当前 Provider")))
@@ -4935,7 +5136,7 @@ impl ConduitApp {
                         div()
                             .flex_shrink_0()
                             .text_size(px(10.))
-                            .text_color(rgb(FAINT))
+                            .text_color(rgb(palette().faint))
                             .child(format!("{} 个模型", entry.models.len())),
                     ),
             );
@@ -4954,9 +5155,9 @@ impl ConduitApp {
                     .px_4()
                     .py_3()
                     .border_t_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(palette().border))
                     .text_size(px(11.))
-                    .text_color(rgb(FAINT))
+                    .text_color(rgb(palette().faint))
                     .child(if provider == Provider::Claude {
                         "cc-switch 中没有可列出的 Claude 模型目录。"
                     } else {
@@ -4976,13 +5177,13 @@ impl ConduitApp {
                         div()
                             .text_size(px(13.))
                             .font_semibold()
-                            .text_color(rgb(TEXT))
+                            .text_color(rgb(palette().text))
                             .child(provider.label()),
                     )
                     .child(
                         div()
                             .text_size(px(10.))
-                            .text_color(rgb(FAINT))
+                            .text_color(rgb(palette().faint))
                             .child(format!("当前默认 {current}")),
                     ),
             )
@@ -5023,7 +5224,7 @@ impl ConduitApp {
                     ),
             )
             .child(
-                div().text_size(px(12.)).text_color(rgb(MUTED))
+                div().text_size(px(12.)).text_color(rgb(palette().muted))
                     .child("设置生成说明的语言、格式和风格，应用于 Git 侧栏的 Generate 按钮。已暂存文件名与 diff 会自动附加，无需填写占位符。"),
             )
             .child(
@@ -5035,7 +5236,7 @@ impl ConduitApp {
                     .disabled(disabled),
             )
             .child(
-                div().text_size(px(11.)).text_color(rgb(FAINT))
+                div().text_size(px(11.)).text_color(rgb(palette().faint))
                     .child("自动保存，适用于所有工作区；留空时使用默认提示词。修改将在下一次生成时生效。"),
             )
             .into_any_element()
@@ -5056,20 +5257,20 @@ impl ConduitApp {
                     .overflow_hidden()
                     .rounded(px(12.))
                     .border_1()
-                    .border_color(rgb(BORDER))
-                    .bg(rgb(SURFACE_STRONG))
+                    .border_color(rgb(palette().border))
+                    .bg(rgb(palette().surface_strong))
                     .child(
                         h_flex()
                             .px_4()
                             .py_3()
                             .items_center()
                             .border_b_1()
-                            .border_color(rgb(BORDER))
+                            .border_color(rgb(palette().border))
                             .child(
                                 div()
                                     .text_size(px(13.))
                                     .font_semibold()
-                                    .text_color(rgb(TEXT))
+                                    .text_color(rgb(palette().text))
                                     .child("本机数据"),
                             ),
                     )
@@ -5082,92 +5283,23 @@ impl ConduitApp {
                     .overflow_hidden()
                     .rounded(px(12.))
                     .border_1()
-                    .border_color(rgb(BORDER))
-                    .bg(rgb(SURFACE_STRONG))
+                    .border_color(rgb(palette().border))
+                    .bg(rgb(palette().surface_strong))
                     .child(
                         h_flex()
                             .px_4()
                             .py_3()
                             .items_center()
                             .border_b_1()
-                            .border_color(rgb(BORDER))
+                            .border_color(rgb(palette().border))
                             .child(
                                 div()
                                     .text_size(px(13.))
                                     .font_semibold()
-                                    .text_color(rgb(TEXT))
-                                    .child("界面"),
+                                    .text_color(rgb(palette().text))
+                                    .child("诊断"),
                             ),
                     )
-                    .child({
-                        let value = self.store.ui.sessions_per_workspace.clamp(1, 50);
-                        let decrease = view.clone();
-                        let increase = view.clone();
-                        h_flex()
-                            .px_4()
-                            .py_3()
-                            .gap_4()
-                            .items_center()
-                            .child(settings_label("工作区会话数"))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(MUTED))
-                                    .child("默认 5 条，超出时侧栏可展开"),
-                            )
-                            .child(
-                                h_flex()
-                                    .gap_1()
-                                    .items_center()
-                                    .child(
-                                        Button::new("sessions-limit-minus")
-                                            .label("−")
-                                            .small()
-                                            .ghost()
-                                            .disabled(value <= 1)
-                                            .when(value > 1, |button| button.cursor_pointer())
-                                            .on_click(move |_, _, cx| {
-                                                decrease.update(cx, |this, cx| {
-                                                    this.store.ui.sessions_per_workspace = this
-                                                        .store
-                                                        .ui
-                                                        .sessions_per_workspace
-                                                        .saturating_sub(1)
-                                                        .max(1);
-                                                    this.persist();
-                                                    cx.notify();
-                                                });
-                                            }),
-                                    )
-                                    .child(
-                                        h_flex()
-                                            .w(px(26.))
-                                            .justify_center()
-                                            .text_size(px(12.))
-                                            .text_color(rgb(TEXT))
-                                            .child(value.to_string()),
-                                    )
-                                    .child(
-                                        Button::new("sessions-limit-plus")
-                                            .label("+")
-                                            .small()
-                                            .ghost()
-                                            .disabled(value >= 30)
-                                            .when(value < 30, |button| button.cursor_pointer())
-                                            .on_click(move |_, _, cx| {
-                                                increase.update(cx, |this, cx| {
-                                                    this.store.ui.sessions_per_workspace =
-                                                        (this.store.ui.sessions_per_workspace + 1)
-                                                            .min(30);
-                                                    this.persist();
-                                                    cx.notify();
-                                                });
-                                            }),
-                                    ),
-                            )
-                    })
                     .child({
                         let toggle = view.clone();
                         let disabled = !self.writable || self.closing;
@@ -5177,15 +5309,13 @@ impl ConduitApp {
                             .py_3()
                             .gap_4()
                             .items_center()
-                            .border_t_1()
-                            .border_color(rgb(BORDER))
                             .child(settings_label("性能监测"))
                             .child(
                                 div()
                                     .flex_1()
                                     .min_w_0()
                                     .text_size(px(11.))
-                                    .text_color(rgb(MUTED))
+                                    .text_color(rgb(palette().muted))
                                     .child("在底部工具栏显示性能入口并采集指标"),
                             )
                             .child(
@@ -5215,8 +5345,277 @@ impl ConduitApp {
                 div()
                     .text_size(px(11.))
                     .line_height(relative(1.5))
-                    .text_color(rgb(FAINT))
-                    .child("配置只保存在本机，界面设置随本地状态保存。"),
+                    .text_color(rgb(palette().faint))
+                    .child("配置只保存在本机；外观与诊断设置随本地状态保存。"),
+            )
+            .into_any_element()
+    }
+    fn settings_appearance_content(&self, view: Entity<Self>) -> AnyElement {
+        let disabled = !self.writable || self.closing;
+        let selected = self.store.ui.appearance;
+        let theme_option = |mode: AppearanceMode,
+                            label: &'static str,
+                            detail: &'static str,
+                            icon: gpui_kit::assets::IconName,
+                            id: &'static str|
+         -> AnyElement {
+            let view = view.clone();
+            let active = selected == mode;
+            let label_color = if disabled {
+                palette().faint
+            } else {
+                palette().text
+            };
+            let icon_color = if disabled {
+                palette().faint
+            } else if active {
+                palette().text
+            } else {
+                palette().muted
+            };
+            let check_color = if disabled {
+                palette().faint
+            } else {
+                palette().text
+            };
+            Button::new(id)
+                .ghost()
+                .h(px(54.))
+                .w_full()
+                .px_3()
+                .rounded(px(8.))
+                .selected(active)
+                .accessibility_label(label)
+                .disabled(disabled)
+                .when(!disabled, |button| button.cursor_pointer())
+                .on_click(move |_, window, cx| {
+                    view.update(cx, |this, cx| {
+                        if !this.writable || this.closing {
+                            return;
+                        }
+                        if this.store.ui.appearance != mode {
+                            this.store.ui.appearance = mode;
+                            this.persist();
+                        }
+                        this.apply_appearance(window, cx);
+                    });
+                })
+                .child(
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .gap_3()
+                        .child(Icon::new(icon).small().text_color(rgb(icon_color)))
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .gap(px(2.))
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .font_medium()
+                                        .text_color(rgb(label_color))
+                                        .child(label),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .text_color(rgb(palette().faint))
+                                        .child(detail),
+                                ),
+                        )
+                        .when(active, |row| {
+                            row.child(
+                                Icon::new(gpui_kit::assets::IconName::Check)
+                                    .small()
+                                    .text_color(rgb(check_color)),
+                            )
+                        }),
+                )
+                .into_any_element()
+        };
+        let value = self.store.ui.sessions_per_workspace.clamp(1, 30);
+        let decrease = view.clone();
+        let increase = view.clone();
+        v_flex()
+            .w_full()
+            .gap_4()
+            .child(
+                v_flex()
+                    .w_full()
+                    .overflow_hidden()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(rgb(palette().border))
+                    .bg(rgb(palette().surface_strong))
+                    .child(
+                        h_flex()
+                            .px_4()
+                            .py_3()
+                            .items_center()
+                            .border_b_1()
+                            .border_color(rgb(palette().border))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_semibold()
+                                    .text_color(rgb(palette().text))
+                                    .child("主题"),
+                            )
+                            .child(div().flex_1())
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(rgb(palette().faint))
+                                    .child("立即生效"),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .p_2()
+                            .gap_1()
+                            .child(theme_option(
+                                AppearanceMode::System,
+                                "跟随系统",
+                                "随 Windows 的浅色 / 深色外观自动切换",
+                                gpui_kit::assets::IconName::Monitor,
+                                "appearance-theme-system",
+                            ))
+                            .child(theme_option(
+                                AppearanceMode::Light,
+                                "浅色",
+                                "始终使用浅色背景与深色文字",
+                                gpui_kit::assets::IconName::Sun,
+                                "appearance-theme-light",
+                            ))
+                            .child(theme_option(
+                                AppearanceMode::Dark,
+                                "深色",
+                                "始终使用深色背景与浅色文字",
+                                gpui_kit::assets::IconName::Moon,
+                                "appearance-theme-dark",
+                            )),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .w_full()
+                    .overflow_hidden()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(rgb(palette().border))
+                    .bg(rgb(palette().surface_strong))
+                    .child(
+                        h_flex()
+                            .px_4()
+                            .py_3()
+                            .items_center()
+                            .border_b_1()
+                            .border_color(rgb(palette().border))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_semibold()
+                                    .text_color(rgb(palette().text))
+                                    .child("侧栏"),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .px_4()
+                            .py_3()
+                            .gap_4()
+                            .items_center()
+                            .child(settings_label("工作区会话数"))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(palette().muted))
+                                    .child("默认 5 条，范围 1–30，超出时侧栏可展开"),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .child(
+                                        Button::new("sessions-limit-minus")
+                                            .label("−")
+                                            .accessibility_label("减少工作区会话数")
+                                            .small()
+                                            .ghost()
+                                            .disabled(disabled || value <= 1)
+                                            .when(!disabled && value > 1, |button| {
+                                                button.cursor_pointer()
+                                            })
+                                            .on_click(move |_, _, cx| {
+                                                decrease.update(cx, |this, cx| {
+                                                    if !this.writable || this.closing {
+                                                        return;
+                                                    }
+                                                    this.store.ui.sessions_per_workspace = this
+                                                        .store
+                                                        .ui
+                                                        .sessions_per_workspace
+                                                        .clamp(1, 30)
+                                                        .saturating_sub(1)
+                                                        .max(1);
+                                                    this.persist();
+                                                    cx.notify();
+                                                });
+                                            }),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .w(px(26.))
+                                            .justify_center()
+                                            .text_size(px(12.))
+                                            .text_color(rgb(if disabled {
+                                                palette().faint
+                                            } else {
+                                                palette().text
+                                            }))
+                                            .child(value.to_string()),
+                                    )
+                                    .child(
+                                        Button::new("sessions-limit-plus")
+                                            .label("+")
+                                            .accessibility_label("增加工作区会话数")
+                                            .small()
+                                            .ghost()
+                                            .disabled(disabled || value >= 30)
+                                            .when(!disabled && value < 30, |button| {
+                                                button.cursor_pointer()
+                                            })
+                                            .on_click(move |_, _, cx| {
+                                                increase.update(cx, |this, cx| {
+                                                    if !this.writable || this.closing {
+                                                        return;
+                                                    }
+                                                    this.store.ui.sessions_per_workspace = (this
+                                                        .store
+                                                        .ui
+                                                        .sessions_per_workspace
+                                                        .clamp(1, 30)
+                                                        + 1)
+                                                    .min(30);
+                                                    this.persist();
+                                                    cx.notify();
+                                                });
+                                            }),
+                                    ),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .line_height(relative(1.5))
+                    .text_color(rgb(palette().faint))
+                    .child("主题切换会立即应用并保存；跟随系统时，Windows 明暗变化会自动同步。"),
             )
             .into_any_element()
     }
@@ -5230,27 +5629,27 @@ impl ConduitApp {
                     .overflow_hidden()
                     .rounded(px(12.))
                     .border_1()
-                    .border_color(rgb(BORDER))
-                    .bg(rgb(SURFACE_STRONG))
+                    .border_color(rgb(palette().border))
+                    .bg(rgb(palette().surface_strong))
                     .child(
                         h_flex()
                             .px_4()
                             .py_3()
                             .items_center()
                             .border_b_1()
-                            .border_color(rgb(BORDER))
+                            .border_color(rgb(palette().border))
                             .child(
                                 div()
                                     .text_size(px(13.))
                                     .font_semibold()
-                                    .text_color(rgb(TEXT))
+                                    .text_color(rgb(palette().text))
                                     .child("路径查找顺序"),
                             )
                             .child(div().flex_1())
                             .child(
                                 div()
                                     .text_size(px(10.))
-                                    .text_color(rgb(FAINT))
+                                    .text_color(rgb(palette().faint))
                                     .child("前者优先"),
                             ),
                     )
@@ -5277,20 +5676,20 @@ impl ConduitApp {
                     .overflow_hidden()
                     .rounded(px(12.))
                     .border_1()
-                    .border_color(rgb(BORDER))
-                    .bg(rgb(SURFACE_STRONG))
+                    .border_color(rgb(palette().border))
+                    .bg(rgb(palette().surface_strong))
                     .child(
                         h_flex()
                             .px_4()
                             .py_3()
                             .items_center()
                             .border_b_1()
-                            .border_color(rgb(BORDER))
+                            .border_color(rgb(palette().border))
                             .child(
                                 div()
                                     .text_size(px(13.))
                                     .font_semibold()
-                                    .text_color(rgb(TEXT))
+                                    .text_color(rgb(palette().text))
                                     .child("可执行文件与版本"),
                             ),
                     )
@@ -5309,14 +5708,15 @@ impl ConduitApp {
                 div()
                     .text_size(px(11.))
                     .line_height(relative(1.5))
-                    .text_color(rgb(FAINT))
+                    .text_color(rgb(palette().faint))
                     .child("修改 CLI 路径或版本设置仅影响后续启动的会话；路径无效时会显式报错，不会自动改用另一份程序。"),
             )
             .into_any_element()
     }
     fn settings_modal_content(&self, window: &Window, view: Entity<Self>) -> AnyElement {
         let (title, subtitle) = match self.settings_tab {
-            SettingsTab::General => ("通用", "本机数据位置与界面设置"),
+            SettingsTab::General => ("通用", "本机数据与诊断设置"),
+            SettingsTab::Appearance => ("外观", "主题与侧栏显示密度"),
             SettingsTab::Git => ("Git", "配置 Commit Message 的 AI 生成提示词"),
             SettingsTab::Cli => ("CLI", "可执行文件路径查找顺序与版本检测说明"),
             SettingsTab::Provider(provider) => (provider.label(), "管理可执行文件路径与版本检测"),
@@ -5325,36 +5725,47 @@ impl ConduitApp {
         let nav_item = |tab: SettingsTab, label: &'static str, leading: AnyElement| -> AnyElement {
             let view = view.clone();
             let active = self.settings_tab == tab;
-            h_flex()
-                .id(match tab {
-                    SettingsTab::General => "settings-tab-general",
-                    SettingsTab::Git => "settings-tab-git",
-                    SettingsTab::Cli => "settings-tab-cli",
-                    SettingsTab::Provider(Provider::Claude) => "settings-tab-claude",
-                    SettingsTab::Provider(Provider::Codex) => "settings-tab-codex",
-                    SettingsTab::Models => "settings-tab-models",
-                })
-                .h(px(32.))
-                .px_2()
-                .gap_2()
-                .items_center()
-                .rounded(px(8.))
-                .cursor_pointer()
-                .text_size(px(13.))
-                .text_color(rgb(if active { TEXT } else { MUTED }))
-                .when(active, |row| row.bg(rgb(SURFACE_HOVER)))
-                .when(!active, |row| {
-                    row.hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(TEXT)))
-                })
-                .on_click(move |_, _, cx| {
-                    view.update(cx, |this, cx| {
-                        this.settings_tab = tab;
-                        cx.notify();
-                    });
-                })
-                .child(leading)
-                .child(label)
-                .into_any_element()
+            Button::new(match tab {
+                SettingsTab::General => "settings-tab-general",
+                SettingsTab::Appearance => "settings-tab-appearance",
+                SettingsTab::Git => "settings-tab-git",
+                SettingsTab::Cli => "settings-tab-cli",
+                SettingsTab::Provider(Provider::Claude) => "settings-tab-claude",
+                SettingsTab::Provider(Provider::Codex) => "settings-tab-codex",
+                SettingsTab::Models => "settings-tab-models",
+            })
+            .ghost()
+            .h(px(32.))
+            .w_full()
+            .px_2()
+            .rounded(px(8.))
+            .selected(active)
+            .accessibility_label(label)
+            .cursor_pointer()
+            .on_click(move |_, _, cx| {
+                view.update(cx, |this, cx| {
+                    this.settings_tab = tab;
+                    cx.notify();
+                });
+            })
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap_2()
+                    .items_center()
+                    .child(leading)
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(rgb(if active {
+                                palette().text
+                            } else {
+                                palette().muted
+                            }))
+                            .child(label),
+                    ),
+            )
+            .into_any_element()
         };
         let section = |text: &'static str| {
             div()
@@ -5362,13 +5773,13 @@ impl ConduitApp {
                 .pt_3()
                 .pb_1()
                 .text_size(px(10.))
-                .text_color(rgb(FAINT))
+                .text_color(rgb(palette().faint))
                 .child(text)
         };
         let general_icon = if self.settings_tab == SettingsTab::General {
-            TEXT
+            palette().text
         } else {
-            FAINT
+            palette().faint
         };
         let general_leading = h_flex()
             .w(px(14.))
@@ -5380,10 +5791,25 @@ impl ConduitApp {
                     .text_color(rgb(general_icon)),
             )
             .into_any_element();
-        let models_icon = if self.settings_tab == SettingsTab::Models {
-            TEXT
+        let appearance_icon = if self.settings_tab == SettingsTab::Appearance {
+            palette().text
         } else {
-            FAINT
+            palette().faint
+        };
+        let appearance_leading = h_flex()
+            .w(px(14.))
+            .flex_shrink_0()
+            .justify_center()
+            .child(
+                Icon::new(IconName::Palette)
+                    .small()
+                    .text_color(rgb(appearance_icon)),
+            )
+            .into_any_element();
+        let models_icon = if self.settings_tab == SettingsTab::Models {
+            palette().text
+        } else {
+            palette().faint
         };
         let models_leading = h_flex()
             .w(px(14.))
@@ -5396,9 +5822,9 @@ impl ConduitApp {
             )
             .into_any_element();
         let cli_icon = if self.settings_tab == SettingsTab::Cli {
-            TEXT
+            palette().text
         } else {
-            FAINT
+            palette().faint
         };
         let cli_leading = h_flex()
             .w(px(14.))
@@ -5415,9 +5841,9 @@ impl ConduitApp {
             .h_full()
             .p_3()
             .gap_1()
-            .bg(rgb(SIDEBAR_BG))
+            .bg(rgb(palette().sidebar_bg))
             .border_r_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(palette().border))
             .child(
                 div()
                     .px_2()
@@ -5425,20 +5851,25 @@ impl ConduitApp {
                     .pb_3()
                     .text_size(px(16.))
                     .font_semibold()
-                    .text_color(rgb(TEXT))
+                    .text_color(rgb(palette().text))
                     .child("设置"),
             )
             .child(section("应用"))
             .child(nav_item(SettingsTab::General, "通用", general_leading))
+            .child(nav_item(
+                SettingsTab::Appearance,
+                "外观",
+                appearance_leading,
+            ))
             .child(nav_item(
                 SettingsTab::Git,
                 "Git",
                 Icon::new(gpui_kit::assets::IconName::GitFork)
                     .small()
                     .text_color(rgb(if self.settings_tab == SettingsTab::Git {
-                        TEXT
+                        palette().text
                     } else {
-                        FAINT
+                        palette().faint
                     }))
                     .into_any_element(),
             ))
@@ -5461,11 +5892,12 @@ impl ConduitApp {
                 div()
                     .px_2()
                     .text_size(px(10.))
-                    .text_color(rgb(FAINT))
+                    .text_color(rgb(palette().faint))
                     .child("本地 CLI · Windows"),
             );
         let page = match self.settings_tab {
             SettingsTab::General => self.settings_general_content(view.clone()),
+            SettingsTab::Appearance => self.settings_appearance_content(view.clone()),
             SettingsTab::Git => self.settings_git_content(view.clone()),
             SettingsTab::Cli => self.settings_cli_content(),
             SettingsTab::Provider(provider) => {
@@ -5487,9 +5919,9 @@ impl ConduitApp {
                         .px_3()
                         .py_2()
                         .rounded(px(8.))
-                        .bg(rgb(0x2a1d1a))
+                        .bg(rgb(palette().danger_bg))
                         .text_size(px(11.))
-                        .text_color(rgb(0xe6b4a8))
+                        .text_color(rgb(palette().danger_text))
                         .child("当前数据目录为只读，无法保存设置或会话模型。"),
                 )
             })
@@ -5499,9 +5931,9 @@ impl ConduitApp {
                         .px_3()
                         .py_2()
                         .rounded(px(8.))
-                        .bg(rgb(0x2a1d1a))
+                        .bg(rgb(palette().danger_bg))
                         .text_size(px(11.))
-                        .text_color(rgb(0xe6b4a8))
+                        .text_color(rgb(palette().danger_text))
                         .child(message),
                 )
             })
@@ -5521,17 +5953,17 @@ impl ConduitApp {
                         div()
                             .text_size(px(18.))
                             .font_semibold()
-                            .text_color(rgb(TEXT))
+                            .text_color(rgb(palette().text))
                             .child(title),
                     )
                     .child(
                         div()
                             .text_size(px(12.))
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(palette().muted))
                             .child(subtitle),
                     ),
             )
-            .child(div().h(px(1.)).bg(rgb(BORDER)))
+            .child(div().h(px(1.)).bg(rgb(palette().border)))
             .child(body)
             .child(
                 h_flex()
@@ -5540,12 +5972,12 @@ impl ConduitApp {
                     .gap_3()
                     .items_center()
                     .border_t_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(palette().border))
                     .child(
                         div()
                             .flex_1()
                             .text_size(px(11.))
-                            .text_color(rgb(FAINT))
+                            .text_color(rgb(palette().faint))
                             .child("配置保存在本地，具体生效范围见各页面说明"),
                     )
                     .child(
@@ -5820,7 +6252,7 @@ impl Render for ConduitApp {
             .id("sidebar")
             .h_full()
             .w_full()
-            .bg(rgb(SIDEBAR_BG))
+            .bg(rgb(palette().sidebar_bg))
             .p_2()
             .gap_1()
             .child(
@@ -5877,7 +6309,7 @@ impl Render for ConduitApp {
                 .child(
                     div()
                         .text_size(px(11.))
-                        .text_color(rgb(FAINT))
+                        .text_color(rgb(palette().faint))
                         .child("工作区"),
                 )
                 .child(
@@ -5892,10 +6324,20 @@ impl Render for ConduitApp {
                                 .items_center()
                                 .rounded(px(6.))
                                 .text_size(px(10.))
-                                .text_color(rgb(if self.show_archived { TEXT } else { FAINT }))
-                                .when(self.show_archived, |row| row.bg(rgb(SURFACE_HOVER)))
+                                .text_color(rgb(if self.show_archived {
+                                    palette().text
+                                } else {
+                                    palette().faint
+                                }))
+                                .when(self.show_archived, |row| {
+                                    row.bg(rgb(palette().surface_hover))
+                                })
                                 .cursor_pointer()
-                                .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(TEXT)))
+                                .hover(|style| {
+                                    style
+                                        .bg(rgb(palette().surface_hover))
+                                        .text_color(rgb(palette().text))
+                                })
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.show_archived = !this.show_archived;
                                     cx.notify();
@@ -5914,14 +6356,16 @@ impl Render for ConduitApp {
                                 .when(can_edit, |button| {
                                     button
                                         .cursor_pointer()
-                                        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                        .hover(|style| style.bg(rgb(palette().surface_hover)))
                                         .on_click(cx.listener(Self::add_workspace))
                                 })
-                                .child(
-                                    Icon::new(IconName::Plus)
-                                        .small()
-                                        .text_color(rgb(if can_edit { MUTED } else { FAINT })),
-                                ),
+                                .child(Icon::new(IconName::Plus).small().text_color(rgb(
+                                    if can_edit {
+                                        palette().muted
+                                    } else {
+                                        palette().faint
+                                    },
+                                ))),
                         ),
                 ),
         );
@@ -5943,7 +6387,7 @@ impl Render for ConduitApp {
                 .or_else(|| workspace.sessions.last().map(|session| session.id));
             let workspace_selected = self.selected_workspace == Some(index);
             let count = sessions.len();
-            let limit = self.store.ui.sessions_per_workspace.clamp(1, 50);
+            let limit = self.store.ui.sessions_per_workspace.clamp(1, 30);
             let expanded = self.expanded_workspaces.contains(&index);
             let total = sessions.len();
             list =
@@ -5956,19 +6400,27 @@ impl Render for ConduitApp {
                         .items_center()
                         .rounded(px(8.))
                         .text_size(px(13.))
-                        .text_color(rgb(if workspace_selected { TEXT } else { MUTED }))
-                        .when(workspace_selected, |row| row.bg(rgb(SURFACE)))
+                        .text_color(rgb(if workspace_selected {
+                            palette().text
+                        } else {
+                            palette().muted
+                        }))
+                        .when(workspace_selected, |row| row.bg(rgb(palette().surface)))
                         .cursor_pointer()
-                        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                        .hover(|style| style.bg(rgb(palette().surface_hover)))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.switch(index, last, window, cx)
                         }))
-                        .child(Icon::new(IconName::Folder).small().text_color(rgb(FAINT)))
+                        .child(
+                            Icon::new(IconName::Folder)
+                                .small()
+                                .text_color(rgb(palette().faint)),
+                        )
                         .child(div().flex_1().truncate().child(workspace.name()))
                         .child(
                             div()
                                 .text_size(px(10.))
-                                .text_color(rgb(FAINT))
+                                .text_color(rgb(palette().faint))
                                 .child(count.to_string()),
                         )
                         .child(
@@ -6007,15 +6459,19 @@ impl Render for ConduitApp {
                         .rounded(px(8.))
                         .text_size(px(13.))
                         .text_color(rgb(if archived {
-                            FAINT
+                            palette().faint
                         } else if active {
-                            TEXT
+                            palette().text
                         } else {
-                            MUTED
+                            palette().muted
                         }))
-                        .when(active, |row| row.bg(rgb(SURFACE_HOVER)))
+                        .when(active, |row| row.bg(rgb(palette().surface_hover)))
                         .cursor_pointer()
-                        .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(TEXT)))
+                        .hover(|style| {
+                            style
+                                .bg(rgb(palette().surface_hover))
+                                .text_color(rgb(palette().text))
+                        })
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.switch(index, Some(id), window, cx)
                         }))
@@ -6034,7 +6490,7 @@ impl Render for ConduitApp {
                             row.child(
                                 div()
                                     .text_size(px(9.))
-                                    .text_color(rgb(FAINT))
+                                    .text_color(rgb(palette().faint))
                                     .child("已归档"),
                             )
                         })
@@ -6042,7 +6498,7 @@ impl Render for ConduitApp {
                             row.child(
                                 div()
                                     .text_size(px(10.))
-                                    .text_color(rgb(FAINT))
+                                    .text_color(rgb(palette().faint))
                                     .child(status),
                             )
                         })
@@ -6065,7 +6521,7 @@ impl Render for ConduitApp {
                         .items_center()
                         .rounded(px(6.))
                         .cursor_pointer()
-                        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                        .hover(|style| style.bg(rgb(palette().surface_hover)))
                         .on_click(move |_, _, cx| {
                             toggle_app.update(cx, |this, cx| {
                                 if !this.expanded_workspaces.insert(index) {
@@ -6077,7 +6533,7 @@ impl Render for ConduitApp {
                         .child(
                             div()
                                 .text_size(px(11.))
-                                .text_color(rgb(FAINT))
+                                .text_color(rgb(palette().faint))
                                 .child(more_label),
                         ),
                 );
@@ -6097,19 +6553,19 @@ impl Render for ConduitApp {
                             .child(
                                 Icon::new(gpui_kit::assets::IconName::FolderPlus)
                                     .small()
-                                    .text_color(rgb(FAINT)),
+                                    .text_color(rgb(palette().faint)),
                             )
                             .child(
                                 div()
                                     .text_size(px(13.))
-                                    .text_color(rgb(MUTED))
+                                    .text_color(rgb(palette().muted))
                                     .child("还没有工作区"),
                             ),
                     )
                     .child(
                         div()
                             .text_size(px(11.))
-                            .text_color(rgb(FAINT))
+                            .text_color(rgb(palette().faint))
                             .child("点击上方 + 添加一个本地目录"),
                     ),
             );
@@ -6119,7 +6575,7 @@ impl Render for ConduitApp {
                 .gap_1()
                 .pt_2()
                 .border_t_1()
-                .border_color(rgb(BORDER))
+                .border_color(rgb(palette().border))
                 .child(
                     h_flex()
                         .id("settings")
@@ -6129,20 +6585,28 @@ impl Render for ConduitApp {
                         .items_center()
                         .rounded(px(8.))
                         .text_size(px(13.))
-                        .text_color(rgb(MUTED))
+                        .text_color(rgb(palette().muted))
                         .cursor_pointer()
-                        .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(TEXT)))
+                        .hover(|style| {
+                            style
+                                .bg(rgb(palette().surface_hover))
+                                .text_color(rgb(palette().text))
+                        })
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.open_settings(window, cx);
                         }))
-                        .child(Icon::new(IconName::Settings).small().text_color(rgb(FAINT)))
+                        .child(
+                            Icon::new(IconName::Settings)
+                                .small()
+                                .text_color(rgb(palette().faint)),
+                        )
                         .child("设置"),
                 )
                 .child(
                     div()
                         .px_2()
                         .text_size(px(10.))
-                        .text_color(rgb(FAINT))
+                        .text_color(rgb(palette().faint))
                         .child("本地 CLI · Windows · Preview"),
                 ),
         );
@@ -6174,7 +6638,7 @@ impl Render for ConduitApp {
                                 .child(
                                     div()
                                         .text_size(px(12.))
-                                        .text_color(rgb(FAINT))
+                                        .text_color(rgb(palette().faint))
                                         .child(format!("{} · 已就绪", session.provider.label())),
                                 ),
                         )
@@ -6182,13 +6646,13 @@ impl Render for ConduitApp {
                             div()
                                 .text_size(px(30.))
                                 .font_bold()
-                                .text_color(rgb(TEXT))
+                                .text_color(rgb(palette().text))
                                 .child("今天想完成什么？"),
                         )
                         .child(
                             div()
                                 .text_size(px(14.))
-                                .text_color(rgb(MUTED))
+                                .text_color(rgb(palette().muted))
                                 .child(format!("在 {} 中开始你的任务", directory)),
                         ),
                 );
@@ -6225,13 +6689,13 @@ impl Render for ConduitApp {
                             .justify_center()
                             .rounded(px(12.))
                             .border_1()
-                            .border_color(rgb(BORDER))
-                            .bg(rgb(SURFACE))
+                            .border_color(rgb(palette().border))
+                            .bg(rgb(palette().surface))
                             .child(
                                 div()
                                     .text_base()
                                     .font_bold()
-                                    .text_color(rgb(MUTED))
+                                    .text_color(rgb(palette().muted))
                                     .child("C"),
                             ),
                     )
@@ -6239,13 +6703,13 @@ impl Render for ConduitApp {
                         div()
                             .text_size(px(30.))
                             .font_semibold()
-                            .text_color(rgb(TEXT))
+                            .text_color(rgb(palette().text))
                             .child("今天想完成什么？"),
                     )
                     .child(
                         div()
                             .text_size(px(14.))
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(palette().muted))
                             .child(format!(
                                 "会话将在 {directory} 中运行，输入任务后会按上次使用的引擎新建会话。"
                             )),
@@ -6267,13 +6731,13 @@ impl Render for ConduitApp {
                             .justify_center()
                             .rounded(px(12.))
                             .border_1()
-                            .border_color(rgb(BORDER))
-                            .bg(rgb(SURFACE))
+                            .border_color(rgb(palette().border))
+                            .bg(rgb(palette().surface))
                             .child(
                                 div()
                                     .text_base()
                                     .font_bold()
-                                    .text_color(rgb(MUTED))
+                                    .text_color(rgb(palette().muted))
                                     .child("C"),
                             ),
                     )
@@ -6281,20 +6745,20 @@ impl Render for ConduitApp {
                         div()
                             .text_size(px(30.))
                             .font_semibold()
-                            .text_color(rgb(TEXT))
+                            .text_color(rgb(palette().text))
                             .child("连接一个本地工作区"),
                     )
                     .child(
                         div()
                             .text_size(px(14.))
                             .line_height(relative(1.5))
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(palette().muted))
                             .child("Conduit 直接调用本机 CLI，文件留在你的机器上。"),
                     )
                     .child(
                         div()
                             .text_size(px(11.))
-                            .text_color(rgb(FAINT))
+                            .text_color(rgb(palette().faint))
                             .child("CLI 只会在所选目录内执行任务"),
                     ),
             );
@@ -6314,7 +6778,7 @@ impl Render for ConduitApp {
                 .items_center()
                 .gap_3()
                 .border_b_1()
-                .border_color(rgb(BORDER))
+                .border_color(rgb(palette().border))
                 .child(self.workspace_picker(app_entity.clone()))
                 .when_some(current_provider, |header, provider| {
                     header.child(provider_icon(provider))
@@ -6326,7 +6790,7 @@ impl Render for ConduitApp {
                         .truncate()
                         .text_size(px(13.))
                         .font_bold()
-                        .text_color(rgb(TEXT))
+                        .text_color(rgb(palette().text))
                         .child(header_title),
                 )
                 .when(active, |header| {
@@ -6335,9 +6799,9 @@ impl Render for ConduitApp {
                             .px_2()
                             .py_1()
                             .rounded(px(6.))
-                            .bg(rgb(SURFACE))
+                            .bg(rgb(palette().surface))
                             .text_size(px(10.))
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(palette().muted))
                             .child(status.clone().unwrap_or_else(|| "运行中".into())),
                     )
                 })
@@ -6417,8 +6881,8 @@ impl Render for ConduitApp {
                         .gap_3()
                         .rounded(px(14.))
                         .border_1()
-                        .border_color(rgb(0x4a3b22))
-                        .bg(rgb(0x1d1a14))
+                        .border_color(rgb(palette().warning_border))
+                        .bg(rgb(palette().warning_bg))
                         .child(
                             h_flex()
                                 .items_start()
@@ -6431,11 +6895,11 @@ impl Render for ConduitApp {
                                         .items_center()
                                         .justify_center()
                                         .rounded(px(8.))
-                                        .bg(rgb(0x2a2317))
+                                        .bg(rgb(palette().warning_icon_bg))
                                         .child(
                                             Icon::new(IconName::TriangleAlert)
                                                 .small()
-                                                .text_color(rgb(0xe3b96b)),
+                                                .text_color(rgb(palette().warning_text)),
                                         ),
                                 )
                                 .child(
@@ -6451,7 +6915,7 @@ impl Render for ConduitApp {
                                                     div()
                                                         .text_size(px(13.))
                                                         .font_semibold()
-                                                        .text_color(rgb(0xf0d49b))
+                                                        .text_color(rgb(palette().highlight_text))
                                                         .child(approval.title.clone()),
                                                 )
                                                 .when(!queue_label.is_empty(), |row| {
@@ -6461,9 +6925,11 @@ impl Render for ConduitApp {
                                                             .px_2()
                                                             .items_center()
                                                             .rounded_full()
-                                                            .bg(rgb(0x332b1b))
+                                                            .bg(rgb(palette().warning_chip_bg))
                                                             .text_size(px(10.))
-                                                            .text_color(rgb(0xd6b26b))
+                                                            .text_color(rgb(
+                                                                palette().warning_chip_text
+                                                            ))
                                                             .child(queue_label.clone()),
                                                     )
                                                 }),
@@ -6472,7 +6938,7 @@ impl Render for ConduitApp {
                                             div()
                                                 .text_size(px(11.))
                                                 .line_height(relative(1.4))
-                                                .text_color(rgb(0x9c9284))
+                                                .text_color(rgb(palette().warning_muted))
                                                 .child("CLI 请求授权，仅对本次操作生效。"),
                                         ),
                                 )
@@ -6497,11 +6963,11 @@ impl Render for ConduitApp {
                                     .p_3()
                                     .rounded(px(10.))
                                     .border_1()
-                                    .border_color(rgb(0x352c1b))
-                                    .bg(rgb(0x15130e))
+                                    .border_color(rgb(palette().warning_inner_border))
+                                    .bg(rgb(palette().warning_code_bg))
                                     .text_xs()
                                     .line_height(relative(1.5))
-                                    .text_color(rgb(0xd9d3c7))
+                                    .text_color(rgb(palette().warning_code_text))
                                     .child(approval.detail.clone()),
                             )
                         })
@@ -6514,7 +6980,7 @@ impl Render for ConduitApp {
                                         div()
                                             .flex_1()
                                             .text_size(px(11.))
-                                            .text_color(rgb(0xd6a75a))
+                                            .text_color(rgb(palette().warning_accent))
                                             .child("CLI 未提供「允许本次」选项，此请求只能拒绝。"),
                                     )
                                 })
@@ -6558,10 +7024,10 @@ impl Render for ConduitApp {
                     .p_3()
                     .rounded_lg()
                     .border_1()
-                    .border_color(rgb(0x5c332c))
-                    .bg(rgb(0x2a1d1a))
+                    .border_color(rgb(palette().danger_border))
+                    .bg(rgb(palette().danger_bg))
                     .text_sm()
-                    .text_color(rgb(0xe6b4a8))
+                    .text_color(rgb(palette().danger_text))
                     .child(message.clone()),
             );
         }
@@ -6614,12 +7080,12 @@ impl Render for ConduitApp {
             .p_2()
             .gap_1()
             .rounded(px(22.))
-            .bg(rgb(SURFACE))
+            .bg(rgb(palette().surface))
             .border_1()
             .border_color(if input_focused {
-                rgb(FOCUS)
+                rgb(palette().focus)
             } else {
-                rgb(BORDER)
+                rgb(palette().border)
             })
             .on_click(cx.listener(|this, event, window, cx| {
                 if this.selected_workspace.is_some() {
@@ -6635,15 +7101,24 @@ impl Render for ConduitApp {
                     .gap_2()
                     .items_center()
                     .rounded(px(10.))
-                    .bg(rgb(SURFACE_STRONG))
-                    .child(Icon::new(IconName::Folder).small().text_color(rgb(FAINT)))
+                    .bg(rgb(palette().surface_strong))
+                    // This row is only for the model/workspace context. Do not
+                    // let clicks on its empty area bubble to the composer shell:
+                    // when no workspace is selected, that handler opens the
+                    // workspace directory picker.
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        Icon::new(IconName::Folder)
+                            .small()
+                            .text_color(rgb(palette().faint)),
+                    )
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .truncate()
                             .text_size(px(12.))
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(palette().muted))
                             .child(directory.clone()),
                     )
                     .when(selected.is_some(), |row| row.child(model_picker)),
@@ -6674,9 +7149,9 @@ impl Render for ConduitApp {
                             .items_center()
                             .justify_center()
                             .rounded_full()
-                            .bg(rgb(TEXT))
+                            .bg(rgb(palette().text))
                             .cursor_pointer()
-                            .hover(|style| style.bg(rgb(0xffffff)))
+                            .hover(|style| style.bg(rgb(palette().control_hover)))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 if let Some(run) =
                                     this.selected_session.and_then(|id| this.runs.get_mut(&id))
@@ -6688,7 +7163,13 @@ impl Render for ConduitApp {
                                 this.input.read(cx).focus_handle(cx).focus(window, cx);
                                 cx.notify();
                             }))
-                            .child(div().w(px(8.)).h(px(8.)).rounded(px(2.)).bg(rgb(0x111113)))
+                            .child(
+                                div()
+                                    .w(px(8.))
+                                    .h(px(8.))
+                                    .rounded(px(2.))
+                                    .bg(rgb(palette().on_text)),
+                            )
                             .into_any_element()
                     } else {
                         h_flex()
@@ -6698,18 +7179,24 @@ impl Render for ConduitApp {
                             .items_center()
                             .justify_center()
                             .rounded_full()
-                            .bg(rgb(if send_ready { TEXT } else { SURFACE_STRONG }))
+                            .bg(rgb(if send_ready {
+                                palette().text
+                            } else {
+                                palette().surface_strong
+                            }))
                             .when(send_ready, |button| {
                                 button
                                     .cursor_pointer()
-                                    .hover(|style| style.bg(rgb(0xffffff)))
+                                    .hover(|style| style.bg(rgb(palette().control_hover)))
                                     .on_click(cx.listener(Self::send_message))
                             })
-                            .child(
-                                Icon::new(IconName::ArrowUp)
-                                    .small()
-                                    .text_color(rgb(if send_ready { 0x111113 } else { FAINT })),
-                            )
+                            .child(Icon::new(IconName::ArrowUp).small().text_color(rgb(
+                                if send_ready {
+                                    palette().on_text
+                                } else {
+                                    palette().faint
+                                },
+                            )))
                             .into_any_element()
                     }),
             )
@@ -6740,8 +7227,8 @@ impl Render for ConduitApp {
                                 .justify_center()
                                 .rounded_full()
                                 .border_1()
-                                .border_color(rgb(BORDER))
-                                .bg(rgb(SURFACE_STRONG))
+                                .border_color(rgb(palette().border))
+                                .bg(rgb(palette().surface_strong))
                                 .cursor_pointer()
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.scroll_to_end();
@@ -6753,7 +7240,7 @@ impl Render for ConduitApp {
                                 .child(
                                     Icon::new(gpui_kit::assets::IconName::ArrowDown)
                                         .small()
-                                        .text_color(rgb(MUTED)),
+                                        .text_color(rgb(palette().muted)),
                                 ),
                         )
                     }),
@@ -6775,7 +7262,7 @@ impl Render for ConduitApp {
             .gap_3()
             .items_center()
             .border_t_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(palette().border))
             .when(self.git_repository.is_some(), |bar| {
                 bar.child(self.branch_picker(app_entity.clone()))
             })
@@ -6784,7 +7271,7 @@ impl Render for ConduitApp {
                     .min_w_0()
                     .truncate()
                     .text_size(px(11.))
-                    .text_color(rgb(FAINT))
+                    .text_color(rgb(palette().faint))
                     .child(toolbar_hint),
             )
             .child(div().flex_1())
@@ -6802,7 +7289,11 @@ impl Render for ConduitApp {
                     })
                     .when(
                         self.details && self.detail_view == DetailView::Git,
-                        |button| button.bg(rgb(SURFACE_HOVER)).text_color(rgb(TEXT)),
+                        |button| {
+                            button
+                                .bg(rgb(palette().surface_hover))
+                                .text_color(rgb(palette().text))
+                        },
                     )
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.details = !(this.details && this.detail_view == DetailView::Git);
@@ -6849,8 +7340,8 @@ impl Render for ConduitApp {
                 })
             });
         let title_bar = TitleBar::new()
-            .bg(rgb(CANVAS))
-            .border_color(rgb(BORDER))
+            .bg(rgb(palette().canvas))
+            .border_color(rgb(palette().border))
             .child(
                 h_flex()
                     .items_center()
@@ -6862,23 +7353,23 @@ impl Render for ConduitApp {
                             .items_center()
                             .justify_center()
                             .rounded(px(6.))
-                            .bg(rgb(TEXT))
+                            .bg(rgb(palette().text))
                             .text_size(px(11.))
                             .font_bold()
-                            .text_color(rgb(0x111113))
+                            .text_color(rgb(palette().on_text))
                             .child("C"),
                     )
                     .child(
                         div()
                             .text_size(px(13.))
                             .font_semibold()
-                            .text_color(rgb(TEXT))
+                            .text_color(rgb(palette().text))
                             .child("Conduit"),
                     )
                     .child(
                         div()
                             .text_size(px(10.))
-                            .text_color(rgb(FAINT))
+                            .text_color(rgb(palette().faint))
                             .child("Chat M0 · Preview"),
                     ),
             );
@@ -6925,9 +7416,19 @@ impl Render for ConduitApp {
                 .flex_1()
                 .min_h_0()
                 .gap_3()
-                .child(div().text_xs().text_color(rgb(MUTED)).child("工作目录"))
-                .child(div().text_xs().text_color(rgb(TEXT)).child(path))
-                .child(div().text_xs().text_color(rgb(MUTED)).child("原生会话 ID"))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(palette().muted))
+                        .child("工作目录"),
+                )
+                .child(div().text_xs().text_color(rgb(palette().text)).child(path))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(palette().muted))
+                        .child("原生会话 ID"),
+                )
                 .child(div().text_xs().child(native_id))
                 .child(
                     div()
@@ -6953,7 +7454,7 @@ impl Render for ConduitApp {
                 .h_full()
                 .w_full()
                 .flex_shrink_0()
-                .bg(rgb(SIDEBAR_BG))
+                .bg(rgb(palette().sidebar_bg))
                 .p_3()
                 .gap_3()
                 .when(narrow, |panel| {
@@ -6965,7 +7466,7 @@ impl Render for ConduitApp {
                         .h_auto()
                         .bottom(px(34.))
                         .border_l_1()
-                        .border_color(rgb(BORDER))
+                        .border_color(rgb(palette().border))
                 })
                 .child(
                     h_flex()
@@ -6978,7 +7479,7 @@ impl Render for ConduitApp {
                                 gpui_kit::assets::IconName::PanelRight
                             })
                             .small()
-                            .text_color(rgb(MUTED)),
+                            .text_color(rgb(palette().muted)),
                         )
                         .child(div().text_size(px(12.)).font_semibold().child(
                             if self.detail_view == DetailView::Git {
@@ -7045,7 +7546,7 @@ impl Render for ConduitApp {
                     .h_full()
                     .flex_shrink_0()
                     .cursor_col_resize()
-                    .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                    .hover(|style| style.bg(rgb(palette().surface_hover)))
                     .on_drag(DetailResize, move |_, position, window, cx| {
                         // `position` is relative to the band; the panel's right
                         // edge is the window edge, so recover the pointer's
@@ -7105,8 +7606,8 @@ impl Render for ConduitApp {
         let view = v_flex()
             .relative()
             .size_full()
-            .bg(rgb(CANVAS))
-            .text_color(rgb(TEXT))
+            .bg(rgb(palette().canvas))
+            .text_color(rgb(palette().text))
             .child(title_bar)
             .child(main_area);
         if self.store.ui.performance_monitor {

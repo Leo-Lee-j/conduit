@@ -30,7 +30,7 @@ pub struct ImportedSession {
 pub fn scan_workspace(workspace: &Path) -> Vec<ImportedSession> {
     let mut sessions = scan_claude(workspace);
     sessions.extend(scan_codex(workspace));
-    sessions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.created_at));
     sessions
 }
 
@@ -49,7 +49,7 @@ pub fn merge_into(workspace: &mut crate::domain::Workspace, next_id: &mut u64) -
     // New imported sessions first in the sidebar ordering.
     workspace
         .sessions
-        .sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        .sort_by_key(|session| std::cmp::Reverse(session.created_at));
     imported
 }
 
@@ -102,7 +102,11 @@ fn same_dir(a: &str, b: &Path) -> bool {
     let normalize = |p: &str| p.replace('/', "\\").to_lowercase();
     let b = b.to_string_lossy().replace('/', "\\").to_lowercase();
     let a = normalize(a);
-    a == b || Path::new(&a).canonicalize().map(|c| c == b).unwrap_or(false)
+    a == b
+        || Path::new(&a)
+            .canonicalize()
+            .map(|c| c == b)
+            .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -139,7 +143,7 @@ pub fn scan_claude(workspace: &Path) -> Vec<ImportedSession> {
             }
         }
     }
-    out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    out.sort_by_key(|session| std::cmp::Reverse(session.created_at));
     out
 }
 
@@ -169,8 +173,10 @@ fn parse_claude(text: &str, workspace: &Path) -> Option<ImportedSession> {
         {
             created_at = rfc3339_to_unix(ts);
         }
-        if same_dir(value.get("cwd").and_then(Value::as_str).unwrap_or(""), workspace)
-            && native_id.is_none()
+        if same_dir(
+            value.get("cwd").and_then(Value::as_str).unwrap_or(""),
+            workspace,
+        ) && native_id.is_none()
         {
             // Trust the per-line cwd for grouping; a session file whose
             // lines all carry a different cwd is filtered out below.
@@ -203,8 +209,7 @@ fn parse_claude(text: &str, workspace: &Path) -> Option<ImportedSession> {
             Some("assistant") => {
                 let message = value.get("message");
                 if model.is_none()
-                    && let Some(m) =
-                        message.and_then(|m| m.get("model")).and_then(Value::as_str)
+                    && let Some(m) = message.and_then(|m| m.get("model")).and_then(Value::as_str)
                 {
                     model = Some(m.to_owned());
                 }
@@ -258,7 +263,11 @@ fn parse_claude(text: &str, workspace: &Path) -> Option<ImportedSession> {
     let cwd_matches = text.lines().any(|line| {
         serde_json::from_str::<Value>(line)
             .ok()
-            .and_then(|v| v.get("cwd").and_then(Value::as_str).map(|cwd| same_dir(cwd, workspace)))
+            .and_then(|v| {
+                v.get("cwd")
+                    .and_then(Value::as_str)
+                    .map(|cwd| same_dir(cwd, workspace))
+            })
             .unwrap_or(false)
     });
     if !cwd_matches || messages.is_empty() {
@@ -335,7 +344,7 @@ pub fn scan_codex(workspace: &Path) -> Vec<ImportedSession> {
             }
         }
     }
-    out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    out.sort_by_key(|session| std::cmp::Reverse(session.created_at));
     out
 }
 
@@ -393,14 +402,11 @@ fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
                         {
                             continue;
                         }
-                        let Some(parts) =
-                            payload.get("content").and_then(Value::as_array)
-                        else {
+                        let Some(parts) = payload.get("content").and_then(Value::as_array) else {
                             continue;
                         };
                         for (part_index, part) in parts.iter().enumerate() {
-                            let part_type =
-                                part.get("type").and_then(Value::as_str).unwrap_or("");
+                            let part_type = part.get("type").and_then(Value::as_str).unwrap_or("");
                             if part_type != "input_text" && part_type != "output_text" {
                                 continue;
                             }
@@ -429,8 +435,10 @@ fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
                         }
                     }
                     Some("function_call") => {
-                        let name =
-                            payload.get("name").and_then(Value::as_str).unwrap_or("tool");
+                        let name = payload
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("tool");
                         messages.push(ChatItem {
                             key: format!("import-{index}-call"),
                             kind: ItemKind::Tool,
@@ -502,9 +510,8 @@ fn rfc3339_to_unix_opt(ts: &str) -> Option<u64> {
     if bytes.len() < 19 || bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b'T' {
         return None;
     }
-    let digits = |range: std::ops::Range<usize>| -> Option<u64> {
-        ts.get(range)?.parse::<u64>().ok()
-    };
+    let digits =
+        |range: std::ops::Range<usize>| -> Option<u64> { ts.get(range)?.parse::<u64>().ok() };
     let (year, month, day) = (digits(0..4)?, digits(5..7)?, digits(8..10)?);
     let (hour, minute, second) = (digits(11..13)?, digits(14..16)?, digits(17..19)?);
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
@@ -722,7 +729,11 @@ mod tests {
         assert_eq!(refreshed.messages.len(), 1);
         assert_eq!(refreshed.messages[0].text, "刷新后的内容");
         assert_eq!(refreshed.model.as_deref(), Some("m1"));
-        let fresh = workspace.sessions.iter().find(|s| s.native_id.as_deref() == Some("fresh")).unwrap();
+        let fresh = workspace
+            .sessions
+            .iter()
+            .find(|s| s.native_id.as_deref() == Some("fresh"))
+            .unwrap();
         assert_eq!(fresh.id, 8);
         assert_eq!(next_id, 9);
         // Newest first ordering.
@@ -740,7 +751,7 @@ mod tests {
         }
         workspace
             .sessions
-            .sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            .sort_by_key(|session| std::cmp::Reverse(session.created_at));
         count
     }
 

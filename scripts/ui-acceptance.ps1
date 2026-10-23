@@ -212,7 +212,7 @@ function Wait-MainWindow($process) {
     while ([DateTime]::UtcNow -lt $deadline) {
         $process.Refresh()
         if ($process.HasExited) { throw "Conduit exited during startup ($($process.ExitCode))" }
-        if ($process.MainWindowHandle -ne [IntPtr]::Zero -and $process.Responding) {
+        if ($process.MainWindowHandle -ne [IntPtr]::Zero -and $process.MainWindowTitle -eq 'Conduit' -and $process.Responding) {
             return $process.MainWindowHandle
         }
         Start-Sleep -Milliseconds 150
@@ -326,20 +326,6 @@ try {
     $buttons = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $buttonCondition)
     $edits = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $editCondition)
     $texts = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $textCondition)
-
-    $uia = New-Object System.Collections.Generic.List[string]
-    for ($i = 0; $i -lt $buttons.Count; $i++) {
-        $element = $buttons.Item($i)
-        $uia.Add(("BUTTON {0} | {1} | enabled={2}" -f $i, (Get-ElementName $element), $element.Current.IsEnabled))
-    }
-    for ($i = 0; $i -lt $edits.Count; $i++) {
-        $uia.Add(("EDIT {0} | {1}" -f $i, (Get-ElementName $edits.Item($i))))
-    }
-    $uia.Add("TEXT_COUNT=$($texts.Count)")
-    $limit = [Math]::Min($texts.Count, 120)
-    for ($i = 0; $i -lt $limit; $i++) {
-        $uia.Add(("TEXT {0} | {1}" -f $i, (Get-ElementName $texts.Item($i))))
-    }
 
     $rect = New-Object ConduitWin+RECT
     [ConduitWin]::GetWindowRect($handle, [ref]$rect) | Out-Null
@@ -594,6 +580,24 @@ try {
     $graphics.Dispose()
     $bitmap.Save($png, [System.Drawing.Imaging.ImageFormat]::Png)
     $bitmap.Dispose()
+
+    $buttons = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $buttonCondition)
+    $edits = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $editCondition)
+    $texts = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $textCondition)
+
+    $uia = New-Object System.Collections.Generic.List[string]
+    for ($i = 0; $i -lt $buttons.Count; $i++) {
+        $element = $buttons.Item($i)
+        $uia.Add(("BUTTON {0} | {1} | enabled={2}" -f $i, (Get-ElementName $element), $element.Current.IsEnabled))
+    }
+    for ($i = 0; $i -lt $edits.Count; $i++) {
+        $uia.Add(("EDIT {0} | {1}" -f $i, (Get-ElementName $edits.Item($i))))
+    }
+    $uia.Add("TEXT_COUNT=$($texts.Count)")
+    $limit = [Math]::Min($texts.Count, 120)
+    for ($i = 0; $i -lt $limit; $i++) {
+        $uia.Add(("TEXT {0} | {1}" -f $i, (Get-ElementName $texts.Item($i))))
+    }
 
     $uia | Out-File -FilePath $uiaPath -Encoding utf8
     [ordered]@{

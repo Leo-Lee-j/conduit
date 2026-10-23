@@ -23,6 +23,7 @@ fn main() {
     if std::env::args_os().any(|arg| arg == "--history") {
         return print_history();
     }
+    let appearance = store::Store::load_ui_settings().appearance;
     let _instance = match single_instance() {
         Ok(instance) => instance,
         Err(error) => {
@@ -48,7 +49,15 @@ fn main() {
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
-            gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);
+            let initial_mode = match appearance {
+                store::AppearanceMode::System => {
+                    gpui_kit::component::ThemeMode::from(cx.window_appearance())
+                }
+                store::AppearanceMode::Light => gpui_kit::component::ThemeMode::Light,
+                store::AppearanceMode::Dark => gpui_kit::component::ThemeMode::Dark,
+            };
+            app::set_palette(initial_mode);
+            gpui_kit::component::Theme::change(initial_mode, None, cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1200.), px(800.)), cx)),
                 window_min_size: Some(size(px(850.), px(500.))),
@@ -69,7 +78,12 @@ fn main() {
 /// current directory.
 fn print_history() {
     let workspace = std::env::args()
-        .nth(std::env::args().position(|a| a == "--history").map(|i| i + 1).unwrap_or(usize::MAX))
+        .nth(
+            std::env::args()
+                .position(|a| a == "--history")
+                .map(|i| i + 1)
+                .unwrap_or(usize::MAX),
+        )
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
     let workspace = workspace.canonicalize().unwrap_or(workspace);
@@ -78,7 +92,11 @@ fn print_history() {
         println!("未在 CLI 历史中发现 {} 的会话", workspace.display());
         return;
     }
-    println!("工作区 {} 共发现 {} 条 CLI 历史会话：", workspace.display(), sessions.len());
+    println!(
+        "工作区 {} 共发现 {} 条 CLI 历史会话：",
+        workspace.display(),
+        sessions.len()
+    );
     for session in &sessions {
         println!(
             "[{:?}] {} | native_id={} | {} | 消息 {} 条 | {}",
