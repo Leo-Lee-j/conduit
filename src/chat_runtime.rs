@@ -56,6 +56,20 @@ pub struct ChatRuntime {
     cancelled: Arc<AtomicBool>,
 }
 impl ChatRuntime {
+    /// Isolated helper turn; never resumes or mutates the chat conversation.
+    pub fn start_text(
+        provider: Provider,
+        executable: PathBuf,
+        prompt: String,
+        model: Option<String>,
+    ) -> Self {
+        let cwd = std::env::temp_dir();
+        let protocol = Protocol::new(provider, cwd.to_string_lossy().into_owned(), prompt, None)
+            .with_model(model)
+            .text_only();
+        let args = protocol.args();
+        Self::start_command(protocol, executable, args, cwd)
+    }
     pub fn start(
         provider: Provider,
         executable: PathBuf,
@@ -636,6 +650,65 @@ mod tests {
                 cancelled: false
             }
         ));
+    }
+    #[test]
+    #[ignore = "requires installed CLIs; handshake only, no model request"]
+    fn installed_commit_helpers_initialize_without_model_request() {
+        for provider in [Provider::Claude, Provider::Codex] {
+            let executable = provider.executable().expect("CLI not installed");
+            let mut protocol = Protocol::new(
+                provider,
+                std::env::temp_dir().to_string_lossy().into_owned(),
+                "unused".into(),
+                None,
+            )
+            .text_only();
+            let (child, mut pipes) =
+                Child::spawn(&executable, &protocol.args(), &std::env::temp_dir()).unwrap();
+            writeln!(pipes.stdin, "{}", protocol.initialize()).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(45);
+            let mut lines = Lines::new();
+            let mut initialized = false;
+            while Instant::now() < deadline {
+                for value in lines.poll(&mut pipes.stdout).unwrap() {
+                    if provider == Provider::Codex && value["id"] == 1 {
+                        assert!(
+                            value.get("error").is_none(),
+                            "helper initialization failed: {value}"
+                        );
+                        // Start an ephemeral read-only thread but do NOT send turn/start.
+                        for write in protocol.accept(value).writes {
+                            writeln!(pipes.stdin, "{write}").unwrap();
+                        }
+                    } else if provider == Provider::Codex && value["id"] == 2 {
+                        assert!(
+                            value.get("error").is_none(),
+                            "helper thread failed: {value}"
+                        );
+                        initialized = true;
+                    } else if provider == Provider::Claude && value["type"] == "control_response" {
+                        assert_eq!(value["response"]["subtype"], "success");
+                        initialized = true;
+                    }
+                }
+                if initialized {
+                    break;
+                }
+                if let Some(code) = child.exit_code().unwrap() {
+                    let mut error = String::new();
+                    let _ = pipes.stderr.read_to_string(&mut error);
+                    panic!("{provider:?} helper exited {code}: {error}");
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            child.terminate().unwrap();
+            while child.active_processes().unwrap() > 0 {
+                assert!(Instant::now() < deadline);
+                thread::sleep(Duration::from_millis(10));
+            }
+            assert!(initialized, "{provider:?} helper handshake timed out");
+            println!("{provider:?} commit helper initialized; no model request sent");
+        }
     }
     #[test]
     #[ignore = "requires installed CLIs; handshake only, no model request"]

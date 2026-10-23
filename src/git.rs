@@ -1,6 +1,6 @@
-//! Read-only Git status and diff snapshots for the selected workspace.
+//! Git snapshots and explicit staged-only commit / upstream push operations.
 //!
-//! Only non-mutating plumbing is executed: `rev-parse`, `status` and `diff`.
+//! Snapshot probes only execute non-mutating branch/ref queries, status and diff.
 //! `--no-optional-locks` keeps `status`/`diff` from taking the index lock, so
 //! viewing the panel never competes with the CLI's own Git commands. Output is
 //! bounded and every probe runs on its own thread with a timeout and a killed
@@ -22,6 +22,7 @@ use std::{
 
 /// Files listed in the panel; beyond this only a note is shown.
 pub const MAX_FILES: usize = 2_000;
+pub const MAX_BRANCHES: usize = 2_000;
 /// Bytes of each diff section kept for rendering.
 pub const MAX_DIFF_BYTES: usize = 200 * 1024;
 /// Hard cap on the bytes read from one Git command (the rest is drained).
@@ -81,6 +82,51 @@ pub struct Snapshot {
     pub staged_diff: String,
     pub unstaged_diff: String,
     pub notes: Vec<String>,
+    pub target: CommitTarget,
+}
+
+/// Identity of the index and HEAD the user reviewed before clicking Commit.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CommitTarget {
+    pub branch: Option<String>,
+    pub head: Option<String>,
+    pub staged: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Branch {
+    pub name: String,
+    pub remote: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Repository {
+    pub current: String,
+    pub detached: bool,
+    pub branches: Vec<Branch>,
+    pub truncated: bool,
+    pub upstream: Option<String>,
+    pub ahead: usize,
+}
+
+#[derive(Clone, Debug)]
+pub enum Operation {
+    Commit {
+        message: String,
+        target: CommitTarget,
+        push: bool,
+    },
+    Push {
+        branch: String,
+        upstream: String,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct OperationResult {
+    pub committed: bool,
+    pub message: String,
+    pub error: Option<String>,
 }
 
 impl Snapshot {
@@ -102,14 +148,24 @@ impl Snapshot {
 }
 
 /// Background probe for one workspace snapshot, modelled on `cli::VersionProbe`.
-pub struct GitProbe {
+pub struct Probe<T> {
     pub path: PathBuf,
-    pub events: Receiver<Result<Snapshot, String>>,
+    pub events: Receiver<Result<T, String>>,
     cancelled: Arc<AtomicBool>,
 }
 
-impl GitProbe {
-    pub fn start(path: PathBuf) -> Self {
+pub type GitProbe = Probe<Snapshot>;
+pub type BranchProbe = Probe<Repository>;
+pub type OperationProbe = Probe<OperationResult>;
+
+impl<T: Send + 'static> Probe<T> {
+    fn start_with(path: PathBuf, load: fn(&Path, &AtomicBool) -> Result<T>) -> Self {
+        Self::spawn(path, load)
+    }
+    fn spawn(
+        path: PathBuf,
+        load: impl FnOnce(&Path, &AtomicBool) -> Result<T> + Send + 'static,
+    ) -> Self {
         let (sender, events) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let cancel = cancelled.clone();
@@ -124,16 +180,160 @@ impl GitProbe {
             cancelled,
         }
     }
-
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
     }
 }
 
-impl Drop for GitProbe {
-    fn drop(&mut self) {
-        self.cancel();
+impl GitProbe {
+    pub fn start(path: PathBuf) -> Self {
+        Self::start_with(path, load)
     }
+}
+
+impl BranchProbe {
+    pub fn start(path: PathBuf) -> Self {
+        Self::start_with(path, load_repository)
+    }
+}
+
+impl OperationProbe {
+    pub fn start(path: PathBuf, operation: Operation) -> Self {
+        Self::spawn(path, move |workspace, cancel| {
+            Ok(operate(workspace, operation, cancel))
+        })
+    }
+}
+
+impl<T> Drop for Probe<T> {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+}
+
+/// Lightweight branch metadata, also read while the changes drawer is closed.
+pub fn load_repository(workspace: &Path, cancel: &AtomicBool) -> Result<Repository> {
+    let git = resolve_git()
+        .ok_or_else(|| anyhow!("未找到 git.exe；请安装 Git 或将其加入 PATH 后重试"))?;
+    let inside = run_git(
+        &git,
+        workspace,
+        &["rev-parse", "--is-inside-work-tree"],
+        cancel,
+    )?;
+    if inside.trim() != "true" {
+        bail!("该工作区不是 Git 仓库");
+    }
+    // symbolic-ref preserves the branch name even before the first commit.
+    let symbolic = run_git(
+        &git,
+        workspace,
+        &["symbolic-ref", "--quiet", "--short", "HEAD"],
+        cancel,
+    );
+    let (current, detached) = match symbolic {
+        Ok(name) => (name.trim().to_string(), false),
+        Err(_) => (
+            run_git(&git, workspace, &["rev-parse", "--short", "HEAD"], cancel)?
+                .trim()
+                .to_string(),
+            true,
+        ),
+    };
+    let refs = run_git(
+        &git,
+        workspace,
+        &[
+            "for-each-ref",
+            "--sort=refname",
+            "--format=%(refname)%00%(symref)",
+            "refs/heads",
+            "refs/remotes",
+        ],
+        cancel,
+    )?;
+    let mut branches = parse_branches(&refs);
+    if !detached
+        && !branches
+            .iter()
+            .any(|branch| !branch.remote && branch.name == current)
+    {
+        branches.insert(
+            0,
+            Branch {
+                name: current.clone(),
+                remote: false,
+            },
+        );
+    }
+    let truncated = branches.len() > MAX_BRANCHES || refs.len() >= MAX_COMMAND_BYTES;
+    // Keep the selected branch visible even in repositories with many refs.
+    branches.sort_by_key(|branch| branch.remote || branch.name != current);
+    branches.truncate(MAX_BRANCHES);
+    let upstream = if detached {
+        None
+    } else {
+        run_git(
+            &git,
+            workspace,
+            &[
+                "rev-parse",
+                "--abbrev-ref",
+                "--symbolic-full-name",
+                "@{upstream}",
+            ],
+            cancel,
+        )
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    };
+    let ahead = if let Some(upstream) = &upstream {
+        run_git(
+            &git,
+            workspace,
+            &["rev-list", "--count", &format!("{upstream}..HEAD")],
+            cancel,
+        )
+    } else {
+        run_git(
+            &git,
+            workspace,
+            &["rev-list", "--count", "HEAD", "--not", "--remotes"],
+            cancel,
+        )
+    }
+    .ok()
+    .and_then(|value| value.trim().parse().ok())
+    .unwrap_or(0);
+    Ok(Repository {
+        current,
+        detached,
+        branches,
+        truncated,
+        upstream,
+        ahead,
+    })
+}
+
+fn parse_branches(refs: &str) -> Vec<Branch> {
+    refs.lines()
+        .filter_map(|line| {
+            let (name, symbolic) = line.split_once('\0')?;
+            if !symbolic.is_empty() {
+                return None;
+            }
+            let (name, remote) = if let Some(name) = name.strip_prefix("refs/heads/") {
+                (name, false)
+            } else {
+                (name.strip_prefix("refs/remotes/")?, true)
+            };
+            Some(Branch {
+                name: name.to_string(),
+                remote,
+            })
+        })
+        .collect()
 }
 
 /// Locate `git.exe` through PATH, then the usual Windows install locations.
@@ -184,13 +384,19 @@ pub fn load(workspace: &Path, cancel: &AtomicBool) -> Result<Snapshot> {
     let branch = run_git(
         &git,
         workspace,
-        &["rev-parse", "--abbrev-ref", "HEAD"],
+        &["symbolic-ref", "--quiet", "--short", "HEAD"],
         cancel,
     )
+    .or_else(|_| {
+        run_git(&git, workspace, &["rev-parse", "--short", "HEAD"], cancel)
+            .map(|hash| format!("HEAD · {}", hash.trim()))
+    })
     .map(|output| output.trim().to_string())
     .ok()
     .filter(|branch| !branch.is_empty())
     .unwrap_or_else(|| "（尚无提交）".into());
+
+    let target = commit_target(&git, workspace, cancel)?;
 
     let status_output = run_git(
         &git,
@@ -226,6 +432,7 @@ pub fn load(workspace: &Path, cancel: &AtomicBool) -> Result<Snapshot> {
             "--cached",
             "--no-color",
             "--no-ext-diff",
+            "--no-textconv",
         ],
         cancel,
     )?;
@@ -240,6 +447,7 @@ pub fn load(workspace: &Path, cancel: &AtomicBool) -> Result<Snapshot> {
             "diff",
             "--no-color",
             "--no-ext-diff",
+            "--no-textconv",
         ],
         cancel,
     )?;
@@ -248,13 +456,192 @@ pub fn load(workspace: &Path, cancel: &AtomicBool) -> Result<Snapshot> {
     if files.iter().any(|file| file.untracked()) {
         notes.push("未跟踪文件只列出路径，不读取内容".into());
     }
+    if commit_target(&git, workspace, cancel)? != target {
+        bail!("读取期间分支或暂存区发生变化，请刷新后重试");
+    }
     Ok(Snapshot {
         branch,
         files,
         staged_diff,
         unstaged_diff,
         notes,
+        target,
     })
+}
+
+fn commit_target(git: &Path, workspace: &Path, cancel: &AtomicBool) -> Result<CommitTarget> {
+    let branch = run_git(
+        git,
+        workspace,
+        &["symbolic-ref", "--quiet", "--short", "HEAD"],
+        cancel,
+    )
+    .ok()
+    .map(|value| value.trim().to_string());
+    let head = run_git(git, workspace, &["rev-parse", "--verify", "HEAD"], cancel)
+        .ok()
+        .map(|value| value.trim().to_string());
+    let staged = run_git(
+        git,
+        workspace,
+        &[
+            "--no-optional-locks",
+            "diff",
+            "--cached",
+            "--raw",
+            "--no-abbrev",
+            "-z",
+            "--no-ext-diff",
+            "--no-textconv",
+        ],
+        cancel,
+    )?;
+    if staged.len() >= MAX_COMMAND_BYTES {
+        bail!("暂存文件列表超过限制，请分批提交");
+    }
+    Ok(CommitTarget {
+        branch,
+        head,
+        staged,
+    })
+}
+
+fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> OperationResult {
+    let mut committed = false;
+    let result = (|| -> Result<String> {
+        let git = resolve_git().ok_or_else(|| anyhow!("未找到 git.exe"))?;
+        match operation {
+            Operation::Commit {
+                message,
+                target,
+                push,
+            } => {
+                if message.trim().is_empty() {
+                    bail!("请填写提交说明");
+                }
+                if message.len() > 16 * 1024 {
+                    bail!("提交说明最多 16 KiB");
+                }
+                if target.branch.is_none() {
+                    bail!("分离 HEAD 状态下不能从此面板提交，请先切回分支");
+                }
+                if target.staged.is_empty() {
+                    bail!("没有已暂存变更，请先在 Git 中暂存文件再刷新");
+                }
+                if commit_target(&git, workspace, cancel)? != target {
+                    bail!("分支、HEAD 或暂存区已变化，请刷新变更后重新提交");
+                }
+                // No add/-a: Git commits exactly its index and preserves unstaged files.
+                run_git_with_timeout(
+                    &git,
+                    workspace,
+                    &["commit", "-m", message.trim()],
+                    cancel,
+                    Duration::from_secs(120),
+                )?;
+                committed = true;
+                if push {
+                    push_upstream(
+                        &git,
+                        workspace,
+                        target.branch.as_deref().unwrap(),
+                        None,
+                        cancel,
+                    )?;
+                    Ok("提交并推送成功".into())
+                } else {
+                    Ok("提交成功".into())
+                }
+            }
+            Operation::Push { branch, upstream } => {
+                push_upstream(&git, workspace, &branch, Some(&upstream), cancel)?;
+                Ok("推送成功".into())
+            }
+        }
+    })();
+    match result {
+        Ok(message) => OperationResult {
+            committed,
+            message,
+            error: None,
+        },
+        Err(error) => OperationResult {
+            committed,
+            message: if committed {
+                "提交已成功，推送失败".into()
+            } else {
+                "Git 操作失败".into()
+            },
+            error: Some(format!("{error:#}")),
+        },
+    }
+}
+
+fn push_upstream(
+    git: &Path,
+    workspace: &Path,
+    branch: &str,
+    expected: Option<&str>,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let current = run_git(
+        git,
+        workspace,
+        &["symbolic-ref", "--quiet", "--short", "HEAD"],
+        cancel,
+    )?;
+    if current.trim() != branch {
+        bail!("当前分支已变化，请刷新后重试推送");
+    }
+    let upstream = run_git(
+        git,
+        workspace,
+        &[
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ],
+        cancel,
+    )
+    .map_err(|_| anyhow!("当前分支未设置有效上游，请先在终端配置上游后重试推送"))?;
+    if expected.is_some_and(|expected| expected != upstream.trim()) {
+        bail!("上游分支已变化，请刷新后重试推送");
+    }
+    // Resolve the configured upstream explicitly; never force or push unrelated refs.
+    let remote = run_git(
+        git,
+        workspace,
+        &["config", "--get", &format!("branch.{branch}.remote")],
+        cancel,
+    )?;
+    let merge = run_git(
+        git,
+        workspace,
+        &["config", "--get", &format!("branch.{branch}.merge")],
+        cancel,
+    )?;
+    let remote = remote.trim();
+    let merge = merge.trim();
+    if remote.is_empty() || !merge.starts_with("refs/heads/") {
+        bail!("上游配置不完整，请检查 Git 分支配置");
+    }
+    run_git_with_timeout(
+        git,
+        workspace,
+        &[
+            "-c",
+            "credential.interactive=false",
+            "push",
+            "--porcelain",
+            "--",
+            remote,
+            &format!("HEAD:{merge}"),
+        ],
+        cancel,
+        Duration::from_secs(120),
+    )?;
+    Ok(())
 }
 
 /// Parse `git status --porcelain=v1 -z` output (NUL-separated records).
@@ -384,6 +771,19 @@ fn read_available(file: &mut File, output: &mut Vec<u8>, truncated: &mut bool) -
 
 /// Run one Git command in `workspace`, bounded in time and output size.
 fn run_git(git: &Path, workspace: &Path, args: &[&str], cancel: &AtomicBool) -> Result<String> {
+    run_git_with_timeout(git, workspace, args, cancel, COMMAND_TIMEOUT)
+}
+
+fn run_git_with_timeout(
+    git: &Path,
+    workspace: &Path,
+    args: &[&str],
+    cancel: &AtomicBool,
+    timeout: Duration,
+) -> Result<String> {
+    if cancel.load(Ordering::Acquire) {
+        bail!("Git 读取已取消");
+    }
     let args: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
     let (child, mut pipes) = Child::spawn(git, &args, workspace)
         .with_context(|| format!("启动 {} 失败", git.display()))?;
@@ -397,7 +797,7 @@ fn run_git(git: &Path, workspace: &Path, args: &[&str], cancel: &AtomicBool) -> 
             if cancel.load(Ordering::Acquire) {
                 bail!("Git 读取已取消");
             }
-            if started.elapsed() > COMMAND_TIMEOUT {
+            if started.elapsed() > timeout {
                 bail!("Git 命令超时，已停止进程树");
             }
             read_available(&mut pipes.stdout, &mut stdout, &mut truncated)?;
@@ -411,7 +811,12 @@ fn run_git(git: &Path, workspace: &Path, args: &[&str], cancel: &AtomicBool) -> 
                 }
                 if code != 0 {
                     let stderr = String::from_utf8_lossy(&stderr);
-                    bail!("Git 命令失败（退出码 {code}）：{}", stderr.trim());
+                    let stdout = String::from_utf8_lossy(&stdout);
+                    bail!(
+                        "Git 命令失败（退出码 {code}）：{}\n{}",
+                        stderr.trim(),
+                        stdout.trim()
+                    );
                 }
                 return Ok(String::from_utf8_lossy(&stdout).into_owned());
             }
@@ -428,6 +833,263 @@ fn run_git(git: &Path, workspace: &Path, args: &[&str], cancel: &AtomicBool) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct TestRepository {
+        path: PathBuf,
+        git: PathBuf,
+    }
+    impl TestRepository {
+        fn new() -> Option<Self> {
+            let git = resolve_git()?;
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir()
+                .join(format!("conduit-commit-{}-{unique}", std::process::id()));
+            std::fs::create_dir_all(path.join("empty-hooks")).unwrap();
+            let repository = Self { path, git };
+            repository.run(&["init", "-q", "--initial-branch=main"]);
+            repository.run(&["config", "user.name", "Conduit Test"]);
+            repository.run(&["config", "user.email", "conduit@example.invalid"]);
+            repository.run(&["config", "commit.gpgSign", "false"]);
+            repository.run(&[
+                "config",
+                "core.hooksPath",
+                repository.path.join("empty-hooks").to_str().unwrap(),
+            ]);
+            Some(repository)
+        }
+        fn run(&self, args: &[&str]) -> String {
+            let output = std::process::Command::new(&self.git)
+                .args(args)
+                .current_dir(&self.path)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        }
+        fn stage(&self, content: &str) {
+            std::fs::write(self.path.join("tracked.txt"), content).unwrap();
+            self.run(&["add", "tracked.txt"]);
+        }
+        fn commit(&self, message: &str, push: bool) -> OperationResult {
+            let target = commit_target(&self.git, &self.path, &AtomicBool::new(false)).unwrap();
+            operate(
+                &self.path,
+                Operation::Commit {
+                    message: message.into(),
+                    target,
+                    push,
+                },
+                &AtomicBool::new(false),
+            )
+        }
+        fn metadata(&self) -> Repository {
+            load_repository(&self.path, &AtomicBool::new(false)).unwrap()
+        }
+        fn seed_remote(&self) -> PathBuf {
+            let remote = self.path.join("remote.git");
+            self.run(&[
+                "init",
+                "--bare",
+                "-q",
+                "--initial-branch=main",
+                remote.to_str().unwrap(),
+            ]);
+            self.run(&["remote", "add", "origin", remote.to_str().unwrap()]);
+            self.run(&["push", "-u", "origin", "main"]);
+            remote
+        }
+    }
+    impl Drop for TestRepository {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn commit_only_includes_index_and_preserves_unstaged_and_untracked_files() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        repo.stage("initial\n");
+        assert!(repo.commit("seed", false).committed);
+        repo.stage("staged\n");
+        std::fs::write(repo.path.join("tracked.txt"), "unstaged\n").unwrap();
+        std::fs::write(repo.path.join("private.txt"), "untracked\n").unwrap();
+        let message = "feat: 提交说明 `literal` $(literal)\n\n仅提交暂存区。";
+        let outcome = repo.commit(message, false);
+        assert!(outcome.committed && outcome.error.is_none(), "{outcome:?}");
+        assert_eq!(repo.run(&["show", "HEAD:tracked.txt"]).trim(), "staged");
+        assert_eq!(
+            std::fs::read_to_string(repo.path.join("tracked.txt")).unwrap(),
+            "unstaged\n"
+        );
+        assert!(
+            repo.run(&["status", "--porcelain"])
+                .contains("?? private.txt")
+        );
+        assert_eq!(repo.run(&["log", "-1", "--format=%B"]).trim(), message);
+        assert_eq!(repo.metadata().ahead, 2); // No upstream: local unpublished history.
+    }
+
+    #[test]
+    fn commit_rejects_changed_index_branch_and_invalid_requests() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        repo.stage("initial\n");
+        assert!(repo.commit("seed", false).committed);
+        repo.stage("first\n");
+        let target = commit_target(&repo.git, &repo.path, &AtomicBool::new(false)).unwrap();
+        let before = repo.run(&["rev-parse", "HEAD"]);
+        repo.stage("second\n");
+        let changed = operate(
+            &repo.path,
+            Operation::Commit {
+                message: "stale".into(),
+                target,
+                push: false,
+            },
+            &AtomicBool::new(false),
+        );
+        assert!(!changed.committed && changed.error.unwrap().contains("变化"));
+        let target = commit_target(&repo.git, &repo.path, &AtomicBool::new(false)).unwrap();
+        repo.run(&["checkout", "-q", "-b", "other"]);
+        let changed = operate(
+            &repo.path,
+            Operation::Commit {
+                message: "wrong branch".into(),
+                target,
+                push: false,
+            },
+            &AtomicBool::new(false),
+        );
+        assert!(!changed.committed && changed.error.unwrap().contains("变化"));
+        assert!(!repo.commit(" \n", false).committed);
+        assert_eq!(repo.run(&["rev-parse", "HEAD"]), before);
+        let target = commit_target(&repo.git, &repo.path, &AtomicBool::new(false)).unwrap();
+        let cancelled = operate(
+            &repo.path,
+            Operation::Commit {
+                message: "cancelled".into(),
+                target,
+                push: false,
+            },
+            &AtomicBool::new(true),
+        );
+        assert!(!cancelled.committed);
+        assert_eq!(repo.run(&["rev-parse", "HEAD"]), before);
+        repo.run(&["checkout", "--detach", "-q"]);
+        assert!(
+            repo.commit("detached", false)
+                .error
+                .unwrap()
+                .contains("分离")
+        );
+    }
+
+    #[test]
+    fn push_counts_follow_upstream_and_commit_and_push_clears_pending() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        repo.stage("initial\n");
+        assert!(repo.commit("seed", false).committed);
+        let remote = repo.seed_remote();
+        assert_eq!(repo.metadata().ahead, 0);
+        repo.stage("second\n");
+        assert!(repo.commit("second", false).committed);
+        assert_eq!(repo.metadata().ahead, 1);
+        repo.stage("third\n");
+        assert!(repo.commit("third", false).committed);
+        assert_eq!(repo.metadata().ahead, 2);
+        let pushed = operate(
+            &repo.path,
+            Operation::Push {
+                branch: "main".into(),
+                upstream: "origin/main".into(),
+            },
+            &AtomicBool::new(false),
+        );
+        assert!(pushed.error.is_none(), "{pushed:?}");
+        assert_eq!(repo.metadata().ahead, 0);
+        repo.stage("fourth\n");
+        let outcome = repo.commit("fourth", true);
+        assert!(outcome.committed && outcome.error.is_none(), "{outcome:?}");
+        assert_eq!(repo.metadata().ahead, 0);
+        assert_eq!(
+            repo.run(&["rev-parse", "HEAD"]),
+            repo.run(&[
+                "--git-dir",
+                remote.to_str().unwrap(),
+                "rev-parse",
+                "refs/heads/main"
+            ])
+        );
+    }
+
+    #[test]
+    fn failed_push_keeps_successful_commit_and_pending_count() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        repo.stage("initial\n");
+        let no_upstream = repo.commit("first", true);
+        assert!(no_upstream.committed && no_upstream.error.unwrap().contains("上游"));
+        assert_eq!(repo.metadata().ahead, 1);
+        repo.seed_remote();
+        // Keep the tracking ref but point the remote at a missing local directory.
+        repo.run(&[
+            "remote",
+            "set-url",
+            "origin",
+            repo.path.join("missing.git").to_str().unwrap(),
+        ]);
+        repo.stage("second\n");
+        let failed = repo.commit("second", true);
+        assert!(failed.committed && failed.error.is_some());
+        assert_eq!(failed.message, "提交已成功，推送失败");
+        assert_eq!(repo.metadata().ahead, 1);
+        assert_eq!(repo.run(&["log", "-1", "--format=%s"]).trim(), "second");
+        assert!(
+            repo.commit("no staged changes", false)
+                .error
+                .unwrap()
+                .contains("暂存")
+        );
+        assert_eq!(repo.run(&["rev-list", "--count", "HEAD"]).trim(), "2");
+    }
+
+    #[test]
+    fn branches_preserve_slashes_unicode_and_skip_remote_head_aliases() {
+        let branches = parse_branches(
+            "refs/heads/feature/界面\0\nrefs/heads/main\0\nrefs/remotes/origin/HEAD\0refs/remotes/origin/main\nrefs/remotes/origin/main\0\n",
+        );
+        assert_eq!(
+            branches,
+            vec![
+                Branch {
+                    name: "feature/界面".into(),
+                    remote: false
+                },
+                Branch {
+                    name: "main".into(),
+                    remote: false
+                },
+                Branch {
+                    name: "origin/main".into(),
+                    remote: true
+                },
+            ]
+        );
+    }
 
     #[test]
     fn status_parser_handles_tracked_untracked_and_renames() {
@@ -490,6 +1152,7 @@ mod tests {
             staged_diff: String::new(),
             unstaged_diff: String::new(),
             notes: vec![],
+            target: CommitTarget::default(),
         };
         assert_eq!(snapshot.files.len(), 4);
         // M ,  M and MM carry one status each: staged 2, unstaged 2.
@@ -531,7 +1194,17 @@ mod tests {
             );
             String::from_utf8_lossy(&output.stdout).into_owned()
         };
+        assert!(load_repository(&directory, &AtomicBool::new(false)).is_err());
         run(&["init", "-q"]);
+        let unborn = load_repository(&directory, &AtomicBool::new(false)).unwrap();
+        assert!(!unborn.detached);
+        assert_eq!(
+            unborn.branches,
+            vec![Branch {
+                name: unborn.current.clone(),
+                remote: false
+            }]
+        );
         std::fs::write(directory.join("tracked.txt"), "one\n").unwrap();
         run(&["add", "tracked.txt"]);
         run(&[
@@ -544,10 +1217,33 @@ mod tests {
             "-m",
             "seed",
         ]);
+        run(&["branch", "feature/ui"]);
+        run(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        run(&[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ]);
         std::fs::write(directory.join("tracked.txt"), "one\ntwo\n").unwrap();
         std::fs::write(directory.join("new.txt"), "untracked\n").unwrap();
 
         let before = read_repository_bytes(&directory);
+        let repository = load_repository(&directory, &AtomicBool::new(false)).unwrap();
+        assert_eq!(repository.current, unborn.current);
+        assert!(repository.branches.contains(&Branch {
+            name: "feature/ui".into(),
+            remote: false
+        }));
+        assert!(repository.branches.contains(&Branch {
+            name: "origin/main".into(),
+            remote: true
+        }));
+        assert!(
+            !repository
+                .branches
+                .iter()
+                .any(|branch| branch.name == "origin/HEAD")
+        );
         let snapshot = load(&directory, &AtomicBool::new(false)).unwrap();
         assert!(!snapshot.branch.is_empty());
         assert!(
@@ -566,6 +1262,19 @@ mod tests {
         // Loading the panel must not touch the repository (no index lock, no
         // staging, no commits).
         assert_eq!(read_repository_bytes(&directory), before);
+        run(&["checkout", "--detach", "-q"]);
+        let detached_before = read_repository_bytes(&directory);
+        let detached = load_repository(&directory, &AtomicBool::new(false)).unwrap();
+        assert!(detached.detached);
+        assert_eq!(
+            detached.current,
+            run(&["rev-parse", "--short", "HEAD"]).trim()
+        );
+        assert_eq!(read_repository_bytes(&directory), detached_before);
+        let plain_directory = directory.join("not-a-repo");
+        std::fs::create_dir(&plain_directory).unwrap();
+        // A child directory belongs to its parent repository.
+        assert!(load_repository(&plain_directory, &AtomicBool::new(false)).is_ok());
         std::fs::remove_dir_all(directory).unwrap();
     }
 

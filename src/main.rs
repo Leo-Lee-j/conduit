@@ -17,6 +17,7 @@ use gpui_kit::*;
 
 fn main() {
     let start_in_settings = std::env::args_os().any(|arg| arg == "--settings");
+    let start_in_git = std::env::args_os().any(|arg| arg == "--git");
     let _instance = match single_instance() {
         Ok(instance) => instance,
         Err(error) => {
@@ -52,7 +53,7 @@ fn main() {
             };
             gpui_kit::open_window(options, cx, move |window, cx| {
                 window.set_window_title("Conduit");
-                cx.new(|cx| ConduitApp::new(window, cx, start_in_settings))
+                cx.new(|cx| ConduitApp::new(window, cx, start_in_settings, start_in_git))
             })
             .expect("failed to open Conduit window");
         });
