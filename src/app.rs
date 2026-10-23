@@ -16,6 +16,7 @@ use gpui_kit::{
         input::{Input, InputEvent, InputState, Textarea, TextareaState},
         popover::Popover,
         scroll::ScrollableElement,
+        switch::Switch,
         text::TextView,
         *,
     },
@@ -2341,9 +2342,11 @@ impl ConduitApp {
                 .when(highlighted, |row| row.bg(rgb(SURFACE_HOVER)))
                 .child(element),
         );
-        self.performance.update(cx, |monitor, _| {
-            monitor.record_message_render(index, started.elapsed());
-        });
+        if self.store.ui.performance_monitor {
+            self.performance.update(cx, |monitor, _| {
+                monitor.record_message_render(index, started.elapsed());
+            });
+        }
         row.into_any_element()
     }
     fn scroll_to_end(&self) {
@@ -3519,7 +3522,7 @@ impl ConduitApp {
         body.into_any_element()
     }
     fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.performance.read(cx).sample_due() {
+        if self.store.ui.performance_monitor && self.performance.read(cx).sample_due() {
             // Notify only the diagnostics view; idle chats need no extra rebuild.
             self.performance.update(cx, |monitor, cx| {
                 monitor.sample();
@@ -3594,8 +3597,10 @@ impl ConduitApp {
                 incoming.push((*id, run.prefix.clone(), event));
             }
         }
-        self.performance
-            .update(cx, |monitor, _| monitor.record_events(incoming.len()));
+        if self.store.ui.performance_monitor {
+            self.performance
+                .update(cx, |monitor, _| monitor.record_events(incoming.len()));
+        }
         let mut changed = false;
         let mut terminal = false;
         let mut visible = false;
@@ -5151,6 +5156,48 @@ impl ConduitApp {
                                             }),
                                     ),
                             )
+                    })
+                    .child({
+                        let toggle = view.clone();
+                        let disabled = !self.writable || self.closing;
+                        let enabled = self.store.ui.performance_monitor;
+                        h_flex()
+                            .px_4()
+                            .py_3()
+                            .gap_4()
+                            .items_center()
+                            .border_t_1()
+                            .border_color(rgb(BORDER))
+                            .child(settings_label("性能监测"))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(MUTED))
+                                    .child("在底部工具栏显示性能入口并采集指标"),
+                            )
+                            .child(
+                                Switch::new("performance-monitor-setting")
+                                    .checked(enabled)
+                                    .disabled(disabled)
+                                    .on_change(move |checked, _, cx| {
+                                        toggle.update(cx, |this, cx| {
+                                            if !this.writable || this.closing {
+                                                return;
+                                            }
+                                            this.store.ui.performance_monitor = *checked;
+                                            if *checked {
+                                                this.performance
+                                                    .update(cx, |monitor, _| monitor.reset());
+                                            } else {
+                                                this.performance_open = false;
+                                            }
+                                            this.persist();
+                                            cx.notify();
+                                        });
+                                    }),
+                            )
                     }),
             )
             .child(
@@ -5733,13 +5780,15 @@ impl Render for ConduitApp {
                 this.at_bottom = !event.is_scrolled;
                 cx.notify();
             }));
-        self.performance.update(cx, |monitor, _| {
-            monitor.begin_render(
-                message_count,
-                self.runs.len(),
-                self.store.workspaces.iter().map(|w| w.sessions.len()).sum(),
-            );
-        });
+        if self.store.ui.performance_monitor {
+            self.performance.update(cx, |monitor, _| {
+                monitor.begin_render(
+                    message_count,
+                    self.runs.len(),
+                    self.store.workspaces.iter().map(|w| w.sessions.len()).sum(),
+                );
+            });
+        }
         let busy = self
             .selected_workspace
             .is_some_and(|i| self.workspace_busy(i));
@@ -6756,35 +6805,37 @@ impl Render for ConduitApp {
             .when_some(self.push_button(app_entity.clone()), |bar, button| {
                 bar.child(button)
             })
-            .child({
-                let hover_monitor = self.performance.clone();
-                let pinned_monitor = self.performance.clone();
-                div()
-                    .id("performance-tooltip")
-                    .flex_shrink_0()
-                    .when(!self.performance_open, |trigger| {
-                        trigger.tooltip(move |_, _| hover_monitor.clone().into())
-                    })
-                    .child(
-                        Popover::new("performance-popover")
-                            .anchor(Anchor::BottomRight)
-                            .appearance(false)
-                            .open(self.performance_open)
-                            .on_open_change(cx.listener(|this, open, _, cx| {
-                                this.performance_open = *open;
-                                cx.notify();
-                            }))
-                            .trigger(
-                                Button::new("performance-monitor")
-                                    .ghost()
-                                    .small()
-                                    .compact()
-                                    .icon(gpui_kit::assets::IconName::Activity)
-                                    .accessibility_label("性能检测")
-                                    .cursor_pointer(),
-                            )
-                            .content(move |_, _, _| pinned_monitor.clone()),
-                    )
+            .when(self.store.ui.performance_monitor, |bar| {
+                bar.child({
+                    let hover_monitor = self.performance.clone();
+                    let pinned_monitor = self.performance.clone();
+                    div()
+                        .id("performance-tooltip")
+                        .flex_shrink_0()
+                        .when(!self.performance_open, |trigger| {
+                            trigger.tooltip(move |_, _| hover_monitor.clone().into())
+                        })
+                        .child(
+                            Popover::new("performance-popover")
+                                .anchor(Anchor::BottomRight)
+                                .appearance(false)
+                                .open(self.performance_open)
+                                .on_open_change(cx.listener(|this, open, _, cx| {
+                                    this.performance_open = *open;
+                                    cx.notify();
+                                }))
+                                .trigger(
+                                    Button::new("performance-monitor")
+                                        .ghost()
+                                        .small()
+                                        .compact()
+                                        .icon(gpui_kit::assets::IconName::Activity)
+                                        .accessibility_label("性能检测")
+                                        .cursor_pointer(),
+                                )
+                                .content(move |_, _, _| pinned_monitor.clone()),
+                        )
+                })
             });
         let title_bar = TitleBar::new()
             .bg(rgb(CANVAS))
@@ -7047,9 +7098,11 @@ impl Render for ConduitApp {
             .text_color(rgb(TEXT))
             .child(title_bar)
             .child(main_area);
-        self.performance.update(cx, |monitor, _| {
-            monitor.record_render(render_started.elapsed());
-        });
+        if self.store.ui.performance_monitor {
+            self.performance.update(cx, |monitor, _| {
+                monitor.record_render(render_started.elapsed());
+            });
+        }
         view
     }
 }

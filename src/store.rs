@@ -15,10 +15,17 @@ pub struct UiSettings {
     /// Engine used for the next new session (the composer's engine picker).
     #[serde(default)]
     pub last_provider: Option<crate::domain::Provider>,
+    /// Shows the in-app performance monitor and collects its samples.
+    #[serde(default = "default_performance_monitor")]
+    pub performance_monitor: bool,
 }
 
 fn default_sessions_per_workspace() -> usize {
     5
+}
+
+fn default_performance_monitor() -> bool {
+    true
 }
 
 impl Default for UiSettings {
@@ -26,6 +33,7 @@ impl Default for UiSettings {
         Self {
             sessions_per_workspace: default_sessions_per_workspace(),
             last_provider: None,
+            performance_monitor: default_performance_monitor(),
         }
     }
 }
@@ -446,9 +454,11 @@ mod tests {
         let mut store = Store::load_from(&path).unwrap();
         assert_eq!(store.ui.sessions_per_workspace, 5);
         assert_eq!(store.ui.last_provider, None);
+        assert!(store.ui.performance_monitor);
         assert_eq!(store.git.commit_message_prompt, DEFAULT_COMMIT_PROMPT);
         store.ui.sessions_per_workspace = 8;
         store.ui.last_provider = Some(crate::domain::Provider::Codex);
+        store.ui.performance_monitor = false;
         store.git.commit_message_prompt =
             "Write an English subject followed by a body.\nKeep it under 72 columns.".into();
         store.save_to(&path).unwrap();
@@ -462,6 +472,7 @@ mod tests {
             reloaded.ui.last_provider,
             Some(crate::domain::Provider::Codex)
         );
+        assert!(!reloaded.ui.performance_monitor);
         fs::remove_file(path).unwrap();
     }
     #[test]

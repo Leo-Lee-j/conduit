@@ -97,6 +97,30 @@ impl PerformanceMonitor {
         self.last_sample.elapsed() >= SAMPLE_INTERVAL
     }
 
+    pub fn reset(&mut self) {
+        let now = Instant::now();
+        self.started = now;
+        self.last_sample = now;
+        self.previous_cpu = process_cpu_ticks();
+        self.history.clear();
+        self.pending_render = Timings::default();
+        self.pending_messages = Timings::default();
+        self.pending_events = 0;
+        self.rendered_indices.clear();
+        self.cpu_percent = None;
+        self.memory_bytes = None;
+        self.private_bytes = None;
+        self.peak_memory_bytes = None;
+        self.render = Timings::default();
+        self.message_render = Timings::default();
+        self.event_count = 0;
+        self.sample_duration = Duration::ZERO;
+        self.message_count = 0;
+        self.active_runs = 0;
+        self.session_count = 0;
+        self.sample_memory();
+    }
+
     pub fn sample(&mut self) {
         let now = Instant::now();
         let cpu = process_cpu_ticks();
@@ -245,6 +269,22 @@ mod tests {
         monitor.sample();
         assert_eq!(monitor.render.average(), None);
         assert_eq!(monitor.event_count, 0);
+    }
+    #[test]
+    fn reset_clears_counters_and_starts_a_new_window() {
+        let mut monitor = PerformanceMonitor::new();
+        monitor.begin_render(10, 1, 2);
+        monitor.record_render(Duration::from_millis(3));
+        monitor.record_message_render(1, Duration::from_millis(1));
+        monitor.record_events(5);
+        monitor.sample();
+        monitor.reset();
+        assert_eq!(monitor.render.average(), None);
+        assert_eq!(monitor.event_count, 0);
+        assert_eq!(monitor.message_count, 0);
+        assert!(monitor.history.is_empty());
+        assert!(monitor.memory_bytes.is_some_and(|bytes| bytes > 0));
+        assert!(!monitor.sample_due());
     }
     #[test]
     fn history_is_bounded_and_growth_keeps_its_sign_and_missing_values() {
