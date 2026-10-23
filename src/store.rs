@@ -12,6 +12,9 @@ pub struct UiSettings {
     /// How many recent sessions a workspace shows before "show more".
     #[serde(default = "default_sessions_per_workspace")]
     pub sessions_per_workspace: usize,
+    /// Engine used for the next new session (the composer's engine picker).
+    #[serde(default)]
+    pub last_provider: Option<crate::domain::Provider>,
 }
 
 fn default_sessions_per_workspace() -> usize {
@@ -22,6 +25,7 @@ impl Default for UiSettings {
     fn default() -> Self {
         Self {
             sessions_per_workspace: default_sessions_per_workspace(),
+            last_provider: None,
         }
     }
 }
@@ -362,10 +366,16 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let mut store = Store::load_from(&path).unwrap();
         assert_eq!(store.ui.sessions_per_workspace, 5);
+        assert_eq!(store.ui.last_provider, None);
         store.ui.sessions_per_workspace = 8;
+        store.ui.last_provider = Some(crate::domain::Provider::Codex);
         store.save_to(&path).unwrap();
         let reloaded = Store::load_from(&path).unwrap();
         assert_eq!(reloaded.ui.sessions_per_workspace, 8);
+        assert_eq!(
+            reloaded.ui.last_provider,
+            Some(crate::domain::Provider::Codex)
+        );
         fs::remove_file(path).unwrap();
     }
 }

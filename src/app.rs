@@ -48,6 +48,16 @@ enum DetailView {
     Git,
 }
 
+/// Drag payload (and invisible drag preview) for the right-sidebar edge.
+#[derive(Clone)]
+struct DetailResize;
+
+impl Render for DetailResize {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
 actions!(conduit, [SendPrompt, Newline]);
 
 const CANVAS: u32 = 0x0e0e10;
@@ -288,6 +298,14 @@ pub struct ConduitApp {
     details: bool,
     detail_view: DetailView,
     detail_text: Option<String>,
+    /// Width of the right sidebar and whether both views are shown side by side.
+    detail_width: f32,
+    detail_split: bool,
+    /// Drag origin `(pointer x, width at drag start)` for the right sidebar edge.
+    detail_drag: Option<(f32, f32)>,
+    /// Measured width of the left workspace sidebar, used to cap the right one at
+    /// half of the remaining content area.
+    sidebar_width: f32,
     /// Read-only Git snapshot for the selected workspace and its in-flight probe.
     git_probe: Option<GitProbe>,
     git_snapshot: Option<git::Snapshot>,
@@ -346,14 +364,18 @@ impl ConduitApp {
             .first()
             .and_then(|w| w.sessions.iter().rev().find(|session| !session.archived))
             .map(|s| s.id);
-        let new_session_provider = selected_session
-            .and_then(|id| {
-                store
-                    .workspaces
-                    .iter()
-                    .flat_map(|w| &w.sessions)
-                    .find(|s| s.id == id)
-                    .map(|s| s.provider)
+        let new_session_provider = store
+            .ui
+            .last_provider
+            .or_else(|| {
+                selected_session.and_then(|id| {
+                    store
+                        .workspaces
+                        .iter()
+                        .flat_map(|w| &w.sessions)
+                        .find(|s| s.id == id)
+                        .map(|s| s.provider)
+                })
             })
             .unwrap_or(Provider::Claude);
         let input = cx.new(|cx| {
@@ -434,6 +456,10 @@ impl ConduitApp {
             details: false,
             detail_view: DetailView::Tool,
             detail_text: None,
+            detail_width: 340.,
+            detail_split: false,
+            detail_drag: None,
+            sidebar_width: 248.,
             git_probe: None,
             git_snapshot: None,
             git_error: None,
@@ -498,7 +524,7 @@ impl ConduitApp {
         }
         self.select_fallback_session();
         self.persist();
-        if self.details && self.detail_view == DetailView::Git {
+        if self.details && (self.detail_view == DetailView::Git || self.detail_split) {
             self.refresh_git(cx);
         }
         cx.notify();
@@ -668,7 +694,7 @@ impl ConduitApp {
         self.select_fallback_session();
         self.delete_target = None;
         self.persist();
-        if self.details && self.detail_view == DetailView::Git {
+        if self.details && (self.detail_view == DetailView::Git || self.detail_split) {
             self.refresh_git(cx);
         }
         cx.notify();
@@ -679,6 +705,7 @@ impl ConduitApp {
     }
     fn select_engine(&mut self, provider: Provider, window: &mut Window, cx: &mut Context<Self>) {
         self.new_session_provider = provider;
+        self.remember_provider(provider);
         if let Some(index) = self.selected_workspace
             && index < self.store.workspaces.len()
         {
@@ -692,7 +719,8 @@ impl ConduitApp {
                 Some(id) => self.switch(index, Some(id), window, cx),
                 None => {
                     // No session of that engine yet: clear the selection so the
-                    // composer offers to create one with the chosen engine.
+                    // next prompt starts one with the chosen engine. The draft
+                    // stays in the composer.
                     if let Some(current) = self.selected_session {
                         self.drafts
                             .insert(current, self.input.read(cx).value().to_string());
@@ -700,8 +728,6 @@ impl ConduitApp {
                     self.selected_session = None;
                     self.detail_text = None;
                     self.message = None;
-                    self.input
-                        .update(cx, |input, cx| input.set_value("", window, cx));
                     cx.notify();
                 }
             }
@@ -771,6 +797,163 @@ impl ConduitApp {
                         }),
                     );
                 }
+                list
+            })
+            .into_any_element()
+    }
+    /// Top-left workspace switcher: pick an existing workspace or add a folder.
+    fn workspace_picker(&self, view: Entity<Self>) -> AnyElement {
+        let current = self.selected_workspace;
+        let label = current
+            .and_then(|index| self.store.workspaces.get(index))
+            .map(|workspace| workspace.name())
+            .unwrap_or_else(|| "选择工作区".into());
+        let rows: Vec<(usize, String, String, Option<u64>, bool)> = self
+            .store
+            .workspaces
+            .iter()
+            .enumerate()
+            .map(|(index, workspace)| {
+                let session = workspace
+                    .sessions
+                    .iter()
+                    .rev()
+                    .find(|session| !session.archived)
+                    .map(|session| session.id);
+                (
+                    index,
+                    workspace.name(),
+                    display_path(&workspace.path),
+                    session,
+                    current == Some(index),
+                )
+            })
+            .collect();
+        let trigger = Button::new("workspace-picker-trigger")
+            .ghost()
+            .small()
+            .h(px(26.))
+            .px_1()
+            .cursor_pointer()
+            .tooltip("切换工作区")
+            .child(
+                h_flex()
+                    .gap_1()
+                    .items_center()
+                    .child(Icon::new(IconName::Folder).small().text_color(rgb(FAINT)))
+                    .child(
+                        div()
+                            .max_w(px(180.))
+                            .truncate()
+                            .text_size(px(12.))
+                            .text_color(rgb(if current.is_some() { TEXT } else { MUTED }))
+                            .child(label),
+                    )
+                    .child(
+                        Icon::new(IconName::ChevronDown)
+                            .small()
+                            .text_color(rgb(FAINT)),
+                    ),
+            );
+        let content_view = view.clone();
+        Popover::new("workspace-picker")
+            .anchor(Anchor::TopLeft)
+            .offset(px(6.))
+            .trigger(trigger)
+            .content(move |_, _window, cx| {
+                let app = content_view.clone();
+                let popover = cx.entity().downgrade();
+                let mut list = v_flex().w(px(320.)).gap(px(1.));
+                for (index, name, path, session, active) in rows.clone() {
+                    let select_app = app.clone();
+                    let select_popover = popover.clone();
+                    list = list.child(
+                        Button::new(("workspace-pick", index as u64))
+                            .ghost()
+                            .h(px(36.))
+                            .w_full()
+                            .px_2()
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .when(active, |button| button.bg(rgb(SURFACE_HOVER)))
+                            .on_click(move |_, window, cx| {
+                                select_app
+                                    .update(cx, |this, cx| this.switch(index, session, window, cx));
+                                if let Some(popover) = select_popover.clone().upgrade() {
+                                    popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                                }
+                            })
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(
+                                        Icon::new(IconName::Folder).small().text_color(rgb(FAINT)),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .gap(px(1.))
+                                            .child(
+                                                div()
+                                                    .truncate()
+                                                    .text_size(px(12.))
+                                                    .text_color(rgb(TEXT))
+                                                    .child(name),
+                                            )
+                                            .child(
+                                                div()
+                                                    .truncate()
+                                                    .text_size(px(10.))
+                                                    .text_color(rgb(FAINT))
+                                                    .child(path),
+                                            ),
+                                    )
+                                    .when(active, |row| {
+                                        row.child(
+                                            Icon::new(IconName::Check)
+                                                .small()
+                                                .text_color(rgb(MUTED)),
+                                        )
+                                    }),
+                            ),
+                    );
+                }
+                if !rows.is_empty() {
+                    list = list.child(div().h(px(1.)).my(px(3.)).bg(rgb(BORDER)));
+                }
+                let add_app = app.clone();
+                let add_popover = popover.clone();
+                list = list.child(
+                    Button::new("workspace-add-directory")
+                        .ghost()
+                        .h(px(32.))
+                        .w_full()
+                        .px_2()
+                        .rounded(px(6.))
+                        .cursor_pointer()
+                        .on_click(move |event, window, cx| {
+                            add_app.update(cx, |this, cx| this.add_workspace(event, window, cx));
+                            if let Some(popover) = add_popover.clone().upgrade() {
+                                popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                            }
+                        })
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .gap_2()
+                                .items_center()
+                                .child(Icon::new(IconName::Plus).small().text_color(rgb(FAINT)))
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(rgb(MUTED))
+                                        .child("添加目录…"),
+                                ),
+                        ),
+                );
                 list
             })
             .into_any_element()
@@ -879,7 +1062,7 @@ impl ConduitApp {
         }
         self.detail_text = None;
         self.persist();
-        if self.details && self.detail_view == DetailView::Git {
+        if self.details && (self.detail_view == DetailView::Git || self.detail_split) {
             self.refresh_git(cx);
         }
         cx.notify();
@@ -1189,10 +1372,11 @@ impl ConduitApp {
             .map(|session| session.provider)
         {
             self.new_session_provider = provider;
+            self.remember_provider(provider);
         }
         // Switching workspaces while the Git panel is open must not keep the
         // previous directory's snapshot on screen.
-        if self.details && self.detail_view == DetailView::Git {
+        if self.details && (self.detail_view == DetailView::Git || self.detail_split) {
             self.refresh_git(cx);
         }
         cx.notify();
@@ -1256,8 +1440,21 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(id) = self.create_session(index, provider, cx) {
+            self.switch(index, Some(id), window, cx);
+        }
+    }
+    /// Append a session without touching the composer draft. Used by the "+"
+    /// buttons (which then switch to it) and by "type to start" (which sends
+    /// the current prompt immediately).
+    fn create_session(
+        &mut self,
+        index: usize,
+        provider: Provider,
+        cx: &mut Context<Self>,
+    ) -> Option<u64> {
         if !self.writable || self.closing || index >= self.store.workspaces.len() {
-            return;
+            return None;
         }
         let id = self.next_id;
         self.next_id += 1;
@@ -1282,8 +1479,19 @@ impl ConduitApp {
             messages: vec![],
             interrupted: false,
         });
-        self.switch(index, Some(id), window, cx);
+        self.selected_workspace = Some(index);
+        self.selected_session = Some(id);
+        self.new_session_provider = provider;
+        self.remember_provider(provider);
         self.persist();
+        cx.notify();
+        Some(id)
+    }
+    fn remember_provider(&mut self, provider: Provider) {
+        if self.store.ui.last_provider != Some(provider) {
+            self.store.ui.last_provider = Some(provider);
+            self.persist();
+        }
     }
     fn reload_models(&mut self, provider: Provider, cx: &mut Context<Self>) {
         self.catalogs.insert(provider, models::load(provider));
@@ -1314,7 +1522,9 @@ impl ConduitApp {
         if self.closing || !self.writable {
             return;
         }
-        let (Some(index), Some(id)) = (self.selected_workspace, self.selected_session) else {
+        let Some(index) = self.selected_workspace else {
+            self.message = Some("请先在左上角选择工作区。".into());
+            cx.notify();
             return;
         };
         if self.workspace_busy(index) {
@@ -1331,20 +1541,25 @@ impl ConduitApp {
             cx.notify();
             return;
         }
-        let session = self.session(id).unwrap();
-        let provider = session.provider;
-        let native_id = session.native_id.clone();
-        let model = session.model.clone();
-        if native_id.is_none()
-            && session
-                .messages
-                .iter()
-                .any(|m| m.kind == ItemKind::Assistant)
-        {
-            self.message =
-                Some("该会话缺少可靠的 CLI 会话标识，请新建会话，避免丢失上下文。".into());
-            cx.notify();
-            return;
+        // Resolve the target engine and validate the environment before creating
+        // a session, so a failed send cannot leave an empty conversation behind.
+        let provider = match self.selected_session {
+            Some(id) => self.session(id).unwrap().provider,
+            None => self.new_session_provider,
+        };
+        if let Some(id) = self.selected_session {
+            let session = self.session(id).unwrap();
+            if session.native_id.is_none()
+                && session
+                    .messages
+                    .iter()
+                    .any(|m| m.kind == ItemKind::Assistant)
+            {
+                self.message =
+                    Some("该会话缺少可靠的 CLI 会话标识，请新建会话，避免丢失上下文。".into());
+                cx.notify();
+                return;
+            }
         }
         let executable = match cli::resolve(provider, &self.store.cli) {
             Ok(cli) => cli.path,
@@ -1363,6 +1578,19 @@ impl ConduitApp {
             cx.notify();
             return;
         }
+        // Typing in a workspace without a selected session starts one with the
+        // last used engine instead of asking the user to click "新建会话".
+        let id = match self.selected_session {
+            Some(id) => id,
+            None => match self.create_session(index, provider, cx) {
+                Some(id) => id,
+                None => return,
+            },
+        };
+        let native_id = self
+            .session(id)
+            .and_then(|session| session.native_id.clone());
+        let model = self.session(id).and_then(|session| session.model.clone());
         let session = self.session_mut(id).unwrap();
         let prefix = format!("turn-{}", session.messages.len());
         if !session.messages.iter().any(|m| m.kind == ItemKind::User) {
@@ -1841,7 +2069,7 @@ impl ConduitApp {
             // panel current without requiring the user to press 刷新.
             if terminal
                 && self.details
-                && self.detail_view == DetailView::Git
+                && (self.detail_view == DetailView::Git || self.detail_split)
                 && self.git_probe.is_none()
             {
                 self.refresh_git(cx);
@@ -4231,7 +4459,7 @@ impl Render for ConduitApp {
                             .text_size(px(14.))
                             .text_color(rgb(MUTED))
                             .child(format!(
-                                "会话将在 {directory} 中运行，在下方选择执行引擎开始。"
+                                "会话将在 {directory} 中运行，输入任务后会按上次使用的引擎新建会话。"
                             )),
                     ),
             );
@@ -4284,95 +4512,81 @@ impl Render for ConduitApp {
             );
         }
         let mut conversation = v_flex().flex_1().min_w_0().h_full();
-        if let Some(session) = &selected {
-            conversation = conversation.child(
-                h_flex()
-                    .h(px(56.))
-                    .px_5()
-                    .items_center()
-                    .gap_3()
-                    .border_b_1()
-                    .border_color(rgb(BORDER))
-                    .child(
+        let current_provider = selected.as_ref().map(|session| session.provider);
+        let header_title = match &selected {
+            Some(session) if !session.title.is_empty() => session.title.clone(),
+            Some(_) => "新会话".to_string(),
+            None if has_workspace => "新会话".to_string(),
+            None => "未选择工作区".to_string(),
+        };
+        conversation = conversation.child(
+            h_flex()
+                .h(px(56.))
+                .px_5()
+                .items_center()
+                .gap_3()
+                .border_b_1()
+                .border_color(rgb(BORDER))
+                .child(self.workspace_picker(app_entity.clone()))
+                .when_some(current_provider, |header, provider| {
+                    header.child(
                         div()
                             .w(px(7.))
                             .h(px(7.))
                             .rounded_full()
-                            .bg(rgb(provider_tint(session.provider))),
+                            .bg(rgb(provider_tint(provider))),
                     )
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_size(px(13.))
-                                    .font_bold()
-                                    .text_color(rgb(TEXT))
-                                    .child(if session.title.is_empty() {
-                                        "新会话".into()
-                                    } else {
-                                        session.title.clone()
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(FAINT))
-                                    .child(directory.clone()),
-                            ),
+                })
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(13.))
+                        .font_bold()
+                        .text_color(rgb(TEXT))
+                        .child(header_title),
+                )
+                .when(active, |header| {
+                    header.child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .rounded(px(6.))
+                            .bg(rgb(SURFACE))
+                            .text_size(px(10.))
+                            .text_color(rgb(MUTED))
+                            .child(status.clone().unwrap_or_else(|| "运行中".into())),
                     )
-                    .when(active, |header| {
-                        header.child(
-                            div()
-                                .px_2()
-                                .py_1()
-                                .rounded(px(6.))
-                                .bg(rgb(SURFACE))
-                                .text_size(px(10.))
-                                .text_color(rgb(MUTED))
-                                .child(status.clone().unwrap_or_else(|| "运行中".into())),
-                        )
-                    })
-                    .child(
-                        Button::new("git-changes")
-                            .label("变更")
-                            .small()
-                            .ghost()
-                            .cursor_pointer()
-                            .tooltip("查看工作区 Git 变更（只读）")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if this.details && this.detail_view == DetailView::Git {
-                                    this.details = false;
-                                } else {
-                                    this.details = true;
-                                    this.detail_view = DetailView::Git;
+                })
+                .child(
+                    Button::new("toggle-sidebar")
+                        .ghost()
+                        .small()
+                        .compact()
+                        .icon(gpui_kit::assets::IconName::PanelRight)
+                        .cursor_pointer()
+                        .tooltip(if self.details {
+                            "收起侧边栏"
+                        } else {
+                            "打开侧边栏（工具详情 / Git 变更）"
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if this.details {
+                                this.details = false;
+                            } else {
+                                this.details = true;
+                                if (this.detail_view == DetailView::Git || this.detail_split)
+                                    && this.git_snapshot.is_none()
+                                    && this.git_probe.is_none()
+                                {
                                     this.refresh_git(cx);
                                 }
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("details")
-                            .label("详情")
-                            .small()
-                            .ghost()
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if this.details && this.detail_view == DetailView::Tool {
-                                    this.details = false;
-                                } else {
-                                    this.details = true;
-                                    this.detail_view = DetailView::Tool;
-                                }
-                                cx.notify();
-                            })),
-                    ),
-            );
-        }
+                            }
+                            cx.notify();
+                        })),
+                ),
+        );
         conversation = conversation.child(messages);
         let approval_count = self
             .selected_session
@@ -4558,270 +4772,153 @@ impl Render for ConduitApp {
         }
         let input_focused = self.input.read(cx).focus_handle(cx).is_focused(window);
         let provider = selected.as_ref().map(|session| session.provider);
-        let send_ready = can_edit && !busy;
+        let send_ready = can_edit && !busy && has_workspace;
         // The floating pin replaces the old "最新消息" text button: it appears
         // only when the user has scrolled away from the end of the message list.
         let show_latest_pin = !self.at_bottom
             && selected
                 .as_ref()
                 .is_some_and(|session| !session.messages.is_empty());
-        let composer: AnyElement = if selected.is_some() {
-            let session_id = selected
-                .as_ref()
-                .map(|session| session.id)
-                .unwrap_or_default();
-            let selected_model = selected.as_ref().and_then(|session| session.model.clone());
-            let model_picker = provider
-                .map(|provider| {
-                    self.composer_model_picker(
-                        cx.entity(),
-                        session_id,
-                        provider,
-                        selected_model,
-                        !can_edit,
-                    )
-                })
-                .unwrap_or_else(|| div().into_any_element());
-            v_flex()
-                .id("composer")
-                .key_context("ConduitComposer")
-                .on_action(cx.listener(|this, _: &SendPrompt, window, cx| {
-                    cx.stop_propagation();
-                    this.send_prompt(window, cx)
-                }))
-                .on_action(cx.listener(|this, _: &Newline, window, cx| {
-                    cx.stop_propagation();
-                    this.input
-                        .update(cx, |input, cx| input.insert("\n", window, cx));
-                    cx.notify();
-                }))
-                .w_full()
-                .max_w(px(840.))
-                .mx_auto()
-                .p_2()
-                .gap_1()
-                .rounded(px(22.))
-                .bg(rgb(SURFACE))
-                .border_1()
-                .border_color(if input_focused {
-                    rgb(FOCUS)
-                } else {
-                    rgb(BORDER)
-                })
-                .on_click(cx.listener(|this, _, window, cx| {
+        let session_id = selected
+            .as_ref()
+            .map(|session| session.id)
+            .unwrap_or_default();
+        let selected_model = selected.as_ref().and_then(|session| session.model.clone());
+        let model_picker = provider
+            .map(|provider| {
+                self.composer_model_picker(
+                    cx.entity(),
+                    session_id,
+                    provider,
+                    selected_model,
+                    !can_edit,
+                )
+            })
+            .unwrap_or_else(|| div().into_any_element());
+        // One composer for every state: an active session, a workspace without
+        // a session (the first send creates one with the last engine), and no
+        // workspace at all. Keeping the same shell in all three states keeps
+        // the chat area from changing size when the session state changes.
+        let composer_enabled = can_edit && has_workspace;
+        let composer: AnyElement = v_flex()
+            .id("composer")
+            .key_context("ConduitComposer")
+            .on_action(cx.listener(|this, _: &SendPrompt, window, cx| {
+                cx.stop_propagation();
+                this.send_prompt(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &Newline, window, cx| {
+                cx.stop_propagation();
+                this.input
+                    .update(cx, |input, cx| input.insert("\n", window, cx));
+                cx.notify();
+            }))
+            .w_full()
+            .max_w(px(840.))
+            .mx_auto()
+            .p_2()
+            .gap_1()
+            .rounded(px(22.))
+            .bg(rgb(SURFACE))
+            .border_1()
+            .border_color(if input_focused {
+                rgb(FOCUS)
+            } else {
+                rgb(BORDER)
+            })
+            .on_click(cx.listener(|this, event, window, cx| {
+                if this.selected_workspace.is_some() {
                     this.input.read(cx).focus_handle(cx).focus(window, cx);
-                }))
-                .child(
-                    h_flex()
-                        .h(px(32.))
-                        .px_2()
-                        .gap_2()
-                        .items_center()
-                        .rounded(px(10.))
-                        .bg(rgb(SURFACE_STRONG))
-                        .child(Icon::new(IconName::Folder).small().text_color(rgb(FAINT)))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(px(12.))
-                                .text_color(rgb(MUTED))
-                                .child(directory.clone()),
-                        )
-                        .child(model_picker),
-                )
-                .child(
-                    div().px_2().pt_2().child(
-                        Textarea::new(&self.input)
-                            .appearance(false)
-                            .bordered(false)
-                            .text_size(px(14.))
-                            .disabled(self.closing || !self.writable),
-                    ),
-                )
-                .child(
-                    h_flex()
-                        .px_2()
-                        .pb_1()
-                        .pt_1()
-                        .gap_2()
-                        .items_center()
-                        .child(self.engine_picker(app_entity.clone()))
-                        .child(div().flex_1())
-                        .child(if active {
-                            h_flex()
-                                .id("stop")
-                                .w(px(30.))
-                                .h(px(30.))
-                                .items_center()
-                                .justify_center()
-                                .rounded_full()
-                                .bg(rgb(TEXT))
-                                .cursor_pointer()
-                                .hover(|style| style.bg(rgb(0xffffff)))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    if let Some(run) =
-                                        this.selected_session.and_then(|id| this.runs.get_mut(&id))
-                                    {
-                                        run.runtime.cancel();
-                                        run.approvals.clear();
-                                        run.status = "正在停止…".into();
-                                    }
-                                    this.input.read(cx).focus_handle(cx).focus(window, cx);
-                                    cx.notify();
-                                }))
-                                .child(div().w(px(8.)).h(px(8.)).rounded(px(2.)).bg(rgb(0x111113)))
-                                .into_any_element()
-                        } else {
-                            h_flex()
-                                .id("send")
-                                .w(px(30.))
-                                .h(px(30.))
-                                .items_center()
-                                .justify_center()
-                                .rounded_full()
-                                .bg(rgb(if send_ready { TEXT } else { SURFACE_STRONG }))
-                                .when(send_ready, |button| {
-                                    button
-                                        .cursor_pointer()
-                                        .hover(|style| style.bg(rgb(0xffffff)))
-                                        .on_click(cx.listener(Self::send_message))
-                                })
-                                .child(
-                                    Icon::new(IconName::ArrowUp)
-                                        .small()
-                                        .text_color(rgb(if send_ready { 0x111113 } else { FAINT })),
-                                )
-                                .into_any_element()
-                        }),
-                )
-                .into_any_element()
-        } else if has_workspace {
-            v_flex()
-                .w_full()
-                .max_w(px(840.))
-                .mx_auto()
-                .p_2()
-                .gap_1()
-                .rounded(px(22.))
-                .bg(rgb(SURFACE))
-                .border_1()
-                .border_color(rgb(BORDER))
-                .child(
-                    h_flex()
-                        .h(px(32.))
-                        .px_2()
-                        .gap_2()
-                        .items_center()
-                        .rounded(px(10.))
-                        .bg(rgb(SURFACE_STRONG))
-                        .child(Icon::new(IconName::Folder).small().text_color(rgb(FAINT)))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(px(12.))
-                                .text_color(rgb(MUTED))
-                                .child(directory.clone()),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(rgb(FAINT))
-                                .child("新会话"),
-                        ),
-                )
-                .child(
-                    h_flex().px_2().py_3().items_center().child(
+                } else {
+                    this.add_workspace(event, window, cx);
+                }
+            }))
+            .child(
+                h_flex()
+                    .h(px(32.))
+                    .px_2()
+                    .gap_2()
+                    .items_center()
+                    .rounded(px(10.))
+                    .bg(rgb(SURFACE_STRONG))
+                    .child(Icon::new(IconName::Folder).small().text_color(rgb(FAINT)))
+                    .child(
                         div()
-                            .text_size(px(14.))
-                            .text_color(rgb(FAINT))
-                            .child("选择引擎后新建会话开始输入"),
-                    ),
-                )
-                .child(
-                    h_flex()
-                        .px_2()
-                        .pb_1()
-                        .pt_1()
-                        .gap_2()
-                        .items_center()
-                        .child(self.engine_picker(app_entity.clone()))
-                        .child(div().flex_1())
-                        .child(
-                            Button::new("composer-new-session")
-                                .label(format!("新建 {} 会话", self.new_session_provider.label()))
-                                .small()
-                                .primary()
-                                .disabled(!can_edit)
-                                .when(can_edit, |button| button.cursor_pointer())
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    if let Some(index) = this.selected_workspace {
-                                        this.new_session_here(index, window, cx);
-                                    }
-                                })),
-                        ),
-                )
-                .into_any_element()
-        } else {
-            v_flex()
-                .id("empty-composer")
-                .w_full()
-                .max_w(px(840.))
-                .mx_auto()
-                .p_2()
-                .rounded(px(22.))
-                .bg(rgb(SURFACE))
-                .border_1()
-                .border_color(rgb(BORDER))
-                .cursor_pointer()
-                .hover(|style| style.border_color(rgb(BORDER_STRONG)))
-                .on_click(cx.listener(Self::add_workspace))
-                .child(
-                    h_flex()
-                        .h(px(56.))
-                        .px_3()
-                        .gap_3()
-                        .items_center()
-                        .child(
-                            Icon::new(gpui_kit::assets::IconName::FolderPlus)
-                                .text_color(rgb(FAINT)),
-                        )
-                        .child(
-                            v_flex()
-                                .flex_1()
-                                .min_w_0()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_size(px(13.))
-                                        .text_color(rgb(MUTED))
-                                        .child("添加工作区后开始输入"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(11.))
-                                        .text_color(rgb(FAINT))
-                                        .child("选择一个本地目录，Conduit 只在该目录内调用 CLI。"),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .px_3()
-                                .h(px(28.))
-                                .flex()
-                                .items_center()
-                                .rounded_full()
-                                .bg(rgb(TEXT))
-                                .text_size(px(11.))
-                                .text_color(rgb(0x111113))
-                                .child("选择目录"),
-                        ),
-                )
-                .into_any_element()
-        };
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(12.))
+                            .text_color(rgb(MUTED))
+                            .child(directory.clone()),
+                    )
+                    .when(selected.is_some(), |row| row.child(model_picker)),
+            )
+            .child(
+                div().px_2().pt_2().child(
+                    Textarea::new(&self.input)
+                        .appearance(false)
+                        .bordered(false)
+                        .text_size(px(14.))
+                        .disabled(self.closing || !composer_enabled),
+                ),
+            )
+            .child(
+                h_flex()
+                    .px_2()
+                    .pb_1()
+                    .pt_1()
+                    .gap_2()
+                    .items_center()
+                    .child(self.engine_picker(app_entity.clone()))
+                    .child(div().flex_1())
+                    .child(if active {
+                        h_flex()
+                            .id("stop")
+                            .w(px(30.))
+                            .h(px(30.))
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .bg(rgb(TEXT))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(rgb(0xffffff)))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if let Some(run) =
+                                    this.selected_session.and_then(|id| this.runs.get_mut(&id))
+                                {
+                                    run.runtime.cancel();
+                                    run.approvals.clear();
+                                    run.status = "正在停止…".into();
+                                }
+                                this.input.read(cx).focus_handle(cx).focus(window, cx);
+                                cx.notify();
+                            }))
+                            .child(div().w(px(8.)).h(px(8.)).rounded(px(2.)).bg(rgb(0x111113)))
+                            .into_any_element()
+                    } else {
+                        h_flex()
+                            .id("send")
+                            .w(px(30.))
+                            .h(px(30.))
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .bg(rgb(if send_ready { TEXT } else { SURFACE_STRONG }))
+                            .when(send_ready, |button| {
+                                button
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(rgb(0xffffff)))
+                                    .on_click(cx.listener(Self::send_message))
+                            })
+                            .child(
+                                Icon::new(IconName::ArrowUp)
+                                    .small()
+                                    .text_color(rgb(if send_ready { 0x111113 } else { FAINT })),
+                            )
+                            .into_any_element()
+                    }),
+            )
+            .into_any_element();
         // The "jump to latest" pin floats at the lower-right of the message
         // area, just above the composer's top-right corner, and only exists
         // while the list is scrolled away from its end.
@@ -4929,6 +5026,7 @@ impl Render for ConduitApp {
                     ),
             );
         let mut detail_panel: Option<AnyElement> = None;
+        let mut overlay: Option<AnyElement> = None;
         if self.details {
             let native_id = selected
                 .as_ref()
@@ -4958,6 +5056,24 @@ impl Render for ConduitApp {
                     )
                 })
                 .unwrap_or_else(|| "点击工具调用卡片查看输入、命令输出或文件变更。".into());
+            let tool_body: AnyElement = v_flex()
+                .flex_1()
+                .min_h_0()
+                .gap_3()
+                .child(div().text_xs().text_color(rgb(MUTED)).child("工作目录"))
+                .child(div().text_xs().text_color(rgb(TEXT)).child(path))
+                .child(div().text_xs().text_color(rgb(MUTED)).child("原生会话 ID"))
+                .child(div().text_xs().child(native_id))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .id("detail-content")
+                        .overflow_y_scroll()
+                        .text_xs()
+                        .child(tool_content),
+                )
+                .into_any_element();
             let tab = |label: &'static str, id: &'static str, view: DetailView| -> AnyElement {
                 let active = self.detail_view == view;
                 let app = app_entity.clone();
@@ -4985,33 +5101,71 @@ impl Render for ConduitApp {
                     })
                     .into_any_element()
             };
-            let body: AnyElement = match self.detail_view {
-                DetailView::Tool => v_flex()
+            let git_body = self.git_panel(app_entity.clone());
+            let split = self.detail_split && !narrow;
+            let body: AnyElement = if split {
+                h_flex()
+                    .w_full()
                     .flex_1()
                     .min_h_0()
-                    .gap_4()
-                    .child(div().text_xs().text_color(rgb(MUTED)).child("工作目录"))
-                    .child(div().text_sm().text_color(rgb(TEXT)).child(path))
-                    .child(div().text_xs().text_color(rgb(MUTED)).child("原生会话 ID"))
-                    .child(div().text_xs().child(native_id))
+                    .overflow_hidden()
                     .child(
-                        div()
+                        v_flex()
                             .flex_1()
+                            .min_w_0()
                             .min_h_0()
-                            .id("detail-content")
-                            .overflow_y_scroll()
-                            .text_xs()
-                            .child(tool_content),
+                            .h_full()
+                            .overflow_hidden()
+                            .p_2()
+                            .child(tool_body),
                     )
-                    .into_any_element(),
-                DetailView::Git => self.git_panel(app_entity.clone()),
+                    .child(div().w(px(1.)).h_full().flex_shrink_0().bg(rgb(BORDER)))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .min_h_0()
+                            .h_full()
+                            .overflow_hidden()
+                            .p_2()
+                            .child(git_body),
+                    )
+                    .into_any_element()
+            } else {
+                match self.detail_view {
+                    DetailView::Tool => tool_body,
+                    DetailView::Git => git_body,
+                }
             };
+            let split_button = Button::new("toggle-sidebar-split")
+                .ghost()
+                .small()
+                .compact()
+                .icon(gpui_kit::assets::IconName::Columns2)
+                .cursor_pointer()
+                .tooltip(if self.detail_split {
+                    "合并为页签"
+                } else {
+                    "并排显示工具详情与 Git 变更"
+                })
+                .when(self.detail_split, |button| button.bg(rgb(SURFACE_HOVER)))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.detail_split = !this.detail_split;
+                    if this.detail_split {
+                        this.detail_width = this.detail_width.max(440.);
+                        if this.git_snapshot.is_none() && this.git_probe.is_none() {
+                            this.refresh_git(cx);
+                        }
+                    }
+                    cx.notify();
+                }));
             let panel = v_flex()
                 .h_full()
+                .w_full()
                 .flex_shrink_0()
                 .bg(rgb(SIDEBAR_BG))
-                .p_4()
-                .gap_4()
+                .p_3()
+                .gap_3()
                 .when(narrow, |panel| {
                     panel
                         .w(px(300.))
@@ -5022,20 +5176,41 @@ impl Render for ConduitApp {
                         .border_l_1()
                         .border_color(rgb(BORDER))
                 })
-                .when(!narrow, |panel| panel.w_full())
                 .child(
                     h_flex()
                         .items_center()
                         .gap_1()
-                        .child(tab("工具详情", "detail-tab-tool", DetailView::Tool))
-                        .child(tab("Git 变更", "detail-tab-git", DetailView::Git))
+                        .when(!split, |row| {
+                            row.child(tab("工具详情", "detail-tab-tool", DetailView::Tool))
+                                .child(tab("Git 变更", "detail-tab-git", DetailView::Git))
+                        })
+                        .when(split, |row| {
+                            row.child(
+                                div()
+                                    .text_size(px(11.))
+                                    .font_semibold()
+                                    .text_color(rgb(TEXT))
+                                    .child("工具详情"),
+                            )
+                            .child(div().text_size(px(10.)).text_color(rgb(FAINT)).child("/"))
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .font_semibold()
+                                    .text_color(rgb(TEXT))
+                                    .child("Git 变更"),
+                            )
+                        })
                         .child(div().flex_1())
+                        .when(!narrow, |row| row.child(split_button))
                         .child(
                             Button::new("close-details")
-                                .label("关闭")
-                                .small()
                                 .ghost()
+                                .small()
+                                .compact()
+                                .icon(gpui_kit::assets::IconName::X)
                                 .cursor_pointer()
+                                .tooltip("关闭侧边栏")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.details = false;
                                     cx.notify();
@@ -5043,35 +5218,102 @@ impl Render for ConduitApp {
                         ),
                 )
                 .child(body);
-            detail_panel = Some(panel.into_any_element());
-        }
-        // The sidebar and the execution detail are both drag-resizable; the
-        // conversation keeps the flexible panel. On narrow windows the detail
-        // panel overlays the conversation instead of shrinking it further.
-        let mut body = h_resizable("body")
-            .child(
-                resizable_panel()
-                    .size(px(248.))
-                    .size_range(px(200.)..px(420.))
-                    .flex_none()
-                    .child(sidebar),
-            )
-            .child(resizable_panel().child(conversation));
-        let mut overlay: Option<AnyElement> = None;
-        if let Some(panel) = detail_panel {
             if narrow {
-                overlay = Some(panel);
+                overlay = Some(panel.into_any_element());
             } else {
-                body = body.child(
-                    resizable_panel()
-                        .size(px(300.))
-                        .size_range(px(240.)..px(480.))
-                        .flex_none()
-                        .child(panel),
-                );
+                detail_panel = Some(panel.into_any_element());
             }
         }
-        let mut main_area = div().relative().flex_1().min_h_0().child(body);
+        // The left workspace rail stays a resizable group. The right sidebar is
+        // laid out by hand so dragging its edge follows the pointer 1:1 and its
+        // width can be capped at half of the remaining content area.
+        let viewport_width = f32::from(window.viewport_size().width);
+        let sidebar_state =
+            window.use_keyed_state("body-resizable", cx, |_, _| ResizableState::default());
+        let measured_sidebar = sidebar_state
+            .read(cx)
+            .sizes()
+            .first()
+            .map(|width| f32::from(*width))
+            .filter(|width| *width > 0.)
+            .unwrap_or(248.);
+        self.sidebar_width = measured_sidebar;
+        let content_width = (viewport_width - measured_sidebar - 6.).max(320.);
+        let max_detail_width = (content_width * 0.5).max(260.);
+        self.detail_width = self.detail_width.clamp(260., max_detail_width);
+        let detail_width = self.detail_width;
+
+        let mut body = h_resizable("body").with_state(&sidebar_state).child(
+            resizable_panel()
+                .size(px(248.))
+                .size_range(px(200.)..px(420.))
+                .flex_none()
+                .child(sidebar),
+        );
+        let conversation_area: AnyElement = match detail_panel {
+            Some(panel) => {
+                let drag_app = app_entity.clone();
+                let band = div()
+                    .id("detail-resize")
+                    .relative()
+                    .w(px(6.))
+                    .h_full()
+                    .flex_shrink_0()
+                    .cursor_col_resize()
+                    .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                    .on_drag(DetailResize, move |_, position, window, cx| {
+                        // `position` is relative to the band; the panel's right
+                        // edge is the window edge, so recover the pointer's
+                        // window x to keep the grab offset constant while dragging.
+                        let viewport = f32::from(window.viewport_size().width);
+                        let local = f32::from(position.x);
+                        drag_app.update(cx, |this, cx| {
+                            let start_x = viewport - this.detail_width - 6. + local;
+                            this.detail_drag = Some((start_x, this.detail_width));
+                            cx.notify();
+                        });
+                        cx.new(|_| DetailResize)
+                    });
+                h_flex()
+                    .h_full()
+                    .w_full()
+                    .child(conversation)
+                    .child(band)
+                    .child(
+                        div()
+                            .w(px(detail_width))
+                            .h_full()
+                            .flex_shrink_0()
+                            .child(panel),
+                    )
+                    .into_any_element()
+            }
+            None => conversation.into_any_element(),
+        };
+        body = body.child(resizable_panel().child(conversation_area));
+
+        let drag_app = app_entity.clone();
+        let mut main_area = div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .on_drag_move(move |event: &DragMoveEvent<DetailResize>, window, cx| {
+                let x = f32::from(event.event.position.x);
+                let viewport = f32::from(window.viewport_size().width);
+                drag_app.update(cx, |this, cx| {
+                    let Some((start_x, start_width)) = this.detail_drag else {
+                        return;
+                    };
+                    let content = (viewport - this.sidebar_width - 6.).max(320.);
+                    let max = (content * 0.5).max(260.);
+                    let width = (start_width + (start_x - x)).clamp(260., max);
+                    if (width - this.detail_width).abs() > 0.5 {
+                        this.detail_width = width;
+                        cx.notify();
+                    }
+                });
+            })
+            .child(body);
         if let Some(panel) = overlay {
             main_area = main_area.child(panel);
         }
