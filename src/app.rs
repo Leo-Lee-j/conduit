@@ -772,7 +772,7 @@ impl ConduitApp {
             KeyBinding::new("shift-enter", Newline, Some("ConduitComposer > Input")),
             KeyBinding::new("shift-enter", Newline, Some("ConduitComposer")),
         ]);
-        let (store, message, writable) = match Store::load() {
+        let (mut store, message, writable) = match Store::load() {
             Ok(store) => (store, None, true),
             Err(error) => (Store::default(), Some(format!("{error:#}")), false),
         };
@@ -784,6 +784,17 @@ impl ConduitApp {
             .max()
             .unwrap_or(0)
             .saturating_add(1);
+        // Import CLI-side (terminal) sessions for known workspaces so they
+        // appear in the sidebar and can be resumed natively. Sessions whose
+        // native id already exists are refreshed instead of duplicated.
+        let imported_total = {
+            let mut next_id = next_id;
+            let mut total = 0;
+            for workspace in &mut store.workspaces {
+                total += crate::history::merge_into(workspace, &mut next_id);
+            }
+            next_id
+        };
         let selected_workspace = (!store.workspaces.is_empty()).then_some(0);
         let selected_session = store
             .workspaces
@@ -908,7 +919,7 @@ impl ConduitApp {
             message,
             settings_tab: SettingsTab::General,
             git_prompt_input,
-            next_id,
+            next_id: imported_total,
             closing: false,
             details: start_in_git,
             detail_view: if start_in_git {
