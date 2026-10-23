@@ -35,7 +35,10 @@ fn main() {
         }
     };
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        // The full icon catalog keeps the UI glyphs that the default component
+        // bundle does not embed (e.g. the composer Pin and the settings CLI
+        // terminal icon) rendering.
+        .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
             gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);

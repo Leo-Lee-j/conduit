@@ -34,6 +34,7 @@ struct ActiveRun {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SettingsTab {
     General,
+    Cli,
     Provider(Provider),
     Models,
 }
@@ -75,6 +76,25 @@ fn settings_label(text: &'static str) -> impl IntoElement {
         .text_size(px(11.))
         .text_color(rgb(FAINT))
         .child(text)
+}
+
+/// A read-only settings card row: fixed label on the left, value on the right.
+fn settings_row(label: &'static str, value: String, divider: bool) -> AnyElement {
+    let mut row = h_flex().px_4().py_3().gap_4().items_center();
+    if divider {
+        row = row.border_t_1().border_color(rgb(BORDER));
+    }
+    row.child(settings_label(label))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(px(11.))
+                .text_color(rgb(MUTED))
+                .child(value),
+        )
+        .into_any_element()
 }
 
 /// Whether a session matches the sidebar search query (title or message text).
@@ -188,6 +208,7 @@ fn session_menu_button(id: (&'static str, u64), label: &'static str, icon: IconN
         .w_full()
         .px_2()
         .rounded(px(6.))
+        .cursor_pointer()
         .child(
             h_flex()
                 .w_full()
@@ -234,6 +255,9 @@ pub struct ConduitApp {
     dirty: bool,
     last_save: Instant,
     scroll: ScrollHandle,
+    /// Whether the message list is scrolled to (or near) its end. Drives the
+    /// floating "jump to latest" pin so it only shows once the user scrolls up.
+    at_bottom: bool,
 }
 
 impl ConduitApp {
@@ -368,6 +392,7 @@ impl ConduitApp {
             dirty: false,
             last_save: Instant::now(),
             scroll: ScrollHandle::new(),
+            at_bottom: true,
         }
     }
     fn session(&self, id: u64) -> Option<&SessionRecord> {
@@ -448,6 +473,7 @@ impl ConduitApp {
                                         .label("取消")
                                         .small()
                                         .ghost()
+                                        .cursor_pointer()
                                         .on_click(move |_, window, cx| {
                                             cancel.update(cx, |this, cx| {
                                                 this.rename_target = None;
@@ -462,6 +488,7 @@ impl ConduitApp {
                                         .label("保存")
                                         .small()
                                         .primary()
+                                        .cursor_pointer()
                                         .on_click(move |_, window, cx| {
                                             let value = confirm
                                                 .read(cx)
@@ -540,6 +567,7 @@ impl ConduitApp {
                                             .label("取消")
                                             .small()
                                             .ghost()
+                                            .cursor_pointer()
                                             .on_click(move |_, window, cx| {
                                                 cancel.update(cx, |this, cx| {
                                                     this.delete_target = None;
@@ -553,6 +581,7 @@ impl ConduitApp {
                                             .label("删除")
                                             .small()
                                             .primary()
+                                            .cursor_pointer()
                                             .on_click(move |_, window, cx| {
                                                 let target = confirm.read(cx).delete_target;
                                                 if let Some(id) = target {
@@ -622,6 +651,7 @@ impl ConduitApp {
             .small()
             .h(px(22.))
             .px_1()
+            .cursor_pointer()
             .tooltip("切换引擎")
             .child(
                 h_flex()
@@ -727,6 +757,7 @@ impl ConduitApp {
                                             .label("取消")
                                             .small()
                                             .ghost()
+                                            .cursor_pointer()
                                             .on_click(move |_, window, cx| {
                                                 cancel.update(cx, |this, cx| {
                                                     this.remove_workspace_target = None;
@@ -740,6 +771,7 @@ impl ConduitApp {
                                             .label("移除")
                                             .small()
                                             .primary()
+                                            .cursor_pointer()
                                             .on_click(move |_, window, cx| {
                                                 let target =
                                                     confirm.read(cx).remove_workspace_target;
@@ -790,6 +822,7 @@ impl ConduitApp {
             .small()
             .compact()
             .icon(IconName::Ellipsis)
+            .cursor_pointer()
             .on_click(|_, _, cx| cx.stop_propagation());
         Popover::new(("workspace-menu", index))
             .anchor(Anchor::LeftCenter)
@@ -989,10 +1022,11 @@ impl ConduitApp {
             .small()
             .compact()
             .icon(IconName::Ellipsis)
+            .cursor_pointer()
             .on_click(|_, _, cx| cx.stop_propagation());
         Popover::new(("session-menu", id))
-            .anchor(Anchor::BottomRight)
-            .offset(px(6.))
+            .anchor(Anchor::LeftCenter)
+            .offset(px(8.))
             .trigger(trigger)
             .content(move |_, _, cx| {
                 let popover = cx.entity().downgrade();
@@ -1079,6 +1113,9 @@ impl ConduitApp {
             self.input.read(cx).focus_handle(cx).focus(window, cx);
         }
         self.scroll.set_offset(point(px(0.), px(0.)));
+        // The new list starts at its top; let the next poll re-evaluate whether
+        // that is already the end instead of keeping the previous session's pin.
+        self.at_bottom = true;
         if let Some(provider) = session
             .and_then(|id| self.session(id))
             .map(|session| session.provider)
@@ -1340,6 +1377,12 @@ impl ConduitApp {
             cx.notify();
         }
         let follow = f32::from(self.scroll.offset().y + self.scroll.max_offset().y).abs() < 60.;
+        // Re-render when the scroll position crosses the "at the end" threshold
+        // so the floating pin appears/disappears without polling every frame.
+        if follow != self.at_bottom {
+            self.at_bottom = follow;
+            cx.notify();
+        }
         let mut incoming = vec![];
         for (id, run) in &self.runs {
             for event in run.runtime.events.try_iter().take(1000) {
@@ -1614,6 +1657,7 @@ impl ConduitApp {
             .px_2()
             .rounded_full()
             .disabled(disabled)
+            .when(!disabled, |button| button.cursor_pointer())
             .accessibility_label("选择模型")
             .on_click(|_, _, cx| cx.stop_propagation())
             .child(
@@ -1680,6 +1724,7 @@ impl ConduitApp {
                             .w_full()
                             .px_2()
                             .rounded(px(8.))
+                            .cursor_pointer()
                             .accessibility_label(format!("模型 {label}"))
                             .when(selected, |button| button.bg(rgb(SURFACE_HOVER)))
                             .on_click(move |_, window, cx| {
@@ -1909,6 +1954,10 @@ impl ConduitApp {
                     .small()
                     .ghost()
                     .disabled(disabled || self.store.cli.path(provider).is_none())
+                    .when(
+                        !disabled && self.store.cli.path(provider).is_some(),
+                        |button| button.cursor_pointer(),
+                    )
                     .on_click(move |_, _, cx| {
                         clear_view.update(cx, |this, cx| {
                             this.set_cli_path(provider, None, cx);
@@ -1923,6 +1972,7 @@ impl ConduitApp {
                     .small()
                     .ghost()
                     .disabled(self.closing)
+                    .when(!self.closing, |button| button.cursor_pointer())
                     .on_click(move |_, _, cx| {
                         cancel_view.update(cx, |this, cx| {
                             if let Some(probe) = this.probes.get(&provider) {
@@ -1941,6 +1991,7 @@ impl ConduitApp {
                     .small()
                     .outline()
                     .disabled(self.closing)
+                    .when(!self.closing, |button| button.cursor_pointer())
                     .on_click(move |_, _, cx| {
                         probe_view.update(cx, |this, cx| {
                             this.probe_cli(provider, cx);
@@ -2007,6 +2058,7 @@ impl ConduitApp {
                             .small()
                             .outline()
                             .disabled(disabled)
+                            .when(!disabled, |button| button.cursor_pointer())
                             .on_click(move |_, window, cx| {
                                 choose_view.update(cx, |this, cx| {
                                     this.choose_cli(provider, window, cx);
@@ -2189,6 +2241,7 @@ impl ConduitApp {
                             .small()
                             .ghost()
                             .disabled(self.closing)
+                            .when(!self.closing, |button| button.cursor_pointer())
                             .on_click(move |_, _, cx| {
                                 sync_view.update(cx, |this, cx| {
                                     this.reload_models(provider, cx);
@@ -2340,6 +2393,7 @@ impl ConduitApp {
                             .small()
                             .ghost()
                             .disabled(self.closing)
+                            .when(!self.closing, |button| button.cursor_pointer())
                             .on_click(move |_, _, cx| {
                                 refresh_view.update(cx, |this, cx| {
                                     this.reload_all_models(cx);
@@ -2666,23 +2720,6 @@ impl ConduitApp {
             .map(display_path)
             .unwrap_or_else(|| "—".into());
         let state_file = display_path(&state_path);
-        let row = |label: &'static str, value: String, divider: bool| -> AnyElement {
-            let mut row = h_flex().px_4().py_3().gap_4().items_center();
-            if divider {
-                row = row.border_t_1().border_color(rgb(BORDER));
-            }
-            row.child(settings_label(label))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(11.))
-                        .text_color(rgb(MUTED))
-                        .child(value),
-                )
-                .into_any_element()
-        };
         v_flex()
             .w_full()
             .gap_4()
@@ -2706,54 +2743,11 @@ impl ConduitApp {
                                     .text_size(px(13.))
                                     .font_semibold()
                                     .text_color(rgb(TEXT))
-                                    .child("路径查找顺序"),
-                            )
-                            .child(div().flex_1())
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .text_color(rgb(FAINT))
-                                    .child("前者优先"),
-                            ),
-                    )
-                    .child(row(
-                        "环境变量",
-                        "CONDUIT_CLAUDE_PATH · CONDUIT_CODEX_PATH".into(),
-                        false,
-                    ))
-                    .child(row("应用配置", "在本弹窗的 CLI 页面手动指定".into(), true))
-                    .child(row("PATH", "claude.exe · codex.exe".into(), true))
-                    .child(row(
-                        "常见安装位置",
-                        "~/.local/bin · %LOCALAPPDATA%\\Programs\\OpenAI\\Codex".into(),
-                        true,
-                    )),
-            )
-            .child(
-                v_flex()
-                    .w_full()
-                    .overflow_hidden()
-                    .rounded(px(12.))
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .bg(rgb(SURFACE_STRONG))
-                    .child(
-                        h_flex()
-                            .px_4()
-                            .py_3()
-                            .items_center()
-                            .border_b_1()
-                            .border_color(rgb(BORDER))
-                            .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .font_semibold()
-                                    .text_color(rgb(TEXT))
                                     .child("本机数据"),
                             ),
                     )
-                    .child(row("数据目录", data_dir, false))
-                    .child(row("配置文件", state_file, true)),
+                    .child(settings_row("数据目录", data_dir, false))
+                    .child(settings_row("配置文件", state_file, true)),
             )
             .child(
                 v_flex()
@@ -2787,7 +2781,7 @@ impl ConduitApp {
                             .py_3()
                             .gap_4()
                             .items_center()
-                            .child(settings_label("每个工作区会话数"))
+                            .child(settings_label("工作区会话数"))
                             .child(
                                 div()
                                     .flex_1()
@@ -2806,6 +2800,7 @@ impl ConduitApp {
                                             .small()
                                             .ghost()
                                             .disabled(value <= 1)
+                                            .when(value > 1, |button| button.cursor_pointer())
                                             .on_click(move |_, _, cx| {
                                                 decrease.update(cx, |this, cx| {
                                                     this.store.ui.sessions_per_workspace = this
@@ -2833,6 +2828,7 @@ impl ConduitApp {
                                             .small()
                                             .ghost()
                                             .disabled(value >= 30)
+                                            .when(value < 30, |button| button.cursor_pointer())
                                             .on_click(move |_, _, cx| {
                                                 increase.update(cx, |this, cx| {
                                                     this.store.ui.sessions_per_workspace =
@@ -2851,13 +2847,108 @@ impl ConduitApp {
                     .text_size(px(11.))
                     .line_height(relative(1.5))
                     .text_color(rgb(FAINT))
-                    .child("配置只保存在本机；修改 CLI 路径或版本设置仅影响后续启动的会话。"),
+                    .child("配置只保存在本机，界面设置随本地状态保存。"),
+            )
+            .into_any_element()
+    }
+    fn settings_cli_content(&self) -> AnyElement {
+        v_flex()
+            .w_full()
+            .gap_4()
+            .child(
+                v_flex()
+                    .w_full()
+                    .overflow_hidden()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .bg(rgb(SURFACE_STRONG))
+                    .child(
+                        h_flex()
+                            .px_4()
+                            .py_3()
+                            .items_center()
+                            .border_b_1()
+                            .border_color(rgb(BORDER))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_semibold()
+                                    .text_color(rgb(TEXT))
+                                    .child("路径查找顺序"),
+                            )
+                            .child(div().flex_1())
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(rgb(FAINT))
+                                    .child("前者优先"),
+                            ),
+                    )
+                    .child(settings_row(
+                        "环境变量",
+                        "CONDUIT_CLAUDE_PATH · CONDUIT_CODEX_PATH".into(),
+                        false,
+                    ))
+                    .child(settings_row(
+                        "应用配置",
+                        "在本页 Claude Code / Codex 中手动指定".into(),
+                        true,
+                    ))
+                    .child(settings_row("PATH", "claude.exe · codex.exe".into(), true))
+                    .child(settings_row(
+                        "常见安装位置",
+                        "~/.local/bin · %LOCALAPPDATA%\\Programs\\OpenAI\\Codex".into(),
+                        true,
+                    )),
+            )
+            .child(
+                v_flex()
+                    .w_full()
+                    .overflow_hidden()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .bg(rgb(SURFACE_STRONG))
+                    .child(
+                        h_flex()
+                            .px_4()
+                            .py_3()
+                            .items_center()
+                            .border_b_1()
+                            .border_color(rgb(BORDER))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_semibold()
+                                    .text_color(rgb(TEXT))
+                                    .child("可执行文件与版本"),
+                            ),
+                    )
+                    .child(settings_row(
+                        "Claude Code",
+                        "在左侧「Claude Code」页面选择本机 .exe 并检测版本".into(),
+                        false,
+                    ))
+                    .child(settings_row(
+                        "Codex",
+                        "在左侧「Codex」页面选择本机 .exe 并检测版本".into(),
+                        true,
+                    )),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .line_height(relative(1.5))
+                    .text_color(rgb(FAINT))
+                    .child("修改 CLI 路径或版本设置仅影响后续启动的会话；路径无效时会显式报错，不会自动改用另一份程序。"),
             )
             .into_any_element()
     }
     fn settings_modal_content(&self, window: &Window, view: Entity<Self>) -> AnyElement {
         let (title, subtitle) = match self.settings_tab {
-            SettingsTab::General => ("通用", "路径查找方式与本机数据位置"),
+            SettingsTab::General => ("通用", "本机数据位置与界面设置"),
+            SettingsTab::Cli => ("CLI", "可执行文件路径查找顺序与版本检测说明"),
             SettingsTab::Provider(provider) => (provider.label(), "管理可执行文件路径与版本检测"),
             SettingsTab::Models => ("模型同步", "查看 CLI 当前模型与 cc-switch 同步的模型"),
         };
@@ -2867,6 +2958,7 @@ impl ConduitApp {
             h_flex()
                 .id(match tab {
                     SettingsTab::General => "settings-tab-general",
+                    SettingsTab::Cli => "settings-tab-cli",
                     SettingsTab::Provider(Provider::Claude) => "settings-tab-claude",
                     SettingsTab::Provider(Provider::Codex) => "settings-tab-codex",
                     SettingsTab::Models => "settings-tab-models",
@@ -2946,6 +3038,21 @@ impl ConduitApp {
                     .text_color(rgb(models_icon)),
             )
             .into_any_element();
+        let cli_icon = if self.settings_tab == SettingsTab::Cli {
+            TEXT
+        } else {
+            FAINT
+        };
+        let cli_leading = h_flex()
+            .w(px(14.))
+            .flex_shrink_0()
+            .justify_center()
+            .child(
+                Icon::new(gpui_kit::assets::IconName::Terminal)
+                    .small()
+                    .text_color(rgb(cli_icon)),
+            )
+            .into_any_element();
         let nav = v_flex()
             .w(px(208.))
             .h_full()
@@ -2967,6 +3074,7 @@ impl ConduitApp {
             .child(section("应用"))
             .child(nav_item(SettingsTab::General, "通用", general_leading))
             .child(section("CLI"))
+            .child(nav_item(SettingsTab::Cli, "CLI", cli_leading))
             .child(nav_item(
                 SettingsTab::Provider(Provider::Claude),
                 "Claude Code",
@@ -2989,6 +3097,7 @@ impl ConduitApp {
             );
         let page = match self.settings_tab {
             SettingsTab::General => self.settings_general_content(view.clone()),
+            SettingsTab::Cli => self.settings_cli_content(),
             SettingsTab::Provider(provider) => {
                 self.settings_provider_content(provider, view.clone())
             }
@@ -3067,13 +3176,14 @@ impl ConduitApp {
                             .flex_1()
                             .text_size(px(11.))
                             .text_color(rgb(FAINT))
-                            .child("配置保存在本地，修改仅影响后续启动"),
+                            .child("配置保存在本地，具体生效范围见各页面说明"),
                     )
                     .child(
                         Button::new("settings-done")
                             .label("完成")
                             .small()
                             .primary()
+                            .cursor_pointer()
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     ),
             );
@@ -3291,6 +3401,9 @@ impl Render for ConduitApp {
                             .icon(IconName::Plus)
                             .tooltip(format!("新建 {} 会话", self.new_session_provider.label()))
                             .disabled(!can_edit || self.selected_workspace.is_none())
+                            .when(can_edit && self.selected_workspace.is_some(), |button| {
+                                button.cursor_pointer()
+                            })
                             .on_click(cx.listener(|this, _, window, cx| {
                                 if let Some(index) = this.selected_workspace {
                                     this.new_session_here(index, window, cx);
@@ -3304,6 +3417,7 @@ impl Render for ConduitApp {
                             .compact()
                             .icon(IconName::Search)
                             .tooltip("搜索会话")
+                            .cursor_pointer()
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.open_search_dialog(window, cx)
                             })),
@@ -3429,6 +3543,7 @@ impl Render for ConduitApp {
                                 .icon(IconName::Plus)
                                 .tooltip("在此工作区新建会话")
                                 .disabled(!can_edit)
+                                .when(can_edit, |button| button.cursor_pointer())
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     // Keep the workspace row's own click
                                     // handler from reselecting the previous
@@ -3450,7 +3565,7 @@ impl Render for ConduitApp {
                         .id(("session", id))
                         .h(px(30.))
                         .pl(px(24.))
-                        .pr(px(4.))
+                        .pr(px(8.))
                         .gap_2()
                         .items_center()
                         .rounded(px(8.))
@@ -3721,11 +3836,6 @@ impl Render for ConduitApp {
                                     .items_center()
                                     .gap_2()
                                     .child(
-                                        Icon::new(gpui_kit::assets::IconName::Terminal)
-                                            .small()
-                                            .text_color(rgb(FAINT)),
-                                    )
-                                    .child(
                                         div()
                                             .flex_1()
                                             .text_size(px(13.))
@@ -3903,6 +4013,7 @@ impl Render for ConduitApp {
                             .label("详情")
                             .small()
                             .ghost()
+                            .cursor_pointer()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.details = !this.details;
                                 cx.notify();
@@ -4009,6 +4120,7 @@ impl Render for ConduitApp {
                                         .label(if expanded { "收起" } else { "展开详情" })
                                         .small()
                                         .ghost()
+                                        .cursor_pointer()
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.toggle_approval_detail(toggle_id.clone(), cx)
                                         })),
@@ -4052,6 +4164,9 @@ impl Render for ConduitApp {
                                         .small()
                                         .ghost()
                                         .disabled(self.closing || submitted)
+                                        .when(!self.closing && !submitted, |button| {
+                                            button.cursor_pointer()
+                                        })
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             this.decide(id, deny_id.clone(), false, window, cx)
                                         })),
@@ -4062,6 +4177,10 @@ impl Render for ConduitApp {
                                         .small()
                                         .primary()
                                         .disabled(self.closing || submitted || !approval.allow_once)
+                                        .when(
+                                            !self.closing && !submitted && approval.allow_once,
+                                            |button| button.cursor_pointer(),
+                                        )
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             this.decide(id, allow_id.clone(), true, window, cx)
                                         })),
@@ -4088,18 +4207,18 @@ impl Render for ConduitApp {
         let input_focused = self.input.read(cx).focus_handle(cx).is_focused(window);
         let provider = selected.as_ref().map(|session| session.provider);
         let send_ready = can_edit && !busy;
-        let dot = |tint: u32| div().w(px(6.)).h(px(6.)).rounded_full().bg(rgb(tint));
+        // The floating pin replaces the old "最新消息" text button: it appears
+        // only when the user has scrolled away from the end of the message list.
+        let show_latest_pin = !self.at_bottom
+            && selected
+                .as_ref()
+                .is_some_and(|session| !session.messages.is_empty());
         let composer: AnyElement = if selected.is_some() {
-            let tint = provider.map(provider_tint).unwrap_or(FAINT);
-            let provider_label = provider.map(|p| p.label()).unwrap_or_default();
             let session_id = selected
                 .as_ref()
                 .map(|session| session.id)
                 .unwrap_or_default();
             let selected_model = selected.as_ref().and_then(|session| session.model.clone());
-            let has_messages = selected
-                .as_ref()
-                .is_some_and(|session| !session.messages.is_empty());
             let model_picker = provider
                 .map(|provider| {
                     self.composer_model_picker(
@@ -4158,37 +4277,7 @@ impl Render for ConduitApp {
                                 .text_color(rgb(MUTED))
                                 .child(directory.clone()),
                         )
-                        .child(model_picker)
-                        .child(dot(tint))
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(rgb(FAINT))
-                                .child(provider_label),
-                        )
-                        .when(has_messages, |row| {
-                            row.child(
-                                h_flex()
-                                    .id("latest")
-                                    .h(px(22.))
-                                    .px_2()
-                                    .gap_1()
-                                    .items_center()
-                                    .rounded(px(6.))
-                                    .cursor_pointer()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(FAINT))
-                                    .hover(|style| {
-                                        style.bg(rgb(SURFACE_HOVER)).text_color(rgb(TEXT))
-                                    })
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.scroll_to_end();
-                                        cx.notify();
-                                    }))
-                                    .child(Icon::new(IconName::ArrowDown).small())
-                                    .child("最新消息"),
-                            )
-                        }),
+                        .child(model_picker),
                 )
                 .child(
                     div().px_2().pt_2().child(
@@ -4315,6 +4404,7 @@ impl Render for ConduitApp {
                                 .small()
                                 .primary()
                                 .disabled(!can_edit)
+                                .when(can_edit, |button| button.cursor_pointer())
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     if let Some(index) = this.selected_workspace {
                                         this.new_session_here(index, window, cx);
@@ -4380,7 +4470,52 @@ impl Render for ConduitApp {
                 )
                 .into_any_element()
         };
-        conversation = conversation.child(div().px_6().pt_3().pb_2().child(composer));
+        // The "jump to latest" pin floats at the lower-right of the message
+        // area, just above the composer's top-right corner, and only exists
+        // while the list is scrolled away from its end.
+        conversation = conversation.child(
+            div().px_6().pt_3().pb_2().child(
+                div()
+                    .relative()
+                    .w_full()
+                    .max_w(px(840.))
+                    .mx_auto()
+                    .child(composer)
+                    .when(show_latest_pin, |area| {
+                        area.child(
+                            h_flex()
+                                .id("scroll-to-latest")
+                                .absolute()
+                                .top(px(-40.))
+                                .right(px(14.))
+                                .w(px(30.))
+                                .h(px(30.))
+                                .items_center()
+                                .justify_center()
+                                .rounded_full()
+                                .border_1()
+                                .border_color(rgb(BORDER))
+                                .bg(rgb(SURFACE_STRONG))
+                                .cursor_pointer()
+                                .hover(|style| {
+                                    style
+                                        .bg(rgb(SURFACE_HOVER))
+                                        .border_color(rgb(BORDER_STRONG))
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.scroll_to_end();
+                                    this.at_bottom = true;
+                                    cx.notify();
+                                }))
+                                .child(
+                                    Icon::new(gpui_kit::assets::IconName::Pin)
+                                        .small()
+                                        .text_color(rgb(MUTED)),
+                                ),
+                        )
+                    }),
+            ),
+        );
         // Reserved horizontal toolbar below the composer. Future chat actions
         // (attachments, context pickers, git actions) belong here so the
         // message list and composer keep their current footprint.
@@ -4498,6 +4633,7 @@ impl Render for ConduitApp {
                                 .label("关闭")
                                 .small()
                                 .ghost()
+                                .cursor_pointer()
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.details = false;
                                     cx.notify();
