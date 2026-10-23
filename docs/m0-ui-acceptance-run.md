@@ -157,6 +157,24 @@ pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -DataDir target/
 
 仍待人工确认：真实鼠标悬浮时光标是否为 pointer（静态截图无法证明）；Pin 的点击手感与自动显隐时机；会话菜单向右弹出时在窄窗或长列表底部是否被视口裁切。
 
+## 第八轮：2026-10-23 只读 Git 变更面板
+
+新增右侧只读 Git 变更面板，并用隔离的合成 Git 仓库 + 非仓库目录做自动预验：
+
+| 目标 | 实现 | 证据 |
+| --- | --- | --- |
+| 只读查看当前工作区 Git 状态与 diff | “执行详情”面板新增“Git 变更”页：分支、暂存/未暂存/未跟踪数量、变更文件列表，以及彩色暂存/未暂存 diff | [ui-v8-git-panel.png](screenshots/acceptance/ui-v8-git-panel.png) |
+| 只读保证 | 仅执行 `rev-parse` / `status` / `diff`，status 与 diff 加 `--no-optional-locks`；新增单测在临时仓库上比对 `.git` 文件指纹，确认读取面板前后无变化 | `src/git.rs` 测试 `real_snapshot_is_read_only_and_sees_worktree_changes` |
+| 失败可恢复 | 非 Git 工作区显示“该工作区不是 Git 仓库”与“重新读取”，不显示原始 fatal 文本；未安装 Git 时提示未找到 git.exe | [ui-v8-git-nonrepo.png](screenshots/acceptance/ui-v8-git-nonrepo.png) |
+| 工具详情不回归 | 面板保留“工具详情 / Git 变更”两页，工具卡片仍打开工具详情 | [ui-v8-git-tool-tab.png](screenshots/acceptance/ui-v8-git-tool-tab.png) |
+| 窄窗可用 | 850×500 下 Git 页以覆盖层显示，内容可滚动 | [ui-v8-git-narrow.png](screenshots/acceptance/ui-v8-git-narrow.png) |
+
+实现细节：每段 diff 最多保留 200 KiB、最多列出 2000 个文件，超出截断并提示；Git 命令 15 秒超时并随 Job 结束进程树；命令在后台线程运行，不阻塞 UI。面板打开、点“刷新”或一轮 CLI 任务结束（面板可见）时重读；切换工作区会丢弃旧快照重新读取。未跟踪文件只列出路径，不读取内容。
+
+验证：`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked -- --test-threads=1`（48 passed，其中 5 个新增 git 测试）、`cargo build --locked` 与双视图启动冒烟通过。
+
+仍待人工确认：真实大仓库 / 宽 diff 的渲染与滚动流畅度、真实 CLI 任务结束后的自动刷新、Windows 未安装 Git 环境的提示，以及只读行为在真实仓库上的手工核对。
+
 ## 仍未覆盖，必须人工完成
 
 清单 1、2、5、6、8、9 全项；3 的复制一致性；4 的动态滚动跟随；7 的 100%–200% DPI 与多屏；10 的取消检测与文件选择；5 的真实审批允许/拒绝与多审批队列。人工完成后把结果写回 [验证记录](m0-validation.md#手工-ui-验收清单)，不得用本预验代替。
