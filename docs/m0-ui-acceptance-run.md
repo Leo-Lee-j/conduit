@@ -137,6 +137,26 @@ pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -DataDir target/
 
 仍待人工确认：Enter/Ctrl+Enter 在真实中文输入法组合态下的行为（合成按键不等同 IME）、模型选择器与引擎下拉的手感、会话数上限在长列表下的滚动表现。
 
+## 第七轮：2026-10-23 界面细节反馈
+
+按最新反馈调整界面细节，全部为自动预验（截图 + 像素几何测量），不替代人工验收：
+
+| 反馈 | 实现 | 证据 |
+| --- | --- | --- |
+| 工作区与会话行的右侧菜单不在一条垂直线上 | 会话行右内边距由 4px 改为 8px，与工作区行一致；像素测量两侧“⋯”右边缘均为 x≈232 | [ui-v7-chat.png](screenshots/acceptance/ui-v7-chat.png) |
+| 会话记录的右侧菜单也要从右侧弹出 | 会话菜单锚点由 `Anchor::BottomRight + 6px` 改为 `Anchor::LeftCenter + 8px`，与工作区菜单同列向右弹出 | [ui-v7-session-menu-right.png](screenshots/acceptance/ui-v7-session-menu-right.png)、[ui-v7-workspace-menu-right.png](screenshots/acceptance/ui-v7-workspace-menu-right.png) |
+| “最新消息”改成 Pin 图标，合适的时候自动显示，放到对话区右下角、输入区右上角上方 | 移除输入区右上角“最新消息”文本按钮；消息列表未停留底部（距底部 ≥60px）时在对话区右下角显示浮动 Pin 按钮，点击回到底部并自动隐藏 | [ui-v7-pin.png](screenshots/acceptance/ui-v7-pin.png)、[ui-v7-pin-hidden.png](screenshots/acceptance/ui-v7-pin-hidden.png) |
+| 功能图标鼠标悬浮改为 pointer 样式 | 会话/工作区菜单、侧栏新建与搜索、引擎与模型下拉（含模型选项行）、设置与审批按钮、菜单项等补 `cursor_pointer`；禁用按钮不加 | —（光标样式无法用静态截图呈现，见下方说明） |
+| 移除模型选择器右侧的引擎标识 | 输入区顶部行删除引擎圆点与“Claude Code / Codex”文字，仅保留目录与模型选择器 | [ui-v7-chat.png](screenshots/acceptance/ui-v7-chat.png) |
+| 工具调用 title 左右 padding 不一致 | 默认图标包不包含 `terminal.svg`，工具卡片标题左侧留下约 24px 的图标占位；移除该占位后标题左内边距与右侧一致（实测标题字形距卡片左边 12px，无图标占位像素） | [ui-v7-chat.png](screenshots/acceptance/ui-v7-chat.png) |
+| 设置中 CLI 相关信息单独放到 CLI 菜单 | 左栏新增“CLI”页（路径查找顺序与可执行文件/版本说明）；通用页只保留本机数据与界面设置 | [ui-v7-settings-general.png](screenshots/acceptance/ui-v7-settings-general.png)、[ui-v7-settings-cli.png](screenshots/acceptance/ui-v7-settings-cli.png) |
+
+补充：Pin 图标位于完整图标目录中，应用资产源由默认组件包切换为 `gpui_kit::assets::AllAssets`；默认组件图标保持不变。
+
+本轮验证：`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked -- --test-threads=1`（43 passed）、`cargo build --locked` 均通过；种子数据下 1216×808 与 850×500 截图正常，窄窗下聊天页无裁切（[ui-v7-narrow.png](screenshots/acceptance/ui-v7-narrow.png)），会话菜单向右弹出仍在窗口内（[ui-v7-narrow-session-menu.png](screenshots/acceptance/ui-v7-narrow-session-menu.png)），设置弹窗仍可完整滚动（[ui-v7-narrow-settings.png](screenshots/acceptance/ui-v7-narrow-settings.png)）。
+
+仍待人工确认：真实鼠标悬浮时光标是否为 pointer（静态截图无法证明）；Pin 的点击手感与自动显隐时机；会话菜单向右弹出时在窄窗或长列表底部是否被视口裁切。
+
 ## 仍未覆盖，必须人工完成
 
 清单 1、2、5、6、8、9 全项；3 的复制一致性；4 的动态滚动跟随；7 的 100%–200% DPI 与多屏；10 的取消检测与文件选择；5 的真实审批允许/拒绝与多审批队列。人工完成后把结果写回 [验证记录](m0-validation.md#手工-ui-验收清单)，不得用本预验代替。
