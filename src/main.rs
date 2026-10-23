@@ -8,6 +8,7 @@ mod cli;
 mod domain;
 mod git;
 mod models;
+mod performance;
 mod protocol;
 mod store;
 

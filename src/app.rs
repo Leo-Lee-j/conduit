@@ -6,6 +6,7 @@ use crate::{
     domain::{ChatItem, ItemKind, Provider, SessionRecord, Workspace},
     git::{self, BranchProbe, GitProbe},
     models::{self, ModelCatalog},
+    performance::PerformanceMonitor,
     protocol::Event,
     store::Store,
 };
@@ -27,11 +28,55 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+struct SessionSummary {
+    id: u64,
+    provider: Provider,
+    title: String,
+    native_id: Option<String>,
+    model: Option<String>,
+    message_count: usize,
+}
+
+impl From<&SessionRecord> for SessionSummary {
+    fn from(session: &SessionRecord) -> Self {
+        Self {
+            id: session.id,
+            provider: session.provider,
+            title: session.title.clone(),
+            native_id: session.native_id.clone(),
+            model: session.model.clone(),
+            message_count: session.messages.len(),
+        }
+    }
+}
+
 struct ActiveRun {
     runtime: ChatRuntime,
     approvals: ApprovalQueue,
     prefix: String,
     status: String,
+    message_index: MessageIndex,
+}
+
+/// Append-only message lookup, shared by every event in an active run.
+#[derive(Default)]
+struct MessageIndex {
+    keys: HashMap<String, usize>,
+    indexed_len: usize,
+}
+
+impl MessageIndex {
+    fn find(&mut self, messages: &[ChatItem], key: &str) -> Option<usize> {
+        if self.indexed_len > messages.len() {
+            self.keys.clear();
+            self.indexed_len = 0;
+        }
+        for (index, item) in messages.iter().enumerate().skip(self.indexed_len) {
+            self.keys.entry(item.key.clone()).or_insert(index);
+        }
+        self.indexed_len = messages.len();
+        self.keys.get(key).copied()
+    }
 }
 
 struct CommitDraft {
@@ -117,6 +162,131 @@ const MUTED: u32 = 0xa1a1a8;
 const FAINT: u32 = 0x717179;
 const FOCUS: u32 = 0x4b4b54;
 
+impl Render for PerformanceMonitor {
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let memory = |bytes: Option<usize>| {
+            bytes
+                .map(|value| format!("{:.1} MiB", value as f64 / 1_048_576.0))
+                .unwrap_or_else(|| "不可用".into())
+        };
+        let percent = |value: Option<f64>| {
+            value
+                .map(|value| format!("{value:.1}%"))
+                .unwrap_or_else(|| {
+                    if self.sample_duration.is_zero() {
+                        "采样中…".into()
+                    } else {
+                        "不可用".into()
+                    }
+                })
+        };
+        let timing = |value: crate::performance::Timings| {
+            value
+                .average()
+                .map(|average| {
+                    format!(
+                        "{:.2} / {:.2} ms",
+                        average.as_secs_f64() * 1000.0,
+                        value.maximum.as_secs_f64() * 1000.0
+                    )
+                })
+                .unwrap_or_else(|| "本周期空闲".into())
+        };
+        let rows = [
+            ("CPU · 整机容量", percent(self.cpu_percent)),
+            ("CPU · 近 60 秒峰值", percent(self.recent_cpu_peak())),
+            ("驻留内存 · 工作集", memory(self.memory_bytes)),
+            ("私有提交内存", memory(self.private_bytes)),
+            ("工作集 · 进程生命周期峰值", memory(self.peak_memory_bytes)),
+            (
+                "私有提交 · 窗口内变化",
+                self.private_growth()
+                    .map(|bytes| format!("{:+.1} MiB", bytes as f64 / 1_048_576.0))
+                    .unwrap_or_else(|| "等待后续样本".into()),
+            ),
+            ("主视图构建 · 均值 / 最大", timing(self.render)),
+            ("单条消息构建 · 均值 / 最大", timing(self.message_render)),
+            (
+                "最近一帧构建 / 会话消息",
+                format!("{} / {} 条", self.mounted_messages(), self.message_count),
+            ),
+            ("本周期主视图构建", format!("{} 次", self.render.count)),
+            ("本周期引擎事件", format!("{} 条", self.event_count)),
+            (
+                "运行任务 / 已加载会话",
+                format!("{} / {}", self.active_runs, self.session_count),
+            ),
+            ("运行时长", self.uptime()),
+        ];
+        v_flex()
+            .id("performance-details")
+            .w(px(350.))
+            .max_h((window.viewport_size().height - px(72.)).min(px(460.)))
+            .overflow_y_scroll()
+            .p_3()
+            .gap_2()
+            .rounded(px(10.))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(SURFACE))
+            .shadow_md()
+            .text_color(rgb(TEXT))
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(Icon::new(gpui_kit::assets::IconName::Activity).small())
+                    .child(div().text_size(px(13.)).font_semibold().child("性能检测"))
+                    .child(div().flex_1())
+                    .child(div().text_size(px(11.)).text_color(rgb(MUTED)).child(
+                        if cfg!(debug_assertions) {
+                            "开发构建"
+                        } else {
+                            "发布构建"
+                        },
+                    )),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(rgb(MUTED))
+                    .child(format!(
+                        "Conduit · PID {} · {} 逻辑处理器",
+                        std::process::id(),
+                        self.logical_cpus
+                    )),
+            )
+            .child(
+                v_flex()
+                    .gap_2()
+                    .py_2()
+                    .border_t_1()
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .children(rows.into_iter().map(|(label, value)| {
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_3()
+                            .text_size(px(12.))
+                            .child(div().text_color(rgb(MUTED)).child(label))
+                            .child(div().flex_shrink_0().child(value))
+                    })),
+            )
+            .child(
+                v_flex()
+                    .gap_1()
+                    .text_size(px(11.))
+                    .text_color(rgb(MUTED))
+                    .child("仅统计 Conduit 主进程，CLI / Git 子进程不计入")
+                    .child("工作集含共享页；私有提交不等于实际驻留内存")
+                    .child("构建耗时不含布局、GPU 绘制，不代表帧率")
+                    .child("约每 2 秒采样，保留最近 60 秒内最多 30 条")
+                    .child("点击图标可固定展开；窗口变化按已有样本计算"),
+            )
+    }
+}
+
 fn provider_icon(provider: Provider) -> Icon {
     let (data, color): (&[u8], u32) = match provider {
         Provider::Claude => (include_bytes!("../assets/icons/claude.svg"), 0xd97757),
@@ -183,6 +353,34 @@ struct MessageOutlineEntry {
     label: String,
 }
 
+#[derive(Default)]
+struct MessageOutlineCache {
+    session: Option<u64>,
+    indexed_len: usize,
+    entries: Vec<MessageOutlineEntry>,
+    active: Option<usize>,
+    scroll: UniformListScrollHandle,
+}
+
+impl MessageOutlineCache {
+    fn refresh(&mut self, session: Option<&SessionRecord>) {
+        let id = session.map(|session| session.id);
+        let count = session.map_or(0, |session| session.messages.len());
+        if self.session != id || count < self.indexed_len {
+            *self = Self {
+                session: id,
+                ..Default::default()
+            };
+        }
+        if let Some(session) = session {
+            // Submitted user messages are immutable; only inspect appended items.
+            self.entries
+                .extend(message_outline_entries(session, self.indexed_len));
+        }
+        self.indexed_len = count;
+    }
+}
+
 fn outline_marker_width(label: &str) -> f32 {
     // Keep short prompts visibly light while allowing longer prompts to form a
     // stronger visual rhythm. The cap prevents one verbose message from
@@ -190,16 +388,22 @@ fn outline_marker_width(label: &str) -> f32 {
     (8. + label.chars().count().min(20) as f32 * 0.8).min(24.)
 }
 
-fn message_outline_entries(session: &SessionRecord) -> Vec<MessageOutlineEntry> {
+fn message_outline_entries(session: &SessionRecord, start: usize) -> Vec<MessageOutlineEntry> {
     session
         .messages
         .iter()
         .enumerate()
+        .skip(start)
         .filter(|(_, item)| item.kind == ItemKind::User)
         .map(|(index, item)| {
-            let label = item.text.split_whitespace().collect::<Vec<_>>().join(" ");
-            let mut preview: String = label.chars().take(100).collect();
-            if label.chars().count() > 100 {
+            // Bound preview work even when a user pastes a very large prompt.
+            let mut chars = item
+                .text
+                .split_whitespace()
+                .flat_map(|word| std::iter::once(' ').chain(word.chars()))
+                .skip(1);
+            let mut preview: String = chars.by_ref().take(100).collect();
+            if chars.next().is_some() {
                 preview.push('…');
             }
             MessageOutlineEntry {
@@ -534,7 +738,9 @@ pub struct ConduitApp {
     _subscriptions: Vec<Subscription>,
     dirty: bool,
     last_save: Instant,
-    scroll: ScrollHandle,
+    scroll: gpui_kit::ListState,
+    timeline_session: Option<u64>,
+    outline: MessageOutlineCache,
     /// Whether the message list is scrolled to (or near) its end. Drives the
     /// floating "jump to latest" arrow so it only shows once the user scrolls up.
     at_bottom: bool,
@@ -543,6 +749,8 @@ pub struct ConduitApp {
     tool_scrolls: HashMap<(u64, String), ScrollHandle>,
     message_focus: Option<(u64, String, Instant)>,
     pending_message_jump: bool,
+    performance: Entity<PerformanceMonitor>,
+    performance_open: bool,
 }
 
 impl ConduitApp {
@@ -736,12 +944,16 @@ impl ConduitApp {
             _subscriptions: vec![search_subscription, git_prompt_subscription],
             dirty: false,
             last_save: Instant::now(),
-            scroll: ScrollHandle::new(),
+            scroll: gpui_kit::ListState::new(0, ListAlignment::Bottom, px(240.)),
+            timeline_session: None,
+            outline: MessageOutlineCache::default(),
             at_bottom: true,
             expanded_tools: HashSet::new(),
             tool_scrolls: HashMap::new(),
             message_focus: None,
             pending_message_jump: false,
+            performance: cx.new(|_| PerformanceMonitor::new()),
+            performance_open: false,
         }
     }
     fn session(&self, id: u64) -> Option<&SessionRecord> {
@@ -1631,9 +1843,8 @@ impl ConduitApp {
         if session.is_some() {
             self.input.read(cx).focus_handle(cx).focus(window, cx);
         }
-        self.scroll.set_offset(point(px(0.), px(0.)));
-        // The new list starts at its top; let the next poll re-evaluate whether
-        // that is already the end instead of keeping the previous session's arrow.
+        self.timeline_session = None;
+        // A newly selected conversation opens at its latest message.
         self.at_bottom = true;
         if let Some(provider) = session
             .and_then(|id| self.session(id))
@@ -1893,6 +2104,7 @@ impl ConduitApp {
                 approvals: ApprovalQueue::default(),
                 prefix,
                 status: "正在连接 CLI…".into(),
+                message_index: MessageIndex::default(),
             },
         );
         self.input
@@ -1903,8 +2115,239 @@ impl ConduitApp {
         self.scroll_to_end();
         cx.notify();
     }
+    fn render_message(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let started = Instant::now();
+        let Some(session) = self
+            .store
+            .workspaces
+            .iter()
+            .flat_map(|w| &w.sessions)
+            .find(|session| Some(session.id) == self.selected_session)
+        else {
+            return div().into_any_element();
+        };
+        let Some(item) = session.messages.get(index) else {
+            return div().into_any_element();
+        };
+        let session_id = session.id;
+        let provider = session.provider;
+        let element = match item.kind {
+            ItemKind::User => h_flex()
+                .w_full()
+                .justify_end()
+                .child(
+                    div()
+                        .max_w(px(680.))
+                        .rounded(px(18.))
+                        .px_4()
+                        .py_3()
+                        .bg(rgb(SURFACE))
+                        .text_size(px(14.))
+                        .text_color(rgb(TEXT))
+                        .child(item.text.clone()),
+                )
+                .into_any_element(),
+            ItemKind::Assistant => v_flex()
+                .gap_2()
+                .w_full()
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(provider_icon(provider))
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(rgb(FAINT))
+                                .child(provider.label()),
+                        ),
+                )
+                .child(
+                    TextView::markdown(
+                        SharedString::from(format!("reply-{}-{}", session_id, item.key)),
+                        item.text.clone(),
+                    )
+                    .text_size(px(15.))
+                    .selectable(true),
+                )
+                .into_any_element(),
+            ItemKind::Tool => {
+                let detail_key = (session_id, item.key.clone());
+                let expanded = self.expanded_tools.contains(&detail_key);
+                let tool_id = format!("tool-{}-{}", session_id, item.key);
+                let header = Button::new(SharedString::from(format!("{tool_id}-toggle")))
+                    .ghost()
+                    .w_full()
+                    .h(px(36.))
+                    .px_3()
+                    .cursor_pointer()
+                    .accessibility_label(format!(
+                        "{}工具调用：{}",
+                        if expanded { "收起" } else { "展开" },
+                        item.text
+                    ))
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .items_center()
+                            .gap_2()
+                            .when_some(item.approval.as_ref(), |header, approval| {
+                                header.child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .px_2()
+                                        .py_1()
+                                        .rounded(px(5.))
+                                        .bg(rgb(SURFACE_STRONG))
+                                        .text_size(px(11.))
+                                        .text_color(rgb(match approval.status.as_str() {
+                                            "已允许" => 0x91c7a0,
+                                            "已拒绝" => 0xe3a0a0,
+                                            _ => MUTED,
+                                        }))
+                                        .child(approval.status.clone()),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_left()
+                                    .text_size(px(13.))
+                                    .truncate()
+                                    .child(item.text.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(FAINT))
+                                    .child(item.status.clone()),
+                            )
+                            .child(
+                                Icon::new(if expanded {
+                                    IconName::ChevronDown
+                                } else {
+                                    IconName::ChevronRight
+                                })
+                                .small()
+                                .text_color(rgb(FAINT)),
+                            ),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.scroll.remeasure_items(index..index + 1);
+                        if !this.expanded_tools.remove(&detail_key) {
+                            this.expanded_tools.insert(detail_key.clone());
+                        }
+                        cx.notify();
+                    }));
+                let mut card = v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .rounded(px(10.))
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .bg(rgb(SURFACE))
+                    .child(header);
+                if expanded {
+                    let tool_scroll = self
+                        .tool_scrolls
+                        .entry((session_id, item.key.clone()))
+                        .or_default()
+                        .clone();
+                    let dock_key = item.key.clone();
+                    let (content, copy_text) = tool_content(&tool_id, item, &tool_scroll);
+                    card = card.child(
+                        v_flex()
+                            .w_full()
+                            .min_w_0()
+                            .border_t_1()
+                            .border_color(rgb(BORDER))
+                            .child(
+                                h_flex()
+                                    .px_3()
+                                    .pt_1()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .text_size(px(10.))
+                                            .text_color(rgb(FAINT))
+                                            .child("工具调用内容"),
+                                    )
+                                    .child(
+                                        Button::new(SharedString::from(format!("{tool_id}-dock")))
+                                            .ghost()
+                                            .small()
+                                            .compact()
+                                            .icon(gpui_kit::assets::IconName::PanelRight)
+                                            .tooltip("在右侧查看工具详情")
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.details = true;
+                                                this.detail_view = DetailView::Tool;
+                                                this.detail_text = Some(dock_key.clone());
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new(SharedString::from(format!("{tool_id}-copy")))
+                                            .ghost()
+                                            .small()
+                                            .compact()
+                                            .icon(gpui_kit::assets::IconName::Copy)
+                                            .tooltip("复制输入与输出")
+                                            .cursor_pointer()
+                                            .on_click(move |_, _, cx| {
+                                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                                    copy_text.clone(),
+                                                ))
+                                            }),
+                                    ),
+                            )
+                            .child(content),
+                    );
+                }
+                card.into_any_element()
+            }
+            ItemKind::Notice => div()
+                .text_size(px(11.))
+                .text_color(rgb(MUTED))
+                .child(item.text.clone())
+                .into_any_element(),
+        };
+        let highlighted = self
+            .message_focus
+            .as_ref()
+            .is_some_and(|(id, key, _)| *id == session_id && key == &item.key);
+        let row = div().w_full().px_6().pb_5().child(
+            div()
+                .id(SharedString::from(format!(
+                    "message-{}-{}",
+                    session_id, item.key
+                )))
+                .w_full()
+                .min_w_0()
+                .max_w(px(840.))
+                .mx_auto()
+                .rounded(px(12.))
+                .border_1()
+                .border_color(if highlighted {
+                    rgb(FOCUS).into()
+                } else {
+                    transparent_black()
+                })
+                .when(highlighted, |row| row.bg(rgb(SURFACE_HOVER)))
+                .child(element),
+        );
+        self.performance.update(cx, |monitor, _| {
+            monitor.record_message_render(index, started.elapsed());
+        });
+        row.into_any_element()
+    }
     fn scroll_to_end(&self) {
-        self.scroll.scroll_to_bottom();
+        self.scroll.scroll_to_end();
     }
     fn jump_to_message(&mut self, session: u64, key: &str, cx: &mut Context<Self>) {
         if self.selected_session != Some(session) {
@@ -1918,64 +2361,80 @@ impl ConduitApp {
         }) else {
             return;
         };
-        self.scroll.scroll_to_top_of_item(index);
+        self.scroll.scroll_to(ListOffset {
+            item_ix: index,
+            offset_in_item: px(0.),
+        });
         self.at_bottom = false;
         self.pending_message_jump = true;
         self.message_focus = Some((session, key.into(), Instant::now()));
         cx.notify();
     }
-    fn message_outline(&self, session: &SessionRecord, cx: &mut Context<Self>) -> AnyElement {
-        let session_id = session.id;
-        let entries = message_outline_entries(session);
-        let top = self.scroll.top_item();
+    fn message_outline(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let session_id = self.outline.session.unwrap_or_default();
+        let entries = &self.outline.entries;
+        let top = self.scroll.logical_scroll_top().item_ix;
         let current = entries
-            .iter()
-            .rev()
-            .find(|entry| entry.index <= top)
-            .or_else(|| entries.first())
-            .map(|entry| entry.index);
-        let mut rail = v_flex()
-            .id(("message-outline", session_id))
-            .w_full()
-            .max_h(relative(1.))
-            .min_h_0()
-            .overflow_y_scroll()
-            .items_end();
-        for (ordinal, entry) in entries.into_iter().enumerate() {
-            let active = current == Some(entry.index);
-            let marker_width = outline_marker_width(&entry.label);
-            rail = rail.child(
-                Button::new(SharedString::from(format!(
-                    "outline-{session_id}-{}",
-                    entry.key
-                )))
-                .ghost()
-                .w_full()
-                .h(px(26.))
-                .p_0()
-                .flex_shrink_0()
-                .cursor_pointer()
-                .tooltip(entry.label.clone())
-                .tooltip_placement(Placement::Left)
-                .accessibility_label(format!("跳转到用户消息 {}：{}", ordinal + 1, entry.label))
-                .child(
-                    h_flex().w_full().justify_end().child(
-                        div()
-                            .w(px(if active {
-                                (marker_width + 2.).min(26.)
-                            } else {
-                                marker_width
-                            }))
-                            .h(px(3.))
-                            .rounded_full()
-                            .bg(rgb(if active { TEXT } else { FAINT })),
-                    ),
-                )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.jump_to_message(session_id, &entry.key, cx);
-                })),
-            );
+            .partition_point(|entry| entry.index <= top)
+            .saturating_sub(1);
+        if self.outline.active != Some(current) {
+            self.outline.active = Some(current);
+            self.outline
+                .scroll
+                .scroll_to_item(current, ScrollStrategy::Nearest);
         }
+        let app = cx.entity();
+        let rail = uniform_list(
+            ("message-outline", session_id),
+            entries.len(),
+            move |range, _, cx| {
+                app.update(cx, |this, cx| {
+                    range
+                        .map(|ordinal| {
+                            let entry = &this.outline.entries[ordinal];
+                            let active = current == ordinal;
+                            let marker_width = outline_marker_width(&entry.label);
+                            let key = entry.key.clone();
+                            Button::new(SharedString::from(format!("outline-{session_id}-{key}")))
+                                .ghost()
+                                .w_full()
+                                .h(px(26.))
+                                .p_0()
+                                .flex_shrink_0()
+                                .cursor_pointer()
+                                .tooltip(entry.label.clone())
+                                .tooltip_placement(Placement::Left)
+                                .accessibility_label(format!(
+                                    "跳转到用户消息 {}：{}",
+                                    ordinal + 1,
+                                    entry.label
+                                ))
+                                .child(
+                                    h_flex().w_full().justify_end().child(
+                                        div()
+                                            .w(px(if active {
+                                                (marker_width + 2.).min(26.)
+                                            } else {
+                                                marker_width
+                                            }))
+                                            .h(px(3.))
+                                            .rounded_full()
+                                            .bg(rgb(if active { TEXT } else { FAINT })),
+                                    ),
+                                )
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.jump_to_message(session_id, &key, cx);
+                                }))
+                        })
+                        .collect::<Vec<_>>()
+                })
+            },
+        )
+        .w_full()
+        .h(px(entries.len() as f32 * 26.))
+        .max_h(relative(1.))
+        .min_h_0()
+        .track_scroll(&self.outline.scroll);
         v_flex()
             .w(px(32.))
             .h_full()
@@ -3060,6 +3519,13 @@ impl ConduitApp {
         body.into_any_element()
     }
     fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.performance.read(cx).sample_due() {
+            // Notify only the diagnostics view; idle chats need no extra rebuild.
+            self.performance.update(cx, |monitor, cx| {
+                monitor.sample();
+                cx.notify();
+            });
+        }
         if self.dirty && self.last_save.elapsed() >= Duration::from_secs(1) {
             self.persist();
             cx.notify();
@@ -3113,7 +3579,9 @@ impl ConduitApp {
             cx.notify();
         }
         let navigating = std::mem::take(&mut self.pending_message_jump);
-        let follow = f32::from(self.scroll.offset().y + self.scroll.max_offset().y).abs() < 60.;
+        let follow = self.scroll.is_scrolled_to_end().unwrap_or_else(|| {
+            self.scroll.logical_scroll_top().item_ix >= self.scroll.item_count()
+        });
         // Re-render when the scroll position crosses the "at the end" threshold
         // so the floating arrow appears/disappears without polling every frame.
         if !navigating && follow != self.at_bottom {
@@ -3126,12 +3594,27 @@ impl ConduitApp {
                 incoming.push((*id, run.prefix.clone(), event));
             }
         }
+        self.performance
+            .update(cx, |monitor, _| monitor.record_events(incoming.len()));
         let mut changed = false;
         let mut terminal = false;
         let mut visible = false;
+        let mut dirty_messages = Vec::new();
+        let mut structural_change = false;
         for (id, prefix, event) in incoming {
             changed = true;
             visible |= Some(id) == self.selected_session;
+            if Some(id) == self.selected_session
+                && matches!(
+                    event,
+                    Event::Approval(_)
+                        | Event::ApprovalCancelled(_)
+                        | Event::ApprovalResolved { .. }
+                        | Event::Finished { .. }
+                )
+            {
+                structural_change = true;
+            }
             match event {
                 Event::Approval(approval) => {
                     let accepted = self
@@ -3255,13 +3738,38 @@ impl ConduitApp {
                     self.persist();
                 }
                 other => {
+                    let mut index = self
+                        .runs
+                        .get_mut(&id)
+                        .map(|run| std::mem::take(&mut run.message_index))
+                        .unwrap_or_default();
                     if let Some(session) = self.session_mut(id) {
-                        apply_event(session, &prefix, other);
+                        if let Some(changed_index) =
+                            apply_event_indexed(session, &prefix, other, &mut index)
+                        {
+                            if Some(id) == self.selected_session {
+                                dirty_messages.push(changed_index);
+                            }
+                        }
+                    }
+                    if let Some(run) = self.runs.get_mut(&id) {
+                        run.message_index = index;
                     }
                 }
             }
         }
         if changed {
+            if structural_change {
+                self.scroll.remeasure();
+            } else {
+                dirty_messages.sort_unstable();
+                dirty_messages.dedup();
+                for index in dirty_messages {
+                    if index < self.scroll.item_count() {
+                        self.scroll.remeasure_items(index..index + 1);
+                    }
+                }
+            }
             self.dirty = true;
             if terminal || self.last_save.elapsed() > Duration::from_secs(1) {
                 self.persist();
@@ -5069,11 +5577,22 @@ fn finish_tool_cards(session: &mut SessionRecord, prefix: &str, status: &str) {
     }
 }
 
+#[cfg(test)]
 pub fn apply_event(session: &mut SessionRecord, prefix: &str, event: Event) {
+    apply_event_indexed(session, prefix, event, &mut MessageIndex::default());
+}
+
+fn apply_event_indexed(
+    session: &mut SessionRecord,
+    prefix: &str,
+    event: Event,
+    index: &mut MessageIndex,
+) -> Option<usize> {
     if let Event::ToolInput { key, input } = event {
         let key = format!("{prefix}-{key}");
-        if let Some(item) = session.messages.iter_mut().find(|m| m.key == key) {
-            item.input = input;
+        if let Some(position) = index.find(&session.messages, &key) {
+            session.messages[position].input = input;
+            return Some(position);
         } else {
             session.messages.push(ChatItem {
                 key,
@@ -5085,7 +5604,7 @@ pub fn apply_event(session: &mut SessionRecord, prefix: &str, event: Event) {
                 approval: None,
             });
         }
-        return;
+        return Some(session.messages.len() - 1);
     }
     let (key, kind, text, detail, status, delta) = match event {
         Event::Delta { key, text } => (
@@ -5121,10 +5640,11 @@ pub fn apply_event(session: &mut SessionRecord, prefix: &str, event: Event) {
             String::new(),
             false,
         ),
-        _ => return,
+        _ => return None,
     };
     let key = format!("{prefix}-{key}");
-    if let Some(item) = session.messages.iter_mut().find(|m| m.key == key) {
+    if let Some(position) = index.find(&session.messages, &key) {
+        let item = &mut session.messages[position];
         if kind == ItemKind::Assistant {
             if delta {
                 item.text.push_str(&text);
@@ -5142,6 +5662,7 @@ pub fn apply_event(session: &mut SessionRecord, prefix: &str, event: Event) {
             }
             item.status = status;
         }
+        Some(position)
     } else {
         // Guard against a provider resending the same completed block under a
         // new item key; keep one visible copy per consecutive run.
@@ -5165,18 +5686,60 @@ pub fn apply_event(session: &mut SessionRecord, prefix: &str, event: Event) {
                 status,
                 approval: None,
             });
+            Some(session.messages.len() - 1)
+        } else {
+            None
         }
     }
 }
 
 impl Render for ConduitApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let render_started = Instant::now();
         let narrow = window.viewport_size().width < px(1100.);
         let app_entity = cx.entity();
         let selected = self
             .selected_session
             .and_then(|id| self.session(id))
-            .cloned();
+            .map(SessionSummary::from);
+        let message_count = selected.as_ref().map_or(0, |session| session.message_count);
+        let outline_session = self.selected_session.and_then(|id| {
+            self.store
+                .workspaces
+                .iter()
+                .flat_map(|workspace| &workspace.sessions)
+                .find(|session| session.id == id)
+        });
+        self.outline.refresh(outline_session);
+        if self.timeline_session != self.selected_session {
+            self.scroll.reset(message_count);
+            self.timeline_session = self.selected_session;
+        } else {
+            let previous_count = self.scroll.item_count();
+            if message_count > previous_count {
+                self.scroll.splice(
+                    previous_count..previous_count,
+                    message_count - previous_count,
+                );
+            } else if message_count < previous_count {
+                self.scroll.splice(message_count..previous_count, 0);
+            }
+        }
+        if self.at_bottom {
+            self.scroll.scroll_to_end();
+        }
+        self.scroll
+            .set_scroll_handler(cx.listener(|this, event: &ListScrollEvent, _, cx| {
+                this.at_bottom = !event.is_scrolled;
+                cx.notify();
+            }));
+        self.performance.update(cx, |monitor, _| {
+            monitor.begin_render(
+                message_count,
+                self.runs.len(),
+                self.store.workspaces.iter().map(|w| w.sessions.len()).sum(),
+            );
+        });
         let busy = self
             .selected_workspace
             .is_some_and(|i| self.workspace_busy(i));
@@ -5523,19 +6086,19 @@ impl Render for ConduitApp {
                         .child("本地 CLI · Windows · Preview"),
                 ),
         );
-        let mut messages = v_flex()
+        let mut messages = div()
+            .v_flex()
             .id("messages")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
-            .track_scroll(&self.scroll)
             .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
             .min_w_0()
             .px_6()
             .py_5()
             .gap_5();
         if let Some(session) = &selected {
-            if session.messages.is_empty() {
+            if session.message_count == 0 {
                 messages = messages.child(
                     v_flex()
                         .flex_1()
@@ -5570,222 +6133,21 @@ impl Render for ConduitApp {
                         ),
                 );
             }
-            for item in &session.messages {
-                let element = match item.kind {
-                    ItemKind::User => h_flex()
-                        .w_full()
-                        .justify_end()
-                        .child(
-                            div()
-                                .max_w(px(680.))
-                                .rounded(px(18.))
-                                .px_4()
-                                .py_3()
-                                .bg(rgb(SURFACE))
-                                .text_size(px(14.))
-                                .text_color(rgb(TEXT))
-                                .child(item.text.clone()),
-                        )
-                        .into_any_element(),
-                    ItemKind::Assistant => v_flex()
-                        .gap_2()
-                        .w_full()
-                        .child(
-                            h_flex()
-                                .items_center()
-                                .gap_2()
-                                .child(provider_icon(session.provider))
-                                .child(
-                                    div()
-                                        .text_size(px(11.))
-                                        .text_color(rgb(FAINT))
-                                        .child(session.provider.label()),
-                                ),
-                        )
-                        .child(
-                            TextView::markdown(
-                                SharedString::from(format!("reply-{}-{}", session.id, item.key)),
-                                item.text.clone(),
-                            )
-                            .text_size(px(15.))
-                            .selectable(true),
-                        )
-                        .into_any_element(),
-                    ItemKind::Tool => {
-                        let detail_key = (session.id, item.key.clone());
-                        let expanded = self.expanded_tools.contains(&detail_key);
-                        let tool_id = format!("tool-{}-{}", session.id, item.key);
-                        let tool_scroll = self
-                            .tool_scrolls
-                            .entry(detail_key.clone())
-                            .or_default()
-                            .clone();
-                        let header = Button::new(SharedString::from(format!("{tool_id}-toggle")))
-                            .ghost()
-                            .w_full()
-                            .h(px(36.))
-                            .px_3()
-                            .cursor_pointer()
-                            .accessibility_label(format!(
-                                "{}工具调用：{}",
-                                if expanded { "收起" } else { "展开" },
-                                item.text
-                            ))
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .min_w_0()
-                                    .items_center()
-                                    .gap_2()
-                                    .when_some(item.approval.as_ref(), |header, approval| {
-                                        header.child(
-                                            div()
-                                                .flex_shrink_0()
-                                                .px_2()
-                                                .py_1()
-                                                .rounded(px(5.))
-                                                .bg(rgb(SURFACE_STRONG))
-                                                .text_size(px(11.))
-                                                .text_color(rgb(match approval.status.as_str() {
-                                                    "已允许" => 0x91c7a0,
-                                                    "已拒绝" => 0xe3a0a0,
-                                                    _ => MUTED,
-                                                }))
-                                                .child(approval.status.clone()),
-                                        )
-                                    })
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .text_left()
-                                            .text_size(px(13.))
-                                            .truncate()
-                                            .child(item.text.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(11.))
-                                            .text_color(rgb(FAINT))
-                                            .child(item.status.clone()),
-                                    )
-                                    .child(
-                                        Icon::new(if expanded {
-                                            IconName::ChevronDown
-                                        } else {
-                                            IconName::ChevronRight
-                                        })
-                                        .small()
-                                        .text_color(rgb(FAINT)),
-                                    ),
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if !this.expanded_tools.remove(&detail_key) {
-                                    this.expanded_tools.insert(detail_key.clone());
-                                }
-                                cx.notify();
-                            }));
-                        let mut card = v_flex()
-                            .w_full()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .rounded(px(10.))
-                            .border_1()
-                            .border_color(rgb(BORDER))
-                            .bg(rgb(SURFACE))
-                            .child(header);
-                        if expanded {
-                            let dock_key = item.key.clone();
-                            let (content, copy_text) = tool_content(&tool_id, item, &tool_scroll);
-                            card = card.child(
-                                v_flex()
-                                    .w_full()
-                                    .min_w_0()
-                                    .border_t_1()
-                                    .border_color(rgb(BORDER))
-                                    .child(
-                                        h_flex()
-                                            .px_3()
-                                            .pt_1()
-                                            .items_center()
-                                            .child(
-                                                div()
-                                                    .flex_1()
-                                                    .text_size(px(10.))
-                                                    .text_color(rgb(FAINT))
-                                                    .child("工具调用内容"),
-                                            )
-                                            .child(
-                                                Button::new(SharedString::from(format!(
-                                                    "{tool_id}-dock"
-                                                )))
-                                                .ghost()
-                                                .small()
-                                                .compact()
-                                                .icon(gpui_kit::assets::IconName::PanelRight)
-                                                .tooltip("在右侧查看工具详情")
-                                                .cursor_pointer()
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.details = true;
-                                                    this.detail_view = DetailView::Tool;
-                                                    this.detail_text = Some(dock_key.clone());
-                                                    cx.notify();
-                                                })),
-                                            )
-                                            .child(
-                                                Button::new(SharedString::from(format!(
-                                                    "{tool_id}-copy"
-                                                )))
-                                                .ghost()
-                                                .small()
-                                                .compact()
-                                                .icon(gpui_kit::assets::IconName::Copy)
-                                                .tooltip("复制输入与输出")
-                                                .cursor_pointer()
-                                                .on_click(move |_, _, cx| {
-                                                    cx.write_to_clipboard(
-                                                        ClipboardItem::new_string(
-                                                            copy_text.clone(),
-                                                        ),
-                                                    )
-                                                }),
-                                            ),
-                                    )
-                                    .child(content),
-                            );
-                        }
-                        card.into_any_element()
-                    }
-                    ItemKind::Notice => div()
-                        .text_size(px(11.))
-                        .text_color(rgb(MUTED))
-                        .child(item.text.clone())
-                        .into_any_element(),
-                };
-                let highlighted = self
-                    .message_focus
-                    .as_ref()
-                    .is_some_and(|(id, key, _)| *id == session.id && key == &item.key);
-                messages = messages.child(
-                    div()
-                        .id(SharedString::from(format!(
-                            "message-{}-{}",
-                            session.id, item.key
-                        )))
-                        .w_full()
-                        .min_w_0()
-                        .max_w(px(840.))
-                        .mx_auto()
-                        .rounded(px(12.))
-                        .border_1()
-                        .border_color(if highlighted {
-                            rgb(FOCUS).into()
-                        } else {
-                            transparent_black()
+            if session.message_count > 0 {
+                let app = app_entity.clone();
+                messages = div()
+                    .id("messages")
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .child(
+                        gpui_kit::list(self.scroll.clone(), move |index, _, cx| {
+                            app.update(cx, |this, cx| this.render_message(index, cx))
                         })
-                        .when(highlighted, |row| row.bg(rgb(SURFACE_HOVER)))
-                        .child(element),
-                );
+                        .size_full()
+                        .pt_5(),
+                    )
+                    .vertical_scrollbar(&self.scroll);
             }
         } else if has_workspace {
             messages = messages.child(
@@ -5942,12 +6304,7 @@ impl Render for ConduitApp {
         // the window edge. It stays outside the scrolling list, while the
         // rail itself is vertically centered in the chat viewport.
         let mut message_area = h_flex().flex_1().min_h_0().min_w_0().items_stretch();
-        if let Some(session) = selected.as_ref().filter(|session| {
-            session
-                .messages
-                .iter()
-                .any(|item| item.kind == ItemKind::User)
-        }) {
+        if !self.outline.entries.is_empty() {
             message_area = message_area.child(
                 h_flex()
                     .w_full()
@@ -5957,7 +6314,7 @@ impl Render for ConduitApp {
                     .min_w_0()
                     .mx_auto()
                     .items_stretch()
-                    .child(self.message_outline(session, cx))
+                    .child(self.message_outline(cx))
                     .child(messages)
                     // Balance the rail so messages stay aligned with the composer.
                     .child(div().w(px(32.)).flex_shrink_0()),
@@ -6156,7 +6513,7 @@ impl Render for ConduitApp {
         let show_latest_button = !self.at_bottom
             && selected
                 .as_ref()
-                .is_some_and(|session| !session.messages.is_empty());
+                .is_some_and(|session| session.message_count > 0);
         let session_id = selected
             .as_ref()
             .map(|session| session.id)
@@ -6398,6 +6755,36 @@ impl Render for ConduitApp {
             )
             .when_some(self.push_button(app_entity.clone()), |bar, button| {
                 bar.child(button)
+            })
+            .child({
+                let hover_monitor = self.performance.clone();
+                let pinned_monitor = self.performance.clone();
+                div()
+                    .id("performance-tooltip")
+                    .flex_shrink_0()
+                    .when(!self.performance_open, |trigger| {
+                        trigger.tooltip(move |_, _| hover_monitor.clone().into())
+                    })
+                    .child(
+                        Popover::new("performance-popover")
+                            .anchor(Anchor::BottomRight)
+                            .appearance(false)
+                            .open(self.performance_open)
+                            .on_open_change(cx.listener(|this, open, _, cx| {
+                                this.performance_open = *open;
+                                cx.notify();
+                            }))
+                            .trigger(
+                                Button::new("performance-monitor")
+                                    .ghost()
+                                    .small()
+                                    .compact()
+                                    .icon(gpui_kit::assets::IconName::Activity)
+                                    .accessibility_label("性能检测")
+                                    .cursor_pointer(),
+                            )
+                            .content(move |_, _, _| pinned_monitor.clone()),
+                    )
             });
         let title_bar = TitleBar::new()
             .bg(rgb(CANVAS))
@@ -6448,7 +6835,12 @@ impl Render for ConduitApp {
             let tool_content = self
                 .detail_text
                 .as_ref()
-                .and_then(|key| selected.as_ref()?.messages.iter().find(|m| &m.key == key))
+                .and_then(|key| {
+                    self.session(self.selected_session?)?
+                        .messages
+                        .iter()
+                        .find(|m| &m.key == key)
+                })
                 .map(|item| {
                     format!(
                         "输入\n{}\n\n输出 / 结果\n{}",
@@ -6648,13 +7040,17 @@ impl Render for ConduitApp {
         if let Some(panel) = overlay {
             main_area = main_area.child(panel);
         }
-        v_flex()
+        let view = v_flex()
             .relative()
             .size_full()
             .bg(rgb(CANVAS))
             .text_color(rgb(TEXT))
             .child(title_bar)
-            .child(main_area)
+            .child(main_area);
+        self.performance.update(cx, |monitor, _| {
+            monitor.record_render(render_started.elapsed());
+        });
+        view
     }
 }
 
@@ -6668,6 +7064,81 @@ mod tests {
         domain::{ChatItem, ItemKind, Provider, SessionRecord},
         protocol::Event,
     };
+    #[test]
+    fn indexed_events_keep_order_inputs_and_stream_snapshots_across_batches() {
+        let mut s = session();
+        let mut index = super::MessageIndex::default();
+        for ordinal in 0..500 {
+            super::apply_event_indexed(
+                &mut s,
+                "turn-1",
+                Event::ToolInput {
+                    key: ordinal.to_string(),
+                    input: format!("input-{ordinal}"),
+                },
+                &mut index,
+            );
+        }
+        for ordinal in 0..500 {
+            super::apply_event_indexed(
+                &mut s,
+                "turn-1",
+                Event::Tool {
+                    key: ordinal.to_string(),
+                    title: "Bash".into(),
+                    detail: "result".into(),
+                    status: "完成".into(),
+                },
+                &mut index,
+            );
+        }
+        assert_eq!(s.messages.len(), 500);
+        for (ordinal, item) in s.messages.iter().enumerate() {
+            assert_eq!(item.key, format!("turn-1-{ordinal}"));
+            assert_eq!(item.input, format!("input-{ordinal}"));
+            assert_eq!(item.detail, "result");
+        }
+        // Approval handling appends messages outside the event index.
+        s.record_tool_approval(
+            "turn-1",
+            "ticket",
+            "请求使用 Write",
+            r#"{"tool_use_id":"write"}"#,
+            "等待中",
+        );
+        super::apply_event_indexed(
+            &mut s,
+            "turn-1",
+            Event::ToolInput {
+                key: "write".into(),
+                input: "payload".into(),
+            },
+            &mut index,
+        );
+        assert_eq!(s.messages.len(), 501);
+        assert!(s.messages[500].approval.is_some());
+        for text in ["first", " second"] {
+            super::apply_event_indexed(
+                &mut s,
+                "turn-1",
+                Event::Delta {
+                    key: "reply".into(),
+                    text: text.into(),
+                },
+                &mut index,
+            );
+        }
+        super::apply_event_indexed(
+            &mut s,
+            "turn-1",
+            Event::Text {
+                key: "reply".into(),
+                text: "complete snapshot".into(),
+            },
+            &mut index,
+        );
+        assert_eq!(s.messages.last().unwrap().text, "complete snapshot");
+    }
     #[test]
     fn message_outline_keeps_real_indices_and_keys_amid_tools_and_replies() {
         let mut s = session();
@@ -6689,7 +7160,7 @@ mod tests {
                 approval: None,
             });
         }
-        let entries = super::message_outline_entries(&s);
+        let entries = super::message_outline_entries(&s, 0);
         assert_eq!(
             entries
                 .iter()
@@ -6700,9 +7171,43 @@ mod tests {
         assert_eq!(entries[0].label, "第一轮 修复 bug");
         assert_eq!(entries[2].label, "（空消息）");
         s.messages[0].text = "中🙂".repeat(90);
-        let entries = super::message_outline_entries(&s);
+        let entries = super::message_outline_entries(&s, 0);
         assert_eq!(entries[0].label.chars().count(), 101);
         assert!(entries[0].label.ends_with('…'));
+    }
+
+    #[test]
+    fn message_outline_cache_only_indexes_appends_and_resets_with_session() {
+        let mut session = session();
+        let mut cache = super::MessageOutlineCache::default();
+        let item = |key: &str, kind| ChatItem {
+            key: key.into(),
+            kind,
+            text: "用户消息".into(),
+            input: String::new(),
+            detail: String::new(),
+            status: String::new(),
+            approval: None,
+        };
+        session.messages.push(item("user-1", ItemKind::User));
+        cache.refresh(Some(&session));
+        let label = cache.entries[0].label.as_ptr();
+        cache.refresh(Some(&session));
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(cache.entries[0].label.as_ptr(), label);
+        session.messages.push(item("reply", ItemKind::Assistant));
+        session.messages.push(item("user-2", ItemKind::User));
+        cache.refresh(Some(&session));
+        assert_eq!(cache.entries.len(), 2);
+        assert_eq!(cache.entries[1].index, 2);
+        session.messages.truncate(1);
+        cache.refresh(Some(&session));
+        assert_eq!(cache.entries.len(), 1);
+        session.id += 1;
+        cache.refresh(Some(&session));
+        assert_eq!(cache.session, Some(session.id));
+        cache.refresh(None);
+        assert!(cache.entries.is_empty());
     }
 
     #[test]
@@ -7027,6 +7532,114 @@ mod ui_tests {
         ScrollWheelEvent, StatefulInteractiveElement, Styled, TestAppContext, Window,
         component::v_flex, div, point, px,
     };
+
+    #[gpui_kit::test]
+    fn long_chat_virtualizes_real_rows_and_keeps_history_jump_on_append(cx: &mut TestAppContext) {
+        use crate::{
+            domain::{ItemKind, Provider, SessionRecord, Workspace},
+            store::Store,
+        };
+        use gpui_kit::AppContext;
+        cx.update(gpui_kit::init);
+        let app_slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let slot = app_slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let mut app = super::ConduitApp::new(window, cx, false, false);
+                let messages = (0..10_000)
+                    .map(|index| ChatItem {
+                        key: format!("message-{index}"),
+                        kind: if index % 2 == 0 {
+                            ItemKind::User
+                        } else {
+                            ItemKind::Notice
+                        },
+                        text: format!("历史消息 {index}"),
+                        input: String::new(),
+                        detail: String::new(),
+                        status: String::new(),
+                        approval: None,
+                    })
+                    .collect();
+                app.store = Store {
+                    workspaces: vec![Workspace {
+                        path: std::env::temp_dir(),
+                        sessions: vec![SessionRecord {
+                            id: 1,
+                            provider: Provider::Claude,
+                            title: "Long chat".into(),
+                            created_at: 0,
+                            exit_code: None,
+                            archived: false,
+                            native_id: None,
+                            model: None,
+                            messages,
+                            interrupted: false,
+                        }],
+                    }],
+                    ..Default::default()
+                };
+                app.selected_workspace = Some(0);
+                app.selected_session = Some(1);
+                app
+            });
+            *slot.borrow_mut() = Some(app.clone());
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        let app = app_slot.borrow().as_ref().unwrap().clone();
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.update(|_, cx| {
+            let app = app.read(cx);
+            let monitor = app.performance.read(cx);
+            assert_eq!(monitor.message_count, 10_000);
+            assert_eq!(app.outline.entries.len(), 5_000);
+            assert!(app.outline.scroll.0.borrow().last_item_size.is_some());
+            assert!(monitor.mounted_messages() > 0);
+            assert!(
+                monitor.mounted_messages() < 100,
+                "offscreen rows must not be constructed"
+            );
+        });
+        cx.update(|_, cx| app.update(cx, |app, cx| app.jump_to_message(1, "message-5000", cx)));
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let before = cx.update(|_, cx| {
+            let app = app.read(cx);
+            assert!(app.scroll.bounds_for_item(5000).is_some());
+            assert!(!app.at_bottom);
+            app.scroll.logical_scroll_top()
+        });
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                super::apply_event(
+                    app.session_mut(1).unwrap(),
+                    "turn-new",
+                    crate::protocol::Event::Delta {
+                        key: "reply".into(),
+                        text: "new streaming content".into(),
+                    },
+                );
+                cx.notify();
+            })
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.update(|_, cx| {
+            let app = app.read(cx);
+            let after = app.scroll.logical_scroll_top();
+            assert_eq!(
+                (after.item_ix, after.offset_in_item),
+                (before.item_ix, before.offset_in_item),
+                "new tail content must not pull readers away from history"
+            );
+            assert!(app.performance.read(cx).mounted_messages() < 100);
+        });
+    }
 
     struct ToolScrollFixture {
         outer: ScrollHandle,
