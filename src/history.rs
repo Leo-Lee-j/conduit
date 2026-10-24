@@ -185,12 +185,15 @@ fn parse_claude(text: &str, workspace: &Path) -> Option<ImportedSession> {
         }
         match value.get("type").and_then(Value::as_str) {
             Some("user") => {
-                let typed = value
+                let is_user_prompt = value
                     .get("promptSource")
                     .and_then(Value::as_str)
-                    .map(|s| s == "typed")
-                    .unwrap_or(false);
-                if !typed {
+                    // Claude Code writes normal prompts from its SDK path with
+                    // `promptSource: "sdk"`; older CLI sessions used
+                    // `"typed"`. Both are user-visible input, unlike tool
+                    // results and continuation/meta records.
+                    .is_some_and(|source| matches!(source, "typed" | "sdk"));
+                if !is_user_prompt {
                     continue; // Skip tool results, local commands, meta input.
                 }
                 if let Some(text) = user_text(&value) {
@@ -571,6 +574,22 @@ mod tests {
         assert!(matches!(session.messages[1].kind, ItemKind::Assistant));
         assert!(matches!(session.messages[2].kind, ItemKind::Tool));
         assert_eq!(session.messages[2].text, "Bash");
+    }
+
+    #[test]
+    fn claude_sdk_prompt_is_rendered_as_user_message() {
+        let workspace = tmpdir("claude-sdk-ws").canonicalize().unwrap();
+        let cwd = workspace.to_string_lossy().replace('\\', "\\\\");
+        let jsonl = [
+            format!(r#"{{"type":"user","promptSource":"sdk","sessionId":"sdk-123","cwd":"{cwd}","message":{{"role":"user","content":"SDK prompt"}},"timestamp":"2026-10-24T13:08:04.421Z"}}"#),
+            format!(r#"{{"type":"user","sessionId":"sdk-123","cwd":"{cwd}","message":{{"role":"user","content":[{{"type":"text","text":"Continue from where you left off."}}]}}}}"#),
+        ].join("\n");
+
+        let session = parse_claude(&jsonl, &workspace).expect("sdk prompt is displayable");
+        assert_eq!(session.title, "SDK prompt");
+        assert_eq!(session.messages.len(), 1);
+        assert_eq!(session.messages[0].kind, ItemKind::User);
+        assert_eq!(session.messages[0].text, "SDK prompt");
     }
 
     #[test]

@@ -16,7 +16,7 @@ use crate::{
 };
 use chrono::{DateTime, Local};
 use gpui_kit::{
-    base::{TextSelection, TextSelectionLayer},
+    base::TextSelection,
     component::{
         Size,
         alert::Alert,
@@ -3673,6 +3673,13 @@ impl ConduitApp {
                 // Keep the whole user message as one literal, selectable text run.
                 // In particular, do not reinterpret Markdown-looking user input.
                 let body = div()
+                    // SelectableText does not subscribe this view to its selection
+                    // state, so request a repaint as the pointer moves during drag.
+                    .on_mouse_move(cx.listener(|_, event: &MouseMoveEvent, _, cx| {
+                        if event.pressed_button == Some(MouseButton::Left) {
+                            cx.notify();
+                        }
+                    }))
                     // SelectableText registers drag selection but does not set the
                     // native text cursor like TextView's text renderer does.
                     .cursor_text()
@@ -10382,7 +10389,6 @@ impl Render for ConduitApp {
             .bg(rgb(palette().canvas))
             .text_color(rgb(palette().text))
             .child(title_bar)
-            .child(TextSelectionLayer)
             .child(main_area);
         if self.store.ui.performance_monitor {
             self.performance.update(cx, |monitor, _| {
@@ -11147,6 +11153,7 @@ mod ui_tests {
         };
         use gpui_kit::{AppContext as _, Modifiers, MouseButton, base::TextSelection};
 
+        const USER_PROMPT: &str = "USER_PROMPT_TEXT enough words to make a wide selectable user bubble for checking repaint during dragging across the text.";
         const REPLY: &str = "第一段回复内容用于验证拖拽选中是否跟随指针移动，这里需要足够长的中文来覆盖两行以上的文本区域。第二段内容继续保持长度以便跨行拖拽选中。";
 
         cx.update(gpui_kit::init);
@@ -11175,7 +11182,7 @@ mod ui_tests {
                             native_id: None,
                             model: None,
                             messages: vec![
-                                item("user-1", ItemKind::User, "问题"),
+                                item("user-1", ItemKind::User, USER_PROMPT),
                                 item("reply-1", ItemKind::Assistant, REPLY),
                             ],
                             interrupted: false,
@@ -11315,5 +11322,57 @@ mod ui_tests {
                 .unwrap_or_default()
         });
         assert_eq!(copied, at_far, "Ctrl+C must copy the chat selection");
+
+        let mut user_line = None;
+        'probe_user: for user_y in (120..640).step_by(16) {
+            for user_x in (320..1120).step_by(80) {
+                let selected = probe(cx, px(user_x as f32), px(user_y as f32));
+                if !selected.is_empty() && USER_PROMPT.contains(&selected) {
+                    user_line = Some((px(user_x as f32), px(user_y as f32)));
+                    break 'probe_user;
+                }
+            }
+        }
+        let (user_x, user_y) = user_line.expect("a selectable user text line");
+        cx.simulate_mouse_down(
+            point(user_x + px(10.), user_y),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.run_until_parked();
+        let drag_user = |cx: &mut gpui_kit::VisualTestContext, x: f32| {
+            cx.simulate_mouse_move(
+                point(user_x + px(x), user_y),
+                Some(MouseButton::Left),
+                Modifiers::default(),
+            );
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            read(cx)
+        };
+        let (user_mid, user_painted_mid) = drag_user(cx, 100.);
+        let (user_far, user_painted_far) = drag_user(cx, 220.);
+        assert!(
+            !user_mid.is_empty(),
+            "user selection should update during drag"
+        );
+        assert!(
+            USER_PROMPT.contains(&user_mid),
+            "unexpected user selection: {user_mid}"
+        );
+        assert!(user_far.chars().count() > user_mid.chars().count());
+        assert!(
+            user_painted_mid.0 > 0,
+            "user highlight should paint during drag"
+        );
+        assert!(user_painted_far.1 > user_painted_mid.1);
+        cx.simulate_mouse_up(
+            point(user_x + px(220.), user_y),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.run_until_parked();
     }
 }
