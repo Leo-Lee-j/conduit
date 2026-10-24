@@ -3,19 +3,23 @@ use crate::{
     ccs::{self, CcsCatalog},
     chat_runtime::ChatRuntime,
     cli::{self, VersionProbe},
-    domain::{ChatItem, ItemKind, Provider, SessionRecord, Workspace},
+    domain::{ChatItem, ItemKind, PermissionLevel, Provider, SessionRecord, Usage, Workspace},
     git::{self, BranchProbe, GitProbe},
     models::{self, ModelCatalog},
     performance::PerformanceMonitor,
     protocol::Event,
-    store::{AppearanceMode, Store},
+    store::{AppearanceMode, MAX_TAB_LIMIT, NamingMode, Store},
 };
+use chrono::{DateTime, Local};
 use gpui_kit::{
     component::{
+        alert::Alert,
         button::*,
         input::{Input, InputEvent, InputState, Textarea, TextareaState},
+        menu::{ContextMenuExt, PopupMenuItem},
         popover::Popover,
         scroll::ScrollableElement,
+        spinner::Spinner,
         switch::Switch,
         text::TextView,
         *,
@@ -32,7 +36,6 @@ use std::{
 struct SessionSummary {
     id: u64,
     provider: Provider,
-    title: String,
     native_id: Option<String>,
     model: Option<String>,
     message_count: usize,
@@ -43,7 +46,6 @@ impl From<&SessionRecord> for SessionSummary {
         Self {
             id: session.id,
             provider: session.provider,
-            title: session.title.clone(),
             native_id: session.native_id.clone(),
             model: session.model.clone(),
             message_count: session.messages.len(),
@@ -56,7 +58,16 @@ struct ActiveRun {
     approvals: ApprovalQueue,
     prefix: String,
     status: String,
+    /// What the engine is doing right now, shown in the chat viewport while
+    /// the turn is still running (the tab keeps the shorter `status`).
+    activity: String,
     message_index: MessageIndex,
+    /// Usage reported by the running turn, plus turn-local token accounting
+    /// used to derive the streaming tokens/s figure.
+    usage: Usage,
+    turn_tokens_at_start: u64,
+    turn_started: Instant,
+    last_usage_event: Instant,
 }
 
 /// Append-only message lookup, shared by every event in an active run.
@@ -99,6 +110,14 @@ struct GitOperation {
     draft: String,
 }
 
+/// One-shot background request that proposes a short session title.
+struct SessionNaming {
+    runtime: ChatRuntime,
+    started: Instant,
+    parts: Vec<(String, String)>,
+    error: Option<String>,
+}
+
 struct GitFeedback {
     text: String,
     error: bool,
@@ -128,6 +147,7 @@ fn update_commit_text(
 enum SettingsTab {
     General,
     Appearance,
+    Session,
     Git,
     Cli,
     Provider(Provider),
@@ -423,6 +443,17 @@ fn provider_icon(provider: Provider) -> Icon {
         .text_color(rgb(color))
 }
 
+fn message_action_button(id: SharedString, icon: Icon, tooltip: &'static str) -> Button {
+    Button::new(id)
+        .ghost()
+        .small()
+        .compact()
+        .icon(icon)
+        .tooltip(tooltip)
+        .accessibility_label(tooltip)
+        .cursor_pointer()
+}
+
 fn display_path(path: &std::path::Path) -> String {
     let text = path.display().to_string();
     if let Some(path) = text.strip_prefix(r"\\?\UNC\") {
@@ -458,6 +489,47 @@ fn settings_row(label: &'static str, value: String, divider: bool) -> AnyElement
                 .child(value),
         )
         .into_any_element()
+}
+
+/// Titles imported from CLI transcripts may contain line breaks; list rows
+/// render a single line, so embedded newlines must collapse to spaces.
+fn single_line_title(title: &str) -> String {
+    title.replace(['\r', '\n'], " ")
+}
+
+/// The most recent user/assistant exchange, flattened for AI titling. Bounded
+/// by both message count and character count so the naming prompt stays small.
+fn latest_naming_excerpt(session: &SessionRecord) -> Option<String> {
+    const MAX_MESSAGES: usize = 4;
+    const MAX_CHARS: usize = 800;
+    let mut parts: Vec<&str> = session
+        .messages
+        .iter()
+        .rev()
+        .filter(|item| matches!(item.kind, ItemKind::User | ItemKind::Assistant))
+        .map(|item| item.text.trim())
+        .filter(|text| !text.is_empty())
+        .take(MAX_MESSAGES)
+        .collect();
+    if parts.is_empty() {
+        return None;
+    }
+    parts.reverse();
+    let joined = parts.join("\n\n");
+    let total = joined.chars().count();
+    Some(
+        joined
+            .chars()
+            .skip(total.saturating_sub(MAX_CHARS))
+            .collect(),
+    )
+}
+
+fn naming_mode_label(mode: NamingMode) -> &'static str {
+    match mode {
+        NamingMode::Latest => "根据最新内容",
+        NamingMode::FirstMessage => "根据第一条消息",
+    }
 }
 
 /// Whether a session matches the sidebar search query (title or message text).
@@ -504,6 +576,16 @@ impl MessageOutlineCache {
         }
         self.indexed_len = count;
     }
+}
+
+/// Tooltip text for an outline marker: long prompts are ellipsized so the
+/// popup stays narrow and never has to flip to the right side of the rail.
+fn outline_tooltip(label: &str) -> SharedString {
+    let mut preview: String = label.chars().take(40).collect();
+    if label.chars().count() > 40 {
+        preview.push('…');
+    }
+    SharedString::from(preview)
 }
 
 fn outline_marker_width(label: &str) -> f32 {
@@ -795,6 +877,14 @@ fn diff_element(diff: &str) -> AnyElement {
         .into_any_element()
 }
 
+/// Menu popovers render only compact buttons, so the default `p_3()` popover
+/// padding (12px on every side) makes the menu look sparse. This refinement is
+/// applied through `Popover`'s own `Styled` impl, which `refine_style`s the
+/// content container after the default padding, overriding it.
+fn menu_popover_style() -> StyleRefinement {
+    StyleRefinement::default().p_1().style().clone()
+}
+
 fn session_menu_button(id: (&'static str, u64), label: &'static str, icon: IconName) -> Button {
     Button::new(id)
         .ghost()
@@ -823,6 +913,9 @@ pub struct ConduitApp {
     writable: bool,
     selected_workspace: Option<usize>,
     selected_session: Option<u64>,
+    /// Open session tabs, ordered left to right by when they were opened.
+    /// Selecting a tab keeps its position; only new tabs append at the end.
+    open_tabs: Vec<u64>,
     input: Entity<TextareaState>,
     drafts: HashMap<u64, String>,
     runs: HashMap<u64, ActiveRun>,
@@ -855,6 +948,8 @@ pub struct ConduitApp {
     last_branch_check: Instant,
     commit_drafts: HashMap<PathBuf, CommitDraft>,
     commit_generation: Option<CommitGeneration>,
+    /// In-flight session naming requests, keyed by session id.
+    session_namings: HashMap<u64, SessionNaming>,
     git_operation: Option<GitOperation>,
     git_feedback: HashMap<PathBuf, GitFeedback>,
     commit_and_push: bool,
@@ -888,6 +983,10 @@ pub struct ConduitApp {
     pending_message_jump: bool,
     performance: Entity<PerformanceMonitor>,
     performance_open: bool,
+    /// Message action currently showing its "copied" check mark, keyed by id.
+    copied_action: Option<SharedString>,
+    /// Bumped on every copy so stale timers cannot clear a newer feedback.
+    copied_action_seq: u64,
 }
 
 impl ConduitApp {
@@ -937,11 +1036,16 @@ impl ConduitApp {
             }
             next_id
         };
+        for workspace in &mut store.workspaces {
+            workspace
+                .sessions
+                .sort_by_key(|session| std::cmp::Reverse(session.created_at));
+        }
         let selected_workspace = (!store.workspaces.is_empty()).then_some(0);
         let selected_session = store
             .workspaces
             .first()
-            .and_then(|w| w.sessions.iter().rev().find(|session| !session.archived))
+            .and_then(|w| w.sessions.iter().find(|session| !session.archived))
             .map(|s| s.id);
         let new_session_provider = store
             .ui
@@ -1004,6 +1108,7 @@ impl ConduitApp {
                     || !this.probes.is_empty()
                     || this.git_operation.is_some()
                     || this.commit_generation.is_some()
+                    || !this.session_namings.is_empty()
                 {
                     this.closing = true;
                     if let Some(operation) = &this.git_operation {
@@ -1012,10 +1117,14 @@ impl ConduitApp {
                     if let Some(generation) = &this.commit_generation {
                         generation.runtime.cancel();
                     }
+                    for naming in this.session_namings.values_mut() {
+                        naming.runtime.cancel();
+                    }
                     for run in this.runs.values_mut() {
                         run.runtime.cancel();
                         run.approvals.clear();
                         run.status = "正在停止…".into();
+                        run.activity = "正在停止…".into();
                     }
                     for probe in this.probes.values() {
                         probe.cancel();
@@ -1053,6 +1162,7 @@ impl ConduitApp {
             writable,
             selected_workspace,
             selected_session,
+            open_tabs: selected_session.into_iter().collect(),
             input,
             drafts: HashMap::new(),
             runs: HashMap::new(),
@@ -1087,6 +1197,7 @@ impl ConduitApp {
             last_branch_check: Instant::now(),
             commit_drafts: HashMap::new(),
             commit_generation: None,
+            session_namings: HashMap::new(),
             git_operation: None,
             git_feedback: HashMap::new(),
             commit_and_push: false,
@@ -1117,6 +1228,8 @@ impl ConduitApp {
             pending_message_jump: false,
             performance: cx.new(|_| PerformanceMonitor::new()),
             performance_open: false,
+            copied_action: None,
+            copied_action_seq: 0,
         }
     }
     fn session(&self, id: u64) -> Option<&SessionRecord> {
@@ -1138,12 +1251,14 @@ impl ConduitApp {
             .selected_session
             .is_some_and(|id| self.session(id).is_some_and(|session| !session.archived))
         {
+            self.push_tab(self.selected_session.unwrap());
             return;
         }
         for (index, workspace) in self.store.workspaces.iter().enumerate() {
-            if let Some(session) = workspace.sessions.iter().rev().find(|s| !s.archived) {
+            if let Some(session) = workspace.sessions.iter().find(|s| !s.archived) {
                 self.selected_workspace = Some(index);
                 self.selected_session = Some(session.id);
+                self.push_tab(session.id);
                 return;
             }
         }
@@ -1157,10 +1272,41 @@ impl ConduitApp {
             self.selected_workspace = Some(0);
         }
     }
+    /// Open a tab without reordering the strip. New tabs append at the end and
+    /// the oldest non-selected tab is evicted past the configured limit.
+    fn push_tab(&mut self, id: u64) {
+        if !self.open_tabs.contains(&id) {
+            self.open_tabs.push(id);
+        }
+        let limit = self.store.ui.max_tabs.clamp(1, MAX_TAB_LIMIT);
+        while self.open_tabs.len() > limit {
+            if let Some(position) = self
+                .open_tabs
+                .iter()
+                .position(|tab| Some(*tab) != self.selected_session)
+            {
+                self.open_tabs.remove(position);
+            } else {
+                break;
+            }
+        }
+    }
+    /// Drop a tab without touching the current selection; used when the tab
+    /// is closed while another session stays active.
+    fn remove_tab(&mut self, id: u64) {
+        self.open_tabs.retain(|tab| *tab != id);
+    }
     fn toggle_archive(&mut self, id: u64, cx: &mut Context<Self>) {
         if let Some(session) = self.session_mut(id) {
             session.archived = !session.archived;
         }
+        let archived_tabs: Vec<u64> = self
+            .open_tabs
+            .iter()
+            .copied()
+            .filter(|tab| self.session(*tab).is_none_or(|session| session.archived))
+            .collect();
+        self.open_tabs.retain(|tab| !archived_tabs.contains(tab));
         self.select_fallback_session();
         self.persist();
         self.sync_git_workspace(cx);
@@ -1242,6 +1388,10 @@ impl ConduitApp {
             self.message = Some("会话名不能为空。".into());
             cx.notify();
             return;
+        }
+        // A manual rename wins over any title the naming engine still owes us.
+        if let Some(naming) = self.session_namings.remove(&id) {
+            naming.runtime.cancel();
         }
         if let Some(session) = self.session_mut(id) {
             session.title = title.chars().take(80).collect();
@@ -1329,6 +1479,7 @@ impl ConduitApp {
         self.drafts.remove(&id);
         self.expanded_tools.retain(|(session, _)| *session != id);
         self.tool_scrolls.retain(|(session, _), _| *session != id);
+        self.remove_tab(id);
         self.detail_text = None;
         self.select_fallback_session();
         self.delete_target = None;
@@ -1343,34 +1494,11 @@ impl ConduitApp {
     fn select_engine(&mut self, provider: Provider, window: &mut Window, cx: &mut Context<Self>) {
         self.new_session_provider = provider;
         self.remember_provider(provider);
-        if let Some(index) = self.selected_workspace
-            && index < self.store.workspaces.len()
-        {
-            let target = self.store.workspaces[index]
-                .sessions
-                .iter()
-                .rev()
-                .find(|session| !session.archived && session.provider == provider)
-                .map(|session| session.id);
-            match target {
-                Some(id) => self.switch(index, Some(id), window, cx),
-                None => {
-                    // No session of that engine yet: clear the selection so the
-                    // next prompt starts one with the chosen engine. The draft
-                    // stays in the composer.
-                    if let Some(current) = self.selected_session {
-                        self.drafts
-                            .insert(current, self.input.read(cx).value().to_string());
-                    }
-                    self.selected_session = None;
-                    self.detail_text = None;
-                    self.message = None;
-                    cx.notify();
-                }
-            }
-        } else {
-            cx.notify();
-        }
+        // Switching the engine targets the *next* new session: it never
+        // jumps to an existing history session. The current session stays
+        // selected and its tab stays open.
+        let _ = window;
+        cx.notify();
     }
     fn engine_picker(&self, view: Entity<Self>) -> AnyElement {
         let provider = self.new_session_provider;
@@ -1447,61 +1575,53 @@ impl ConduitApp {
             })
             .into_any_element()
     }
-    /// Top-left workspace switcher: pick an existing workspace or add a folder.
-    fn workspace_picker(&self, view: Entity<Self>) -> AnyElement {
-        let current = self.selected_workspace;
-        let label = current
-            .and_then(|index| self.store.workspaces.get(index))
-            .map(|workspace| workspace.name())
-            .unwrap_or_else(|| "选择工作区".into());
-        let rows: Vec<(usize, String, String, Option<u64>, bool)> = self
-            .store
-            .workspaces
-            .iter()
-            .enumerate()
-            .map(|(index, workspace)| {
-                let session = workspace
-                    .sessions
-                    .iter()
-                    .rev()
-                    .find(|session| !session.archived)
-                    .map(|session| session.id);
-                (
-                    index,
-                    workspace.name(),
-                    display_path(&workspace.path),
-                    session,
-                    current == Some(index),
-                )
-            })
-            .collect();
-        let trigger = Button::new("workspace-picker-trigger")
+    /// Session permission selector next to the engine picker. FullAccess is
+    /// visually flagged (warning colors + alert icon) because it removes the
+    /// CLI's own safety gates for this session.
+    fn permission_picker(&self, view: Entity<Self>) -> AnyElement {
+        let permission = self
+            .selected_session
+            .and_then(|id| self.session(id))
+            .map(|session| session.permission)
+            .unwrap_or_default();
+        let warning = permission == PermissionLevel::FullAccess;
+        let trigger = Button::new("permission-picker-trigger")
             .ghost()
             .small()
-            .h(px(26.))
+            .h(px(22.))
             .px_1()
             .cursor_pointer()
-            .tooltip("切换工作区")
+            .tooltip(match permission {
+                PermissionLevel::ReadOnly => "会话权限：仅可查看",
+                PermissionLevel::WorkspaceWrite => "会话权限：工作区内修改",
+                PermissionLevel::FullAccess => "会话权限：完全权限（警告：不受沙箱限制）",
+            })
             .child(
                 h_flex()
                     .gap_1()
                     .items_center()
                     .child(
-                        Icon::new(IconName::Folder)
-                            .small()
-                            .text_color(rgb(palette().faint)),
+                        Icon::new(if warning {
+                            gpui_kit::assets::IconName::TriangleAlert
+                        } else {
+                            gpui_kit::assets::IconName::Shield
+                        })
+                        .small()
+                        .text_color(rgb(if warning {
+                            palette().warning_text
+                        } else {
+                            palette().faint
+                        })),
                     )
                     .child(
                         div()
-                            .max_w(px(180.))
-                            .truncate()
-                            .text_size(px(12.))
-                            .text_color(rgb(if current.is_some() {
-                                palette().text
+                            .text_size(px(11.))
+                            .text_color(rgb(if warning {
+                                palette().warning_text
                             } else {
                                 palette().muted
                             }))
-                            .child(label),
+                            .child(permission.label()),
                     )
                     .child(
                         Icon::new(IconName::ChevronDown)
@@ -1509,114 +1629,346 @@ impl ConduitApp {
                             .text_color(rgb(palette().faint)),
                     ),
             );
-        let content_view = view.clone();
-        Popover::new("workspace-picker")
-            .anchor(Anchor::TopLeft)
+        Popover::new("permission-picker")
+            .anchor(Anchor::BottomLeft)
             .offset(px(6.))
             .trigger(trigger)
-            .content(move |_, _window, cx| {
-                let app = content_view.clone();
+            .content(move |_, _, cx| {
                 let popover = cx.entity().downgrade();
-                let mut list = v_flex().w(px(320.)).gap(px(1.));
-                for (index, name, path, session, active) in rows.clone() {
-                    let select_app = app.clone();
-                    let select_popover = popover.clone();
+                let mut list = v_flex().w(px(220.)).gap(px(1.));
+                for option in [
+                    PermissionLevel::ReadOnly,
+                    PermissionLevel::WorkspaceWrite,
+                    PermissionLevel::FullAccess,
+                ] {
+                    let app = view.clone();
+                    let popover = popover.clone();
+                    let active = option == permission;
+                    let is_danger = option == PermissionLevel::FullAccess;
                     list = list.child(
-                        Button::new(("workspace-pick", index as u64))
-                            .ghost()
-                            .h(px(36.))
-                            .w_full()
-                            .px_2()
-                            .rounded(px(6.))
-                            .cursor_pointer()
-                            .when(active, |button| button.bg(rgb(palette().surface_hover)))
-                            .on_click(move |_, window, cx| {
-                                select_app
-                                    .update(cx, |this, cx| this.switch(index, session, window, cx));
-                                if let Some(popover) = select_popover.clone().upgrade() {
-                                    popover.update(cx, |popover, cx| popover.dismiss(window, cx));
-                                }
-                            })
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .gap_2()
-                                    .items_center()
-                                    .child(
-                                        Icon::new(IconName::Folder)
-                                            .small()
-                                            .text_color(rgb(palette().faint)),
-                                    )
-                                    .child(
-                                        v_flex()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .gap(px(1.))
-                                            .child(
-                                                div()
-                                                    .truncate()
-                                                    .text_size(px(12.))
-                                                    .text_color(rgb(palette().text))
-                                                    .child(name),
-                                            )
-                                            .child(
-                                                div()
-                                                    .truncate()
-                                                    .text_size(px(10.))
-                                                    .text_color(rgb(palette().faint))
-                                                    .child(path),
-                                            ),
-                                    )
-                                    .when(active, |row| {
-                                        row.child(
-                                            Icon::new(IconName::Check)
-                                                .small()
-                                                .text_color(rgb(palette().muted)),
-                                        )
-                                    }),
-                            ),
-                    );
-                }
-                if !rows.is_empty() {
-                    list = list.child(div().h(px(1.)).my(px(3.)).bg(rgb(palette().border)));
-                }
-                let add_app = app.clone();
-                let add_popover = popover.clone();
-                list = list.child(
-                    Button::new("workspace-add-directory")
+                        Button::new(match option {
+                            PermissionLevel::ReadOnly => "permission-option-readonly",
+                            PermissionLevel::WorkspaceWrite => "permission-option-workspace",
+                            PermissionLevel::FullAccess => "permission-option-full",
+                        })
                         .ghost()
-                        .h(px(32.))
+                        .h(px(34.))
                         .w_full()
                         .px_2()
-                        .rounded(px(6.))
                         .cursor_pointer()
-                        .on_click(move |event, window, cx| {
-                            add_app.update(cx, |this, cx| this.add_workspace(event, window, cx));
-                            if let Some(popover) = add_popover.clone().upgrade() {
-                                popover.update(cx, |popover, cx| popover.dismiss(window, cx));
-                            }
-                        })
+                        .accessibility_label(option.label())
                         .child(
-                            h_flex()
+                            v_flex()
                                 .w_full()
-                                .gap_2()
-                                .items_center()
+                                .gap(px(2.))
                                 .child(
-                                    Icon::new(IconName::Plus)
-                                        .small()
-                                        .text_color(rgb(palette().faint)),
+                                    h_flex()
+                                        .w_full()
+                                        .gap_2()
+                                        .items_center()
+                                        .child(
+                                            Icon::new(if is_danger {
+                                                gpui_kit::assets::IconName::TriangleAlert
+                                            } else {
+                                                match option {
+                                                    PermissionLevel::ReadOnly => {
+                                                        gpui_kit::assets::IconName::Eye
+                                                    }
+                                                    _ => gpui_kit::assets::IconName::SquarePen,
+                                                }
+                                            })
+                                            .small()
+                                            .text_color(rgb(if is_danger {
+                                                palette().warning_text
+                                            } else {
+                                                palette().muted
+                                            })),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(12.))
+                                                .text_color(rgb(if is_danger {
+                                                    palette().warning_text
+                                                } else {
+                                                    palette().muted
+                                                }))
+                                                .child(option.label()),
+                                        ),
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(12.))
-                                        .text_color(rgb(palette().muted))
-                                        .child("添加目录…"),
+                                        .pl_6()
+                                        .text_size(px(10.))
+                                        .text_color(rgb(palette().faint))
+                                        .child(match option {
+                                            PermissionLevel::ReadOnly => {
+                                                "CLI 沙箱只读，不允许写入与命令执行"
+                                            }
+                                            PermissionLevel::WorkspaceWrite => {
+                                                "允许修改工作区内文件，其余仍需审批"
+                                            }
+                                            PermissionLevel::FullAccess => {
+                                                "警告：不受沙箱限制，命令不经审批直接执行"
+                                            }
+                                        }),
                                 ),
-                        ),
-                );
+                        )
+                        .when(active, |button| button.bg(rgb(palette().surface_hover)))
+                        .on_click(move |_, window, cx| {
+                            app.update(cx, |this, cx| {
+                                this.set_session_permission(option, window, cx)
+                            });
+                            if let Some(popover) = popover.clone().upgrade() {
+                                popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                            }
+                        }),
+                    );
+                }
                 list
             })
             .into_any_element()
+    }
+    fn set_session_permission(
+        &mut self,
+        permission: PermissionLevel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.writable || self.closing {
+            return;
+        }
+        if let Some(id) = self.selected_session
+            && let Some(session) = self.session_mut(id)
+            && session.permission != permission
+        {
+            session.permission = permission;
+            self.persist();
+        }
+        // Permission applies to the next turn; while a run is active the
+        // current process keeps its existing sandbox.
+        if self
+            .selected_session
+            .is_none_or(|id| !self.runs.contains_key(&id))
+        {
+            self.input.read(cx).focus_handle(cx).focus(window, cx);
+        }
+        cx.notify();
+    }
+    /// Compact token/usage indicators (tokens/s while streaming, cumulative
+    /// usage, and a ring gauge for context window consumption) rendered on
+    /// the composer's engine row. Reads from the active run when streaming
+    /// and falls back to the session's last persisted snapshot when idle.
+    /// Returns `None` when there is nothing to show yet.
+    fn usage_status_parts(&self) -> Option<Vec<AnyElement>> {
+        let session = self.selected_session.and_then(|id| self.session(id));
+        let (usage, streaming, elapsed, since_event) = match self.selected_session {
+            Some(id) if self.runs.contains_key(&id) => {
+                let run = &self.runs[&id];
+                (
+                    run.usage,
+                    true,
+                    run.turn_started.elapsed(),
+                    run.last_usage_event.elapsed(),
+                )
+            }
+            _ => (
+                session.map(|s| s.usage).unwrap_or_default(),
+                false,
+                Duration::ZERO,
+                Duration::ZERO,
+            ),
+        };
+        if usage.total_tokens == 0 {
+            return None;
+        }
+        // Tokens/s is derived from this turn's delta; pause the clock while no
+        // usage events arrive (approval wait, model idle) so the figure does
+        // not decay toward zero during stalls.
+        let run = self.selected_session.and_then(|id| self.runs.get(&id));
+        let tokens_per_second = if streaming {
+            let baseline = run
+                .map(|r| r.turn_tokens_at_start)
+                .unwrap_or(usage.total_tokens);
+            let active = if since_event < Duration::from_secs(10) {
+                elapsed
+            } else {
+                Duration::ZERO
+            };
+            let seconds = active.as_secs_f64();
+            if seconds >= 1.0 && usage.total_tokens > baseline {
+                Some(((usage.total_tokens - baseline) as f64 / seconds).round() as u64)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let format_tokens = |tokens: u64| {
+            if tokens >= 1_000_000 {
+                format!("{:.1}M", tokens as f64 / 1_000_000.0)
+            } else if tokens >= 1_000 {
+                format!("{:.1}K", tokens as f64 / 1_000.0)
+            } else {
+                format!("{tokens}")
+            }
+        };
+        let context_ratio = {
+            // The CLI-reported window (Codex) wins; Claude stream-json carries
+            // no window size, so fall back to the model catalog (context_window
+            // field or the model ID's `[1M]` suffix). Estimated rings show a
+            // "≈" prefix since the real window is model-side policy.
+            let window = if usage.context_window > 0 {
+                Some(usage.context_window)
+            } else {
+                let model_id = session
+                    .and_then(|s| s.model.as_deref())
+                    .map(str::to_owned)
+                    .or_else(|| {
+                        // No session model override: use the CLI's current model.
+                        self.catalogs
+                            .get(
+                                &session
+                                    .map(|s| s.provider)
+                                    .unwrap_or(self.new_session_provider),
+                            )
+                            .and_then(|catalog| catalog.current.clone())
+                    });
+                let provider = session
+                    .map(|s| s.provider)
+                    .unwrap_or(self.new_session_provider);
+                model_id.and_then(|id| {
+                    self.catalogs
+                        .get(&provider)
+                        .and_then(|catalog| catalog.context_window(&id))
+                })
+            };
+            match window {
+                Some(window) if window > 0 => Some((
+                    window,
+                    (usage.total_tokens as f64 / window as f64).clamp(0.0, 1.0),
+                )),
+                _ => None,
+            }
+        };
+        let (context_window_display, context_ratio, estimated) = match context_ratio {
+            Some((window, ratio)) => (window, ratio, usage.context_window == 0),
+            None => (0, f64::INFINITY, false),
+        };
+        let ring = if context_ratio.is_finite() {
+            // 270° arc gauge drawn as an SVG stroke; gpui renders SVG paths
+            // with a fixed viewBox, so the arc is recomputed per ratio.
+            let radius = 7.0f64;
+            let center = 9.0f64;
+            let start_angle = 135.0f64;
+            let sweep = 270.0 * context_ratio;
+            let point = |angle: f64| {
+                let radians = angle.to_radians();
+                (
+                    center + radius * radians.cos(),
+                    center + radius * radians.sin(),
+                )
+            };
+            let (sx, sy) = point(start_angle);
+            let (ex, ey) = point(start_angle + sweep);
+            let large = if sweep > 180.0 { 1 } else { 0 };
+            let color = if context_ratio >= 0.9 {
+                palette().danger_text
+            } else if context_ratio >= 0.75 {
+                palette().warning_text
+            } else {
+                palette().highlight_text
+            };
+            let svg = format!(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 18 18\">\
+                 <circle cx=\"9\" cy=\"9\" r=\"7\" fill=\"none\" stroke=\"#{border:06x}\" stroke-width=\"2\"/>\
+                 <path d=\"M {sx:.2} {sy:.2} A 7 7 0 {large} 1 {ex:.2} {ey:.2}\" fill=\"none\" stroke=\"#{color:06x}\" stroke-width=\"2\" stroke-linecap=\"round\"/>\
+                 </svg>",
+                border = palette().border,
+                color = color,
+            );
+            h_flex()
+                .id("context-ring")
+                .w(px(18.))
+                .h(px(18.))
+                .flex_shrink_0()
+                .child(
+                    Icon::default()
+                        .data(svg.as_bytes())
+                        .size(px(18.))
+                        .into_any_element(),
+                )
+                .into_any_element()
+        } else {
+            div().into_any_element()
+        };
+        let mut parts: Vec<AnyElement> = vec![];
+        if let Some(speed) = tokens_per_second {
+            parts.push(
+                h_flex()
+                    .id("usage-speed")
+                    .gap_1()
+                    .items_center()
+                    .child(
+                        Icon::new(gpui_kit::assets::IconName::Zap)
+                            .small()
+                            .text_color(rgb(palette().faint)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(rgb(palette().muted))
+                            .child(format!("{speed} tok/s")),
+                    )
+                    .into_any_element(),
+            );
+        }
+        parts.push(
+            h_flex()
+                .id("usage-total")
+                .gap_1()
+                .items_center()
+                .child(
+                    Icon::new(gpui_kit::assets::IconName::Gauge)
+                        .small()
+                        .text_color(rgb(palette().faint)),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(rgb(palette().muted))
+                        .child(format!(
+                            "↑{} ↓{}",
+                            format_tokens(usage.input_tokens + usage.cached_input_tokens),
+                            format_tokens(usage.output_tokens)
+                        )),
+                )
+                .into_any_element(),
+        );
+        if context_ratio.is_finite() {
+            parts.push(
+                h_flex()
+                    .id("usage-context")
+                    .gap_1()
+                    .items_center()
+                    .child(ring)
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(rgb(palette().muted))
+                            .child(format!(
+                                "{}{} / {}",
+                                if estimated { "≈" } else { "" },
+                                format_tokens(usage.total_tokens),
+                                format_tokens(context_window_display)
+                            )),
+                    )
+                    .into_any_element(),
+            );
+        }
+        if parts.is_empty() {
+            return None;
+        }
+        Some(parts)
     }
     fn open_remove_workspace_dialog(
         &mut self,
@@ -1713,6 +2065,8 @@ impl ConduitApp {
             self.expanded_tools.retain(|(id, _)| *id != session.id);
             self.tool_scrolls.retain(|(id, _), _| *id != session.id);
         }
+        let removed_ids: Vec<u64> = removed.sessions.iter().map(|session| session.id).collect();
+        self.open_tabs.retain(|tab| !removed_ids.contains(tab));
         if self.selected_workspace == Some(index) || self.selected_session.is_none() {
             self.selected_workspace = None;
             self.selected_session = None;
@@ -1738,6 +2092,7 @@ impl ConduitApp {
         Popover::new(("workspace-menu", index))
             .anchor(Anchor::LeftCenter)
             .offset(px(8.))
+            .refine_style(&menu_popover_style())
             .trigger(trigger)
             .content(move |_, _, cx| {
                 let popover = cx.entity().downgrade();
@@ -1764,7 +2119,7 @@ impl ConduitApp {
         let mut hits = Vec::new();
         'outer: for (workspace_index, workspace) in self.store.workspaces.iter().enumerate() {
             let workspace_name = workspace.name();
-            for session in workspace.sessions.iter().rev() {
+            for session in workspace.sessions.iter() {
                 let title_matches =
                     !query.is_empty() && session.title.to_lowercase().contains(query);
                 let matching_message = if query.is_empty() {
@@ -1930,63 +2285,6 @@ impl ConduitApp {
         });
         cx.notify();
     }
-    fn session_menu(&self, id: u64, app: Entity<Self>) -> AnyElement {
-        let archived = self.session(id).is_some_and(|session| session.archived);
-        let trigger = Button::new(("session-menu-trigger", id))
-            .ghost()
-            .small()
-            .compact()
-            .icon(IconName::Ellipsis)
-            .cursor_pointer()
-            .on_click(|_, _, cx| cx.stop_propagation());
-        Popover::new(("session-menu", id))
-            .anchor(Anchor::LeftCenter)
-            .offset(px(8.))
-            .trigger(trigger)
-            .content(move |_, _, cx| {
-                let popover = cx.entity().downgrade();
-                let rename_app = app.clone();
-                let rename_popover = popover.clone();
-                let rename =
-                    session_menu_button(("session-rename", id), "重命名", IconName::Replace)
-                        .on_click(move |_, window, cx| {
-                            rename_app
-                                .update(cx, |this, cx| this.open_rename_dialog(id, window, cx));
-                            if let Some(popover) = rename_popover.clone().upgrade() {
-                                popover.update(cx, |popover, cx| popover.dismiss(window, cx));
-                            }
-                        });
-                let archive_app = app.clone();
-                let archive_popover = popover.clone();
-                let archive = session_menu_button(
-                    ("session-archive", id),
-                    if archived { "取消归档" } else { "归档" },
-                    IconName::Inbox,
-                )
-                .on_click(move |_, window, cx| {
-                    archive_app.update(cx, |this, cx| this.toggle_archive(id, cx));
-                    if let Some(popover) = archive_popover.clone().upgrade() {
-                        popover.update(cx, |popover, cx| popover.dismiss(window, cx));
-                    }
-                });
-                let delete_app = app.clone();
-                let delete_popover = popover.clone();
-                let delete = session_menu_button(("session-delete", id), "删除", IconName::Delete)
-                    .on_click(move |_, window, cx| {
-                        delete_app.update(cx, |this, cx| this.open_delete_dialog(id, window, cx));
-                        if let Some(popover) = delete_popover.clone().upgrade() {
-                            popover.update(cx, |popover, cx| popover.dismiss(window, cx));
-                        }
-                    });
-                v_flex()
-                    .w(px(150.))
-                    .gap(px(1.))
-                    .child(rename)
-                    .child(archive)
-                    .child(delete)
-            })
-            .into_any_element()
-    }
     fn persist(&mut self) -> bool {
         if !self.writable {
             return false;
@@ -2016,6 +2314,195 @@ impl ConduitApp {
         }
         cx.notify();
     }
+    /// Whether the tool detail dock is currently visible.
+    fn details_open(&self) -> bool {
+        self.details && self.detail_view == DetailView::Tool
+    }
+    /// Toggle button for the tool detail dock, pinned to the right of the tab bar.
+    fn detail_toggle(&self, cx: &mut Context<Self>) -> Button {
+        Button::new("toggle-sidebar")
+            .ghost()
+            .small()
+            .compact()
+            .icon(gpui_kit::assets::IconName::PanelRight)
+            .cursor_pointer()
+            .tooltip(if self.details_open() {
+                "隐藏工具详情"
+            } else {
+                "显示工具详情"
+            })
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.details = !this.details_open();
+                this.detail_view = DetailView::Tool;
+                cx.notify();
+            }))
+    }
+    /// Close a session tab. Closing the active tab reveals the next most
+    /// recent one; the conversation itself is kept in the sidebar.
+    fn close_tab(&mut self, id: u64, cx: &mut Context<Self>) {
+        if self.selected_session == Some(id) {
+            self.drafts
+                .insert(id, self.input.read(cx).value().to_string());
+            self.remove_tab(id);
+            if let Some(next) = self
+                .open_tabs
+                .last()
+                .copied()
+                .filter(|next| self.session(*next).is_some())
+            {
+                let window = cx
+                    .windows()
+                    .into_iter()
+                    .find_map(|handle| handle.downcast::<Self>());
+                if let Some(window) = window {
+                    let _ = window.update(cx, |_, window, cx| {
+                        if let Some(workspace) =
+                            self.store.workspaces.iter().position(|workspace| {
+                                workspace.sessions.iter().any(|s| s.id == next)
+                            })
+                        {
+                            self.switch(workspace, Some(next), window, cx);
+                        }
+                    });
+                }
+            } else {
+                self.selected_session = None;
+                self.detail_text = None;
+                self.message = None;
+                cx.notify();
+            }
+        } else {
+            self.remove_tab(id);
+            cx.notify();
+        }
+    }
+    /// Conversation tab strip: one tab per open session, horizontally
+    /// scrollable, with a fixed-width action area pinned to the right.
+    fn session_tab_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let active = self.selected_session;
+        let mut tabs = h_flex()
+            .id("session-tabs")
+            .h_full()
+            .flex_1()
+            .min_w_0()
+            .gap(px(4.))
+            .pr(px(4.))
+            .overflow_x_scroll()
+            .lock_scroll_axis();
+        for id in &self.open_tabs {
+            let id = *id;
+            let Some(session) = self.session(id) else {
+                continue;
+            };
+            let selected = active == Some(id);
+            let running = self.runs.contains_key(&id);
+            let title = if session.title.is_empty() {
+                "???".to_string()
+            } else {
+                session.title.clone()
+            };
+            let title = single_line_title(&title);
+            let status = self
+                .runs
+                .get(&id)
+                .map(|run| run.status.clone())
+                .filter(|status| !status.is_empty());
+            tabs = tabs.child(
+                h_flex()
+                    .id(("session-tab", id))
+                    .h(px(30.))
+                    .my_auto()
+                    .px(px(10.))
+                    .gap(px(6.))
+                    .flex_shrink_0()
+                    .items_center()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(rgb(if selected {
+                        palette().border
+                    } else {
+                        palette().sidebar_bg
+                    }))
+                    .when(selected, |tab| tab.bg(rgb(palette().surface)))
+                    .text_size(px(12.))
+                    .text_color(rgb(if selected {
+                        palette().text
+                    } else {
+                        palette().muted
+                    }))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgb(palette().surface_hover)))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if let Some(workspace) = this
+                            .store
+                            .workspaces
+                            .iter()
+                            .position(|workspace| workspace.sessions.iter().any(|s| s.id == id))
+                        {
+                            this.switch(workspace, Some(id), window, cx);
+                        }
+                    }))
+                    .child(provider_icon(session.provider))
+                    .child(
+                        div()
+                            .max_w(px(180.))
+                            .truncate()
+                            .line_height(px(16.))
+                            .whitespace_nowrap()
+                            .child(title),
+                    )
+                    .when_some(status, |tab, status| {
+                        tab.child(
+                            div()
+                                .text_size(px(10.))
+                                .text_color(rgb(palette().faint))
+                                .child(status),
+                        )
+                    })
+                    .child(
+                        Button::new(("session-tab-close", id))
+                            .ghost()
+                            .small()
+                            .compact()
+                            .icon(gpui_kit::assets::IconName::X)
+                            .cursor_pointer()
+                            .tooltip(if running { "????????????" } else { "????" })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.close_tab(id, cx);
+                                cx.stop_propagation();
+                            })),
+                    ),
+            );
+        }
+        if self.open_tabs.is_empty() {
+            tabs = tabs.child(
+                h_flex()
+                    .h_full()
+                    .px_3()
+                    .items_center()
+                    .text_size(px(12.))
+                    .text_color(rgb(palette().faint))
+                    .child("???????????"),
+            );
+        }
+        h_flex()
+            .h(px(44.))
+            .pl_2()
+            .pr_3()
+            .border_b_1()
+            .border_color(rgb(palette().border))
+            .items_center()
+            .child(tabs)
+            .child(
+                h_flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap_1()
+                    .child(div().w(px(1.)).h(px(18.)).mx_1().bg(rgb(palette().border)))
+                    .child(self.detail_toggle(cx)),
+            )
+            .into_any_element()
+    }
     fn switch(
         &mut self,
         workspace: usize,
@@ -2029,6 +2516,9 @@ impl ConduitApp {
         }
         self.selected_workspace = Some(workspace);
         self.selected_session = session;
+        if let Some(id) = session {
+            self.push_tab(id);
+        }
         self.message_focus = None;
         self.pending_message_jump = false;
         self.detail_text = None;
@@ -2089,7 +2579,7 @@ impl ConduitApp {
                                         this.store.workspaces.len() - 1
                                     });
                                 let session =
-                                    this.store.workspaces[index].sessions.last().map(|s| s.id);
+                                    this.store.workspaces[index].sessions.first().map(|s| s.id);
                                 this.switch(index, session, window, cx);
                                 this.persist();
                             }
@@ -2140,23 +2630,29 @@ impl ConduitApp {
             .catalogs
             .get(&provider)
             .and_then(|catalog| catalog.current.clone());
-        self.store.workspaces[index].sessions.push(SessionRecord {
-            id,
-            provider,
-            created_at: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            exit_code: None,
-            title: "新会话".into(),
-            archived: false,
-            native_id: None,
-            model,
-            messages: vec![],
-            interrupted: false,
-        });
+        self.store.workspaces[index].sessions.insert(
+            0,
+            SessionRecord {
+                id,
+                provider,
+                created_at: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                exit_code: None,
+                title: "新会话".into(),
+                archived: false,
+                native_id: None,
+                model,
+                messages: vec![],
+                interrupted: false,
+                permission: PermissionLevel::default(),
+                usage: Usage::default(),
+            },
+        );
         self.selected_workspace = Some(index);
         self.selected_session = Some(id);
+        self.push_tab(id);
         self.new_session_provider = provider;
         self.remember_provider(provider);
         self.persist();
@@ -2195,30 +2691,57 @@ impl ConduitApp {
         self.send_prompt(window, cx);
     }
     fn send_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let prompt = self.input.read(cx).value().to_string();
+        self.send_text(prompt, true, window, cx);
+    }
+    /// Starts one engine turn. `append_user` is false when regenerating: the
+    /// user message is already in the transcript and must not be duplicated.
+    fn send_text(
+        &mut self,
+        prompt: String,
+        append_user: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if self.closing || !self.writable {
-            return;
+            return false;
         }
         let Some(index) = self.selected_workspace else {
             self.message = Some("请先在左上角选择工作区。".into());
             cx.notify();
-            return;
+            return false;
         };
         if self.workspace_busy(index) {
             self.message = Some("该工作区已有任务运行，请等待完成或取消后发送。".into());
             cx.notify();
-            return;
+            return false;
         }
-        let prompt = self.input.read(cx).value().to_string();
         if prompt.trim().is_empty() {
-            return;
+            return false;
         }
         if prompt.len() > 256 * 1024 {
             self.message = Some("单条消息最多 256 KiB。".into());
             cx.notify();
-            return;
+            return false;
         }
         // Resolve the target engine and validate the environment before creating
         // a session, so a failed send cannot leave an empty conversation behind.
+        // A pending engine switch (composer engine differs from the selected
+        // session's) retargets the message to a fresh session instead of
+        // jumping to history. Regeneration always stays on its own session.
+        if append_user {
+            let retarget = self.selected_session.is_some_and(|id| {
+                self.session(id)
+                    .is_some_and(|session| session.provider != self.new_session_provider)
+            });
+            if retarget && let Some(id) = self.selected_session {
+                self.drafts
+                    .insert(id, self.input.read(cx).value().to_string());
+                self.selected_session = None;
+            }
+        } else if self.selected_session.is_none() {
+            return false;
+        }
         let provider = match self.selected_session {
             Some(id) => self.session(id).unwrap().provider,
             None => self.new_session_provider,
@@ -2234,7 +2757,7 @@ impl ConduitApp {
                 self.message =
                     Some("该会话缺少可靠的 CLI 会话标识，请新建会话，避免丢失上下文。".into());
                 cx.notify();
-                return;
+                return false;
             }
         }
         let executable = match cli::resolve(provider, &self.store.cli) {
@@ -2245,14 +2768,14 @@ impl ConduitApp {
                     provider.label()
                 ));
                 cx.notify();
-                return;
+                return false;
             }
         };
         let cwd = self.store.workspaces[index].path.clone();
         if !cwd.is_dir() {
             self.message = Some("工作区目录已移动或不可访问。".into());
             cx.notify();
-            return;
+            return false;
         }
         // Typing in a workspace without a selected session starts one with the
         // last used engine instead of asking the user to click "新建会话".
@@ -2260,42 +2783,67 @@ impl ConduitApp {
             Some(id) => id,
             None => match self.create_session(index, provider, cx) {
                 Some(id) => id,
-                None => return,
+                None => return false,
             },
         };
         let native_id = self
             .session(id)
             .and_then(|session| session.native_id.clone());
         let model = self.session(id).and_then(|session| session.model.clone());
+        let permission = self
+            .session(id)
+            .map(|session| session.permission)
+            .unwrap_or_default();
         let session = self.session_mut(id).unwrap();
         let prefix = format!("turn-{}", session.messages.len());
-        if !session.messages.iter().any(|m| m.kind == ItemKind::User) {
-            session.title = prompt
-                .lines()
-                .next()
-                .unwrap_or("新会话")
-                .chars()
-                .take(26)
-                .collect();
+        if append_user {
+            if !session.messages.iter().any(|m| m.kind == ItemKind::User) {
+                session.title = prompt
+                    .lines()
+                    .next()
+                    .unwrap_or("新会话")
+                    .trim()
+                    .chars()
+                    .take(26)
+                    .collect();
+            }
+            session.messages.push(ChatItem {
+                key: format!("{prefix}-user"),
+                kind: ItemKind::User,
+                text: prompt.clone(),
+                input: String::new(),
+                detail: String::new(),
+                status: String::new(),
+                approval: None,
+            });
         }
-        session.messages.push(ChatItem {
-            key: format!("{prefix}-user"),
-            kind: ItemKind::User,
-            text: prompt.clone(),
-            input: String::new(),
-            detail: String::new(),
-            status: String::new(),
-            approval: None,
-        });
         session.interrupted = true;
         if !self.persist() {
             let session = self.session_mut(id).unwrap();
-            session.messages.pop();
+            if append_user {
+                session.messages.pop();
+            }
             session.interrupted = false;
             cx.notify();
-            return;
+            return false;
         }
-        let runtime = ChatRuntime::start(provider, executable, cwd, prompt, native_id, model);
+        let first_turn = append_user
+            && !self.session(id).is_some_and(|session| {
+                session
+                    .messages
+                    .iter()
+                    .any(|message| message.kind == ItemKind::Assistant)
+            });
+        let naming_snippet = (self.store.ui.naming_mode == NamingMode::FirstMessage && first_turn)
+            .then(|| prompt.clone());
+        let runtime = ChatRuntime::start(
+            provider, executable, cwd, prompt, native_id, model, permission,
+        );
+        let usage = self
+            .session(id)
+            .map(|session| session.usage)
+            .unwrap_or_default();
+        let now = Instant::now();
         self.runs.insert(
             id,
             ActiveRun {
@@ -2303,17 +2851,275 @@ impl ConduitApp {
                 approvals: ApprovalQueue::default(),
                 prefix,
                 status: "正在连接 CLI…".into(),
+                activity: "正在启动 CLI…".into(),
                 message_index: MessageIndex::default(),
+                usage,
+                turn_tokens_at_start: usage.total_tokens,
+                turn_started: now,
+                last_usage_event: now,
             },
         );
-        self.input
-            .update(cx, |input, cx| input.set_value("", window, cx));
+        if append_user {
+            self.input
+                .update(cx, |input, cx| input.set_value("", window, cx));
+            self.drafts.remove(&id);
+        }
         self.input.read(cx).focus_handle(cx).focus(window, cx);
-        self.drafts.remove(&id);
         self.message = None;
+        if let Some(snippet) = naming_snippet {
+            self.start_session_naming(id, &snippet);
+        }
         self.scroll_to_end();
         cx.notify();
+        true
     }
+    /// Re-runs the latest exchange: keeps its user message, drops everything
+    /// after it, and starts a fresh engine turn with the same prompt.
+    fn regenerate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing || !self.writable {
+            return;
+        }
+        let Some(id) = self.selected_session else {
+            return;
+        };
+        let Some(session) = self.session(id) else {
+            return;
+        };
+        if self.runs.contains_key(&id)
+            || session
+                .messages
+                .get(index)
+                .is_none_or(|item| item.kind != ItemKind::Assistant)
+            || session.messages[index + 1..]
+                .iter()
+                .any(|item| matches!(item.kind, ItemKind::User | ItemKind::Assistant))
+        {
+            return;
+        }
+        let Some(user_index) = session.messages[..index]
+            .iter()
+            .rposition(|item| item.kind == ItemKind::User)
+        else {
+            return;
+        };
+        if session.native_id.is_none() {
+            self.message =
+                Some("该会话缺少可靠的 CLI 会话标识，请新建会话，避免丢失上下文。".into());
+            cx.notify();
+            return;
+        }
+        let prompt = session.messages[user_index].text.clone();
+        let removed = self
+            .session_mut(id)
+            .map(|session| session.messages.split_off(user_index + 1))
+            .unwrap_or_default();
+        if !self.send_text(prompt, false, window, cx)
+            && let Some(session) = self.session_mut(id)
+        {
+            session.messages.extend(removed);
+            cx.notify();
+        }
+    }
+    /// Ask the naming engine (settings → 会话) for a short title in the
+    /// background; failures are silent and simply keep the current title.
+    fn start_session_naming(&mut self, id: u64, content: &str) {
+        if self.session_namings.contains_key(&id) {
+            return;
+        }
+        let provider = self
+            .store
+            .ui
+            .naming_provider
+            .or_else(|| self.session(id).map(|session| session.provider))
+            .unwrap_or(self.new_session_provider);
+        let model = self
+            .store
+            .ui
+            .naming_model
+            .clone()
+            .or_else(|| self.session(id).and_then(|session| session.model.clone()));
+        let executable = match cli::resolve(provider, &self.store.cli) {
+            Ok(cli) => cli.path,
+            Err(_) => return,
+        };
+        let snippet: String = content.chars().take(1200).collect();
+        let naming_prompt = format!(
+            "请根据以下对话内容为这段对话起一个简短的标题（不超过 12 个字，与内容使用相同语言，不带标点、引号或换行）。只返回标题本身。\n\n<content>\n{snippet}\n</content>"
+        );
+        self.session_namings.insert(
+            id,
+            SessionNaming {
+                runtime: ChatRuntime::start_text(provider, executable, naming_prompt, model),
+                started: Instant::now(),
+                parts: vec![],
+                error: None,
+            },
+        );
+    }
+    /// Explicit "AI 重命名" from the session menu: drop any automatic naming in
+    /// flight and regenerate from the latest exchange.
+    fn ai_rename_session(&mut self, id: u64, cx: &mut Context<Self>) {
+        if !self.writable || self.closing {
+            return;
+        }
+        let Some(excerpt) = self.session(id).and_then(latest_naming_excerpt) else {
+            return;
+        };
+        if let Some(naming) = self.session_namings.remove(&id) {
+            naming.runtime.cancel();
+        }
+        self.start_session_naming(id, &excerpt);
+        cx.notify();
+    }
+    /// Daily session counts across every workspace for the last `weeks * 7`
+    /// days, anchored to today's local date. Buckets use the local timezone so
+    /// a session made just after midnight lands on the same day the user sees.
+    fn session_activity(&self, weeks: usize) -> (chrono::NaiveDate, Vec<u32>) {
+        let today = Local::now().date_naive();
+        let days = weeks * 7;
+        let start_day = today - chrono::Duration::days((days - 1) as i64);
+        let mut counts = vec![0u32; days];
+        for workspace in &self.store.workspaces {
+            for session in &workspace.sessions {
+                if session.created_at == 0 {
+                    continue;
+                }
+                let Some(created) = DateTime::from_timestamp(session.created_at as i64, 0) else {
+                    continue;
+                };
+                let day = created.with_timezone(&Local).date_naive();
+                let offset = (day - start_day).num_days();
+                if (0..days as i64).contains(&offset) {
+                    counts[offset as usize] += 1;
+                }
+            }
+        }
+        (today, counts)
+    }
+
+    fn heatmap_cell_color(count: u32, max: u32) -> u32 {
+        if count == 0 || max == 0 {
+            return palette().surface;
+        }
+        let base = palette().surface_hover;
+        let accent = palette().diff_add_text;
+        let ratio = 0.25 + 0.75 * (count as f32 / max as f32);
+        let mix = |a: u32, b: u32, t: f32| -> u8 { (a as f32 + (b as f32 - a as f32) * t) as u8 };
+        let r = mix(base >> 16 & 0xff, accent >> 16 & 0xff, ratio);
+        let g = mix(base >> 8 & 0xff, accent >> 8 & 0xff, ratio);
+        let b = mix(base & 0xff, accent & 0xff, ratio);
+        ((r as u32) << 16) | ((g as u32) << 8) | b as u32
+    }
+
+    /// Activity heatmap shown in place of the chat while no workspace is
+    /// selected: 7 rows (weekdays) by trailing weeks, newest column last.
+    fn session_heatmap(&self, weeks: usize) -> AnyElement {
+        const WEEKDAYS: [&str; 7] = ["一", "二", "三", "四", "五", "六", "日"];
+        let (today, counts) = self.session_activity(weeks);
+        let start_day = today - chrono::Duration::days((weeks * 7 - 1) as i64);
+        let total: u32 = counts.iter().sum();
+        let max = counts.iter().copied().max().unwrap_or(0);
+
+        let mut grid = h_flex().gap(px(3.));
+        for week in 0..weeks {
+            let mut column = v_flex().gap(px(3.));
+            for weekday in 0..7 {
+                let index = week * 7 + weekday;
+                let count = counts[index];
+                let day = start_day + chrono::Duration::days(index as i64);
+                let label: SharedString =
+                    format!("{} · {} 次会话", day.format("%Y-%m-%d"), count).into();
+                column = column.child(
+                    div()
+                        .id(("heatmap-cell", index))
+                        .w(px(12.))
+                        .h(px(12.))
+                        .rounded(px(3.))
+                        .bg(rgb(Self::heatmap_cell_color(count, max)))
+                        .border_1()
+                        .border_color(rgb(palette().border))
+                        .when(day > today, |cell| cell.opacity(0.25))
+                        .tooltip(move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(label.clone())
+                                .build(window, cx)
+                        }),
+                );
+            }
+            grid = grid.child(column);
+        }
+
+        let mut weekday_labels = v_flex().gap(px(3.)).pt(px(0.));
+        for weekday in WEEKDAYS {
+            weekday_labels = weekday_labels.child(
+                div()
+                    .h(px(12.))
+                    .text_size(px(9.))
+                    .text_color(rgb(palette().faint))
+                    .child(weekday),
+            );
+        }
+
+        v_flex()
+            .flex_1()
+            .items_center()
+            .justify_center()
+            .gap_5()
+            .py_20()
+            .child(
+                div()
+                    .text_size(px(30.))
+                    .font_semibold()
+                    .text_color(rgb(palette().text))
+                    .child("连接一个本地工作区"),
+            )
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .text_color(rgb(palette().muted))
+                    .child("Conduit 直接调用本机 CLI，文件留在你的机器上。"),
+            )
+            .child(
+                v_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(rgb(palette().muted))
+                            .child(format!("近 {weeks} 周共 {total} 次会话")),
+                    )
+                    .child(h_flex().gap_2().child(weekday_labels).child(grid)),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(rgb(palette().faint))
+                    .child("CLI 只会在所选目录内执行任务"),
+            )
+            .into_any_element()
+    }
+
+    /// Shows the copied check mark on `id` for a short moment. Each call gets a
+    /// fresh generation so a previous timer cannot hide newer feedback.
+    fn show_copied(&mut self, id: SharedString, window: &mut Window, cx: &mut Context<Self>) {
+        self.copied_action_seq = self.copied_action_seq.wrapping_add(1);
+        let seq = self.copied_action_seq;
+        self.copied_action = Some(id);
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(1500))
+                .await;
+            let _ = this.update_in(cx, |this, _window, cx| {
+                if this.copied_action_seq == seq {
+                    this.copied_action = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     fn render_message(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let started = Instant::now();
         let Some(session) = self
@@ -2330,46 +3136,157 @@ impl ConduitApp {
         };
         let session_id = session.id;
         let provider = session.provider;
+        let regenerable = item.kind == ItemKind::Assistant
+            && self.writable
+            && !self.closing
+            && !self.runs.contains_key(&session_id)
+            && session.messages[..index]
+                .iter()
+                .any(|message| message.kind == ItemKind::User)
+            && !session.messages[index + 1..]
+                .iter()
+                .any(|message| matches!(message.kind, ItemKind::User | ItemKind::Assistant));
         let element = match item.kind {
-            ItemKind::User => h_flex()
-                .w_full()
-                .justify_end()
-                .child(
-                    div()
-                        .max_w(px(680.))
-                        .rounded(px(18.))
-                        .px_4()
-                        .py_3()
-                        .bg(rgb(palette().surface))
-                        .text_size(px(14.))
-                        .text_color(rgb(palette().text))
-                        .child(item.text.clone()),
-                )
-                .into_any_element(),
-            ItemKind::Assistant => v_flex()
-                .gap_2()
-                .w_full()
-                .child(
-                    h_flex()
-                        .items_center()
-                        .gap_2()
-                        .child(provider_icon(provider))
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(rgb(palette().faint))
-                                .child(provider.label()),
-                        ),
-                )
-                .child(
-                    TextView::markdown(
-                        SharedString::from(format!("reply-{}-{}", session_id, item.key)),
-                        item.text.clone(),
+            ItemKind::User => {
+                let copy_text = item.text.clone();
+                let copy_id = SharedString::from(format!("user-copy-{}-{}", session_id, item.key));
+                let copied = self.copied_action.as_ref() == Some(&copy_id);
+                let copy_icon = if copied {
+                    Icon::new(IconName::Check).text_color(rgb(palette().diff_add_text))
+                } else {
+                    Icon::new(IconName::Copy)
+                };
+                let message_group =
+                    SharedString::from(format!("user-message-{}-{}", session_id, item.key));
+                v_flex()
+                    .w_full()
+                    .items_end()
+                    .gap_1()
+                    .group(message_group.clone())
+                    .child(
+                        div()
+                            .id(("user-bubble", index))
+                            .max_w(px(680.))
+                            .rounded(px(18.))
+                            .px_4()
+                            .py_3()
+                            .bg(rgb(palette().surface))
+                            .text_size(px(14.))
+                            .text_color(rgb(palette().text))
+                            .child(gpui_kit::base::SelectableText::new(
+                                SharedString::from(format!(
+                                    "user-text-{}-{}",
+                                    session_id, item.key
+                                )),
+                                item.text.clone(),
+                            )),
                     )
-                    .text_size(px(15.))
-                    .selectable(true),
-                )
-                .into_any_element(),
+                    .child(
+                        h_flex()
+                            .gap(px(2.))
+                            .opacity(0.)
+                            .group_hover(message_group, |this| this.opacity(1.))
+                            .child(
+                                message_action_button(
+                                    copy_id.clone(),
+                                    copy_icon,
+                                    if copied { "已复制" } else { "复制消息" },
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            copy_text.clone(),
+                                        ));
+                                        this.show_copied(copy_id.clone(), window, cx);
+                                    },
+                                )),
+                            ),
+                    )
+                    .into_any_element()
+            }
+            ItemKind::Assistant => {
+                let copy_text = item.text.clone();
+                let copy_id = SharedString::from(format!("reply-copy-{}-{}", session_id, item.key));
+                let copied = self.copied_action.as_ref() == Some(&copy_id);
+                let copy_icon = if copied {
+                    Icon::new(IconName::Check).text_color(rgb(palette().diff_add_text))
+                } else {
+                    Icon::new(IconName::Copy)
+                };
+                let message_group =
+                    SharedString::from(format!("reply-message-{}-{}", session_id, item.key));
+                let mut actions = h_flex()
+                    .gap(px(2.))
+                    .opacity(0.)
+                    .group_hover(message_group.clone(), |this| this.opacity(1.))
+                    .child(
+                        message_action_button(
+                            copy_id.clone(),
+                            copy_icon,
+                            if copied { "已复制" } else { "复制消息" },
+                        )
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
+                                this.show_copied(copy_id.clone(), window, cx);
+                            },
+                        )),
+                    );
+                if regenerable {
+                    actions = actions.child(
+                        message_action_button(
+                            SharedString::from(format!(
+                                "reply-regenerate-{}-{}",
+                                session_id, item.key
+                            )),
+                            Icon::new(IconName::RefreshCw),
+                            "重新生成",
+                        )
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| this.regenerate(index, window, cx),
+                        )),
+                    );
+                }
+                v_flex()
+                    .w_full()
+                    .gap_1()
+                    .group(message_group)
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .gap_2()
+                            .p_4()
+                            .rounded(px(14.))
+                            .border_1()
+                            .border_color(rgb(palette().border))
+                            .bg(rgb(palette().surface))
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(provider_icon(provider))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(rgb(palette().faint))
+                                            .child(provider.label()),
+                                    ),
+                            )
+                            .child(
+                                TextView::markdown(
+                                    SharedString::from(format!(
+                                        "reply-{}-{}",
+                                        session_id, item.key
+                                    )),
+                                    item.text.clone(),
+                                )
+                                .text_size(px(15.))
+                                .selectable(true),
+                            ),
+                    )
+                    .child(actions)
+                    .into_any_element()
+            }
             ItemKind::Tool => {
                 let detail_key = (session_id, item.key.clone());
                 let expanded = self.expanded_tools.contains(&detail_key);
@@ -2515,6 +3432,12 @@ impl ConduitApp {
                 .text_color(rgb(palette().muted))
                 .child(item.text.clone())
                 .into_any_element(),
+            ItemKind::Error => Alert::error(
+                SharedString::from(format!("error-{}-{}", session_id, item.key)),
+                item.text.clone(),
+            )
+            .banner()
+            .into_any_element(),
         };
         let highlighted = self
             .message_focus
@@ -2528,8 +3451,9 @@ impl ConduitApp {
                 )))
                 .w_full()
                 .min_w_0()
-                .max_w(px(840.))
-                .mx_auto()
+                .when(!self.store.ui.full_width_content, |card| {
+                    card.max_w(px(840.)).mx_auto()
+                })
                 .rounded(px(12.))
                 .border_1()
                 .border_color(if highlighted {
@@ -2603,7 +3527,10 @@ impl ConduitApp {
                                 .p_0()
                                 .flex_shrink_0()
                                 .cursor_pointer()
-                                .tooltip(entry.label.clone())
+                                // A short, fixed-length tooltip keeps the
+                                // popup narrow enough to always fit on the
+                                // left; longer text would flip to the right.
+                                .tooltip(outline_tooltip(&entry.label))
                                 .tooltip_placement(Placement::Left)
                                 .accessibility_label(format!(
                                     "跳转到用户消息 {}：{}",
@@ -2852,15 +3779,23 @@ impl ConduitApp {
         else {
             return;
         };
+        // Git settings can pin the generation CLI & model; by default both
+        // follow the currently selected session.
         let provider = self
-            .selected_session
-            .and_then(|id| self.session(id))
-            .map(|session| session.provider)
+            .store
+            .git
+            .generation_provider
+            .or_else(|| {
+                self.selected_session
+                    .and_then(|id| self.session(id))
+                    .map(|session| session.provider)
+            })
             .unwrap_or(self.new_session_provider);
-        let model = self
-            .selected_session
-            .and_then(|id| self.session(id))
-            .and_then(|session| session.model.clone());
+        let model = self.store.git.generation_model.clone().or_else(|| {
+            self.selected_session
+                .and_then(|id| self.session(id))
+                .and_then(|session| session.model.clone())
+        });
         let executable = match cli::resolve(provider, &self.store.cli) {
             Ok(cli) => cli.path,
             Err(error) => {
@@ -2902,6 +3837,89 @@ impl ConduitApp {
             false,
             cx,
         );
+    }
+    /// Drain naming requests; apply a finished title only when the session
+    /// still shows its prompt-derived placeholder (i.e. the user has not
+    /// renamed it meanwhile).
+    fn poll_session_namings(&mut self, cx: &mut Context<Self>) {
+        let mut finished = vec![];
+        for (id, naming) in &mut self.session_namings {
+            if naming.started.elapsed() > Duration::from_secs(60) && naming.error.is_none() {
+                naming.error = Some("timeout".into());
+                naming.runtime.cancel();
+            }
+            loop {
+                match naming.runtime.events.try_recv() {
+                    Ok(Event::Text { key, text }) => {
+                        update_commit_text(&mut naming.parts, key, text, true);
+                    }
+                    Ok(Event::Delta { key, text }) => {
+                        update_commit_text(&mut naming.parts, key, text, false);
+                    }
+                    Ok(Event::Approval(approval)) => {
+                        naming.runtime.decide(approval.id, false);
+                        naming.error = Some("approval".into());
+                        naming.runtime.cancel();
+                    }
+                    Ok(Event::Tool { .. }) | Ok(Event::ToolInput { .. }) => {
+                        naming.error = Some("tool".into());
+                        naming.runtime.cancel();
+                    }
+                    Ok(Event::Finished { .. }) => {
+                        finished.push(*id);
+                        break;
+                    }
+                    Ok(_) => {}
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        finished.push(*id);
+                        break;
+                    }
+                }
+            }
+        }
+        for id in finished {
+            let Some(naming) = self.session_namings.remove(&id) else {
+                continue;
+            };
+            if naming.error.is_some() {
+                continue;
+            }
+            let title = naming
+                .parts
+                .into_iter()
+                .map(|(_, text)| text)
+                .collect::<Vec<_>>()
+                .join("")
+                .trim()
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim_matches(|ch: char| {
+                    ch == '"'
+                        || ch == '\u{201c}'
+                        || ch == '\u{201d}'
+                        || ch == '\u{300c}'
+                        || ch == '\u{300d}'
+                        || ch == '\''
+                })
+                .trim_end_matches(|ch: char| {
+                    ch == '.' || ch == '\u{3002}' || ch == '!' || ch == '\u{ff01}' || ch == '?'
+                })
+                .chars()
+                .take(30)
+                .collect::<String>();
+            if title.is_empty() {
+                continue;
+            }
+            if let Some(session) = self.session_mut(id)
+                && session.messages.iter().any(|m| m.kind == ItemKind::User)
+            {
+                session.title = title;
+                self.persist();
+                cx.notify();
+            }
+        }
     }
     fn poll_git_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.ensure_commit_draft(window, cx);
@@ -3779,6 +4797,7 @@ impl ConduitApp {
         self.poll_branches(cx);
         self.poll_git(cx);
         self.poll_git_actions(window, cx);
+        self.poll_session_namings(cx);
         if self
             .message_focus
             .as_ref()
@@ -3812,6 +4831,7 @@ impl ConduitApp {
         let mut visible = false;
         let mut dirty_messages = Vec::new();
         let mut structural_change = false;
+        let mut completed_turns = Vec::new();
         for (id, prefix, event) in incoming {
             changed = true;
             visible |= Some(id) == self.selected_session;
@@ -3827,6 +4847,42 @@ impl ConduitApp {
                 structural_change = true;
             }
             match event {
+                Event::Usage {
+                    input_tokens,
+                    cached_input_tokens,
+                    output_tokens,
+                    total_tokens,
+                    context_window,
+                } => {
+                    // Usage is display-only state: update both the running turn
+                    // and the session so the value survives run completion.
+                    let now = Instant::now();
+                    if let Some(run) = self.runs.get_mut(&id) {
+                        // A falling total means a new turn or compaction reset;
+                        // re-anchor the speed baseline.
+                        if total_tokens < run.turn_tokens_at_start {
+                            run.turn_tokens_at_start = total_tokens;
+                            run.turn_started = now;
+                        }
+                        run.usage = Usage {
+                            input_tokens,
+                            cached_input_tokens,
+                            output_tokens,
+                            total_tokens,
+                            context_window,
+                        };
+                        run.last_usage_event = now;
+                    }
+                    if let Some(session) = self.session_mut(id) {
+                        session.usage = Usage {
+                            input_tokens,
+                            cached_input_tokens,
+                            output_tokens,
+                            total_tokens,
+                            context_window,
+                        };
+                    }
+                }
                 Event::Approval(approval) => {
                     let accepted = self
                         .runs
@@ -3846,6 +4902,7 @@ impl ConduitApp {
                     }
                     if let Some(run) = self.runs.get_mut(&id) {
                         run.status = "等待你的审批".into();
+                        run.activity = "等待你的审批".into();
                         run.approvals.push(approval);
                     }
                 }
@@ -3856,6 +4913,7 @@ impl ConduitApp {
                         approval = run.approvals.remove(&request);
                         if run.approvals.is_empty() && !run.runtime.is_cancelled() {
                             run.status = "正在执行…".into();
+                            run.activity = "正在继续处理…".into();
                         }
                     }
                     if let (Some(approval), Some(session)) = (approval, self.session_mut(id)) {
@@ -3878,6 +4936,12 @@ impl ConduitApp {
                             "等待你的审批"
                         }
                         .into();
+                        run.activity = if run.approvals.is_empty() {
+                            "正在继续处理…"
+                        } else {
+                            "等待你的审批"
+                        }
+                        .into();
                         approval
                     });
                     if let (Some(approval), Some(session)) = (approval, self.session_mut(id)) {
@@ -3893,6 +4957,9 @@ impl ConduitApp {
                 Event::Finished { error, cancelled } => {
                     self.runs.remove(&id);
                     terminal = true;
+                    if error.is_none() && !cancelled {
+                        completed_turns.push(id);
+                    }
                     if let Some(session) = self.session_mut(id) {
                         session.interrupted = false;
                         finish_tool_cards(
@@ -3926,7 +4993,7 @@ impl ConduitApp {
                                 text: if cancelled {
                                     "已取消；不会自动重试。".into()
                                 } else if let Some(error) = error {
-                                    format!("执行失败：{error}")
+                                    format!("执行失败：{}", friendly_failure(&error))
                                 } else {
                                     "本轮已完成".into()
                                 },
@@ -3944,11 +5011,30 @@ impl ConduitApp {
                     }
                     if let Some(run) = self.runs.get_mut(&id) {
                         run.status = "正在执行…".into();
+                        run.activity = "已连接 CLI，正在等待模型响应…".into();
                     }
                     self.dirty = true;
                     self.persist();
                 }
                 other => {
+                    if let Some(run) = self.runs.get_mut(&id) {
+                        let activity = match &other {
+                            Event::Delta { .. } | Event::Text { .. } => "正在生成回复…".to_string(),
+                            Event::ToolInput { .. } => "正在准备工具调用…".to_string(),
+                            Event::Tool { title, status, .. } => match status.as_str() {
+                                "运行中" if !title.is_empty() => {
+                                    format!("正在调用工具：{title}")
+                                }
+                                "运行中" => "正在调用工具…".to_string(),
+                                "输出中" => "正在接收工具输出…".to_string(),
+                                _ => "正在继续处理…".to_string(),
+                            },
+                            _ => String::new(),
+                        };
+                        if !activity.is_empty() {
+                            run.activity = activity;
+                        }
+                    }
                     let mut index = self
                         .runs
                         .get_mut(&id)
@@ -3965,6 +5051,13 @@ impl ConduitApp {
                     if let Some(run) = self.runs.get_mut(&id) {
                         run.message_index = index;
                     }
+                }
+            }
+        }
+        if self.store.ui.naming_mode == NamingMode::Latest {
+            for id in completed_turns {
+                if let Some(excerpt) = self.session(id).and_then(latest_naming_excerpt) {
+                    self.start_session_naming(id, &excerpt);
                 }
             }
         }
@@ -4016,7 +5109,7 @@ impl ConduitApp {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some(format!("选择 {} 原生 .exe", provider.label()).into()),
+            prompt: Some(format!("选择 {} 可执行文件（.exe 或 .cmd）", provider.label()).into()),
         });
         cx.spawn_in(window, async move |this, cx| match paths.await {
             Ok(Ok(Some(paths))) => {
@@ -5191,11 +6284,882 @@ impl ConduitApp {
             .child(ccs_card)
             .into_any_element()
     }
+    /// Model catalog merged with cc-switch synced models, for the Git
+    /// generation model picker.
+    fn git_generation_catalog(&self, provider: Provider) -> ModelCatalog {
+        let catalog = self.catalogs.get(&provider);
+        let synced = self.ccs.current(provider);
+        match (catalog, synced) {
+            (Some(catalog), Some(synced)) if !synced.models.is_empty() => {
+                catalog.with_synced(&format!("CCS · {}", synced.name), &synced.models)
+            }
+            (Some(catalog), _) => catalog.clone(),
+            (None, Some(synced)) if !synced.models.is_empty() => ModelCatalog::default()
+                .with_synced(&format!("CCS · {}", synced.name), &synced.models),
+            (None, _) => ModelCatalog::default(),
+        }
+    }
+    /// Picker for the CLI engine used to auto-name sessions.
+    fn naming_provider_picker(&self, view: Entity<Self>, disabled: bool) -> AnyElement {
+        let current = self.store.ui.naming_provider;
+        let label = current
+            .map(|provider| provider.label())
+            .unwrap_or("跟随当前会话");
+        let trigger = Button::new("naming-provider-trigger")
+            .ghost()
+            .small()
+            .h(px(24.))
+            .px_2()
+            .rounded_full()
+            .disabled(disabled)
+            .when(!disabled, |button| button.cursor_pointer())
+            .accessibility_label("选择命名引擎")
+            .child(
+                h_flex()
+                    .gap_1()
+                    .items_center()
+                    .when_some(current, |row, provider| row.child(provider_icon(provider)))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(if disabled {
+                                palette().faint
+                            } else {
+                                palette().muted
+                            }))
+                            .child(label),
+                    )
+                    .child(
+                        Icon::new(IconName::ChevronDown)
+                            .small()
+                            .text_color(rgb(palette().faint)),
+                    ),
+            );
+        Popover::new("naming-provider-popover")
+            .anchor(Anchor::BottomRight)
+            .offset(px(6.))
+            .trigger(trigger)
+            .content(move |_, _, cx| {
+                let popover = cx.entity().downgrade();
+                let mut list = v_flex().w(px(220.)).gap(px(1.));
+                let options: [(Option<Provider>, &str); 3] = [
+                    (None, "跟随当前会话"),
+                    (Some(Provider::Claude), Provider::Claude.label()),
+                    (Some(Provider::Codex), Provider::Codex.label()),
+                ];
+                for (index, (option, name)) in options.into_iter().enumerate() {
+                    let view = view.clone();
+                    let popover = popover.clone();
+                    let active = current == option;
+                    list = list.child(
+                        Button::new(("naming-provider-option", index))
+                            .ghost()
+                            .h(px(32.))
+                            .w_full()
+                            .px_2()
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .when(active, |button| button.bg(rgb(palette().surface_hover)))
+                            .on_click(move |_, window, cx| {
+                                view.update(cx, |this, cx| {
+                                    if !this.writable || this.closing {
+                                        return;
+                                    }
+                                    this.store.ui.naming_provider = option;
+                                    // A model picked for another engine no longer applies.
+                                    if option.is_some() {
+                                        this.store.ui.naming_model = None;
+                                    }
+                                    this.persist();
+                                    cx.notify();
+                                });
+                                if let Some(popover) = popover.clone().upgrade() {
+                                    popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                                }
+                            })
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .gap_2()
+                                    .items_center()
+                                    .when_some(option, |row, provider| {
+                                        row.child(provider_icon(provider))
+                                    })
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .text_size(px(12.))
+                                            .text_color(rgb(if active {
+                                                palette().text
+                                            } else {
+                                                palette().muted
+                                            }))
+                                            .child(name),
+                                    )
+                                    .when(active, |row| {
+                                        row.child(
+                                            Icon::new(IconName::Check)
+                                                .small()
+                                                .text_color(rgb(palette().muted)),
+                                        )
+                                    }),
+                            ),
+                    );
+                }
+                list
+            })
+            .into_any_element()
+    }
+    /// Picker for what automatic session titling reacts to.
+    fn naming_mode_picker(&self, view: Entity<Self>, disabled: bool) -> AnyElement {
+        let current = self.store.ui.naming_mode;
+        let label = naming_mode_label(current);
+        let trigger = Button::new("naming-mode-trigger")
+            .ghost()
+            .small()
+            .h(px(24.))
+            .px_2()
+            .rounded_full()
+            .disabled(disabled)
+            .when(!disabled, |button| button.cursor_pointer())
+            .accessibility_label("选择自动重命名方式")
+            .child(
+                h_flex()
+                    .gap_1()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(if disabled {
+                                palette().faint
+                            } else {
+                                palette().muted
+                            }))
+                            .child(label),
+                    )
+                    .child(
+                        Icon::new(IconName::ChevronDown)
+                            .small()
+                            .text_color(rgb(palette().faint)),
+                    ),
+            );
+        Popover::new("naming-mode-popover")
+            .anchor(Anchor::BottomRight)
+            .offset(px(6.))
+            .trigger(trigger)
+            .content(move |_, _, cx| {
+                let popover = cx.entity().downgrade();
+                let mut list = v_flex().w(px(240.)).gap(px(1.));
+                for (index, (mode, name, detail)) in [
+                    (
+                        NamingMode::Latest,
+                        "自动根据最新内容重命名",
+                        "每轮结束后按最新对话更新标题",
+                    ),
+                    (
+                        NamingMode::FirstMessage,
+                        "根据第一条消息内容重命名",
+                        "只在第一条消息后生成一次标题",
+                    ),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let view = view.clone();
+                    let popover = popover.clone();
+                    let active = current == mode;
+                    list = list.child(
+                        Button::new(("naming-mode-option", index))
+                            .ghost()
+                            .h(px(44.))
+                            .w_full()
+                            .px_2()
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .when(active, |button| button.bg(rgb(palette().surface_hover)))
+                            .on_click(move |_, window, cx| {
+                                view.update(cx, |this, cx| {
+                                    if !this.writable || this.closing {
+                                        return;
+                                    }
+                                    this.store.ui.naming_mode = mode;
+                                    this.persist();
+                                    cx.notify();
+                                });
+                                if let Some(popover) = popover.clone().upgrade() {
+                                    popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                                }
+                            })
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.))
+                                                    .text_color(rgb(if active {
+                                                        palette().text
+                                                    } else {
+                                                        palette().muted
+                                                    }))
+                                                    .child(name),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(10.))
+                                                    .text_color(rgb(palette().faint))
+                                                    .child(detail),
+                                            ),
+                                    )
+                                    .when(active, |row| {
+                                        row.child(
+                                            Icon::new(IconName::Check)
+                                                .small()
+                                                .text_color(rgb(palette().muted)),
+                                        )
+                                    }),
+                            ),
+                    );
+                }
+                list
+            })
+            .into_any_element()
+    }
+    /// Picker for the model used to auto-name sessions.
+    fn naming_model_picker(&self, view: Entity<Self>, disabled: bool) -> AnyElement {
+        let follow_session = self.store.ui.naming_provider.is_none();
+        let provider = self
+            .store
+            .ui
+            .naming_provider
+            .or_else(|| {
+                self.selected_session
+                    .and_then(|id| self.session(id))
+                    .map(|session| session.provider)
+            })
+            .unwrap_or(self.new_session_provider);
+        let merged = self.git_generation_catalog(provider);
+        let selected_model = self.store.ui.naming_model.clone();
+        let trigger_label = selected_model
+            .as_deref()
+            .map(|id| merged.label(id))
+            .unwrap_or_else(|| {
+                if follow_session {
+                    "跟随当前会话".to_string()
+                } else {
+                    "CLI 默认".to_string()
+                }
+            });
+        let models = merged.models;
+        let provider_label = provider.label();
+        let trigger = Button::new("naming-model-trigger")
+            .ghost()
+            .small()
+            .h(px(24.))
+            .px_2()
+            .rounded_full()
+            .disabled(disabled)
+            .when(!disabled, |button| button.cursor_pointer())
+            .accessibility_label("选择命名模型")
+            .child(
+                h_flex()
+                    .gap_1()
+                    .items_center()
+                    .child(
+                        Icon::new(IconName::Cpu)
+                            .small()
+                            .text_color(rgb(palette().faint)),
+                    )
+                    .child(
+                        div()
+                            .max_w(px(180.))
+                            .truncate()
+                            .text_size(px(11.))
+                            .text_color(rgb(if disabled {
+                                palette().faint
+                            } else {
+                                palette().muted
+                            }))
+                            .child(trigger_label),
+                    )
+                    .child(
+                        Icon::new(IconName::ChevronDown)
+                            .small()
+                            .text_color(rgb(palette().faint)),
+                    ),
+            );
+        Popover::new("naming-model-popover")
+            .anchor(Anchor::BottomRight)
+            .offset(px(8.))
+            .trigger(trigger)
+            .content(move |_, _, cx| {
+                let popover = cx.entity().downgrade();
+                let mut list = v_flex()
+                    .id("naming-model-list")
+                    .w(px(320.))
+                    .gap(px(1.))
+                    .max_h(px(320.))
+                    .overflow_y_scroll();
+                let default_label = if follow_session {
+                    "跟随当前会话"
+                } else {
+                    "CLI 默认"
+                };
+                let options: Vec<(Option<String>, String, String)> =
+                    std::iter::once((None, default_label.to_string(), String::new()))
+                        .chain(models.iter().map(|model| {
+                            (
+                                Some(model.id.clone()),
+                                model.label.clone(),
+                                model.note.clone(),
+                            )
+                        }))
+                        .collect();
+                for (index, (id, label, note)) in options.into_iter().enumerate() {
+                    let view = view.clone();
+                    let popover = popover.clone();
+                    let selected = selected_model == id;
+                    list = list.child(
+                        Button::new(("naming-model-option", index))
+                            .ghost()
+                            .h(px(38.))
+                            .w_full()
+                            .px_2()
+                            .rounded(px(8.))
+                            .cursor_pointer()
+                            .accessibility_label(format!("模型 {label}"))
+                            .when(selected, |button| button.bg(rgb(palette().surface_hover)))
+                            .on_click(move |_, window, cx| {
+                                let id = id.clone();
+                                view.update(cx, |this, cx| {
+                                    if !this.writable || this.closing {
+                                        return;
+                                    }
+                                    this.store.ui.naming_model = id;
+                                    this.persist();
+                                    cx.notify();
+                                });
+                                if let Some(popover) = popover.clone().upgrade() {
+                                    popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                                }
+                            })
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .gap(px(1.))
+                                            .child(
+                                                div()
+                                                    .truncate()
+                                                    .text_size(px(12.))
+                                                    .text_color(rgb(if selected {
+                                                        palette().text
+                                                    } else {
+                                                        palette().muted
+                                                    }))
+                                                    .child(label),
+                                            )
+                                            .when(!note.is_empty(), |column| {
+                                                column.child(
+                                                    div()
+                                                        .truncate()
+                                                        .text_size(px(10.))
+                                                        .text_color(rgb(palette().faint))
+                                                        .child(note),
+                                                )
+                                            }),
+                                    )
+                                    .when(selected, |row| {
+                                        row.child(
+                                            Icon::new(IconName::Check)
+                                                .small()
+                                                .text_color(rgb(palette().muted)),
+                                        )
+                                    }),
+                            ),
+                    );
+                }
+                list = list.child(
+                    div()
+                        .px_2()
+                        .pt_1()
+                        .text_size(px(10.))
+                        .text_color(rgb(palette().faint))
+                        .child(format!("{provider_label} · {} 个模型", models.len())),
+                );
+                list
+            })
+            .into_any_element()
+    }
+    /// Settings picker for the CLI used to generate commit messages.
+    fn git_provider_picker(&self, view: Entity<Self>, disabled: bool) -> AnyElement {
+        let current = self.store.git.generation_provider;
+        let label = current
+            .map(|provider| provider.label())
+            .unwrap_or("跟随当前会话");
+        let trigger = Button::new("git-provider-trigger")
+            .ghost()
+            .small()
+            .h(px(24.))
+            .px_2()
+            .rounded_full()
+            .disabled(disabled)
+            .when(!disabled, |button| button.cursor_pointer())
+            .accessibility_label("选择生成用 CLI")
+            .child(
+                h_flex()
+                    .gap_1()
+                    .items_center()
+                    .when_some(current, |row, provider| row.child(provider_icon(provider)))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(if disabled {
+                                palette().faint
+                            } else {
+                                palette().muted
+                            }))
+                            .child(label),
+                    )
+                    .child(
+                        Icon::new(IconName::ChevronDown)
+                            .small()
+                            .text_color(rgb(palette().faint)),
+                    ),
+            );
+        Popover::new("git-provider-popover")
+            .anchor(Anchor::BottomRight)
+            .offset(px(6.))
+            .trigger(trigger)
+            .content(move |_, _, cx| {
+                let popover = cx.entity().downgrade();
+                let mut list = v_flex().w(px(220.)).gap(px(1.));
+                let options: [(Option<Provider>, &str); 3] = [
+                    (None, "跟随当前会话"),
+                    (Some(Provider::Claude), Provider::Claude.label()),
+                    (Some(Provider::Codex), Provider::Codex.label()),
+                ];
+                for (index, (option, name)) in options.into_iter().enumerate() {
+                    let view = view.clone();
+                    let popover = popover.clone();
+                    let active = current == option;
+                    list = list.child(
+                        Button::new(("git-provider-option", index))
+                            .ghost()
+                            .h(px(32.))
+                            .w_full()
+                            .px_2()
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .when(active, |button| button.bg(rgb(palette().surface_hover)))
+                            .on_click(move |_, window, cx| {
+                                view.update(cx, |this, cx| {
+                                    if !this.writable || this.closing {
+                                        return;
+                                    }
+                                    this.store.git.generation_provider = option;
+                                    // A model picked for another engine no longer applies.
+                                    if option.is_some() {
+                                        this.store.git.generation_model = None;
+                                    }
+                                    this.persist();
+                                    cx.notify();
+                                });
+                                if let Some(popover) = popover.clone().upgrade() {
+                                    popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                                }
+                            })
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .gap_2()
+                                    .items_center()
+                                    .when_some(option, |row, provider| {
+                                        row.child(provider_icon(provider))
+                                    })
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .text_size(px(12.))
+                                            .text_color(rgb(if active {
+                                                palette().text
+                                            } else {
+                                                palette().muted
+                                            }))
+                                            .child(name),
+                                    )
+                                    .when(active, |row| {
+                                        row.child(
+                                            Icon::new(IconName::Check)
+                                                .small()
+                                                .text_color(rgb(palette().muted)),
+                                        )
+                                    }),
+                            ),
+                    );
+                }
+                list
+            })
+            .into_any_element()
+    }
+    /// Settings picker for the model used to generate commit messages.
+    fn git_model_picker(&self, view: Entity<Self>, disabled: bool) -> AnyElement {
+        let provider = self
+            .store
+            .git
+            .generation_provider
+            .or_else(|| {
+                self.selected_session
+                    .and_then(|id| self.session(id))
+                    .map(|session| session.provider)
+            })
+            .unwrap_or(self.new_session_provider);
+        let merged = self.git_generation_catalog(provider);
+        let selected_model = self.store.git.generation_model.clone();
+        let follow_session = self.store.git.generation_provider.is_none();
+        let trigger_label = selected_model
+            .as_deref()
+            .map(|id| merged.label(id))
+            .unwrap_or_else(|| {
+                if follow_session {
+                    "跟随当前会话".to_string()
+                } else {
+                    "CLI 默认".to_string()
+                }
+            });
+        let models = merged.models;
+        let provider_label = provider.label();
+        let trigger = Button::new("git-model-trigger")
+            .ghost()
+            .small()
+            .h(px(24.))
+            .px_2()
+            .rounded_full()
+            .disabled(disabled)
+            .when(!disabled, |button| button.cursor_pointer())
+            .accessibility_label("选择生成用模型")
+            .child(
+                h_flex()
+                    .gap_1()
+                    .items_center()
+                    .child(
+                        Icon::new(IconName::Cpu)
+                            .small()
+                            .text_color(rgb(palette().faint)),
+                    )
+                    .child(
+                        div()
+                            .max_w(px(180.))
+                            .truncate()
+                            .text_size(px(11.))
+                            .text_color(rgb(if disabled {
+                                palette().faint
+                            } else {
+                                palette().muted
+                            }))
+                            .child(trigger_label),
+                    )
+                    .child(
+                        Icon::new(IconName::ChevronDown)
+                            .small()
+                            .text_color(rgb(palette().faint)),
+                    ),
+            );
+        Popover::new("git-model-popover")
+            .anchor(Anchor::BottomRight)
+            .offset(px(8.))
+            .trigger(trigger)
+            .content(move |_, _, cx| {
+                let popover = cx.entity().downgrade();
+                let mut list = v_flex()
+                    .id("git-model-list")
+                    .w(px(320.))
+                    .gap(px(1.))
+                    .max_h(px(320.))
+                    .overflow_y_scroll();
+                let default_label = if follow_session {
+                    "跟随当前会话"
+                } else {
+                    "CLI 默认"
+                };
+                let options: Vec<(Option<String>, String, String)> =
+                    std::iter::once((None, default_label.to_string(), String::new()))
+                        .chain(models.iter().map(|model| {
+                            (
+                                Some(model.id.clone()),
+                                model.label.clone(),
+                                model.note.clone(),
+                            )
+                        }))
+                        .collect();
+                for (index, (id, label, note)) in options.into_iter().enumerate() {
+                    let view = view.clone();
+                    let popover = popover.clone();
+                    let selected = selected_model == id;
+                    list = list.child(
+                        Button::new(("git-model-option", index))
+                            .ghost()
+                            .h(px(38.))
+                            .w_full()
+                            .px_2()
+                            .rounded(px(8.))
+                            .cursor_pointer()
+                            .accessibility_label(format!("模型 {label}"))
+                            .when(selected, |button| button.bg(rgb(palette().surface_hover)))
+                            .on_click(move |_, window, cx| {
+                                let id = id.clone();
+                                view.update(cx, |this, cx| {
+                                    if !this.writable || this.closing {
+                                        return;
+                                    }
+                                    this.store.git.generation_model = id;
+                                    this.persist();
+                                    cx.notify();
+                                });
+                                if let Some(popover) = popover.clone().upgrade() {
+                                    popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                                }
+                            })
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .gap(px(1.))
+                                            .child(
+                                                div()
+                                                    .truncate()
+                                                    .text_size(px(12.))
+                                                    .text_color(rgb(if selected {
+                                                        palette().text
+                                                    } else {
+                                                        palette().muted
+                                                    }))
+                                                    .child(label),
+                                            )
+                                            .when(!note.is_empty(), |column| {
+                                                column.child(
+                                                    div()
+                                                        .truncate()
+                                                        .text_size(px(10.))
+                                                        .text_color(rgb(palette().faint))
+                                                        .child(note),
+                                                )
+                                            }),
+                                    )
+                                    .when(selected, |row| {
+                                        row.child(
+                                            Icon::new(IconName::Check)
+                                                .small()
+                                                .text_color(rgb(palette().muted)),
+                                        )
+                                    }),
+                            ),
+                    );
+                }
+                list = list.child(
+                    div()
+                        .px_2()
+                        .pt_1()
+                        .text_size(px(10.))
+                        .text_color(rgb(palette().faint))
+                        .child(format!("{provider_label} · {} 个模型", models.len())),
+                );
+                list
+            })
+            .into_any_element()
+    }
+    fn settings_session_content(&self, view: Entity<Self>) -> AnyElement {
+        let disabled = !self.writable || self.closing;
+        let provider_picker = self.naming_provider_picker(view.clone(), disabled);
+        let model_picker = self.naming_model_picker(view.clone(), disabled);
+        let mode_picker = self.naming_mode_picker(view.clone(), disabled);
+        v_flex()
+            .w_full()
+            .gap_4()
+            .child(
+                v_flex()
+                    .w_full()
+                    .overflow_hidden()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(rgb(palette().border))
+                    .bg(rgb(palette().surface_strong))
+                    .child(
+                        h_flex()
+                            .px_4()
+                            .py_3()
+                            .items_center()
+                            .border_b_1()
+                            .border_color(rgb(palette().border))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_semibold()
+                                    .text_color(rgb(palette().text))
+                                    .child("会话命名"),
+                            )
+                            .child(div().flex_1())
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(rgb(palette().faint))
+                                    .child("立即生效"),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .px_4()
+                            .py_3()
+                            .gap_4()
+                            .items_center()
+                            .child(settings_label("命名引擎"))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(palette().muted))
+                                    .child("生成会话标题使用的引擎；默认跟随当前会话"),
+                            )
+                            .child(provider_picker),
+                    )
+                    .child(
+                        h_flex()
+                            .px_4()
+                            .py_3()
+                            .gap_4()
+                            .items_center()
+                            .border_t_1()
+                            .border_color(rgb(palette().border))
+                            .child(settings_label("命名模型"))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(palette().muted))
+                                    .child("指定引擎后可固定模型；默认跟随当前会话的模型"),
+                            )
+                            .child(model_picker),
+                    )
+                    .child(
+                        h_flex()
+                            .px_4()
+                            .py_3()
+                            .gap_4()
+                            .items_center()
+                            .border_t_1()
+                            .border_color(rgb(palette().border))
+                            .child(settings_label("自动重命名"))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(palette().muted))
+                                    .child("选择标题跟随最新对话自动更新，或只按第一条消息生成一次"),
+                            )
+                            .child(mode_picker),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .line_height(relative(1.5))
+                    .text_color(rgb(palette().faint))
+                    .child("命名在后台进行，失败时保留当前标题；命名完成前手动重命名的会话不会被覆盖。右键会话可随时使用 AI 重命名。"),
+            )
+            .into_any_element()
+    }
     fn settings_git_content(&self, view: Entity<Self>) -> AnyElement {
         let disabled = !self.writable || self.closing;
+        let provider_picker = self.git_provider_picker(view.clone(), disabled);
+        let model_picker = self.git_model_picker(view.clone(), disabled);
         v_flex()
             .w_full()
             .gap_3()
+            .child(
+                v_flex()
+                    .w_full()
+                    .overflow_hidden()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(rgb(palette().border))
+                    .bg(rgb(palette().surface_strong))
+                    .child(
+                        h_flex()
+                            .px_4()
+                            .py_3()
+                            .items_center()
+                            .border_b_1()
+                            .border_color(rgb(palette().border))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_semibold()
+                                    .text_color(rgb(palette().text))
+                                    .child("生成引擎"),
+                            )
+                            .child(div().flex_1())
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(rgb(palette().faint))
+                                    .child("立即生效"),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .px_4()
+                            .py_3()
+                            .gap_4()
+                            .items_center()
+                            .child(settings_label("生成 CLI"))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(palette().muted))
+                                    .child("用于生成 Commit Message 的 CLI；默认跟随当前会话"),
+                            )
+                            .child(provider_picker),
+                    )
+                    .child(
+                        h_flex()
+                            .px_4()
+                            .py_3()
+                            .gap_4()
+                            .items_center()
+                            .border_t_1()
+                            .border_color(rgb(palette().border))
+                            .child(settings_label("生成模型"))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(palette().muted))
+                                    .child("指定 CLI 后可固定模型；默认跟随当前会话（或 CLI 默认）"),
+                            )
+                            .child(model_picker),
+                    ),
+            )
             .child(
                 h_flex()
                     .items_center()
@@ -5438,6 +7402,10 @@ impl ConduitApp {
         let value = self.store.ui.sessions_per_workspace.clamp(1, 30);
         let decrease = view.clone();
         let increase = view.clone();
+        let max_tabs = self.store.ui.max_tabs.clamp(1, MAX_TAB_LIMIT);
+        let max_tabs_limit = MAX_TAB_LIMIT;
+        let tabs_decrease = view.clone();
+        let tabs_increase = view.clone();
         v_flex()
             .w_full()
             .gap_4()
@@ -5499,6 +7467,70 @@ impl ConduitApp {
                             )),
                     ),
             )
+            .child({
+                let toggle = view.clone();
+                let full_width = self.store.ui.full_width_content;
+                v_flex()
+                    .w_full()
+                    .overflow_hidden()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(rgb(palette().border))
+                    .bg(rgb(palette().surface_strong))
+                    .child(
+                        h_flex()
+                            .px_4()
+                            .py_3()
+                            .items_center()
+                            .border_b_1()
+                            .border_color(rgb(palette().border))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_semibold()
+                                    .text_color(rgb(palette().text))
+                                    .child("内容区域"),
+                            )
+                            .child(div().flex_1())
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(rgb(palette().faint))
+                                    .child("立即生效"),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .px_4()
+                            .py_3()
+                            .gap_4()
+                            .items_center()
+                            .child(settings_label("内容铺满"))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(palette().muted))
+                                    .child("关闭时右侧内容以 840px 居中显示；开启后铺满整个内容区"),
+                            )
+                            .child(
+                                Switch::new("full-width-content-setting")
+                                    .checked(full_width)
+                                    .disabled(disabled)
+                                    .on_change(move |checked, _, cx| {
+                                        toggle.update(cx, |this, cx| {
+                                            if !this.writable || this.closing {
+                                                return;
+                                            }
+                                            this.store.ui.full_width_content = *checked;
+                                            this.persist();
+                                            cx.notify();
+                                        });
+                                    }),
+                            ),
+                    )
+            })
             .child(
                 v_flex()
                     .w_full()
@@ -5611,6 +7643,118 @@ impl ConduitApp {
                     ),
             )
             .child(
+                v_flex()
+                    .w_full()
+                    .overflow_hidden()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(rgb(palette().border))
+                    .bg(rgb(palette().surface_strong))
+                    .child(
+                        h_flex()
+                            .px_4()
+                            .py_3()
+                            .items_center()
+                            .border_b_1()
+                            .border_color(rgb(palette().border))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_semibold()
+                                    .text_color(rgb(palette().text))
+                                    .child("标签页"),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .px_4()
+                            .py_3()
+                            .gap_4()
+                            .items_center()
+                            .child(settings_label("最大 tab 数量"))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(palette().muted))
+                                    .child("默认 8 个，范围 1–20；超过数量自动关闭最老的标签"),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .child(
+                                        Button::new("max-tabs-minus")
+                                            .label("−")
+                                            .accessibility_label("减少最大标签数量")
+                                            .small()
+                                            .ghost()
+                                            .disabled(disabled || max_tabs <= 1)
+                                            .when(!disabled && max_tabs > 1, |button| {
+                                                button.cursor_pointer()
+                                            })
+                                            .on_click(move |_, _, cx| {
+                                                tabs_decrease.update(cx, |this, cx| {
+                                                    if !this.writable || this.closing {
+                                                        return;
+                                                    }
+                                                    this.store.ui.max_tabs = this
+                                                        .store
+                                                        .ui
+                                                        .max_tabs
+                                                        .clamp(1, max_tabs_limit)
+                                                        .saturating_sub(1)
+                                                        .max(1);
+                                                    this.persist();
+                                                    cx.notify();
+                                                });
+                                            }),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .w(px(26.))
+                                            .justify_center()
+                                            .text_size(px(12.))
+                                            .text_color(rgb(if disabled {
+                                                palette().faint
+                                            } else {
+                                                palette().text
+                                            }))
+                                            .child(max_tabs.to_string()),
+                                    )
+                                    .child(
+                                        Button::new("max-tabs-plus")
+                                            .label("+")
+                                            .accessibility_label("增加最大标签数量")
+                                            .small()
+                                            .ghost()
+                                            .disabled(disabled || max_tabs >= max_tabs_limit)
+                                            .when(
+                                                !disabled && max_tabs < max_tabs_limit,
+                                                |button| button.cursor_pointer(),
+                                            )
+                                            .on_click(move |_, _, cx| {
+                                                tabs_increase.update(cx, |this, cx| {
+                                                    if !this.writable || this.closing {
+                                                        return;
+                                                    }
+                                                    this.store.ui.max_tabs = (this
+                                                        .store
+                                                        .ui
+                                                        .max_tabs
+                                                        .clamp(1, max_tabs_limit)
+                                                        + 1)
+                                                    .min(max_tabs_limit);
+                                                    this.persist();
+                                                    cx.notify();
+                                                });
+                                            }),
+                                    ),
+                            ),
+                    ),
+            )
+            .child(
                 div()
                     .text_size(px(11.))
                     .line_height(relative(1.5))
@@ -5663,7 +7807,11 @@ impl ConduitApp {
                         "在本页 Claude Code / Codex 中手动指定".into(),
                         true,
                     ))
-                    .child(settings_row("PATH", "claude.exe · codex.exe".into(), true))
+                    .child(settings_row(
+                        "PATH",
+                        "claude.exe / .cmd · codex.exe / .cmd".into(),
+                        true,
+                    ))
                     .child(settings_row(
                         "常见安装位置",
                         "~/.local/bin · %LOCALAPPDATA%\\Programs\\OpenAI\\Codex".into(),
@@ -5695,12 +7843,12 @@ impl ConduitApp {
                     )
                     .child(settings_row(
                         "Claude Code",
-                        "在左侧「Claude Code」页面选择本机 .exe 并检测版本".into(),
+                        "在左侧「Claude Code」页面选择本机 .exe / .cmd 并检测版本".into(),
                         false,
                     ))
                     .child(settings_row(
                         "Codex",
-                        "在左侧「Codex」页面选择本机 .exe 并检测版本".into(),
+                        "在左侧「Codex」页面选择本机 .exe / .cmd 并检测版本".into(),
                         true,
                     )),
             )
@@ -5717,6 +7865,7 @@ impl ConduitApp {
         let (title, subtitle) = match self.settings_tab {
             SettingsTab::General => ("通用", "本机数据与诊断设置"),
             SettingsTab::Appearance => ("外观", "主题与侧栏显示密度"),
+            SettingsTab::Session => ("会话", "会话命名与标签页行为"),
             SettingsTab::Git => ("Git", "配置 Commit Message 的 AI 生成提示词"),
             SettingsTab::Cli => ("CLI", "可执行文件路径查找顺序与版本检测说明"),
             SettingsTab::Provider(provider) => (provider.label(), "管理可执行文件路径与版本检测"),
@@ -5728,6 +7877,7 @@ impl ConduitApp {
             Button::new(match tab {
                 SettingsTab::General => "settings-tab-general",
                 SettingsTab::Appearance => "settings-tab-appearance",
+                SettingsTab::Session => "settings-tab-session",
                 SettingsTab::Git => "settings-tab-git",
                 SettingsTab::Cli => "settings-tab-cli",
                 SettingsTab::Provider(Provider::Claude) => "settings-tab-claude",
@@ -5862,6 +8012,18 @@ impl ConduitApp {
                 appearance_leading,
             ))
             .child(nav_item(
+                SettingsTab::Session,
+                "会话",
+                Icon::new(gpui_kit::assets::IconName::Sparkles)
+                    .small()
+                    .text_color(rgb(if self.settings_tab == SettingsTab::Session {
+                        palette().text
+                    } else {
+                        palette().faint
+                    }))
+                    .into_any_element(),
+            ))
+            .child(nav_item(
                 SettingsTab::Git,
                 "Git",
                 Icon::new(gpui_kit::assets::IconName::GitFork)
@@ -5898,6 +8060,7 @@ impl ConduitApp {
         let page = match self.settings_tab {
             SettingsTab::General => self.settings_general_content(view.clone()),
             SettingsTab::Appearance => self.settings_appearance_content(view.clone()),
+            SettingsTab::Session => self.settings_session_content(view.clone()),
             SettingsTab::Git => self.settings_git_content(view.clone()),
             SettingsTab::Cli => self.settings_cli_content(),
             SettingsTab::Provider(provider) => {
@@ -6039,6 +8202,44 @@ impl ConduitApp {
 /// already shows. CLI wrappers often echo the same provider error in both the
 /// assistant output and the task result, and showing it twice reads as a
 /// duplicated reply.
+/// Turn a raw CLI failure blob into a one-line banner summary. The runtime
+/// reports some failures as pretty-printed JSON (e.g. a Codex `turn.error`
+/// object); those get parsed so the banner shows the cause, not the payload.
+fn friendly_failure(error: &str) -> String {
+    let trimmed = error.trim();
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+        return trimmed.to_string();
+    };
+    let get = |keys: &[&str]| -> Option<String> {
+        keys.iter().find_map(|key| {
+            json.get(*key)
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+                .filter(|value| !value.is_empty())
+        })
+    };
+    let message = get(&["message", "error"]);
+    let detail = json
+        .get("codexErrorInfo")
+        .and_then(|info| info.get("responseStreamDisconnected"))
+        .map(|disconnected| {
+            let status = disconnected["httpStatusCode"].as_i64();
+            let detail = disconnected["additionalDetails"].as_str().unwrap_or("");
+            let brief = detail.split(['\n', ';']).next().unwrap_or(detail).trim();
+            let brief = if brief.chars().count() > 120 {
+                format!("{}…", brief.chars().take(120).collect::<String>())
+            } else {
+                brief.to_string()
+            };
+            match (status, brief.is_empty()) {
+                (Some(code), false) => format!("连接中断（HTTP {code}）：{brief}"),
+                (Some(code), true) => format!("连接中断（HTTP {code}）"),
+                (None, false) => format!("连接中断：{brief}"),
+                (None, true) => "连接中断".to_string(),
+            }
+        });
+    detail.or(message).unwrap_or_else(|| trimmed.to_string())
+}
 fn same_failure(message: &str, error: &str) -> bool {
     let message = message.trim();
     let error = error.trim();
@@ -6125,6 +8326,14 @@ fn apply_event_indexed(
         Event::Notice(text) => (
             format!("notice-{}", session.messages.len()),
             ItemKind::Notice,
+            text,
+            String::new(),
+            String::new(),
+            false,
+        ),
+        Event::ErrorBanner(text) => (
+            format!("error-{}", session.messages.len()),
+            ItemKind::Error,
             text,
             String::new(),
             String::new(),
@@ -6373,7 +8582,6 @@ impl Render for ConduitApp {
             let sessions: Vec<&SessionRecord> = workspace
                 .sessions
                 .iter()
-                .rev()
                 .filter(|session| {
                     (self.show_archived || !session.archived) && session_matches(session, &query)
                 })
@@ -6384,7 +8592,7 @@ impl Render for ConduitApp {
             let last = sessions
                 .first()
                 .map(|session| session.id)
-                .or_else(|| workspace.sessions.last().map(|session| session.id));
+                .or_else(|| workspace.sessions.first().map(|session| session.id));
             let workspace_selected = self.selected_workspace == Some(index);
             let count = sessions.len();
             let limit = self.store.ui.sessions_per_workspace.clamp(1, 30);
@@ -6447,63 +8655,123 @@ impl Render for ConduitApp {
                 let active = self.selected_session == Some(id);
                 let run_status = self.runs.get(&id).map(|r| r.status.clone());
                 let archived = session.archived;
-                let menu = self.session_menu(id, app_entity.clone());
-                list = list.child(
-                    h_flex()
-                        .id(("session", id))
-                        .h(px(30.))
-                        .pl(px(24.))
-                        .pr(px(8.))
-                        .gap_2()
-                        .items_center()
-                        .rounded(px(8.))
-                        .text_size(px(13.))
-                        .text_color(rgb(if archived {
-                            palette().faint
-                        } else if active {
-                            palette().text
-                        } else {
-                            palette().muted
-                        }))
-                        .when(active, |row| row.bg(rgb(palette().surface_hover)))
-                        .cursor_pointer()
-                        .hover(|style| {
-                            style
-                                .bg(rgb(palette().surface_hover))
-                                .text_color(rgb(palette().text))
-                        })
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.switch(index, Some(id), window, cx)
-                        }))
-                        .child(provider_icon(session.provider))
-                        .child(
-                            div()
-                                .flex_1()
-                                .truncate()
-                                .child(if session.title.is_empty() {
-                                    "新会话".into()
-                                } else {
-                                    session.title.clone()
-                                }),
-                        )
-                        .when(archived, |row| {
-                            row.child(
+                let can_ai_rename = can_edit
+                    && session
+                        .messages
+                        .iter()
+                        .any(|item| item.kind == ItemKind::User);
+                list =
+                    list.child(
+                        h_flex()
+                            .id(("session", id))
+                            .h(px(30.))
+                            .pl(px(24.))
+                            .pr(px(8.))
+                            .gap_2()
+                            .items_center()
+                            .rounded(px(8.))
+                            .text_size(px(13.))
+                            .text_color(rgb(if archived {
+                                palette().faint
+                            } else if active {
+                                palette().text
+                            } else {
+                                palette().muted
+                            }))
+                            .when(active, |row| row.bg(rgb(palette().surface_hover)))
+                            .cursor_pointer()
+                            .hover(|style| {
+                                style
+                                    .bg(rgb(palette().surface_hover))
+                                    .text_color(rgb(palette().text))
+                            })
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.switch(index, Some(id), window, cx)
+                            }))
+                            .context_menu({
+                                let menu_app = app_entity.clone();
+                                move |menu, _, _| {
+                                    let rename_app = menu_app.clone();
+                                    let ai_rename_app = menu_app.clone();
+                                    let archive_app = menu_app.clone();
+                                    let delete_app = menu_app.clone();
+                                    menu.min_w(px(150.))
+                                        .item(
+                                            PopupMenuItem::new("重命名")
+                                                .icon(IconName::Replace)
+                                                .on_click(move |_, window, cx| {
+                                                    rename_app.update(cx, |this, cx| {
+                                                        this.open_rename_dialog(id, window, cx)
+                                                    });
+                                                }),
+                                        )
+                                        .item(
+                                            PopupMenuItem::new("AI 重命名")
+                                                .icon(gpui_kit::assets::IconName::Sparkles)
+                                                .disabled(!can_ai_rename)
+                                                .on_click(move |_, _, cx| {
+                                                    ai_rename_app.update(cx, |this, cx| {
+                                                        this.ai_rename_session(id, cx)
+                                                    });
+                                                }),
+                                        )
+                                        .item(
+                                            PopupMenuItem::new(if archived {
+                                                "取消归档"
+                                            } else {
+                                                "归档"
+                                            })
+                                            .icon(IconName::Inbox)
+                                            .on_click(move |_, _, cx| {
+                                                archive_app.update(cx, |this, cx| {
+                                                    this.toggle_archive(id, cx)
+                                                });
+                                            }),
+                                        )
+                                        .item(
+                                            PopupMenuItem::new("删除")
+                                                .icon(IconName::Delete)
+                                                .on_click(move |_, window, cx| {
+                                                    delete_app.update(cx, |this, cx| {
+                                                        this.open_delete_dialog(id, window, cx)
+                                                    });
+                                                }),
+                                        )
+                                }
+                            })
+                            .child(provider_icon(session.provider))
+                            .child(
                                 div()
-                                    .text_size(px(9.))
-                                    .text_color(rgb(palette().faint))
-                                    .child("已归档"),
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .line_height(px(16.))
+                                    .child(if session.title.is_empty() {
+                                        "新会话".to_string()
+                                    } else {
+                                        single_line_title(&session.title)
+                                    }),
                             )
-                        })
-                        .when_some(run_status, |row, status| {
-                            row.child(
-                                div()
-                                    .text_size(px(10.))
-                                    .text_color(rgb(palette().faint))
-                                    .child(status),
-                            )
-                        })
-                        .child(menu),
-                );
+                            .when(self.session_namings.contains_key(&id), |row| {
+                                row.child(Spinner::new().small().color(rgb(palette().muted).into()))
+                            })
+                            .when(archived, |row| {
+                                row.child(
+                                    div()
+                                        .text_size(px(9.))
+                                        .text_color(rgb(palette().faint))
+                                        .child("已归档"),
+                                )
+                            })
+                            .when_some(run_status, |row, status| {
+                                row.child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .text_color(rgb(palette().faint))
+                                        .child(status),
+                                )
+                            }),
+                    );
             }
             if total > limit {
                 let toggle_app = app_entity.clone();
@@ -6716,114 +8984,11 @@ impl Render for ConduitApp {
                     ),
             );
         } else {
-            messages = messages.child(
-                v_flex()
-                    .flex_1()
-                    .items_center()
-                    .justify_center()
-                    .gap_4()
-                    .py_20()
-                    .child(
-                        h_flex()
-                            .w(px(44.))
-                            .h(px(44.))
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(12.))
-                            .border_1()
-                            .border_color(rgb(palette().border))
-                            .bg(rgb(palette().surface))
-                            .child(
-                                div()
-                                    .text_base()
-                                    .font_bold()
-                                    .text_color(rgb(palette().muted))
-                                    .child("C"),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(30.))
-                            .font_semibold()
-                            .text_color(rgb(palette().text))
-                            .child("连接一个本地工作区"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(14.))
-                            .line_height(relative(1.5))
-                            .text_color(rgb(palette().muted))
-                            .child("Conduit 直接调用本机 CLI，文件留在你的机器上。"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(rgb(palette().faint))
-                            .child("CLI 只会在所选目录内执行任务"),
-                    ),
-            );
+            messages = messages.child(self.session_heatmap(13));
         }
+
         let mut conversation = v_flex().flex_1().min_w_0().h_full();
-        let current_provider = selected.as_ref().map(|session| session.provider);
-        let header_title = match &selected {
-            Some(session) if !session.title.is_empty() => session.title.clone(),
-            Some(_) => "新会话".to_string(),
-            None if has_workspace => "新会话".to_string(),
-            None => "未选择工作区".to_string(),
-        };
-        conversation = conversation.child(
-            h_flex()
-                .h(px(56.))
-                .px_5()
-                .items_center()
-                .gap_3()
-                .border_b_1()
-                .border_color(rgb(palette().border))
-                .child(self.workspace_picker(app_entity.clone()))
-                .when_some(current_provider, |header, provider| {
-                    header.child(provider_icon(provider))
-                })
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(13.))
-                        .font_bold()
-                        .text_color(rgb(palette().text))
-                        .child(header_title),
-                )
-                .when(active, |header| {
-                    header.child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .rounded(px(6.))
-                            .bg(rgb(palette().surface))
-                            .text_size(px(10.))
-                            .text_color(rgb(palette().muted))
-                            .child(status.clone().unwrap_or_else(|| "运行中".into())),
-                    )
-                })
-                .child(
-                    Button::new("toggle-sidebar")
-                        .ghost()
-                        .small()
-                        .compact()
-                        .icon(gpui_kit::assets::IconName::PanelRight)
-                        .cursor_pointer()
-                        .tooltip(if self.details && self.detail_view == DetailView::Tool {
-                            "收起工具详情"
-                        } else {
-                            "打开工具详情"
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.details = !(this.details && this.detail_view == DetailView::Tool);
-                            this.detail_view = DetailView::Tool;
-                            cx.notify();
-                        })),
-                ),
-        );
+        conversation = conversation.child(self.session_tab_bar(cx));
         // Keep the outline attached to the centered message column instead of
         // the window edge. It stays outside the scrolling list, while the
         // rail itself is vertically centered in the chat viewport.
@@ -6832,11 +8997,12 @@ impl Render for ConduitApp {
             message_area = message_area.child(
                 h_flex()
                     .w_full()
-                    .max_w(px(952.))
+                    .when(!self.store.ui.full_width_content, |row| {
+                        row.max_w(px(952.)).mx_auto()
+                    })
                     .h_full()
                     .min_h_0()
                     .min_w_0()
-                    .mx_auto()
                     .items_stretch()
                     .child(self.message_outline(cx))
                     .child(messages)
@@ -6847,6 +9013,37 @@ impl Render for ConduitApp {
             message_area = message_area.child(messages);
         }
         conversation = conversation.child(message_area);
+        // Live engine activity, shown in the conversation itself rather than
+        // only through the send button and the tab's short status.
+        let run_activity = self
+            .selected_session
+            .and_then(|id| self.runs.get(&id))
+            .map(|run| run.activity.clone());
+        if let Some(activity) = run_activity {
+            conversation = conversation.child(
+                div().w_full().px_6().pb_3().child(
+                    h_flex()
+                        .items_center()
+                        .gap_2()
+                        .when(!self.store.ui.full_width_content, |row| {
+                            row.max_w(px(840.)).mx_auto()
+                        })
+                        .child(Spinner::new().small().color(rgb(palette().muted).into()))
+                        .when_some(
+                            selected.as_ref().map(|session| session.provider),
+                            |row, provider| row.child(provider_icon(provider)),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(12.))
+                                .text_color(rgb(palette().muted))
+                                .child(activity),
+                        ),
+                ),
+            );
+        }
         let approval_count = self
             .selected_session
             .and_then(|id| self.runs.get(&id))
@@ -6875,8 +9072,9 @@ impl Render for ConduitApp {
                 div().w_full().px_6().mb_4().child(
                     v_flex()
                         .w_full()
-                        .max_w(px(840.))
-                        .mx_auto()
+                        .when(!self.store.ui.full_width_content, |card| {
+                            card.max_w(px(840.)).mx_auto()
+                        })
                         .p_4()
                         .gap_3()
                         .rounded(px(14.))
@@ -7061,7 +9259,8 @@ impl Render for ConduitApp {
         // workspace at all. Keeping the same shell in all three states keeps
         // the chat area from changing size when the session state changes.
         let composer_enabled = can_edit && has_workspace;
-        let composer: AnyElement = v_flex()
+        let usage_parts = self.usage_status_parts();
+        let mut composer = v_flex()
             .id("composer")
             .key_context("ConduitComposer")
             .on_action(cx.listener(|this, _: &SendPrompt, window, cx| {
@@ -7075,8 +9274,6 @@ impl Render for ConduitApp {
                 cx.notify();
             }))
             .w_full()
-            .max_w(px(840.))
-            .mx_auto()
             .p_2()
             .gap_1()
             .rounded(px(22.))
@@ -7087,15 +9284,14 @@ impl Render for ConduitApp {
             } else {
                 rgb(palette().border)
             })
-            .on_click(cx.listener(|this, event, window, cx| {
+            .on_click(cx.listener(|this, _, window, cx| {
                 if this.selected_workspace.is_some() {
                     this.input.read(cx).focus_handle(cx).focus(window, cx);
-                } else {
-                    this.add_workspace(event, window, cx);
                 }
             }))
             .child(
                 h_flex()
+                    .id("composer-workspace")
                     .h(px(32.))
                     .px_2()
                     .gap_2()
@@ -7107,6 +9303,11 @@ impl Render for ConduitApp {
                     // when no workspace is selected, that handler opens the
                     // workspace directory picker.
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .when(!has_workspace, |row| {
+                        row.cursor_pointer()
+                            .hover(|style| style.bg(rgb(palette().control_hover)))
+                            .on_click(cx.listener(Self::add_workspace))
+                    })
                     .child(
                         Icon::new(IconName::Folder)
                             .small()
@@ -7140,6 +9341,12 @@ impl Render for ConduitApp {
                     .gap_2()
                     .items_center()
                     .child(self.engine_picker(app_entity.clone()))
+                    .when(selected.is_some(), |row| {
+                        row.child(self.permission_picker(app_entity.clone()))
+                    })
+                    .when_some(usage_parts, |row, parts| {
+                        row.child(h_flex().gap_3().items_center().min_w_0().children(parts))
+                    })
                     .child(div().flex_1())
                     .child(if active {
                         h_flex()
@@ -7159,6 +9366,7 @@ impl Render for ConduitApp {
                                     run.runtime.cancel();
                                     run.approvals.clear();
                                     run.status = "正在停止…".into();
+                                    run.activity = "正在停止…".into();
                                 }
                                 this.input.read(cx).focus_handle(cx).focus(window, cx);
                                 cx.notify();
@@ -7199,8 +9407,11 @@ impl Render for ConduitApp {
                             )))
                             .into_any_element()
                     }),
-            )
-            .into_any_element();
+            );
+        if !self.store.ui.full_width_content {
+            composer = composer.max_w(px(840.)).mx_auto();
+        }
+        let composer: AnyElement = composer.into_any_element();
         // The "jump to latest" arrow floats at the lower-right of the message
         // area, just above the composer's top-right corner, and only exists
         // while the list is scrolled away from its end.
@@ -7209,8 +9420,9 @@ impl Render for ConduitApp {
                 div()
                     .relative()
                     .w_full()
-                    .max_w(px(840.))
-                    .mx_auto()
+                    .when(!self.store.ui.full_width_content, |card| {
+                        card.max_w(px(840.)).mx_auto()
+                    })
                     .child(composer)
                     .when(show_latest_button, |area| {
                         area.child(
@@ -7274,6 +9486,21 @@ impl Render for ConduitApp {
                     .text_color(rgb(palette().faint))
                     .child(toolbar_hint),
             )
+            .when(!self.closing && !self.session_namings.is_empty(), |bar| {
+                bar.child(
+                    h_flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap_1()
+                        .child(Spinner::new().small().color(rgb(palette().muted).into()))
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(rgb(palette().muted))
+                                .child("自动命名中…"),
+                        ),
+                )
+            })
             .child(div().flex_1())
             .child(
                 Button::new("toggle-git")
@@ -7622,11 +9849,11 @@ impl Render for ConduitApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_event, finish_tool_cards, highlight_ranges, same_failure, search_snippet,
-        session_matches,
+        apply_event, finish_tool_cards, highlight_ranges, latest_naming_excerpt, same_failure,
+        search_snippet, session_matches, single_line_title,
     };
     use crate::{
-        domain::{ChatItem, ItemKind, Provider, SessionRecord},
+        domain::{ChatItem, ItemKind, PermissionLevel, Provider, SessionRecord, Usage},
         protocol::Event,
     };
     #[test]
@@ -7930,6 +10157,8 @@ mod tests {
             model: None,
             messages: vec![],
             interrupted: false,
+            permission: PermissionLevel::default(),
+            usage: Usage::default(),
         }
     }
     #[test]
@@ -8046,6 +10275,53 @@ mod tests {
         assert!(!same_failure("", "boom"));
     }
     #[test]
+    fn latest_naming_excerpt_prefers_recent_turns() {
+        let mut s = session();
+        assert_eq!(latest_naming_excerpt(&s), None);
+        for (index, (kind, text)) in [
+            (ItemKind::User, "旧问题"),
+            (ItemKind::Assistant, "旧回答"),
+            (ItemKind::Tool, "工具输出应忽略"),
+            (ItemKind::User, "新问题"),
+            (ItemKind::Assistant, "新回答"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            s.messages.push(ChatItem {
+                key: format!("m{index}"),
+                kind,
+                text: text.into(),
+                input: String::new(),
+                detail: String::new(),
+                status: String::new(),
+                approval: None,
+            });
+        }
+        assert_eq!(
+            latest_naming_excerpt(&s).as_deref(),
+            Some("旧问题\n\n旧回答\n\n新问题\n\n新回答")
+        );
+        s.messages.push(ChatItem {
+            key: "long".into(),
+            kind: ItemKind::Assistant,
+            text: "长".repeat(1_000),
+            input: String::new(),
+            detail: String::new(),
+            status: String::new(),
+            approval: None,
+        });
+        assert_eq!(latest_naming_excerpt(&s).unwrap().chars().count(), 800);
+    }
+    #[test]
+    fn single_line_title_collapses_line_breaks() {
+        assert_eq!(
+            single_line_title("# AGENTS.md\n<INSTRUCTIONS>"),
+            "# AGENTS.md <INSTRUCTIONS>"
+        );
+        assert_eq!(single_line_title("第一行\r第二行"), "第一行 第二行");
+    }
+    #[test]
     fn session_search_matches_title_and_message_text() {
         let mut s = session();
         s.title = "Rust 重构计划".into();
@@ -8101,7 +10377,7 @@ mod ui_tests {
     #[gpui_kit::test]
     fn long_chat_virtualizes_real_rows_and_keeps_history_jump_on_append(cx: &mut TestAppContext) {
         use crate::{
-            domain::{ItemKind, Provider, SessionRecord, Workspace},
+            domain::{ItemKind, PermissionLevel, Provider, SessionRecord, Usage, Workspace},
             store::Store,
         };
         use gpui_kit::AppContext;
@@ -8140,6 +10416,8 @@ mod ui_tests {
                             model: None,
                             messages,
                             interrupted: false,
+                            permission: PermissionLevel::default(),
+                            usage: Usage::default(),
                         }],
                     }],
                     ..Default::default()

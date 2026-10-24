@@ -1,5 +1,5 @@
-//! Provider-specific wire formats translated into presentation events.
-use crate::domain::Provider;
+﻿//! Provider-specific wire formats translated into presentation events.
+use crate::domain::{PermissionLevel, Provider};
 use serde_json::{Value, json};
 
 /// Which wire request an approval answers. The response shape differs per
@@ -24,6 +24,13 @@ pub struct Approval {
 #[derive(Clone, Debug)]
 pub enum Event {
     NativeId(String),
+    Usage {
+        input_tokens: u64,
+        cached_input_tokens: u64,
+        output_tokens: u64,
+        total_tokens: u64,
+        context_window: u64,
+    },
     Delta {
         key: String,
         text: String,
@@ -49,6 +56,9 @@ pub enum Event {
         allow: bool,
     },
     Notice(String),
+    /// A transient or fatal error from the CLI stream. Rendered as a banner
+    /// instead of an inline notice so it does not pollute the transcript.
+    ErrorBanner(String),
     Finished {
         error: Option<String>,
         cancelled: bool,
@@ -77,6 +87,7 @@ pub struct Protocol {
     prompt: String,
     native_id: Option<String>,
     model: Option<String>,
+    permission: PermissionLevel,
     text_only: bool,
     thread_id: Option<String>,
     turn_id: Option<String>,
@@ -96,6 +107,47 @@ pub struct Protocol {
 fn text<'a>(v: &'a Value, key: &str) -> &'a str {
     v.get(key).and_then(Value::as_str).unwrap_or("")
 }
+/// Friendly one-line summary for a Codex `"error"` notification. The raw
+/// payload nests `codexErrorInfo` (e.g. `responseStreamDisconnected` with
+/// `httpStatusCode` / `additionalDetails`) and `willRetry`; rendering the
+/// pretty-printed JSON inline buries the actual cause, so we extract the
+/// message, HTTP status and retry hint instead.
+fn codex_error_summary(params: &Value) -> String {
+    let error = &params["error"];
+    let message = text(error, "message");
+    let info = &error["codexErrorInfo"];
+    let mut summary = if let Some(disconnected) = info.get("responseStreamDisconnected") {
+        let mut summary = match disconnected["httpStatusCode"].as_i64() {
+            Some(code) => format!("连接中断（HTTP {code}）"),
+            None => "连接中断".to_string(),
+        };
+        let detail = text(disconnected, "additionalDetails");
+        if !detail.is_empty() {
+            // additionalDetails is a proxy/vendor blob; keep the first
+            // sentence so cf-ray / request-id noise stays out of the banner.
+            let brief = detail.split(['\n', ';']).next().unwrap_or(detail).trim();
+            let brief = if brief.chars().count() > 120 {
+                format!("{}…", brief.chars().take(120).collect::<String>())
+            } else {
+                brief.to_string()
+            };
+            summary = format!("{summary}：{brief}");
+        }
+        summary
+    } else if !info.is_null() {
+        pretty(info)
+    } else if !message.is_empty() {
+        message.to_string()
+    } else {
+        pretty(error)
+    };
+    // The CLI is reconnecting by itself, so tell the user instead of making
+    // the banner look like a fatal failure.
+    if error["willRetry"].as_bool().unwrap_or(false) {
+        summary = format!("{summary}（正在自动重试）");
+    }
+    summary
+}
 fn pretty(v: &Value) -> String {
     serde_json::to_string_pretty(v).unwrap_or_default()
 }
@@ -113,6 +165,7 @@ impl Protocol {
             prompt,
             native_id,
             model: None,
+            permission: PermissionLevel::default(),
             text_only: false,
             thread_id: None,
             turn_id: None,
@@ -131,6 +184,10 @@ impl Protocol {
         self.model = model;
         self
     }
+    pub fn with_permission(mut self, permission: PermissionLevel) -> Self {
+        self.permission = permission;
+        self
+    }
     pub fn text_only(mut self) -> Self {
         self.text_only = true;
         self
@@ -140,7 +197,7 @@ impl Protocol {
         if let Some(mode) = &self.test_permission_mode {
             return mode;
         }
-        "default"
+        self.permission.claude_permission_mode()
     }
     pub fn args(&self) -> Vec<String> {
         match self.provider {
@@ -219,7 +276,7 @@ impl Protocol {
         match v.get("id").and_then(Value::as_u64) {
             Some(1) if v.get("result").is_some() => {
                 step.writes.push(json!({"method":"initialized"}));
-                let mut params = json!({"cwd":self.cwd,"approvalPolicy":"on-request","approvalsReviewer":"user","sandbox":"workspace-write"});
+                let mut params = json!({"cwd":self.cwd,"approvalPolicy":"on-request","approvalsReviewer":"user","sandbox":self.permission.codex_sandbox()});
                 if self.text_only {
                     params["sandbox"] = json!("read-only");
                     params["approvalPolicy"] = json!("never");
@@ -372,6 +429,20 @@ impl Protocol {
                 detail: text(p, "delta").into(),
                 status: "输出中".into(),
             }),
+            "thread/tokenUsage/updated" => {
+                let usage = &p["tokenUsage"];
+                let number = |value: &Value| value.as_u64().unwrap_or(0);
+                let total = &usage["total"];
+                // `total` is cumulative across the thread; the live context
+                // size is its totalTokens (what the ring progress shows).
+                step.events.push(Event::Usage {
+                    input_tokens: number(&total["inputTokens"]),
+                    cached_input_tokens: number(&total["cachedInputTokens"]),
+                    output_tokens: number(&total["outputTokens"]),
+                    total_tokens: number(&total["totalTokens"]),
+                    context_window: number(&usage["modelContextWindow"]),
+                });
+            }
             "turn/completed" => {
                 step.done = true;
                 if text(&p["turn"], "status") != "completed" {
@@ -385,7 +456,7 @@ impl Protocol {
                 }
             }
             "error" => {
-                step.events.push(Event::Notice(pretty(p)));
+                step.events.push(Event::ErrorBanner(codex_error_summary(p)));
             }
             "serverRequest/resolved" => {
                 if let Some(id) = p
@@ -556,6 +627,25 @@ impl Protocol {
             "assistant" => {
                 let message = &v["message"];
                 let id = text(message, "id");
+                // stream-json assistant messages carry a usage block per model
+                // response; input includes the whole live context on each turn.
+                let usage = &message["usage"];
+                if usage.is_object() {
+                    let number = |value: &Value| value.as_u64().unwrap_or(0);
+                    let input = number(&usage["input_tokens"]);
+                    let cached = number(&usage["cache_read_input_tokens"]);
+                    let cache_creation = number(&usage["cache_creation_input_tokens"]);
+                    let output = number(&usage["output_tokens"]);
+                    step.events.push(Event::Usage {
+                        input_tokens: input,
+                        cached_input_tokens: cached,
+                        output_tokens: output,
+                        total_tokens: input + output + cache_creation,
+                        // Claude stream-json has no context window field; the
+                        // UI falls back to a model-derived estimate when 0.
+                        context_window: 0,
+                    });
+                }
                 if let Some(blocks) = message["content"].as_array() {
                     let mut text_ordinal = 0usize;
                     for block in blocks.iter() {
@@ -917,5 +1007,113 @@ mod tests {
         let snapshot = protocol.accept(json!({"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"Hello"}]}}));
         assert_eq!(snapshot.events.len(), 1);
         assert!(matches!(&snapshot.events[0], Event::Text { key, .. } if key == "m1-0"));
+    }
+    #[test]
+    fn codex_token_usage_notification_maps_to_usage_event() {
+        let mut protocol = Protocol::new(
+            Provider::Codex,
+            "C:\\work".into(),
+            "hello".into(),
+            Some("thread-1".into()),
+        );
+        protocol.accept(json!({"id":2,"result":{"thread":{"id":"thread-1"}}}));
+        let step = protocol.accept(json!({
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "threadId": "thread-1",
+                "tokenUsage": {
+                    "total": {
+                        "inputTokens": 5389,
+                        "cachedInputTokens": 5120,
+                        "cacheWriteInputTokens": 0,
+                        "outputTokens": 96,
+                        "reasoningOutputTokens": 0,
+                        "totalTokens": 5485
+                    },
+                    "last": {
+                        "inputTokens": 5389,
+                        "cachedInputTokens": 5120,
+                        "outputTokens": 96,
+                        "totalTokens": 5485
+                    },
+                    "modelContextWindow": 996147
+                }
+            }
+        }));
+        assert!(matches!(
+            &step.events[0],
+            Event::Usage {
+                input_tokens: 5389,
+                cached_input_tokens: 5120,
+                output_tokens: 96,
+                total_tokens: 5485,
+                context_window: 996147
+            }
+        ));
+    }
+    #[test]
+    fn claude_assistant_usage_maps_to_usage_event() {
+        let mut protocol = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None);
+        let step = protocol.accept(json!({
+            "type": "assistant",
+            "message": {
+                "id": "m1",
+                "content": [{"type": "text", "text": "hi"}],
+                "usage": {
+                    "input_tokens": 34441,
+                    "cache_read_input_tokens": 256,
+                    "cache_creation_input_tokens": 0,
+                    "output_tokens": 153
+                }
+            }
+        }));
+        assert!(matches!(
+            &step.events[0],
+            Event::Usage {
+                input_tokens: 34441,
+                cached_input_tokens: 256,
+                output_tokens: 153,
+                total_tokens: 34594,
+                context_window: 0
+            }
+        ));
+        // Messages without a usage block emit no usage event.
+        let step = protocol.accept(json!({
+            "type": "assistant",
+            "message": {"id": "m2", "content": [{"type": "text", "text": "no usage"}]}
+        }));
+        assert!(
+            !step
+                .events
+                .iter()
+                .any(|event| matches!(event, Event::Usage { .. }))
+        );
+    }
+    #[test]
+    fn permission_level_reaches_both_wire_formats() {
+        let protocol = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None)
+            .with_permission(crate::domain::PermissionLevel::FullAccess);
+        let args = protocol.args();
+        let position = args
+            .iter()
+            .position(|arg| arg == "--permission-mode")
+            .unwrap();
+        assert_eq!(args[position + 1], "bypassPermissions");
+
+        let protocol = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None)
+            .with_permission(crate::domain::PermissionLevel::ReadOnly);
+        let args = protocol.args();
+        let position = args
+            .iter()
+            .position(|arg| arg == "--permission-mode")
+            .unwrap();
+        assert_eq!(args[position + 1], "default");
+
+        let mut protocol = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None)
+            .with_permission(crate::domain::PermissionLevel::FullAccess);
+        let step = protocol.accept(json!({"id":1,"result":{}}));
+        assert_eq!(step.writes[1]["params"]["sandbox"], "danger-full-access");
+        let step = protocol.accept(json!({"id":2,"result":{"thread":{"id":"t"}}}));
+        assert!(step.writes.is_empty() || step.writes[0]["method"] == "turn/start");
     }
 }

@@ -35,7 +35,7 @@ cargo run --locked -- --git
 
 ## 设置、外观、CLI 路径与模型同步
 
-左下角齿轮打开设置弹窗，左侧切换通用、外观、Git、CLI、各引擎与模型同步页面。通用页保留本机数据与诊断设置；外观页提供跟随系统 / 浅色 / 深色主题和侧栏会话数（默认 5，范围 1–30）。CLI 路径查找顺序与版本说明在 CLI 页，可执行文件路径与版本检测仍在各引擎页。可为两款引擎选择本机 `.exe`、清除应用配置并检测版本。配置保存后用于后续启动。路径优先级为：**环境变量 → 应用配置 → PATH → 常见原生安装位置**；无效显式路径会报错，不会自动改用另一份程序。当前要求 Windows 原生 `.exe`；npm `.cmd`、Shell 包装脚本与 WSL 尚未适配。
+左下角齿轮打开设置弹窗，左侧切换通用、外观、Git、CLI、各引擎与模型同步页面。通用页保留本机数据与诊断设置；外观页提供跟随系统 / 浅色 / 深色主题和侧栏会话数（默认 5，范围 1–30）。CLI 路径查找顺序与版本说明在 CLI 页，可执行文件路径与版本检测仍在各引擎页。可为两款引擎选择本机 `.exe` 或 npm 全局 `.cmd` 启动器、清除应用配置并检测版本。配置保存后用于后续启动。路径优先级为：**环境变量 → 应用配置 → PATH → 常见原生安装位置**；无效显式路径会报错，不会自动改用另一份程序。支持 Windows 原生 `.exe` 与 npm 全局 `.cmd`；Shell 包装脚本、`.ps1` 与 WSL 尚未适配。
 
 外观主题切换立即生效并保存；选择“跟随系统”时，Windows 明暗变化会自动同步。只读数据目录下，主题与会话数控件保持禁用并显示当前值。
 
@@ -103,6 +103,8 @@ pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -Name chat-markd
 ```powershell
 cargo test --locked installed_clis_report_versions -- --ignored --nocapture --test-threads=1
 cargo test --locked installed_cli_protocol_handshakes -- --ignored --nocapture --test-threads=1
+$env:CONDUIT_CODEX_TEST_MODEL='<available-model>'
+$env:CONDUIT_CLAUDE_TEST_MODEL='<available-model>'
 cargo test --locked real_codex_chat_and_resume -- --ignored --nocapture --test-threads=1
 cargo test --locked real_claude_chat_and_resume -- --ignored --nocapture --test-threads=1
 cargo test --locked real_codex_command_approval_can_be_denied -- --ignored --nocapture --test-threads=1

@@ -1,6 +1,6 @@
 use crate::{
     child::{Child, available},
-    domain::Provider,
+    domain::{PermissionLevel, Provider},
     protocol::{Approval, Event, Protocol},
 };
 use anyhow::{Result, bail};
@@ -77,6 +77,7 @@ impl ChatRuntime {
         prompt: String,
         native_id: Option<String>,
         model: Option<String>,
+        permission: PermissionLevel,
     ) -> Self {
         let protocol = Protocol::new(
             provider,
@@ -84,7 +85,8 @@ impl ChatRuntime {
             prompt,
             native_id,
         )
-        .with_model(model);
+        .with_model(model)
+        .with_permission(permission);
         let args = protocol.args();
         Self::start_command(protocol, executable, args, cwd)
     }
@@ -234,7 +236,8 @@ fn execute(
     controls: Receiver<Control>,
     events: &Sender<Event>,
 ) -> Result<()> {
-    let (child, mut pipes) = Child::spawn(&executable, &args, &cwd)?;
+    let (program, full_args) = crate::cli::command_for(&executable, &args);
+    let (child, mut pipes) = Child::spawn(&program, &full_args, &cwd)?;
     let (writer, input) = mpsc::sync_channel::<Vec<u8>>(128);
     let done = Arc::new(AtomicBool::new(false));
     let writer_done = done.clone();
@@ -641,6 +644,7 @@ mod tests {
             "test".into(),
             None,
             None,
+            PermissionLevel::default(),
         );
         let event = runtime.events.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(matches!(
@@ -663,8 +667,8 @@ mod tests {
                 None,
             )
             .text_only();
-            let (child, mut pipes) =
-                Child::spawn(&executable, &protocol.args(), &std::env::temp_dir()).unwrap();
+            let (program, args) = crate::cli::command_for(&executable, &protocol.args());
+            let (child, mut pipes) = Child::spawn(&program, &args, &std::env::temp_dir()).unwrap();
             writeln!(pipes.stdin, "{}", protocol.initialize()).unwrap();
             let deadline = Instant::now() + Duration::from_secs(45);
             let mut lines = Lines::new();
@@ -721,8 +725,8 @@ mod tests {
                 "unused".into(),
                 None,
             );
-            let (child, mut pipes) =
-                Child::spawn(&executable, &protocol.args(), &std::env::temp_dir()).unwrap();
+            let (program, args) = crate::cli::command_for(&executable, &protocol.args());
+            let (child, mut pipes) = Child::spawn(&program, &args, &std::env::temp_dir()).unwrap();
             writeln!(pipes.stdin, "{}", protocol.initialize()).unwrap();
             let deadline = Instant::now() + Duration::from_secs(60);
             let mut lines = Lines::new();
@@ -766,13 +770,20 @@ mod tests {
         prompt: &str,
         native_id: Option<String>,
     ) -> String {
+        let model = match provider {
+            Provider::Claude => std::env::var("CONDUIT_CLAUDE_TEST_MODEL"),
+            Provider::Codex => std::env::var("CONDUIT_CODEX_TEST_MODEL"),
+        }
+        .ok()
+        .filter(|value| !value.is_empty());
         let runtime = ChatRuntime::start(
             provider,
             provider.executable().unwrap(),
             cwd,
             prompt.into(),
             native_id,
-            None,
+            model,
+            PermissionLevel::default(),
         );
         let mut id = None;
         let mut response = HashMap::<String, String>::new();

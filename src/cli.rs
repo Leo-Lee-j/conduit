@@ -62,22 +62,63 @@ pub struct ResolvedCli {
     pub source: PathSource,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Launcher {
+    Native,
+    Cmd,
+}
+
 pub fn validate_executable(path: &Path) -> Result<PathBuf> {
+    validate_launcher(path).map(|(path, _)| path)
+}
+
+fn validate_launcher(path: &Path) -> Result<(PathBuf, Launcher)> {
     if !path.is_absolute() {
-        bail!("请选择绝对路径的 Windows 原生 .exe");
+        bail!("请选择绝对路径的 Windows CLI");
     }
-    if !path
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
-    {
-        bail!("目前只支持 Windows 原生 .exe，不支持 .cmd、.ps1 或 WSL 启动器");
-    }
+    let launcher = match path.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) if ext.eq_ignore_ascii_case("exe") => Launcher::Native,
+        Some(ext) if ext.eq_ignore_ascii_case("cmd") || ext.eq_ignore_ascii_case("bat") => {
+            Launcher::Cmd
+        }
+        _ => {
+            bail!("目前只支持 Windows 原生 .exe 或 npm 全局 .cmd 包装器；不支持 .ps1 或 WSL 启动器")
+        }
+    };
     if !path.is_file() {
         bail!("文件不存在或不可访问：{}", path.display());
     }
-    Ok(path.canonicalize()?)
+    Ok((path.canonicalize()?, launcher))
 }
 
+/// Build the process to actually spawn. `.cmd` shims (npm global CLIs) are
+/// wrapped in cmd.exe because CreateProcess cannot run batch files directly.
+pub fn command_for(path: &Path, args: &[String]) -> (PathBuf, Vec<String>) {
+    let launcher = match path.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) if ext.eq_ignore_ascii_case("cmd") || ext.eq_ignore_ascii_case("bat") => {
+            Launcher::Cmd
+        }
+        _ => Launcher::Native,
+    };
+    match launcher {
+        Launcher::Native => (path.to_path_buf(), args.to_vec()),
+        Launcher::Cmd => {
+            let shell = std::env::var_os("ComSpec")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("cmd.exe"));
+            let mut command = vec![
+                "/d".into(),
+                "/s".into(),
+                "/c".into(),
+                crate::child::normalized_dir(path)
+                    .to_string_lossy()
+                    .into_owned(),
+            ];
+            command.extend(args.iter().cloned());
+            (shell, command)
+        }
+    }
+}
 fn resolve_candidates(
     explicit: Option<(PathBuf, PathSource)>,
     candidates: impl IntoIterator<Item = (PathBuf, PathSource)>,
@@ -95,7 +136,7 @@ fn resolve_candidates(
             return Ok(ResolvedCli { path, source });
         }
     }
-    bail!("未找到 CLI；请在设置中选择已安装的原生 .exe")
+    bail!("未找到 CLI；请在设置中选择已安装的 .exe 或 npm 全局 .cmd 启动器")
 }
 
 pub fn resolve(provider: Provider, settings: &CliSettings) -> Result<ResolvedCli> {
@@ -110,10 +151,16 @@ pub fn resolve(provider: Provider, settings: &CliSettings) -> Result<ResolvedCli
                 .path(provider)
                 .map(|p| (p.to_path_buf(), PathSource::Settings))
         });
+    let shim = filename.replace(".exe", ".cmd");
     let mut candidates: Vec<_> = std::env::var_os("PATH")
         .map(|paths| {
             std::env::split_paths(&paths)
-                .map(|p| (p.join(filename), PathSource::SearchPath))
+                .flat_map(|p| {
+                    [
+                        (p.join(filename), PathSource::SearchPath),
+                        (p.join(&shim), PathSource::SearchPath),
+                    ]
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -160,7 +207,7 @@ fn parse_version(provider: Provider, output: &str) -> Result<VersionInfo> {
                     .split('.')
                     .all(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
         })
-        .ok_or_else(|| anyhow::anyhow!("CLI 版本格式暂不支持：{line}"))?
+        .ok_or_else(|| anyhow::anyhow!("CLI 版本格式暂不支持：{}", line))?
         .to_string();
     Ok(VersionInfo {
         verified_version: version == tested_version(provider),
@@ -225,7 +272,8 @@ fn probe_command(
     cancel: &AtomicBool,
     timeout: Duration,
 ) -> Result<String> {
-    let (child, mut pipes) = Child::spawn(executable, args, &std::env::temp_dir())?;
+    let (program, full_args) = command_for(executable, args);
+    let (child, mut pipes) = Child::spawn(&program, &full_args, &std::env::temp_dir())?;
     drop(pipes.stdin);
     let result = (|| {
         let started = Instant::now();
@@ -298,7 +346,29 @@ mod tests {
             .is_err()
         );
         assert!(validate_executable(Path::new("relative.exe")).is_err());
+        assert!(validate_executable(&std::env::temp_dir().join("cli.ps1")).is_err());
         assert!(validate_executable(&std::env::temp_dir().join("cli.cmd")).is_err());
+        let shim = std::env::temp_dir().join("conduit-test-shim.cmd");
+        std::fs::write(&shim, "@echo off\r\n").unwrap();
+        let canonical_shim = validate_executable(&shim).unwrap();
+        let (program, full_args) = command_for(&canonical_shim, &["--version".into()]);
+        assert!(program.to_string_lossy().to_lowercase().contains("cmd.exe"));
+        let launch_shim = crate::child::normalized_dir(&canonical_shim);
+        assert_eq!(
+            full_args,
+            vec![
+                "/d",
+                "/s",
+                "/c",
+                launch_shim.to_string_lossy().as_ref(),
+                "--version"
+            ]
+        );
+        assert!(!full_args[3].starts_with(r"\\?\"));
+        let (native_program, native_args) = command_for(&fallback, &["--version".into()]);
+        assert_eq!(native_program, fallback);
+        assert_eq!(native_args, vec!["--version"]);
+        let _ = std::fs::remove_file(&shim);
         let resolved =
             resolve_candidates(Some((fallback.clone(), PathSource::Environment)), []).unwrap();
         assert_eq!(resolved.source, PathSource::Environment);
@@ -339,7 +409,7 @@ mod tests {
             )
             .unwrap_err()
             .to_string()
-            .contains("取消")
+            .contains("已取消")
         );
         assert!(
             probe_command(

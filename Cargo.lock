@@ -968,6 +968,7 @@ name = "conduit"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "gpui-kit",
  "raw-window-handle",
  "rusqlite",

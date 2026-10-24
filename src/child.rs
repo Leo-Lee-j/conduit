@@ -9,7 +9,7 @@ use std::{
         ffi::OsStrExt,
         io::{AsRawHandle, FromRawHandle, OwnedHandle},
     },
-    path::Path,
+    path::{Path, PathBuf},
     ptr::{null, null_mut},
 };
 use windows_sys::Win32::{
@@ -128,6 +128,19 @@ impl Drop for Attributes {
     }
 }
 
+/// Strip the `\\?\` extended-length prefix: cmd.exe rejects it in current
+/// directories and batch-launcher paths. Canonicalization on Windows adds it.
+pub(crate) fn normalized_dir(path: &Path) -> PathBuf {
+    let s = path.as_os_str();
+    if let Some(rest) = s.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        // Keep genuine UNC (\\?\UNC\server\share) -> \\server\share
+        if let Some(unc) = rest.strip_prefix(r"UNC\") {
+            return PathBuf::from(format!(r"\\{}", unc));
+        }
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
+}
 pub struct Child {
     job: OwnedHandle,
     process: OwnedHandle,
@@ -177,7 +190,7 @@ impl Child {
             startup.StartupInfo.hStdError = handles[2];
             startup.lpAttributeList = attributes.ptr();
             let exe = wide(executable.as_os_str())?;
-            let cwd = wide(cwd.as_os_str())?;
+            let cwd = wide(normalized_dir(cwd).as_os_str())?;
             let mut command = quote_arg(&executable.to_string_lossy());
             for arg in args {
                 command.push(' ');

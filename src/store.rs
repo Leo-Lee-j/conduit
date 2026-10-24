@@ -16,7 +16,17 @@ pub enum AppearanceMode {
     Dark,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NamingMode {
+    /// Regenerate the title from the latest exchange after every turn.
+    Latest,
+    /// Generate the title once from the first user message.
+    #[default]
+    FirstMessage,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UiSettings {
     /// How many recent sessions a workspace shows before "show more".
     #[serde(default = "default_sessions_per_workspace")]
@@ -30,6 +40,23 @@ pub struct UiSettings {
     /// Follow the system appearance or force one of the bundled palettes.
     #[serde(default)]
     pub appearance: AppearanceMode,
+    /// Fill the whole right content area instead of a centered 840px column.
+    #[serde(default)]
+    pub full_width_content: bool,
+    /// What automatic titling reacts to.
+    #[serde(default)]
+    pub naming_mode: NamingMode,
+    /// CLI engine used to auto-name sessions; `None` follows the session's
+    /// own engine.
+    #[serde(default)]
+    pub naming_provider: Option<crate::domain::Provider>,
+    /// Model override for session naming; `None` follows the session model
+    /// (or the CLI default when a naming engine is pinned).
+    #[serde(default)]
+    pub naming_model: Option<String>,
+    /// Maximum number of session tabs kept open; opening more closes the oldest.
+    #[serde(default = "default_max_tabs")]
+    pub max_tabs: usize,
 }
 
 fn default_sessions_per_workspace() -> usize {
@@ -40,6 +67,13 @@ fn default_performance_monitor() -> bool {
     true
 }
 
+/// Upper bound of the appearance setting for open session tabs.
+pub const MAX_TAB_LIMIT: usize = 20;
+
+fn default_max_tabs() -> usize {
+    8
+}
+
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
@@ -47,6 +81,11 @@ impl Default for UiSettings {
             last_provider: None,
             performance_monitor: default_performance_monitor(),
             appearance: AppearanceMode::default(),
+            full_width_content: false,
+            max_tabs: default_max_tabs(),
+            naming_mode: NamingMode::default(),
+            naming_provider: None,
+            naming_model: None,
         }
     }
 }
@@ -57,6 +96,14 @@ pub const DEFAULT_COMMIT_PROMPT: &str = "根据 Git 已暂存变更生成一条�
 pub struct GitSettings {
     #[serde(default = "default_commit_prompt")]
     pub commit_message_prompt: String,
+    /// CLI engine used to generate commit messages; `None` follows the
+    /// currently selected session.
+    #[serde(default)]
+    pub generation_provider: Option<crate::domain::Provider>,
+    /// Model override for commit message generation; `None` uses the CLI
+    /// default (or the session model when following the session).
+    #[serde(default)]
+    pub generation_model: Option<String>,
 }
 
 fn default_commit_prompt() -> String {
@@ -67,6 +114,8 @@ impl Default for GitSettings {
     fn default() -> Self {
         Self {
             commit_message_prompt: default_commit_prompt(),
+            generation_provider: None,
+            generation_model: None,
         }
     }
 }
@@ -360,6 +409,8 @@ mod tests {
             model: None,
             messages: vec![],
             interrupted: false,
+            permission: crate::domain::PermissionLevel::default(),
+            usage: crate::domain::Usage::default(),
         });
         store
             .cli
@@ -478,11 +529,16 @@ mod tests {
         assert_eq!(store.ui.last_provider, None);
         assert!(store.ui.performance_monitor);
         assert_eq!(store.ui.appearance, AppearanceMode::Dark);
+        assert_eq!(store.ui.max_tabs, 8);
+        assert!(!store.ui.full_width_content);
+        assert_eq!(store.ui.naming_mode, NamingMode::FirstMessage);
         assert_eq!(store.git.commit_message_prompt, DEFAULT_COMMIT_PROMPT);
         store.ui.sessions_per_workspace = 8;
         store.ui.last_provider = Some(crate::domain::Provider::Codex);
         store.ui.performance_monitor = false;
         store.ui.appearance = AppearanceMode::System;
+        store.ui.max_tabs = 12;
+        store.ui.naming_mode = NamingMode::Latest;
         store.git.commit_message_prompt =
             "Write an English subject followed by a body.\nKeep it under 72 columns.".into();
         store.save_to(&path).unwrap();
@@ -498,12 +554,16 @@ mod tests {
         );
         assert!(!reloaded.ui.performance_monitor);
         assert_eq!(reloaded.ui.appearance, AppearanceMode::System);
+        assert_eq!(reloaded.ui.max_tabs, 12);
+        assert_eq!(reloaded.ui.naming_mode, NamingMode::Latest);
         fs::remove_file(path).unwrap();
     }
     #[test]
     fn commit_prompt_uses_saved_preferences_and_appends_staged_context() {
         let mut settings = GitSettings {
             commit_message_prompt: "Use English and include a concise body.".into(),
+            generation_provider: None,
+            generation_model: None,
         };
         let prompt = settings.generation_prompt(&["src/中文.rs"], "+a staged change");
         assert!(prompt.starts_with(&settings.commit_message_prompt));

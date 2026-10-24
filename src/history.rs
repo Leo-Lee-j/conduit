@@ -88,6 +88,8 @@ fn merge_session(
         model: session.model,
         messages: session.messages,
         interrupted: false,
+        permission: crate::domain::PermissionLevel::default(),
+        usage: crate::domain::Usage::default(),
     });
     1
 }
@@ -394,11 +396,16 @@ fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
                         }
                         // Codex injects project instructions (AGENTS.md,
                         // environment, approval notices) as user-role
-                        // messages without `metadata`; real typed input
-                        // carries `metadata.user_input_order`.
+                        // messages. Newer rollouts mark real typed input with
+                        // `metadata.user_input_order`; older ones only carry
+                        // `internal_chat_message_metadata_passthrough` — which
+                        // synthetic injections lack.
                         if role == "user"
                             && payload.get("metadata").is_none()
                             && value.get("metadata").is_none()
+                            && payload
+                                .get("internal_chat_message_metadata_passthrough")
+                                .is_none()
                         {
                             continue;
                         }
@@ -586,6 +593,12 @@ mod tests {
             "metadata":{"user_input_order":0},
             "payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"运行测试"}]}
         });
+        // Older rollouts lack `metadata.user_input_order`; typed input there
+        // is marked by `internal_chat_message_metadata_passthrough` instead.
+        let legacy_user = serde_json::json!({
+            "type":"response_item",
+            "payload":{"type":"message","role":"user","internal_chat_message_metadata_passthrough":{"turn_id":"t1"},"content":[{"type":"input_text","text":"继续"}]}
+        });
         let assistant = serde_json::json!({
             "type":"response_item",
             "payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"通过"}]}
@@ -594,19 +607,28 @@ mod tests {
             "type":"response_item",
             "payload":{"type":"function_call","name":"shell","arguments":"{\"cmd\":\"cargo test\"}"}
         });
-        let jsonl = [meta, developer, injected, user, assistant, call]
-            .iter()
-            .map(|v| v.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
+        let jsonl = [
+            meta,
+            developer,
+            injected,
+            user,
+            legacy_user,
+            assistant,
+            call,
+        ]
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
         let session = parse_codex(&jsonl, &workspace).expect("cwd matches");
         assert_eq!(session.native_id, "01a1");
         assert_eq!(session.provider, Provider::Codex);
         assert_eq!(session.title, "运行测试");
         assert_eq!(session.created_at, 1_792_765_745);
-        assert_eq!(session.messages.len(), 3);
+        assert_eq!(session.messages.len(), 4);
         assert_eq!(session.messages[0].text, "运行测试");
-        assert!(matches!(session.messages[2].kind, ItemKind::Tool));
+        assert_eq!(session.messages[1].text, "继续");
+        assert!(matches!(session.messages[3].kind, ItemKind::Tool));
     }
 
     #[test]
@@ -672,6 +694,8 @@ mod tests {
             archived: false,
             native_id: Some("known".into()),
             model: None,
+            permission: crate::domain::PermissionLevel::default(),
+            usage: crate::domain::Usage::default(),
             messages: vec![ChatItem {
                 key: "old".into(),
                 kind: ItemKind::User,

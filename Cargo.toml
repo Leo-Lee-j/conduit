@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "conduit"
 version = "0.1.0"
 edition = "2024"
@@ -12,6 +12,7 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 toml = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_Console", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_ProcessStatus", "Win32_Security", "Win32_Storage_FileSystem", "Win32_UI_WindowsAndMessaging"] }
 
 [features]

@@ -42,6 +42,7 @@ param(
     [int[]]$ClickButtonIndex = @(),
     [string[]]$PreClickAt = @(),
     [string[]]$ClickAt = @(),
+    [string[]]$RightClickAt = @(),
     [string[]]$PostClickAt = @(),
     [string[]]$PostClickButton = @(),
     [string[]]$SendClickAt = @(),
@@ -246,6 +247,7 @@ if ($Action -eq 'seed') { exit 0 }
 # -File argument parsing joins comma lists; allow "x,y;x,y" in one value.
 $ClickButton = @($ClickButton | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $ClickAt = @($ClickAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
+$RightClickAt = @($RightClickAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $PreClickAt = @($PreClickAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $PostClickAt = @($PostClickAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $PostClickButton = @($PostClickButton | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
@@ -403,6 +405,20 @@ try {
         # MOUSEEVENTF_LEFTDOWN / LEFTUP
         [ConduitWin]::mouse_event(0x02, 0, 0, 0, [UIntPtr]::Zero)
         [ConduitWin]::mouse_event(0x04, 0, 0, 0, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 700
+    }
+
+    foreach ($position in $RightClickAt) {
+        $parts = $position.Split(',')
+        if ($parts.Count -ne 2) { throw "RightClickAt must be 'x,y': $position" }
+        $x = $rect.Left + [int]$parts[0]
+        $y = $rect.Top + [int]$parts[1]
+        Set-TargetForeground $handle
+        [ConduitWin]::SetCursorPos($x, $y) | Out-Null
+        Start-Sleep -Milliseconds 150
+        # MOUSEEVENTF_RIGHTDOWN / RIGHTUP
+        [ConduitWin]::mouse_event(0x08, 0, 0, 0, [UIntPtr]::Zero)
+        [ConduitWin]::mouse_event(0x10, 0, 0, 0, [UIntPtr]::Zero)
         Start-Sleep -Milliseconds 700
     }
 

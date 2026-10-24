@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+﻿use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -23,6 +23,61 @@ impl Provider {
     }
 }
 
+/// Session permission level. The mapping to each CLI differs: Codex uses
+/// `sandbox=read-only | workspace-write | danger-full-access`, Claude uses
+/// `--permission-mode default | acceptEdits | bypassPermissions`.
+/// ReadOnly is approximated on Claude by plain `default`; the UI never claims
+/// more than the CLI enforces and FullAccess always renders with a warning.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionLevel {
+    /// View only: Codex read-only sandbox.
+    ReadOnly,
+    /// Read plus edits inside the workspace (default).
+    #[default]
+    WorkspaceWrite,
+    /// Unrestricted filesystem/network access; shown with a warning.
+    FullAccess,
+}
+
+impl PermissionLevel {
+    #[allow(dead_code)]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "仅可查看",
+            Self::WorkspaceWrite => "工作区内修改",
+            Self::FullAccess => "完全权限",
+        }
+    }
+
+    pub fn codex_sandbox(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only",
+            Self::WorkspaceWrite => "workspace-write",
+            Self::FullAccess => "danger-full-access",
+        }
+    }
+
+    pub fn claude_permission_mode(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "default",
+            Self::WorkspaceWrite => "acceptEdits",
+            Self::FullAccess => "bypassPermissions",
+        }
+    }
+}
+
+/// Token usage snapshot for the running turn / session.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+pub struct Usage {
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+    /// Model context window; 0 when the CLI has not reported it.
+    pub context_window: u64,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionRecord {
     pub id: u64,
@@ -42,6 +97,16 @@ pub struct SessionRecord {
     pub messages: Vec<ChatItem>,
     #[serde(default)]
     pub interrupted: bool,
+    /// Permission level applied to the next turn of this session.
+    #[serde(default)]
+    pub permission: PermissionLevel,
+    /// Last reported token usage; transient, not used for restore.
+    #[serde(default, skip_serializing_if = "crate::domain::usage_is_zero")]
+    pub usage: Usage,
+}
+
+fn usage_is_zero(usage: &Usage) -> bool {
+    usage.total_tokens == 0
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -50,6 +115,8 @@ pub enum ItemKind {
     Assistant,
     Tool,
     Notice,
+    /// CLI stream error shown as a banner instead of inline transcript text.
+    Error,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

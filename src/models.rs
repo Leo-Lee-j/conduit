@@ -13,6 +13,9 @@ pub struct ModelOption {
     pub id: String,
     pub label: String,
     pub note: String,
+    /// Context window in tokens when known (catalog field or `[1M]`-style ID
+    /// suffix); used only as a display fallback for the usage ring.
+    pub context_window: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -35,6 +38,13 @@ impl ModelCatalog {
         self.option(id)
             .map(|model| model.label.clone())
             .unwrap_or_else(|| id.to_string())
+    }
+    /// Context window for a model, falling back to parsing the model ID's
+    /// `[1M]`-style suffix. Returns `None` when both are unknown.
+    pub fn context_window(&self, id: &str) -> Option<u64> {
+        self.option(id)
+            .and_then(|model| model.context_window)
+            .or_else(|| context_from_suffix(id))
     }
     pub fn with_synced(&self, source: &str, synced: &[ModelOption]) -> Self {
         let mut catalog = self.clone();
@@ -66,10 +76,33 @@ pub fn load_from(provider: Provider, home: &Path) -> ModelCatalog {
 }
 
 pub(crate) fn push_model(models: &mut Vec<ModelOption>, id: &str, label: &str, note: &str) {
+    push_model_with_context(models, id, label, note, None)
+}
+
+/// Context window parsed from a `[1M]` / `[200K]`-style model ID suffix.
+fn context_from_suffix(id: &str) -> Option<u64> {
+    let suffix = id.rsplit_once('[')?.1;
+    let value = suffix.strip_suffix('K')?;
+    let multiplier = 1_000u64;
+    value
+        .parse::<u64>()
+        .ok()
+        .map(|tokens| tokens.saturating_mul(multiplier))
+}
+
+pub(crate) fn push_model_with_context(
+    models: &mut Vec<ModelOption>,
+    id: &str,
+    label: &str,
+    note: &str,
+    context_window: Option<u64>,
+) {
     let id = id.trim();
     if id.is_empty() {
         return;
     }
+    // A catalog-supplied window wins; otherwise derive it from the ID suffix.
+    let context_window = context_window.or_else(|| context_from_suffix(id));
     let label = label.trim();
     if let Some(existing) = models.iter_mut().find(|model| model.id == id) {
         for part in note.split(" · ").filter(|part| !part.is_empty()) {
@@ -86,12 +119,16 @@ pub(crate) fn push_model(models: &mut Vec<ModelOption>, id: &str, label: &str, n
         {
             existing.label = label.to_string();
         }
+        if existing.context_window.is_none() {
+            existing.context_window = context_window;
+        }
         return;
     }
     models.push(ModelOption {
         id: id.to_string(),
         label: if label.is_empty() { id } else { label }.to_string(),
         note: note.to_string(),
+        context_window,
     });
 }
 
@@ -264,7 +301,16 @@ fn codex(home: &Path) -> ModelCatalog {
                                     .and_then(serde_json::Value::as_str)
                                     .map(|level| format!("推理 {level}"))
                                     .unwrap_or_default();
-                                push_model(&mut catalog.models, slug, label, &note);
+                                let context_window = entry
+                                    .get("context_window")
+                                    .and_then(serde_json::Value::as_u64);
+                                push_model_with_context(
+                                    &mut catalog.models,
+                                    slug,
+                                    label,
+                                    &note,
+                                    context_window,
+                                );
                             }
                         }
                     }
@@ -407,11 +453,13 @@ base_url = "https://example.invalid"
                     id: "shared-model".into(),
                     label: "Shared Model".into(),
                     note: "上下文 1.1M".into(),
+                    context_window: None,
                 },
                 ModelOption {
                     id: "ccs-only".into(),
                     label: "CCS Only".into(),
                     note: String::new(),
+                    context_window: None,
                 },
             ],
         );

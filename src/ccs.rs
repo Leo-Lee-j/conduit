@@ -201,7 +201,13 @@ fn codex_providers(connection: &Connection) -> rusqlite::Result<Vec<CcsProvider>
             .filter(|label| !label.trim().is_empty())
             .unwrap_or_else(|| id.clone());
         let note = context_note(context);
-        models::push_model(&mut providers[index].models, &id, &label, &note);
+        models::push_model_with_context(
+            &mut providers[index].models,
+            &id,
+            &label,
+            &note,
+            context.map(|tokens| tokens.max(0) as u64),
+        );
     }
     Ok(providers)
 }
