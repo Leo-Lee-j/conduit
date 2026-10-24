@@ -8,20 +8,30 @@ use crate::{
     models::{self, ModelCatalog},
     performance::PerformanceMonitor,
     protocol::Event,
-    store::{AppearanceMode, MAX_TAB_LIMIT, NamingMode, Store},
+    store::{
+        AppearanceMode, MAX_CHAT_FONT_SIZE, MAX_CHAT_LINE_HEIGHT, MAX_CODE_FONT_SIZE,
+        MAX_TAB_LIMIT, MIN_CHAT_FONT_SIZE, MIN_CHAT_LINE_HEIGHT, MIN_CODE_FONT_SIZE, NamingMode,
+        Store,
+    },
 };
 use chrono::{DateTime, Local};
 use gpui_kit::{
+    base::TextSelection,
     component::{
+        Size,
         alert::Alert,
         button::*,
+        clipboard::Clipboard,
+        highlighter::HighlightTheme,
         input::{Input, InputEvent, InputState, Textarea, TextareaState},
         menu::{ContextMenuExt, PopupMenuItem},
         popover::Popover,
         scroll::ScrollableElement,
+        searchable_list::{SearchableListItem, SearchableVec},
+        select::{Select, SelectEvent, SelectState},
         spinner::Spinner,
         switch::Switch,
-        text::TextView,
+        text::{TextView, TextViewStyle},
         *,
     },
     prelude::FluentBuilder,
@@ -491,8 +501,384 @@ fn settings_row(label: &'static str, value: String, divider: bool) -> AnyElement
         .into_any_element()
 }
 
-/// Titles imported from CLI transcripts may contain line breaks; list rows
-/// render a single line, so embedded newlines must collapse to spaces.
+/// A bordered settings card: a title row followed by the caller's own rows.
+fn settings_card(title: &'static str, trailing: AnyElement) -> Div {
+    v_flex()
+        .w_full()
+        .overflow_hidden()
+        .rounded(px(12.))
+        .border_1()
+        .border_color(rgb(palette().border))
+        .bg(rgb(palette().surface_strong))
+        .child(
+            h_flex()
+                .px_4()
+                .py_3()
+                .items_center()
+                .border_b_1()
+                .border_color(rgb(palette().border))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_semibold()
+                        .text_color(rgb(palette().text))
+                        .child(title),
+                )
+                .child(div().flex_1())
+                .child(trailing),
+        )
+}
+
+/// The short right-aligned note a settings card header ends with.
+fn settings_card_note(text: &'static str) -> AnyElement {
+    div()
+        .text_size(px(10.))
+        .text_color(rgb(palette().faint))
+        .child(text)
+        .into_any_element()
+}
+
+/// A settings row: fixed label, wrapping hint, and a right-aligned control.
+/// Unlike [`settings_row`] the control is an element, so pickers and steppers
+/// can sit at the trailing edge.
+fn settings_control_row(
+    label: &'static str,
+    hint: &'static str,
+    control: AnyElement,
+    divider: bool,
+) -> AnyElement {
+    let mut row = h_flex().w_full().px_4().py_3().gap_4().items_center();
+    if divider {
+        row = row.border_t_1().border_color(rgb(palette().border));
+    }
+    row.child(settings_label(label))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_size(px(11.))
+                .text_color(rgb(palette().muted))
+                .child(hint),
+        )
+        .child(control)
+        .into_any_element()
+}
+
+/// One row of a font dropdown. Row zero always restores the default family.
+#[derive(Clone)]
+struct FontChoice {
+    label: SharedString,
+    value: Option<SharedString>,
+}
+
+impl FontChoice {
+    fn default_entry(label: &'static str) -> Self {
+        Self {
+            label: label.into(),
+            value: None,
+        }
+    }
+}
+
+impl SearchableListItem for FontChoice {
+    type Value = Option<SharedString>;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.value
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TypographyField {
+    ChatSize,
+    ChatLineHeight,
+    CodeSize,
+}
+
+impl TypographyField {
+    fn range(self) -> (f32, f32) {
+        match self {
+            Self::ChatSize => (MIN_CHAT_FONT_SIZE, MAX_CHAT_FONT_SIZE),
+            Self::ChatLineHeight => (MIN_CHAT_LINE_HEIGHT, MAX_CHAT_LINE_HEIGHT),
+            Self::CodeSize => (MIN_CODE_FONT_SIZE, MAX_CODE_FONT_SIZE),
+        }
+    }
+    fn stepper_labels(self) -> (&'static str, &'static str) {
+        match self {
+            Self::ChatSize => ("减小聊天字号", "增大聊天字号"),
+            Self::ChatLineHeight => ("减小聊天行高", "增大聊天行高"),
+            Self::CodeSize => ("减小代码字号", "增大代码字号"),
+        }
+    }
+    fn display_value(self, value: f32) -> String {
+        match self {
+            Self::ChatLineHeight => format!("{value:.1}"),
+            _ => format!("{value:.0}"),
+        }
+    }
+}
+
+/// Chat typography resolved from settings, clamped so a hand-edited
+/// `state.json` cannot push the layout to unusable values.
+#[derive(Clone)]
+struct ChatTypography {
+    body_font: Option<SharedString>,
+    body_size: f32,
+    line_height: f32,
+    code_font: SharedString,
+    code_size: f32,
+    code_copy: bool,
+    syntax_highlight: bool,
+}
+
+impl ChatTypography {
+    /// `None` keeps the theme's code block style. A fixed, process-wide empty
+    /// highlight theme disables coloring without re-parsing every frame.
+    fn text_view_style(&self) -> Option<TextViewStyle> {
+        if self.syntax_highlight && !self.code_copy {
+            return None;
+        }
+        let mut style = TextViewStyle::default();
+        if !self.syntax_highlight {
+            style.highlight_theme = plain_highlight_theme();
+        }
+        if self.code_copy {
+            // The action row floats over the block's top-right corner.
+            style.code_block = StyleRefinement::default().pt(px(34.));
+        }
+        Some(style)
+    }
+}
+
+fn plain_highlight_theme() -> std::sync::Arc<HighlightTheme> {
+    static PLAIN: std::sync::OnceLock<std::sync::Arc<HighlightTheme>> = std::sync::OnceLock::new();
+    PLAIN
+        .get_or_init(|| {
+            std::sync::Arc::new(HighlightTheme {
+                name: "Conduit Plain".into(),
+                appearance: gpui_kit::component::ThemeMode::Dark,
+                style: Default::default(),
+            })
+        })
+        .clone()
+}
+
+/// The corner row every chat code block gets: the language tag and a copy
+/// button. Each block needs its own element id, otherwise all blocks share one
+/// "已复制" state.
+fn code_block_actions(
+    scope: SharedString,
+) -> impl Fn(&gpui_kit::base::text::CodeBlock, &mut Window, &mut App) -> Div + Send + Sync + 'static
+{
+    let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    move |block, _, _| {
+        let index = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        h_flex()
+            .gap_1()
+            .items_center()
+            .when_some(block.lang(), |row, lang| {
+                row.child(
+                    div()
+                        .text_size(px(10.))
+                        .line_height(px(16.))
+                        .text_color(rgb(palette().faint))
+                        .child(lang),
+                )
+            })
+            .child(
+                Clipboard::new(SharedString::from(format!("{scope}-{index}")))
+                    .tooltip("复制代码")
+                    .accessibility_label("复制代码")
+                    .value(block.code()),
+            )
+    }
+}
+
+/// A chat markdown view carrying the current typography: prose follows the body
+/// settings, code blocks read the mono settings from the global theme.
+fn chat_markdown_view(
+    id: SharedString,
+    text: impl Into<SharedString>,
+    typography: &ChatTypography,
+    copy_scope: &str,
+    selectable: bool,
+) -> TextView {
+    let mut view = TextView::markdown(id, text)
+        .text_size(px(typography.body_size))
+        .line_height(relative(typography.line_height))
+        .selectable(selectable);
+    if let Some(family) = typography.body_font.clone() {
+        view = view.font_family(family);
+    }
+    if let Some(style) = typography.text_view_style() {
+        view = view.style(style);
+    }
+    if typography.code_copy {
+        view = view.code_block_actions(code_block_actions(copy_scope.into()));
+    }
+    view
+}
+
+/// A run of a user message: typed prose, or a fenced code block re-emitted as
+/// markdown so it picks up the code typography.
+enum MessageSegment {
+    Text(String),
+    Code(String),
+}
+
+/// The backtick fence on a line, as (length, info string, indent). The markdown
+/// crate also understands `~~~`, but only backticks are recognised here: user
+/// text is not a controlled markdown source and a rarer marker is not worth the
+/// extra rendering risk.
+fn fence_marker(line: &str) -> Option<(usize, &str, usize)> {
+    let indent = line.len() - line.trim_start_matches(' ').len();
+    if indent > 3 {
+        return None;
+    }
+    let rest = &line[indent..];
+    let length = rest.chars().take_while(|c| *c == '`').count();
+    if length < 3 {
+        return None;
+    }
+    Some((length, rest[length..].trim(), indent))
+}
+
+/// Splits a user message on complete ``` fences. Everything else is left
+/// exactly as typed, so a stray fence cannot rewrite the message.
+fn split_fenced_code(text: &str) -> Vec<MessageSegment> {
+    let lines: Vec<&str> = text
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .collect();
+    let mut segments: Vec<MessageSegment> = Vec::new();
+    let mut prose: Vec<&str> = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        let opening = fence_marker(lines[index]);
+        let closing = opening.and_then(|(length, info, indent)| {
+            (index + 1..lines.len())
+                .find(|next| {
+                    fence_marker(lines[*next]).is_some_and(|(close_length, close_info, _)| {
+                        close_length >= length && close_info.is_empty()
+                    })
+                })
+                .map(|close| (length, info, indent, close))
+        });
+        let Some((length, info, indent, close)) = closing else {
+            prose.push(lines[index]);
+            index += 1;
+            continue;
+        };
+        let fence = "`".repeat(length);
+        let body = lines[index + 1..close]
+            .iter()
+            .map(|line| {
+                // Only leading spaces are cut, so the slice stays on a char
+                // boundary and the block keeps its own relative indent.
+                let leading = line.len() - line.trim_start_matches(' ').len();
+                &line[leading.min(indent)..]
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        push_prose(&mut segments, &prose);
+        prose.clear();
+        segments.push(MessageSegment::Code(format!(
+            "{fence}{info}\n{body}\n{fence}"
+        )));
+        index = close + 1;
+    }
+    push_prose(&mut segments, &prose);
+    segments
+}
+
+/// Collects a prose run, dropping runs that are only blank lines and the
+/// newlines that belong to the fence boundary rather than to the text.
+fn push_prose(segments: &mut Vec<MessageSegment>, lines: &[&str]) {
+    if lines.is_empty() {
+        return;
+    }
+    let text = lines.join("\n").trim_end_matches('\n').to_string();
+    if !text.trim().is_empty() {
+        segments.push(MessageSegment::Text(text));
+    }
+}
+
+/// Writes the code font into the global theme, which code blocks, inline code
+/// and the Git diff view all read.
+fn install_code_font(cx: &mut App, family: Option<&str>, default_family: &SharedString, size: f32) {
+    let family = family.map_or_else(|| default_family.clone(), SharedString::from);
+    let size = px(size.clamp(MIN_CODE_FONT_SIZE, MAX_CODE_FONT_SIZE));
+    gpui_kit::component::Theme::update(cx, move |theme| {
+        theme.mono_font_family = family;
+        theme.mono_font_size = size;
+    });
+}
+
+fn typography_stepper(
+    id: &'static str,
+    value: f32,
+    disabled: bool,
+    field: TypographyField,
+    view: Entity<ConduitApp>,
+) -> AnyElement {
+    let (min, max) = field.range();
+    let can_decrease = value > min;
+    let can_increase = value < max;
+    let (decrease_label, increase_label) = field.stepper_labels();
+    let display = field.display_value(value);
+    let decrease = view.clone();
+    let increase = view;
+    let enabled = !disabled;
+    h_flex()
+        .gap_1()
+        .items_center()
+        .child(
+            Button::new(format!("{id}-minus"))
+                .label("−")
+                .accessibility_label(decrease_label)
+                .small()
+                .ghost()
+                .disabled(!enabled || !can_decrease)
+                .when(enabled && can_decrease, |button| button.cursor_pointer())
+                .on_click(move |_, _, cx| {
+                    decrease.update(cx, |this, cx| {
+                        this.adjust_typography(field, -1.0, cx);
+                    });
+                }),
+        )
+        .child(
+            h_flex()
+                .w(px(32.))
+                .justify_center()
+                .text_size(px(12.))
+                .text_color(rgb(if disabled {
+                    palette().faint
+                } else {
+                    palette().text
+                }))
+                .child(display),
+        )
+        .child(
+            Button::new(format!("{id}-plus"))
+                .label("+")
+                .accessibility_label(increase_label)
+                .small()
+                .ghost()
+                .disabled(!enabled || !can_increase)
+                .when(enabled && can_increase, |button| button.cursor_pointer())
+                .on_click(move |_, _, cx| {
+                    increase.update(cx, |this, cx| {
+                        this.adjust_typography(field, 1.0, cx);
+                    });
+                }),
+        )
+        .into_any_element()
+}
+
 fn single_line_title(title: &str) -> String {
     title.replace(['\r', '\n'], " ")
 }
@@ -676,7 +1062,12 @@ fn format_tool_text(text: &str) -> String {
 
 /// Use a block viewport around natural-height flex content. Constraining the
 /// flex column itself lets its text children shrink and erases scroll overflow.
-fn tool_content(tool_id: &str, item: &ChatItem, scroll: &ScrollHandle) -> (AnyElement, String) {
+fn tool_content(
+    tool_id: &str,
+    item: &ChatItem,
+    scroll: &ScrollHandle,
+    typography: &ChatTypography,
+) -> (AnyElement, String) {
     let input = format_tool_text(&item.input);
     let output = format_tool_text(&item.detail);
     let copy_text = format!("输入\n{input}\n\n输出 / 结果\n{output}");
@@ -686,8 +1077,8 @@ fn tool_content(tool_id: &str, item: &ChatItem, scroll: &ScrollHandle) -> (AnyEl
         .flex_shrink_0()
         .p_3()
         .gap_2()
-        .font_family("Consolas")
-        .text_size(px(12.))
+        .font_family(typography.code_font.clone())
+        .text_size(px(typography.code_size))
         .line_height(relative(1.5))
         .text_color(rgb(palette().muted));
     for (section, label, text, empty) in [
@@ -926,6 +1317,12 @@ pub struct ConduitApp {
     message: Option<String>,
     settings_tab: SettingsTab,
     git_prompt_input: Entity<TextareaState>,
+    /// Font pickers for chat body text and code; rebuilt from the installed
+    /// families when the app starts.
+    chat_font_select: Entity<SelectState<SearchableVec<FontChoice>>>,
+    code_font_select: Entity<SelectState<SearchableVec<FontChoice>>>,
+    /// The theme's platform monospace family, restored when no code font is set.
+    default_mono_font: SharedString,
     next_id: u64,
     closing: bool,
     details: bool,
@@ -971,6 +1368,9 @@ pub struct ConduitApp {
     dirty: bool,
     last_save: Instant,
     scroll: gpui_kit::ListState,
+    /// Focus target for the conversation, so a finished selection drag leaves the
+    /// composer and Ctrl+C reaches the window root's copy handler.
+    chat_focus: FocusHandle,
     timeline_session: Option<u64>,
     outline: MessageOutlineCache,
     /// Whether the message list is scrolled to (or near) its end. Drives the
@@ -1018,6 +1418,92 @@ impl ConduitApp {
         };
         set_palette(initial_mode);
         gpui_kit::component::Theme::change(initial_mode, Some(window), cx);
+        // GPUI panics while laying out a family the machine does not have, so a
+        // saved family that has since been uninstalled falls back to the default.
+        let mut installed_fonts = cx.text_system().all_font_names();
+        installed_fonts.sort_by_key(|name| name.to_lowercase());
+        installed_fonts.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+        for family in [
+            &mut store.ui.chat_font_family,
+            &mut store.ui.code_font_family,
+        ] {
+            if family
+                .as_ref()
+                .is_some_and(|name| !installed_fonts.iter().any(|installed| installed == name))
+            {
+                *family = None;
+            }
+        }
+        let default_mono_font = gpui_kit::component::Theme::global(cx)
+            .mono_font_family
+            .clone();
+        install_code_font(
+            cx,
+            store.ui.code_font_family.as_deref(),
+            &default_mono_font,
+            store.ui.code_font_size,
+        );
+        let font_choices = |default_label: &'static str| {
+            std::iter::once(FontChoice::default_entry(default_label))
+                .chain(installed_fonts.iter().map(|name| FontChoice {
+                    label: SharedString::from(name.clone()),
+                    value: Some(SharedString::from(name.clone())),
+                }))
+                .collect::<Vec<_>>()
+        };
+        let font_index = |family: &Option<String>| {
+            family
+                .as_ref()
+                .and_then(|family| installed_fonts.iter().position(|name| name == family))
+                .map_or(0, |index| index + 1)
+        };
+        let chat_font_index = font_index(&store.ui.chat_font_family);
+        let code_font_index = font_index(&store.ui.code_font_family);
+        let chat_font_select = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(font_choices("默认（跟随主题）")),
+                Some(IndexPath::new(chat_font_index)),
+                window,
+                cx,
+            )
+            .searchable(true)
+        });
+        let code_font_select = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(font_choices("默认（系统等宽）")),
+                Some(IndexPath::new(code_font_index)),
+                window,
+                cx,
+            )
+            .searchable(true)
+        });
+        let chat_font_subscription =
+            cx.subscribe(&chat_font_select, |this, _, event: &SelectEvent<_>, cx| {
+                if !this.writable || this.closing {
+                    return;
+                }
+                let SelectEvent::Confirm(value) = event;
+                this.store.ui.chat_font_family = value
+                    .as_ref()
+                    .and_then(|family| family.as_ref())
+                    .map(|family| family.to_string());
+                this.persist();
+                cx.notify();
+            });
+        let code_font_subscription =
+            cx.subscribe(&code_font_select, |this, _, event: &SelectEvent<_>, cx| {
+                if !this.writable || this.closing {
+                    return;
+                }
+                let SelectEvent::Confirm(value) = event;
+                this.store.ui.code_font_family = value
+                    .as_ref()
+                    .and_then(|family| family.as_ref())
+                    .map(|family| family.to_string());
+                this.apply_code_font(cx);
+                this.persist();
+                cx.notify();
+            });
         let next_id = store
             .workspaces
             .iter()
@@ -1176,6 +1662,9 @@ impl ConduitApp {
             message,
             settings_tab: SettingsTab::General,
             git_prompt_input,
+            chat_font_select,
+            code_font_select,
+            default_mono_font,
             next_id: imported_total,
             closing: false,
             details: start_in_git,
@@ -1215,10 +1704,13 @@ impl ConduitApp {
                 search_subscription,
                 git_prompt_subscription,
                 appearance_subscription,
+                chat_font_subscription,
+                code_font_subscription,
             ],
             dirty: false,
             last_save: Instant::now(),
             scroll: gpui_kit::ListState::new(0, ListAlignment::Bottom, px(240.)),
+            chat_focus: cx.focus_handle(),
             timeline_session: None,
             outline: MessageOutlineCache::default(),
             at_bottom: true,
@@ -2312,6 +2804,109 @@ impl ConduitApp {
         if gpui_kit::component::Theme::global(cx).mode != mode {
             gpui_kit::component::Theme::change(mode, Some(window), cx);
         }
+        // Loading a theme can reset the monospace pair; reinstall the chat's
+        // chosen code font after every mode change.
+        self.apply_code_font(cx);
+        cx.notify();
+    }
+    fn apply_code_font(&mut self, cx: &mut Context<Self>) {
+        install_code_font(
+            cx,
+            self.store.ui.code_font_family.as_deref(),
+            &self.default_mono_font,
+            self.store.ui.code_font_size,
+        );
+    }
+    fn chat_typography(&self) -> ChatTypography {
+        ChatTypography {
+            body_font: self
+                .store
+                .ui
+                .chat_font_family
+                .as_deref()
+                .map(SharedString::from),
+            body_size: self
+                .store
+                .ui
+                .chat_font_size
+                .clamp(MIN_CHAT_FONT_SIZE, MAX_CHAT_FONT_SIZE),
+            line_height: self
+                .store
+                .ui
+                .chat_line_height
+                .clamp(MIN_CHAT_LINE_HEIGHT, MAX_CHAT_LINE_HEIGHT),
+            code_font: self
+                .store
+                .ui
+                .code_font_family
+                .as_deref()
+                .map(SharedString::from)
+                .unwrap_or_else(|| self.default_mono_font.clone()),
+            code_size: self
+                .store
+                .ui
+                .code_font_size
+                .clamp(MIN_CODE_FONT_SIZE, MAX_CODE_FONT_SIZE),
+            code_copy: self.store.ui.code_copy_button,
+            syntax_highlight: self.store.ui.code_syntax_highlight,
+        }
+    }
+    fn adjust_typography(&mut self, field: TypographyField, delta: f32, cx: &mut Context<Self>) {
+        if !self.writable || self.closing {
+            return;
+        }
+        match field {
+            TypographyField::ChatSize => {
+                let value = self
+                    .store
+                    .ui
+                    .chat_font_size
+                    .clamp(MIN_CHAT_FONT_SIZE, MAX_CHAT_FONT_SIZE);
+                self.store.ui.chat_font_size =
+                    (value + delta).clamp(MIN_CHAT_FONT_SIZE, MAX_CHAT_FONT_SIZE);
+            }
+            TypographyField::ChatLineHeight => {
+                let value = self
+                    .store
+                    .ui
+                    .chat_line_height
+                    .clamp(MIN_CHAT_LINE_HEIGHT, MAX_CHAT_LINE_HEIGHT);
+                // Keep one decimal so repeated steps do not drift.
+                self.store.ui.chat_line_height =
+                    (value * 10.0 + delta).clamp(12.0, 20.0).round() / 10.0;
+            }
+            TypographyField::CodeSize => {
+                let value = self
+                    .store
+                    .ui
+                    .code_font_size
+                    .clamp(MIN_CODE_FONT_SIZE, MAX_CODE_FONT_SIZE);
+                self.store.ui.code_font_size =
+                    (value + delta).clamp(MIN_CODE_FONT_SIZE, MAX_CODE_FONT_SIZE);
+                self.apply_code_font(cx);
+            }
+        }
+        self.persist();
+        cx.notify();
+    }
+    fn reset_typography(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.writable || self.closing {
+            return;
+        }
+        self.store.ui.chat_font_family = None;
+        self.store.ui.chat_font_size = 15.0;
+        self.store.ui.chat_line_height = 1.5;
+        self.store.ui.code_font_family = None;
+        self.store.ui.code_font_size = 13.0;
+        self.store.ui.code_copy_button = true;
+        self.store.ui.code_syntax_highlight = true;
+        for select in [&self.chat_font_select, &self.code_font_select] {
+            select.update(cx, |state, cx| {
+                state.set_selected_index(Some(IndexPath::new(0)), window, cx);
+            });
+        }
+        self.apply_code_font(cx);
+        self.persist();
         cx.notify();
     }
     /// Whether the tool detail dock is currently visible.
@@ -3136,6 +3731,7 @@ impl ConduitApp {
         };
         let session_id = session.id;
         let provider = session.provider;
+        let typography = self.chat_typography();
         let regenerable = item.kind == ItemKind::Assistant
             && self.writable
             && !self.closing
@@ -3158,6 +3754,30 @@ impl ConduitApp {
                 };
                 let message_group =
                     SharedString::from(format!("user-message-{}-{}", session_id, item.key));
+                let mut body = v_flex().gap_2();
+                for (position, segment) in split_fenced_code(&item.text).into_iter().enumerate() {
+                    body = match segment {
+                        MessageSegment::Text(text) => {
+                            body.child(gpui_kit::base::SelectableText::new(
+                                SharedString::from(format!(
+                                    "user-text-{}-{}-{}",
+                                    session_id, item.key, position
+                                )),
+                                text,
+                            ))
+                        }
+                        MessageSegment::Code(markdown) => body.child(chat_markdown_view(
+                            SharedString::from(format!(
+                                "user-code-{}-{}-{}",
+                                session_id, item.key, position
+                            )),
+                            markdown,
+                            &typography,
+                            &format!("user-code-copy-{}-{}-{}", session_id, item.key, position),
+                            true,
+                        )),
+                    };
+                }
                 v_flex()
                     .w_full()
                     .items_end()
@@ -3171,15 +3791,13 @@ impl ConduitApp {
                             .px_4()
                             .py_3()
                             .bg(rgb(palette().surface))
-                            .text_size(px(14.))
+                            .text_size(px(typography.body_size))
+                            .line_height(relative(typography.line_height))
+                            .when_some(typography.body_font.clone(), |bubble, family| {
+                                bubble.font_family(family)
+                            })
                             .text_color(rgb(palette().text))
-                            .child(gpui_kit::base::SelectableText::new(
-                                SharedString::from(format!(
-                                    "user-text-{}-{}",
-                                    session_id, item.key
-                                )),
-                                item.text.clone(),
-                            )),
+                            .child(body),
                     )
                     .child(
                         h_flex()
@@ -3272,17 +3890,13 @@ impl ConduitApp {
                                             .child(provider.label()),
                                     ),
                             )
-                            .child(
-                                TextView::markdown(
-                                    SharedString::from(format!(
-                                        "reply-{}-{}",
-                                        session_id, item.key
-                                    )),
-                                    item.text.clone(),
-                                )
-                                .text_size(px(15.))
-                                .selectable(true),
-                            ),
+                            .child(chat_markdown_view(
+                                SharedString::from(format!("reply-{}-{}", session_id, item.key)),
+                                item.text.clone(),
+                                &typography,
+                                &format!("code-copy-{}-{}", session_id, item.key),
+                                true,
+                            )),
                     )
                     .child(actions)
                     .into_any_element()
@@ -3373,7 +3987,8 @@ impl ConduitApp {
                         .or_default()
                         .clone();
                     let dock_key = item.key.clone();
-                    let (content, copy_text) = tool_content(&tool_id, item, &tool_scroll);
+                    let (content, copy_text) =
+                        tool_content(&tool_id, item, &tool_scroll, &typography);
                     card = card.child(
                         v_flex()
                             .w_full()
@@ -7410,35 +8025,7 @@ impl ConduitApp {
             .w_full()
             .gap_4()
             .child(
-                v_flex()
-                    .w_full()
-                    .overflow_hidden()
-                    .rounded(px(12.))
-                    .border_1()
-                    .border_color(rgb(palette().border))
-                    .bg(rgb(palette().surface_strong))
-                    .child(
-                        h_flex()
-                            .px_4()
-                            .py_3()
-                            .items_center()
-                            .border_b_1()
-                            .border_color(rgb(palette().border))
-                            .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .font_semibold()
-                                    .text_color(rgb(palette().text))
-                                    .child("主题"),
-                            )
-                            .child(div().flex_1())
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .text_color(rgb(palette().faint))
-                                    .child("立即生效"),
-                            ),
-                    )
+                settings_card("主题", settings_card_note("立即生效"))
                     .child(
                         v_flex()
                             .w_full()
@@ -7468,291 +8055,332 @@ impl ConduitApp {
                     ),
             )
             .child({
+                let chat = self.chat_typography();
+                let font_size = chat.body_size;
+                let line_height = chat.line_height;
+                settings_card("聊天文字", settings_card_note("立即生效"))
+                    .child(settings_control_row(
+                        "正文字体",
+                        "用户消息、回复与输入框；默认跟随系统界面字体",
+                        div()
+                            .w(px(188.))
+                            .flex_shrink_0()
+                            .child(
+                                Select::new(&self.chat_font_select)
+                                    .with_size(Size::Small)
+                                    .w_full()
+                                    .menu_width(px(260.))
+                                    .menu_max_h(px(320.))
+                                    .search_placeholder("搜索字体")
+                                    .accessibility_label("聊天正文字体")
+                                    .disabled(disabled),
+                            )
+                            .into_any_element(),
+                        false,
+                    ))
+                    .child(settings_control_row(
+                        "字号",
+                        "12–20 px；默认 15",
+                        typography_stepper(
+                            "chat-font-size",
+                            font_size,
+                            disabled,
+                            TypographyField::ChatSize,
+                            view.clone(),
+                        ),
+                        true,
+                    ))
+                    .child(settings_control_row(
+                        "行高",
+                        "1.2–2.0；默认 1.5",
+                        typography_stepper(
+                            "chat-line-height",
+                            line_height,
+                            disabled,
+                            TypographyField::ChatLineHeight,
+                            view.clone(),
+                        ),
+                        true,
+                    ))
+            })
+            .child({
+                let chat = self.chat_typography();
+                let code_size = chat.code_size;
+                let copy_view = view.clone();
+                let highlight_view = view.clone();
+                settings_card("代码块", settings_card_note("立即生效"))
+                    .child(settings_control_row(
+                        "代码字体",
+                        "Markdown 代码块、行内代码与工具输出；默认系统等宽字体",
+                        div()
+                            .w(px(188.))
+                            .flex_shrink_0()
+                            .child(
+                                Select::new(&self.code_font_select)
+                                    .with_size(Size::Small)
+                                    .w_full()
+                                    .menu_width(px(260.))
+                                    .menu_max_h(px(320.))
+                                    .search_placeholder("搜索字体")
+                                    .accessibility_label("代码字体")
+                                    .disabled(disabled),
+                            )
+                            .into_any_element(),
+                        false,
+                    ))
+                    .child(settings_control_row(
+                        "代码字号",
+                        "10–18 px；默认 13",
+                        typography_stepper(
+                            "code-font-size",
+                            code_size,
+                            disabled,
+                            TypographyField::CodeSize,
+                            view.clone(),
+                        ),
+                        true,
+                    ))
+                    .child(settings_control_row(
+                        "复制按钮",
+                        "在每个代码块右上角显示复制按钮",
+                        Switch::new("code-copy-setting")
+                            .checked(self.store.ui.code_copy_button)
+                            .disabled(disabled)
+                            .on_change(move |checked, _, cx| {
+                                copy_view.update(cx, |this, cx| {
+                                    if !this.writable || this.closing {
+                                        return;
+                                    }
+                                    this.store.ui.code_copy_button = *checked;
+                                    this.persist();
+                                    cx.notify();
+                                });
+                            })
+                            .into_any_element(),
+                        true,
+                    ))
+                    .child(settings_control_row(
+                        "语法高亮",
+                        "按语言着色；关闭后保持等宽单色",
+                        Switch::new("code-syntax-setting")
+                            .checked(self.store.ui.code_syntax_highlight)
+                            .disabled(disabled)
+                            .on_change(move |checked, _, cx| {
+                                highlight_view.update(cx, |this, cx| {
+                                    if !this.writable || this.closing {
+                                        return;
+                                    }
+                                    this.store.ui.code_syntax_highlight = *checked;
+                                    this.persist();
+                                    cx.notify();
+                                });
+                            })
+                            .into_any_element(),
+                        true,
+                    ))
+            })
+            .child({
+                let chat = self.chat_typography();
+                let reset_view = view.clone();
+                let preview = chat_markdown_view(
+                    "appearance-chat-preview".into(),
+                    "调整上方选项可即时预览聊天正文。\n\n```rust\nfn main() {\n    println!(\"hello, conduit\");\n}\n```\n\n行内 `code` 与代码块都会跟随等宽字体设置。",
+                    &chat,
+                    "appearance-preview-code",
+                    false,
+                );
+                settings_card(
+                    "聊天预览",
+                    Button::new("appearance-typography-reset")
+                        .label("恢复默认")
+                        .small()
+                        .ghost()
+                        .disabled(disabled)
+                        .when(!disabled, |button| button.cursor_pointer())
+                        .on_click(move |_, window, cx| {
+                            reset_view.update(cx, |this, cx| {
+                                this.reset_typography(window, cx);
+                            });
+                        })
+                        .into_any_element(),
+                )
+                .child(div().px_4().py_3().child(preview))
+            })
+            .child({
                 let toggle = view.clone();
                 let full_width = self.store.ui.full_width_content;
-                v_flex()
-                    .w_full()
-                    .overflow_hidden()
-                    .rounded(px(12.))
-                    .border_1()
-                    .border_color(rgb(palette().border))
-                    .bg(rgb(palette().surface_strong))
-                    .child(
+                settings_card("内容区域", settings_card_note("立即生效"))
+                    .child(settings_control_row(
+                        "内容铺满",
+                        "关闭时右侧内容以 840px 居中显示；开启后铺满整个内容区",
+                        Switch::new("full-width-content-setting")
+                            .checked(full_width)
+                            .disabled(disabled)
+                            .on_change(move |checked, _, cx| {
+                                toggle.update(cx, |this, cx| {
+                                    if !this.writable || this.closing {
+                                        return;
+                                    }
+                                    this.store.ui.full_width_content = *checked;
+                                    this.persist();
+                                    cx.notify();
+                                });
+                            })
+                            .into_any_element(),
+                        false,
+                    ))
+            })
+            .child(
+                settings_card("侧栏", div().into_any_element())
+                    .child(settings_control_row(
+                        "工作区会话数",
+                        "默认 5 条，范围 1–30，超出时侧栏可展开",
                         h_flex()
-                            .px_4()
-                            .py_3()
+                            .gap_1()
                             .items_center()
-                            .border_b_1()
-                            .border_color(rgb(palette().border))
                             .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .font_semibold()
-                                    .text_color(rgb(palette().text))
-                                    .child("内容区域"),
-                            )
-                            .child(div().flex_1())
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .text_color(rgb(palette().faint))
-                                    .child("立即生效"),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .px_4()
-                            .py_3()
-                            .gap_4()
-                            .items_center()
-                            .child(settings_label("内容铺满"))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(palette().muted))
-                                    .child("关闭时右侧内容以 840px 居中显示；开启后铺满整个内容区"),
-                            )
-                            .child(
-                                Switch::new("full-width-content-setting")
-                                    .checked(full_width)
-                                    .disabled(disabled)
-                                    .on_change(move |checked, _, cx| {
-                                        toggle.update(cx, |this, cx| {
+                                Button::new("sessions-limit-minus")
+                                    .label("−")
+                                    .accessibility_label("减少工作区会话数")
+                                    .small()
+                                    .ghost()
+                                    .disabled(disabled || value <= 1)
+                                    .when(!disabled && value > 1, |button| button.cursor_pointer())
+                                    .on_click(move |_, _, cx| {
+                                        decrease.update(cx, |this, cx| {
                                             if !this.writable || this.closing {
                                                 return;
                                             }
-                                            this.store.ui.full_width_content = *checked;
+                                            this.store.ui.sessions_per_workspace = this
+                                                .store
+                                                .ui
+                                                .sessions_per_workspace
+                                                .clamp(1, 30)
+                                                .saturating_sub(1)
+                                                .max(1);
                                             this.persist();
                                             cx.notify();
                                         });
                                     }),
-                            ),
-                    )
-            })
-            .child(
-                v_flex()
-                    .w_full()
-                    .overflow_hidden()
-                    .rounded(px(12.))
-                    .border_1()
-                    .border_color(rgb(palette().border))
-                    .bg(rgb(palette().surface_strong))
-                    .child(
-                        h_flex()
-                            .px_4()
-                            .py_3()
-                            .items_center()
-                            .border_b_1()
-                            .border_color(rgb(palette().border))
-                            .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .font_semibold()
-                                    .text_color(rgb(palette().text))
-                                    .child("侧栏"),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .px_4()
-                            .py_3()
-                            .gap_4()
-                            .items_center()
-                            .child(settings_label("工作区会话数"))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(palette().muted))
-                                    .child("默认 5 条，范围 1–30，超出时侧栏可展开"),
                             )
                             .child(
                                 h_flex()
-                                    .gap_1()
-                                    .items_center()
-                                    .child(
-                                        Button::new("sessions-limit-minus")
-                                            .label("−")
-                                            .accessibility_label("减少工作区会话数")
-                                            .small()
-                                            .ghost()
-                                            .disabled(disabled || value <= 1)
-                                            .when(!disabled && value > 1, |button| {
-                                                button.cursor_pointer()
-                                            })
-                                            .on_click(move |_, _, cx| {
-                                                decrease.update(cx, |this, cx| {
-                                                    if !this.writable || this.closing {
-                                                        return;
-                                                    }
-                                                    this.store.ui.sessions_per_workspace = this
-                                                        .store
-                                                        .ui
-                                                        .sessions_per_workspace
-                                                        .clamp(1, 30)
-                                                        .saturating_sub(1)
-                                                        .max(1);
-                                                    this.persist();
-                                                    cx.notify();
-                                                });
-                                            }),
-                                    )
-                                    .child(
-                                        h_flex()
-                                            .w(px(26.))
-                                            .justify_center()
-                                            .text_size(px(12.))
-                                            .text_color(rgb(if disabled {
-                                                palette().faint
-                                            } else {
-                                                palette().text
-                                            }))
-                                            .child(value.to_string()),
-                                    )
-                                    .child(
-                                        Button::new("sessions-limit-plus")
-                                            .label("+")
-                                            .accessibility_label("增加工作区会话数")
-                                            .small()
-                                            .ghost()
-                                            .disabled(disabled || value >= 30)
-                                            .when(!disabled && value < 30, |button| {
-                                                button.cursor_pointer()
-                                            })
-                                            .on_click(move |_, _, cx| {
-                                                increase.update(cx, |this, cx| {
-                                                    if !this.writable || this.closing {
-                                                        return;
-                                                    }
-                                                    this.store.ui.sessions_per_workspace = (this
-                                                        .store
-                                                        .ui
-                                                        .sessions_per_workspace
-                                                        .clamp(1, 30)
-                                                        + 1)
-                                                    .min(30);
-                                                    this.persist();
-                                                    cx.notify();
-                                                });
-                                            }),
-                                    ),
-                            ),
-                    ),
+                                    .w(px(26.))
+                                    .justify_center()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(if disabled {
+                                        palette().faint
+                                    } else {
+                                        palette().text
+                                    }))
+                                    .child(value.to_string()),
+                            )
+                            .child(
+                                Button::new("sessions-limit-plus")
+                                    .label("+")
+                                    .accessibility_label("增加工作区会话数")
+                                    .small()
+                                    .ghost()
+                                    .disabled(disabled || value >= 30)
+                                    .when(!disabled && value < 30, |button| button.cursor_pointer())
+                                    .on_click(move |_, _, cx| {
+                                        increase.update(cx, |this, cx| {
+                                            if !this.writable || this.closing {
+                                                return;
+                                            }
+                                            this.store.ui.sessions_per_workspace = (this
+                                                .store
+                                                .ui
+                                                .sessions_per_workspace
+                                                .clamp(1, 30)
+                                                + 1)
+                                                .min(30);
+                                            this.persist();
+                                            cx.notify();
+                                        });
+                                    }),
+                            )
+                            .into_any_element(),
+                        false,
+                    )),
             )
             .child(
-                v_flex()
-                    .w_full()
-                    .overflow_hidden()
-                    .rounded(px(12.))
-                    .border_1()
-                    .border_color(rgb(palette().border))
-                    .bg(rgb(palette().surface_strong))
-                    .child(
+                settings_card("标签页", div().into_any_element()).child(
+                    settings_control_row(
+                        "最大 tab 数量",
+                        "默认 8 个，范围 1–20；超过数量自动关闭最老的标签",
                         h_flex()
-                            .px_4()
-                            .py_3()
+                            .gap_1()
                             .items_center()
-                            .border_b_1()
-                            .border_color(rgb(palette().border))
                             .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .font_semibold()
-                                    .text_color(rgb(palette().text))
-                                    .child("标签页"),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .px_4()
-                            .py_3()
-                            .gap_4()
-                            .items_center()
-                            .child(settings_label("最大 tab 数量"))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(palette().muted))
-                                    .child("默认 8 个，范围 1–20；超过数量自动关闭最老的标签"),
+                                Button::new("max-tabs-minus")
+                                    .label("−")
+                                    .accessibility_label("减少最大标签数量")
+                                    .small()
+                                    .ghost()
+                                    .disabled(disabled || max_tabs <= 1)
+                                    .when(!disabled && max_tabs > 1, |button| button.cursor_pointer())
+                                    .on_click(move |_, _, cx| {
+                                        tabs_decrease.update(cx, |this, cx| {
+                                            if !this.writable || this.closing {
+                                                return;
+                                            }
+                                            this.store.ui.max_tabs = this
+                                                .store
+                                                .ui
+                                                .max_tabs
+                                                .clamp(1, max_tabs_limit)
+                                                .saturating_sub(1)
+                                                .max(1);
+                                            this.persist();
+                                            cx.notify();
+                                        });
+                                    }),
                             )
                             .child(
                                 h_flex()
-                                    .gap_1()
-                                    .items_center()
-                                    .child(
-                                        Button::new("max-tabs-minus")
-                                            .label("−")
-                                            .accessibility_label("减少最大标签数量")
-                                            .small()
-                                            .ghost()
-                                            .disabled(disabled || max_tabs <= 1)
-                                            .when(!disabled && max_tabs > 1, |button| {
-                                                button.cursor_pointer()
-                                            })
-                                            .on_click(move |_, _, cx| {
-                                                tabs_decrease.update(cx, |this, cx| {
-                                                    if !this.writable || this.closing {
-                                                        return;
-                                                    }
-                                                    this.store.ui.max_tabs = this
-                                                        .store
-                                                        .ui
-                                                        .max_tabs
-                                                        .clamp(1, max_tabs_limit)
-                                                        .saturating_sub(1)
-                                                        .max(1);
-                                                    this.persist();
-                                                    cx.notify();
-                                                });
-                                            }),
+                                    .w(px(26.))
+                                    .justify_center()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(if disabled {
+                                        palette().faint
+                                    } else {
+                                        palette().text
+                                    }))
+                                    .child(max_tabs.to_string()),
+                            )
+                            .child(
+                                Button::new("max-tabs-plus")
+                                    .label("+")
+                                    .accessibility_label("增加最大标签数量")
+                                    .small()
+                                    .ghost()
+                                    .disabled(disabled || max_tabs >= max_tabs_limit)
+                                    .when(
+                                        !disabled && max_tabs < max_tabs_limit,
+                                        |button| button.cursor_pointer(),
                                     )
-                                    .child(
-                                        h_flex()
-                                            .w(px(26.))
-                                            .justify_center()
-                                            .text_size(px(12.))
-                                            .text_color(rgb(if disabled {
-                                                palette().faint
-                                            } else {
-                                                palette().text
-                                            }))
-                                            .child(max_tabs.to_string()),
-                                    )
-                                    .child(
-                                        Button::new("max-tabs-plus")
-                                            .label("+")
-                                            .accessibility_label("增加最大标签数量")
-                                            .small()
-                                            .ghost()
-                                            .disabled(disabled || max_tabs >= max_tabs_limit)
-                                            .when(
-                                                !disabled && max_tabs < max_tabs_limit,
-                                                |button| button.cursor_pointer(),
-                                            )
-                                            .on_click(move |_, _, cx| {
-                                                tabs_increase.update(cx, |this, cx| {
-                                                    if !this.writable || this.closing {
-                                                        return;
-                                                    }
-                                                    this.store.ui.max_tabs = (this
-                                                        .store
-                                                        .ui
-                                                        .max_tabs
-                                                        .clamp(1, max_tabs_limit)
-                                                        + 1)
-                                                    .min(max_tabs_limit);
-                                                    this.persist();
-                                                    cx.notify();
-                                                });
-                                            }),
-                                    ),
-                            ),
+                                    .on_click(move |_, _, cx| {
+                                        tabs_increase.update(cx, |this, cx| {
+                                            if !this.writable || this.closing {
+                                                return;
+                                            }
+                                            this.store.ui.max_tabs = (this
+                                                .store
+                                                .ui
+                                                .max_tabs
+                                                .clamp(1, max_tabs_limit)
+                                                + 1)
+                                                .min(max_tabs_limit);
+                                            this.persist();
+                                            cx.notify();
+                                        });
+                                    }),
+                            )
+                            .into_any_element(),
+                        false,
                     ),
+                ),
             )
             .child(
                 div()
@@ -7864,7 +8492,7 @@ impl ConduitApp {
     fn settings_modal_content(&self, window: &Window, view: Entity<Self>) -> AnyElement {
         let (title, subtitle) = match self.settings_tab {
             SettingsTab::General => ("通用", "本机数据与诊断设置"),
-            SettingsTab::Appearance => ("外观", "主题与侧栏显示密度"),
+            SettingsTab::Appearance => ("外观", "主题、聊天排版与侧栏显示密度"),
             SettingsTab::Session => ("会话", "会话命名与标签页行为"),
             SettingsTab::Git => ("Git", "配置 Commit Message 的 AI 生成提示词"),
             SettingsTab::Cli => ("CLI", "可执行文件路径查找顺序与版本检测说明"),
@@ -8397,6 +9025,7 @@ impl Render for ConduitApp {
         let render_started = Instant::now();
         let narrow = window.viewport_size().width < px(1100.);
         let app_entity = cx.entity();
+        let typography = self.chat_typography();
         let selected = self
             .selected_session
             .and_then(|id| self.session(id))
@@ -8932,6 +9561,18 @@ impl Render for ConduitApp {
                     .flex_1()
                     .min_h_0()
                     .min_w_0()
+                    .track_focus(&self.chat_focus)
+                    .on_mouse_up(MouseButton::Left, {
+                        let focus = self.chat_focus.clone();
+                        move |_, window, cx| {
+                            // The composer holds keyboard focus, so a finished chat
+                            // selection would never see Ctrl+C. Move focus onto the
+                            // conversation, inside the window root's key context.
+                            if !TextSelection::selected_text(window, cx).trim().is_empty() {
+                                focus.focus(window, cx);
+                            }
+                        }
+                    })
                     .child(
                         gpui_kit::list(self.scroll.clone(), move |index, _, cx| {
                             app.update(cx, |this, cx| this.render_message(index, cx))
@@ -9324,15 +9965,18 @@ impl Render for ConduitApp {
                     )
                     .when(selected.is_some(), |row| row.child(model_picker)),
             )
-            .child(
-                div().px_2().pt_2().child(
-                    Textarea::new(&self.input)
-                        .appearance(false)
-                        .bordered(false)
-                        .text_size(px(14.))
-                        .disabled(self.closing || !composer_enabled),
-                ),
-            )
+            .child(div().px_2().pt_2().child({
+                let mut composer_input = Textarea::new(&self.input)
+                    .appearance(false)
+                    .bordered(false)
+                    .text_size(px(typography.body_size))
+                    .line_height(relative(typography.line_height))
+                    .disabled(self.closing || !composer_enabled);
+                if let Some(family) = typography.body_font.clone() {
+                    composer_input = composer_input.font_family(family);
+                }
+                composer_input
+            }))
             .child(
                 h_flex()
                     .px_2()
@@ -10363,11 +11007,59 @@ mod tests {
         assert!(snippet.to_lowercase().contains("markdown"));
         assert!(snippet.chars().count() <= 162);
     }
+
+    fn text_of(segments: &[super::MessageSegment]) -> Vec<&str> {
+        segments
+            .iter()
+            .map(|segment| match segment {
+                super::MessageSegment::Text(text) => text.as_str(),
+                super::MessageSegment::Code(markdown) => markdown.as_str(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn fenced_blocks_split_out_without_rewriting_the_prose() {
+        let segments =
+            super::split_fenced_code("看下这段\n\n```rust\nfn main() {}\n```\n为什么报错\r\n结束");
+        assert_eq!(
+            text_of(&segments),
+            ["看下这段", "```rust\nfn main() {}\n```", "为什么报错\n结束"]
+        );
+    }
+
+    #[test]
+    fn inline_backticks_and_stray_fences_stay_as_typed_text() {
+        assert_eq!(
+            text_of(&super::split_fenced_code("路径 __init__.py 与 `ls`")),
+            ["路径 __init__.py 与 `ls`"]
+        );
+        assert_eq!(
+            text_of(&super::split_fenced_code("没有闭合\n```python\nprint(1)\n")),
+            ["没有闭合\n```python\nprint(1)"]
+        );
+    }
+
+    #[test]
+    fn an_indented_fence_trims_only_its_own_indent_from_the_body() {
+        assert_eq!(
+            text_of(&super::split_fenced_code("  ```\n    x\n  ```")),
+            ["```\n  x\n```"]
+        );
+    }
+
+    #[test]
+    fn a_longer_marker_closes_only_at_its_own_length() {
+        assert_eq!(
+            text_of(&super::split_fenced_code("````\n    ```\n    x\n````")),
+            ["````\n    ```\n    x\n````"]
+        );
+    }
 }
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod ui_tests {
-    use super::{ChatItem, tool_content};
+    use super::{ChatItem, ChatTypography, tool_content};
     use gpui_kit::{
         Context, InteractiveElement, IntoElement, ParentElement, Render, ScrollDelta, ScrollHandle,
         ScrollWheelEvent, StatefulInteractiveElement, Styled, TestAppContext, Window,
@@ -10489,6 +11181,7 @@ mod ui_tests {
         inner: ScrollHandle,
         sibling: ScrollHandle,
         item: ChatItem,
+        typography: ChatTypography,
     }
 
     impl Render for ToolScrollFixture {
@@ -10504,8 +11197,13 @@ mod ui_tests {
                     .child(
                         v_flex()
                             .gap_4()
-                            .child(tool_content("first", &self.item, &self.inner).0)
-                            .child(tool_content("second", &self.item, &self.sibling).0),
+                            .child(
+                                tool_content("first", &self.item, &self.inner, &self.typography).0,
+                            )
+                            .child(
+                                tool_content("second", &self.item, &self.sibling, &self.typography)
+                                    .0,
+                            ),
                     ),
             )
         }
@@ -10521,6 +11219,15 @@ mod ui_tests {
             outer: outer.clone(),
             inner: inner.clone(),
             sibling: sibling.clone(),
+            typography: ChatTypography {
+                body_font: None,
+                body_size: 15.0,
+                line_height: 1.5,
+                code_font: "Consolas".into(),
+                code_size: 12.0,
+                code_copy: true,
+                syntax_highlight: true,
+            },
             item: serde_json::from_value(serde_json::json!({
                 "key":"tool", "kind":"Tool", "text":"Bash", "input":"{\"command\":\"test\"}",
                 "detail": (0..200).map(|i| format!("line {i}: 中文 output\n")).collect::<String>(),
@@ -10572,5 +11279,186 @@ mod ui_tests {
         });
         assert!(outer.offset().y < outer_before.y);
         assert_eq!(inner.offset(), inner_before);
+    }
+
+    /// Drives a real pointer drag across an assistant reply inside the
+    /// production virtual list and reports what the selection state and the
+    /// painted highlight do at each pointer position.
+    #[gpui_kit::test]
+    fn drag_across_assistant_reply_tracks_the_pointer(cx: &mut TestAppContext) {
+        use crate::{
+            domain::{ItemKind, PermissionLevel, Provider, SessionRecord, Usage, Workspace},
+            store::Store,
+        };
+        use gpui_kit::{AppContext as _, Modifiers, MouseButton, base::TextSelection};
+
+        const REPLY: &str = "第一段回复内容用于验证拖拽选中是否跟随指针移动，这里需要足够长的中文来覆盖两行以上的文本区域。第二段内容继续保持长度以便跨行拖拽选中。";
+
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let mut app = super::ConduitApp::new(window, cx, false, false);
+                let item = |key: &str, kind: ItemKind, text: &str| ChatItem {
+                    key: key.into(),
+                    kind,
+                    text: text.into(),
+                    input: String::new(),
+                    detail: String::new(),
+                    status: String::new(),
+                    approval: None,
+                };
+                app.store = Store {
+                    workspaces: vec![Workspace {
+                        path: std::env::temp_dir(),
+                        sessions: vec![SessionRecord {
+                            id: 1,
+                            provider: Provider::Claude,
+                            title: "选中".into(),
+                            created_at: 0,
+                            exit_code: None,
+                            archived: false,
+                            native_id: None,
+                            model: None,
+                            messages: vec![
+                                item("user-1", ItemKind::User, "问题"),
+                                item("reply-1", ItemKind::Assistant, REPLY),
+                            ],
+                            interrupted: false,
+                            permission: PermissionLevel::default(),
+                            usage: Usage::default(),
+                        }],
+                    }],
+                    ..Default::default()
+                };
+                app.selected_workspace = Some(0);
+                app.selected_session = Some(1);
+                app
+            });
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        // The virtual list reports no item bounds until it has been scrolled,
+        // so find a painted text line by probing short drags instead.
+        let probe = |cx: &mut gpui_kit::VisualTestContext, x, y| {
+            cx.simulate_mouse_down(point(x, y), MouseButton::Left, Modifiers::default());
+            cx.simulate_mouse_move(
+                point(x + px(30.), y),
+                Some(MouseButton::Left),
+                Modifiers::default(),
+            );
+            cx.simulate_mouse_up(
+                point(x + px(30.), y),
+                MouseButton::Left,
+                Modifiers::default(),
+            );
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            cx.update(TextSelection::selected_text).trim().to_string()
+        };
+        let mut line = None;
+        'probe: for y in (120..1000).step_by(12) {
+            for x in [360, 560, 760] {
+                let selected = probe(cx, px(x as f32), px(y as f32));
+                if selected.is_empty() {
+                    continue;
+                }
+                if REPLY.contains(&selected) {
+                    line = Some((px(x as f32), px(y as f32), selected));
+                    break 'probe;
+                }
+            }
+        }
+        let (anchor_x, y, found) = line.expect("a selectable reply text line");
+        assert!(found.len() > 3, "probe must land inside a word: {found}");
+
+        let read = |cx: &mut gpui_kit::VisualTestContext| {
+            let selected = cx.update(TextSelection::selected_text).trim().to_string();
+            let painted = cx.update(|window, cx| {
+                let color: gpui_kit::Background = gpui_kit::base::Theme::global(cx)
+                    .tokens
+                    .colors
+                    .selection
+                    .into();
+                let scale = window.scale_factor();
+                let mut right = px(0.);
+                let mut count = 0usize;
+                for quad in window.painted_quads() {
+                    if quad.background != color {
+                        continue;
+                    }
+                    let bounds = quad.bounds.map(|value| px(value.0 / scale));
+                    count += 1;
+                    right = right.max(bounds.right());
+                }
+                (count, right)
+            });
+            (selected, painted)
+        };
+
+        cx.simulate_mouse_down(
+            point(anchor_x + px(10.), y),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let move_to = |cx: &mut gpui_kit::VisualTestContext, x: gpui_kit::Pixels| {
+            cx.simulate_mouse_move(point(x, y), Some(MouseButton::Left), Modifiers::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            read(cx)
+        };
+        let (at_mid, painted_mid) = move_to(cx, anchor_x + px(150.));
+        let (at_far, painted_far) = move_to(cx, anchor_x + px(330.));
+        cx.simulate_mouse_up(
+            point(anchor_x + px(330.), y),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.run_until_parked();
+
+        assert!(!at_mid.is_empty(), "drag must select reply text");
+        assert!(
+            REPLY.contains(&at_mid),
+            "selection must stay inside the reply: {at_mid}"
+        );
+        assert!(
+            at_far.chars().count() > at_mid.chars().count(),
+            "selection must grow with the pointer: {at_mid} -> {at_far}"
+        );
+        assert!(
+            painted_mid.0 > 0,
+            "the highlight must be painted while dragging"
+        );
+        assert!(
+            painted_far.1 > painted_mid.1,
+            "the painted highlight must follow the pointer: {:?} -> {:?}",
+            painted_mid.1,
+            painted_far.1
+        );
+
+        // Ctrl+C only reaches the window root's copy handler because the
+        // selection drag handed keyboard focus back to the conversation.
+        cx.update(|window, cx| {
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("SENTINEL".into()));
+            window.dispatch_action(Box::new(gpui_kit::component::input::Copy), cx);
+        });
+        cx.run_until_parked();
+        let copied = cx.update(|_, cx| {
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .unwrap_or_default()
+        });
+        assert_eq!(copied, at_far, "Ctrl+C must copy the chat selection");
     }
 }

@@ -95,6 +95,19 @@ fn main() {
 > 引用块：用于检查文本换行与缩进。
 '@
 
+    # 用户消息里的整段围栏代码块按代码排版渲染，行内标记与原话仍是纯文本。
+    $userMessage = @'
+请检查这段代码，`__init__.py` 的报错和下面这个函数有没有关系？
+
+```rust
+fn parse(input: &str) -> u32 {
+    input.trim().parse().unwrap_or(0)
+}
+```
+
+另外第 1 项、- 这不是列表、# 这不是标题 都要保持原样。
+'@
+
     $longReply = @'
 ### 长回复与滚动验收
 
@@ -130,7 +143,7 @@ fn main() {
                             [ordered]@{
                                 key    = 'user-1'
                                 kind   = 'User'
-                                text   = '请检查这段代码，并用 Markdown 汇总结果。'
+                                text   = $userMessage
                                 input  = ''
                                 detail = ''
                                 status = ''

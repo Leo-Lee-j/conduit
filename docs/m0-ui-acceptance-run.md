@@ -190,6 +190,73 @@ pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -DataDir target/
 
 仍待人工确认：真实输入法下无会话直接发送、上次引擎在重启后的默认值、侧边栏拖动跟手度与 split 下两侧内容滚动、工作区选择器长列表。
 
+## 第十轮：2026-10-24 外观页聊天排版与代码块
+
+| 目标 | 实现 |
+| --- | --- |
+| 聊天正文可配置 | 外观页新增“聊天文字”卡片：正文字体（下拉，含“默认（跟随主题）”）、字号 12–20、行高 1.2–2.0；作用于用户气泡、Markdown 回复与输入框 |
+| 代码块可配置 | 新增“代码块”卡片：代码字体（含“默认（系统等宽）”）、字号 10–18、复制按钮开关、语法高亮开关；代码字体与字号写入全局主题，代码块、行内代码与 Git diff 同步 |
+| 即时反馈 | 新增“聊天预览”卡片，用同一段 Markdown（含 rust 代码块与行内代码）实时反映上述设置；“恢复默认”一键回到 15 / 1.5 / 13 与默认字体、开关全开 |
+| 不 panic | 字体下拉只列 `text_system().all_font_names()` 已安装字体；启动时清除 state.json 里已卸载的字体族，回退默认 |
+| 高亮可关 | `gpui-kit` 启用 `syntect` 特性；关闭高亮时向 `TextViewStyle` 传入进程级静态空 `HighlightTheme`，代码块保持等宽单色 |
+| 复制按钮不遮挡 | 开启复制按钮时代码块上内边距改为 34px，语言标签与复制图标浮在右上角；复制 id 按“会话 + 消息 + 代码块序号”唯一，多块互不串状态 |
+
+实现细节：新增字段全部 `#[serde(default)]`，v2 状态文件无需迁移；读取时对字号、行高再次 clamp，手改 `state.json` 也不会把布局推坏。代码字号走主题，是因为代码块节点由主题的 `mono_font_family / mono_font_size` 生成，正文 `text_size` 不会覆盖它。切换明暗主题会重载主题配置，因此每次 `apply_appearance` 之后重新写入代码字体。
+
+预验发现并修复：`Select` 根元素会吃掉行内剩余空间，把同行提示文字压成 0 宽并把行高撑到溢出，导致标签看不见；改为用固定宽度（188px、`flex_shrink_0`）容器包裹下拉。外观页的卡片头与“标签 + 提示 + 控件”行此前在六张卡片里各写一遍，统一抽为 `settings_card` / `settings_card_note` / `settings_control_row`。
+
+验证：`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked -- --test-threads=1`（79 passed）、`cargo build --locked` 通过。种子数据 1216×808 下：外观页顶部（主题 / 聊天文字）与滚动后（代码块 / 聊天预览 / 内容区域 / 侧栏 / 标签页）截图正常；写入 Arial 18 / 1.8 与 Consolas 16 后聊天页正文与代码块按设置渲染；关闭高亮时代码块单色且语言标签与复制按钮不重叠，开启高亮关闭复制按钮时回到内置样式。
+
+仍待人工确认：字体下拉的真实展开与搜索（弹窗为独立窗口，截图与 UIA 取不到）、中文字体族在正文与代码块的实际观感、只读数据目录下控件禁用态、以及长对话在放大字号后的滚动性能。
+
+## 第十一轮：2026-10-24 用户消息中的围栏代码块
+
+评估过把用户消息整体改成 Markdown 渲染，结论是不做：用户输入不是受控的 markdown 源，`__init__.py`、行首 `#` 与 `-`、日志里的 `---` 会被重新解释，等于静默改写用户原话。改为只识别整段 ``` 围栏。
+
+| 目标 | 实现 |
+| --- | --- |
+| 只切代码块 | `split_fenced_code` 按行扫描，成对的 ``` 围栏才切出代码段；正文段继续用 `SelectableText` 原样显示，行内反引号、`#`、`-` 不受影响 |
+| 不吞正文 | 未闭合的围栏按纯文本保留；闭合围栏要求同种标记、长度不小于起始且无语言信息；起始缩进 ≤3 空格才算围栏，代码体只按围栏缩进裁剪 |
+| 复用排版 | 代码段用 `chat_markdown_view` 走 `TextView::markdown`，因此跟随代码字体/字号、语法高亮与复制按钮设置；正文段继续跟随正文设置 |
+| 去重 | 回复、外观页预览、用户代码块三处相同的 `TextView` 装配与 `code_block_actions` 闭包统一抽为 `chat_markdown_view` / `code_block_actions` |
+
+实现细节：只支持 ``` 不支持 `~~~`（`markdown` 解析器虽两种都认，但用户文本里 `~~~` 更少见，少一条待验证路径）；解析前统一剥掉行尾 `\r`，种子数据里的 CRLF 不会破坏分段；正文段仅裁掉贴围栏边界的空行，段内换行原样保留。
+
+验证：`cargo fmt --check`、`cargo clippy --locked --all-targets --features ui-tests -- -D warnings`、`cargo test --locked --features ui-tests -- --test-threads=1`（85 passed / 11 ignored）、`cargo build --locked` 通过；新增 4 个分段单元测试。顺带修好 `ui-tests` 特性下 `mod ui_tests` 缺少 `ChatTypography` 导入导致的编译失败。种子数据首条用户消息改为“正文 + rust 围栏 + 正文”，1280×860 截图 `chat-user-code-top.png` 显示代码块等宽着色、语言标签与复制按钮在右上角、上下正文保持纯文本。
+
+仍待人工确认：用户消息里连续多段代码块与超长单行代码在 680px 气泡内的换行观感；关闭语法高亮后用户代码块与回复代码块是否一致；选中跨越正文段与代码段时的拖拽选择体验。
+
+## 第十二轮：2026-10-24 聊天文本的拖拽选中与 Ctrl+C
+
+反馈：聊天文字“选中有问题，不跟手，不是 | 光标那种选中文字复制”；追加要求：不要复制菜单提示，AI 回复要像普通文本一样流畅选中。
+
+根因是**同窗口挂了两层 `TextSelectionLayer`**。gpui-kit 的 `base::Root`（`crates/base/src/root.rs:254`）已经在窗口根挂了唯一一层，而 `src/main.rs` 用的是 `gpui_kit::open_window`，它会把 `ConduitApp` 包进 `base::Root`（`crates/kit/src/lib.rs:185`）。上一轮误判为"从未挂载"（只 grep 了 `src/`，漏看库内 Root），在 `ConduitApp::render` 里又加了一层：两层各自持有选区状态与窗口级鼠标处理，一份写状态、另一份画高亮，于是出现"剪贴板里是整行、屏幕上只亮半行"的错位，也就是用户说的不跟手。
+
+| 目标 | 实现 |
+| --- | --- |
+| 恢复跟手选中 | 删除自建的 `TextSelectionLayer`，全窗口只保留 `Root` 那一份；拖拽跟随、I 形光标、双击选词、三击选行随之恢复 |
+| 去掉复制提示 | 删除 `selection_copy_menu` 与两处 `context_menu` 包裹，以及验收脚本临时新增的 `-RightClickAfter` 时序 |
+| Ctrl+C 可用 | 会话容器 `.track_focus(&chat_focus)`，并在鼠标抬起时若已有选区就把焦点移到会话区（`src/app.rs:9559`）：焦点原本在输入框，`Textarea` 无条件消费 `Copy`，所以键盘路径必须先离开输入框；随后 `Root` 的 `key_context("Root")` + `ctrl-c → Copy` 生效 |
+
+新增回归测试 `drag_across_assistant_reply_tracks_the_pointer`（`ui-tests` 特性）：在真实窗口里用 `VisualTestContext` 模拟按下—移动—抬起，断言选中文字随指针增长、`painted_quads()` 里选区高亮的右边界同步跟随，最后派发 `Copy` 动作并断言剪贴板内容等于选区文本。测试用短拖拽探测定位文本行，避免依赖虚拟列表尚未布局时的 `bounds_for_item`。
+
+复现命令（1280×860，种子数据第 2 个会话）：
+
+```powershell
+cargo build --locked
+pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action seed
+# AI 回复正文拖拽选中（截图证据：高亮与拖拽区间一致）
+pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -Name chat-select-reply -Width 1280 -Height 860 -ClickAt '127,205' -ScrollAt '700,400,-25' -DragAt '375,455,700,455'
+# 用户气泡拖拽选中后 Ctrl+C，读回剪贴板
+Set-Clipboard -Value 'SENTINEL-NOT-COPIED'
+pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -Name chat-ctrl-c -Width 1280 -Height 860 -ClickAt '127,205' -ScrollAt '700,400,-25' -DragAt '735,122,1155,122' -SendKeys '^c'
+Get-Clipboard
+```
+
+验证：`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、同名加 `--features ui-tests`、`cargo test --locked --features ui-tests -- --test-threads=1`（86 passed / 11 ignored）、`cargo build --locked` 通过。截图 `chat-select-reply.png` 显示回复正文高亮区间等于拖拽区间（368→697px 对应 375→700px）；`chat-ctrl-c.png` 显示用户气泡整行高亮，`Get-Clipboard` 返回同一行的 37 字原文（拖拽终点落在"关系"与"？"之间，故不含问号）。
+
+仍待人工确认：跨正文段与代码段的连续选区观感、触控板拖动选中、明暗主题下选区高亮对比度，以及"选中后焦点离开输入框"是否会影响连续打字习惯。
+
 ## 仍未覆盖，必须人工完成
 
 清单 1、2、5、6、8、9 全项；3 的复制一致性；4 的动态滚动跟随；7 的 100%–200% DPI 与多屏；10 的取消检测与文件选择；5 的真实审批允许/拒绝与多审批队列。人工完成后把结果写回 [验证记录](m0-validation.md#手工-ui-验收清单)，不得用本预验代替。

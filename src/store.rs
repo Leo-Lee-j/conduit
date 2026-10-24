@@ -57,10 +57,59 @@ pub struct UiSettings {
     /// Maximum number of session tabs kept open; opening more closes the oldest.
     #[serde(default = "default_max_tabs")]
     pub max_tabs: usize,
+    /// Chat body font family; `None` follows the theme's UI font.
+    #[serde(default)]
+    pub chat_font_family: Option<String>,
+    /// Chat body font size in pixels.
+    #[serde(default = "default_chat_font_size")]
+    pub chat_font_size: f32,
+    /// Chat body line height multiplier.
+    #[serde(default = "default_chat_line_height")]
+    pub chat_line_height: f32,
+    /// Font for fenced code blocks and tool output; `None` follows the
+    /// platform monospace font.
+    #[serde(default)]
+    pub code_font_family: Option<String>,
+    /// Code block font size in pixels.
+    #[serde(default = "default_code_font_size")]
+    pub code_font_size: f32,
+    /// Shows a copy button in the corner of each fenced code block.
+    #[serde(default = "default_code_copy_button")]
+    pub code_copy_button: bool,
+    /// Colors fenced code blocks by language.
+    #[serde(default = "default_code_syntax_highlight")]
+    pub code_syntax_highlight: bool,
 }
+
+pub const MIN_CHAT_FONT_SIZE: f32 = 12.0;
+pub const MAX_CHAT_FONT_SIZE: f32 = 20.0;
+pub const MIN_CHAT_LINE_HEIGHT: f32 = 1.2;
+pub const MAX_CHAT_LINE_HEIGHT: f32 = 2.0;
+pub const MIN_CODE_FONT_SIZE: f32 = 10.0;
+pub const MAX_CODE_FONT_SIZE: f32 = 18.0;
 
 fn default_sessions_per_workspace() -> usize {
     5
+}
+
+fn default_chat_font_size() -> f32 {
+    15.0
+}
+
+fn default_chat_line_height() -> f32 {
+    1.5
+}
+
+fn default_code_font_size() -> f32 {
+    13.0
+}
+
+fn default_code_copy_button() -> bool {
+    true
+}
+
+fn default_code_syntax_highlight() -> bool {
+    true
 }
 
 fn default_performance_monitor() -> bool {
@@ -86,6 +135,13 @@ impl Default for UiSettings {
             naming_mode: NamingMode::default(),
             naming_provider: None,
             naming_model: None,
+            chat_font_family: None,
+            chat_font_size: default_chat_font_size(),
+            chat_line_height: default_chat_line_height(),
+            code_font_family: None,
+            code_font_size: default_code_font_size(),
+            code_copy_button: default_code_copy_button(),
+            code_syntax_highlight: default_code_syntax_highlight(),
         }
     }
 }
@@ -532,6 +588,13 @@ mod tests {
         assert_eq!(store.ui.max_tabs, 8);
         assert!(!store.ui.full_width_content);
         assert_eq!(store.ui.naming_mode, NamingMode::FirstMessage);
+        assert_eq!(store.ui.chat_font_family, None);
+        assert_eq!(store.ui.chat_font_size, 15.0);
+        assert_eq!(store.ui.chat_line_height, 1.5);
+        assert_eq!(store.ui.code_font_family, None);
+        assert_eq!(store.ui.code_font_size, 13.0);
+        assert!(store.ui.code_copy_button);
+        assert!(store.ui.code_syntax_highlight);
         assert_eq!(store.git.commit_message_prompt, DEFAULT_COMMIT_PROMPT);
         store.ui.sessions_per_workspace = 8;
         store.ui.last_provider = Some(crate::domain::Provider::Codex);
@@ -539,6 +602,13 @@ mod tests {
         store.ui.appearance = AppearanceMode::System;
         store.ui.max_tabs = 12;
         store.ui.naming_mode = NamingMode::Latest;
+        store.ui.chat_font_family = Some("Segoe UI".into());
+        store.ui.chat_font_size = 17.0;
+        store.ui.chat_line_height = 1.7;
+        store.ui.code_font_family = Some("Cascadia Mono".into());
+        store.ui.code_font_size = 14.0;
+        store.ui.code_copy_button = false;
+        store.ui.code_syntax_highlight = false;
         store.git.commit_message_prompt =
             "Write an English subject followed by a body.\nKeep it under 72 columns.".into();
         store.save_to(&path).unwrap();
@@ -556,6 +626,16 @@ mod tests {
         assert_eq!(reloaded.ui.appearance, AppearanceMode::System);
         assert_eq!(reloaded.ui.max_tabs, 12);
         assert_eq!(reloaded.ui.naming_mode, NamingMode::Latest);
+        assert_eq!(reloaded.ui.chat_font_family.as_deref(), Some("Segoe UI"));
+        assert_eq!(reloaded.ui.chat_font_size, 17.0);
+        assert_eq!(reloaded.ui.chat_line_height, 1.7);
+        assert_eq!(
+            reloaded.ui.code_font_family.as_deref(),
+            Some("Cascadia Mono")
+        );
+        assert_eq!(reloaded.ui.code_font_size, 14.0);
+        assert!(!reloaded.ui.code_copy_button);
+        assert!(!reloaded.ui.code_syntax_highlight);
         fs::remove_file(path).unwrap();
     }
     #[test]
