@@ -16,7 +16,7 @@ use crate::{
 };
 use chrono::{DateTime, Local};
 use gpui_kit::{
-    base::TextSelection,
+    base::{TextSelection, TextSelectionLayer},
     component::{
         Size,
         alert::Alert,
@@ -721,90 +721,6 @@ fn chat_markdown_view(
         view = view.code_block_actions(code_block_actions(copy_scope.into()));
     }
     view
-}
-
-/// A run of a user message: typed prose, or a fenced code block re-emitted as
-/// markdown so it picks up the code typography.
-enum MessageSegment {
-    Text(String),
-    Code(String),
-}
-
-/// The backtick fence on a line, as (length, info string, indent). The markdown
-/// crate also understands `~~~`, but only backticks are recognised here: user
-/// text is not a controlled markdown source and a rarer marker is not worth the
-/// extra rendering risk.
-fn fence_marker(line: &str) -> Option<(usize, &str, usize)> {
-    let indent = line.len() - line.trim_start_matches(' ').len();
-    if indent > 3 {
-        return None;
-    }
-    let rest = &line[indent..];
-    let length = rest.chars().take_while(|c| *c == '`').count();
-    if length < 3 {
-        return None;
-    }
-    Some((length, rest[length..].trim(), indent))
-}
-
-/// Splits a user message on complete ``` fences. Everything else is left
-/// exactly as typed, so a stray fence cannot rewrite the message.
-fn split_fenced_code(text: &str) -> Vec<MessageSegment> {
-    let lines: Vec<&str> = text
-        .split('\n')
-        .map(|line| line.strip_suffix('\r').unwrap_or(line))
-        .collect();
-    let mut segments: Vec<MessageSegment> = Vec::new();
-    let mut prose: Vec<&str> = Vec::new();
-    let mut index = 0;
-    while index < lines.len() {
-        let opening = fence_marker(lines[index]);
-        let closing = opening.and_then(|(length, info, indent)| {
-            (index + 1..lines.len())
-                .find(|next| {
-                    fence_marker(lines[*next]).is_some_and(|(close_length, close_info, _)| {
-                        close_length >= length && close_info.is_empty()
-                    })
-                })
-                .map(|close| (length, info, indent, close))
-        });
-        let Some((length, info, indent, close)) = closing else {
-            prose.push(lines[index]);
-            index += 1;
-            continue;
-        };
-        let fence = "`".repeat(length);
-        let body = lines[index + 1..close]
-            .iter()
-            .map(|line| {
-                // Only leading spaces are cut, so the slice stays on a char
-                // boundary and the block keeps its own relative indent.
-                let leading = line.len() - line.trim_start_matches(' ').len();
-                &line[leading.min(indent)..]
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        push_prose(&mut segments, &prose);
-        prose.clear();
-        segments.push(MessageSegment::Code(format!(
-            "{fence}{info}\n{body}\n{fence}"
-        )));
-        index = close + 1;
-    }
-    push_prose(&mut segments, &prose);
-    segments
-}
-
-/// Collects a prose run, dropping runs that are only blank lines and the
-/// newlines that belong to the fence boundary rather than to the text.
-fn push_prose(segments: &mut Vec<MessageSegment>, lines: &[&str]) {
-    if lines.is_empty() {
-        return;
-    }
-    let text = lines.join("\n").trim_end_matches('\n').to_string();
-    if !text.trim().is_empty() {
-        segments.push(MessageSegment::Text(text));
-    }
 }
 
 /// Writes the code font into the global theme, which code blocks, inline code
@@ -3754,30 +3670,16 @@ impl ConduitApp {
                 };
                 let message_group =
                     SharedString::from(format!("user-message-{}-{}", session_id, item.key));
-                let mut body = v_flex().gap_2();
-                for (position, segment) in split_fenced_code(&item.text).into_iter().enumerate() {
-                    body = match segment {
-                        MessageSegment::Text(text) => {
-                            body.child(gpui_kit::base::SelectableText::new(
-                                SharedString::from(format!(
-                                    "user-text-{}-{}-{}",
-                                    session_id, item.key, position
-                                )),
-                                text,
-                            ))
-                        }
-                        MessageSegment::Code(markdown) => body.child(chat_markdown_view(
-                            SharedString::from(format!(
-                                "user-code-{}-{}-{}",
-                                session_id, item.key, position
-                            )),
-                            markdown,
-                            &typography,
-                            &format!("user-code-copy-{}-{}-{}", session_id, item.key, position),
-                            true,
-                        )),
-                    };
-                }
+                // Keep the whole user message as one literal, selectable text run.
+                // In particular, do not reinterpret Markdown-looking user input.
+                let body = div()
+                    // SelectableText registers drag selection but does not set the
+                    // native text cursor like TextView's text renderer does.
+                    .cursor_text()
+                    .child(gpui_kit::base::SelectableText::new(
+                        SharedString::from(format!("user-text-{}-{}", session_id, item.key)),
+                        item.text.clone(),
+                    ));
                 v_flex()
                     .w_full()
                     .items_end()
@@ -10480,6 +10382,7 @@ impl Render for ConduitApp {
             .bg(rgb(palette().canvas))
             .text_color(rgb(palette().text))
             .child(title_bar)
+            .child(TextSelectionLayer)
             .child(main_area);
         if self.store.ui.performance_monitor {
             self.performance.update(cx, |monitor, _| {
@@ -11006,54 +10909,6 @@ mod tests {
         let snippet = search_snippet(text, "markdown");
         assert!(snippet.to_lowercase().contains("markdown"));
         assert!(snippet.chars().count() <= 162);
-    }
-
-    fn text_of(segments: &[super::MessageSegment]) -> Vec<&str> {
-        segments
-            .iter()
-            .map(|segment| match segment {
-                super::MessageSegment::Text(text) => text.as_str(),
-                super::MessageSegment::Code(markdown) => markdown.as_str(),
-            })
-            .collect()
-    }
-
-    #[test]
-    fn fenced_blocks_split_out_without_rewriting_the_prose() {
-        let segments =
-            super::split_fenced_code("看下这段\n\n```rust\nfn main() {}\n```\n为什么报错\r\n结束");
-        assert_eq!(
-            text_of(&segments),
-            ["看下这段", "```rust\nfn main() {}\n```", "为什么报错\n结束"]
-        );
-    }
-
-    #[test]
-    fn inline_backticks_and_stray_fences_stay_as_typed_text() {
-        assert_eq!(
-            text_of(&super::split_fenced_code("路径 __init__.py 与 `ls`")),
-            ["路径 __init__.py 与 `ls`"]
-        );
-        assert_eq!(
-            text_of(&super::split_fenced_code("没有闭合\n```python\nprint(1)\n")),
-            ["没有闭合\n```python\nprint(1)"]
-        );
-    }
-
-    #[test]
-    fn an_indented_fence_trims_only_its_own_indent_from_the_body() {
-        assert_eq!(
-            text_of(&super::split_fenced_code("  ```\n    x\n  ```")),
-            ["```\n  x\n```"]
-        );
-    }
-
-    #[test]
-    fn a_longer_marker_closes_only_at_its_own_length() {
-        assert_eq!(
-            text_of(&super::split_fenced_code("````\n    ```\n    x\n````")),
-            ["````\n    ```\n    x\n````"]
-        );
     }
 }
 
