@@ -3677,7 +3677,11 @@ impl ConduitApp {
                             .compact()
                             .icon(gpui_kit::assets::IconName::X)
                             .cursor_pointer()
-                            .tooltip(if running { "????????????" } else { "????" })
+                            .tooltip(if running {
+                                "停止并关闭会话"
+                            } else {
+                                "关闭会话"
+                            })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.close_tab(id, cx);
                                 cx.stop_propagation();
@@ -10589,11 +10593,10 @@ impl Render for ConduitApp {
             // No bottom padding: the bottom bar must sit on the window edge so
             // its 34px strip lines up with the conversation toolbar.
             .px_2()
-            .pt_1()
-            .gap_1()
+            .gap_0()
             .child(
                 h_flex()
-                    .h(px(30.))
+                    .h(px(34.))
                     .px_1()
                     .gap_1()
                     .items_center()
@@ -10633,7 +10636,7 @@ impl Render for ConduitApp {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
-            .pt_3()
+            .pt(px(0.))
             .gap_1();
         let query = self.search_query.trim().to_lowercase();
         list = list.child(
