@@ -911,6 +911,37 @@ fn session_matches(session: &SessionRecord, query: &str) -> bool {
             .any(|message| message.text.to_lowercase().contains(query))
 }
 
+fn contiguous_tool_group(session: &SessionRecord, index: usize) -> Option<(usize, usize)> {
+    let item = session.messages.get(index)?;
+    if item.kind != ItemKind::Tool {
+        return None;
+    }
+    let mut start = index;
+    while start > 0 {
+        let previous = &session.messages[start - 1];
+        if previous.kind != ItemKind::Tool || previous.text != item.text {
+            break;
+        }
+        start -= 1;
+    }
+    let mut end = index + 1;
+    while end < session.messages.len() {
+        let next = &session.messages[end];
+        if next.kind != ItemKind::Tool || next.text != item.text {
+            break;
+        }
+        end += 1;
+    }
+    if end - start < 2
+        || session.messages[start..end].iter().any(|item| {
+            item.approval.is_some() || matches!(item.status.as_str(), "运行中" | "输出中")
+        })
+    {
+        return None;
+    }
+    Some((start, end))
+}
+
 struct MessageOutlineEntry {
     key: String,
     index: usize,
@@ -1968,6 +1999,8 @@ pub struct ConduitApp {
     at_bottom: bool,
     /// Scoped by session and tool key, independent of the right detail dock.
     expanded_tools: HashSet<(u64, String)>,
+    /// Consecutive tool groups are collapsed by default to keep long runs scannable.
+    expanded_tool_groups: HashSet<(u64, String)>,
     expanded_reasoning: HashSet<(u64, String)>,
     tool_scrolls: HashMap<(u64, String), ScrollHandle>,
     message_focus: Option<(u64, String, Instant)>,
@@ -2321,6 +2354,7 @@ impl ConduitApp {
             outline: MessageOutlineCache::default(),
             at_bottom: true,
             expanded_tools: HashSet::new(),
+            expanded_tool_groups: HashSet::new(),
             expanded_reasoning: HashSet::new(),
             tool_scrolls: HashMap::new(),
             message_focus: None,
@@ -2579,6 +2613,8 @@ impl ConduitApp {
         self.composer_files
             .retain(|target, _| target.session != Some(id));
         self.expanded_tools.retain(|(session, _)| *session != id);
+        self.expanded_tool_groups
+            .retain(|(session, _)| *session != id);
         self.expanded_reasoning
             .retain(|(session, _)| *session != id);
         self.tool_scrolls.retain(|(session, _), _| *session != id);
@@ -4704,6 +4740,83 @@ impl ConduitApp {
         .detach();
     }
 
+    fn render_collapsed_tool_group(
+        &self,
+        session_id: u64,
+        start: usize,
+        end: usize,
+        group_key: String,
+        title: &str,
+        status: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let count = end - start;
+        let toggle_key = group_key.clone();
+        let toggle = Button::new(SharedString::from(format!(
+            "tool-group-{session_id}-{start}"
+        )))
+        .ghost()
+        .w_full()
+        .h(px(36.))
+        .px_3()
+        .cursor_pointer()
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.expanded_tool_groups
+                .insert((session_id, toggle_key.clone()));
+            this.scroll.remeasure_items(start..end);
+            cx.notify();
+        }))
+        .child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_left()
+                        .text_size(px(13.))
+                        .truncate()
+                        .child(format!("执行了 {title} × {count}")),
+                )
+                .when(!status.is_empty(), |row| {
+                    row.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette().faint))
+                            .child(status.to_string()),
+                    )
+                })
+                .child(
+                    Icon::new(IconName::ChevronRight)
+                        .small()
+                        .text_color(rgb(palette().faint)),
+                ),
+        );
+        div()
+            .w_full()
+            .px_6()
+            .pb_5()
+            .child(
+                div()
+                    .id(SharedString::from(format!(
+                        "tool-group-row-{session_id}-{start}"
+                    )))
+                    .w_full()
+                    .min_w_0()
+                    .when(!self.store.ui.full_width_content, |card| {
+                        card.max_w(px(840.)).mx_auto()
+                    })
+                    .rounded(px(10.))
+                    .border_1()
+                    .border_color(rgb(palette().border))
+                    .bg(rgb(palette().surface))
+                    .child(toggle),
+            )
+            .into_any_element()
+    }
+
     fn render_message(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let started = Instant::now();
         let Some(session) = self
@@ -4720,6 +4833,34 @@ impl ConduitApp {
         };
         let session_id = session.id;
         let provider = session.provider;
+        let tool_group = contiguous_tool_group(session, index);
+        let tool_group_expanded = tool_group.is_some_and(|(start, _)| {
+            self.expanded_tool_groups
+                .contains(&(session_id, session.messages[start].key.clone()))
+        });
+        if let Some((start, end)) = tool_group
+            && !tool_group_expanded
+        {
+            if index != start {
+                return div().h(px(0.)).into_any_element();
+            }
+            let title = session.messages[start].text.clone();
+            let status = session.messages[start..end]
+                .iter()
+                .rev()
+                .find(|item| !item.status.is_empty())
+                .map(|item| item.status.clone())
+                .unwrap_or_default();
+            return self.render_collapsed_tool_group(
+                session_id,
+                start,
+                end,
+                session.messages[start].key.clone(),
+                &title,
+                &status,
+                cx,
+            );
+        }
         let typography = self.chat_typography();
         let timestamp = message_timestamp(item.created_at.max(session.created_at));
         let regenerable = item.kind == ItemKind::Assistant
@@ -4732,7 +4873,7 @@ impl ConduitApp {
             && !session.messages[index + 1..]
                 .iter()
                 .any(|message| matches!(message.kind, ItemKind::User | ItemKind::Assistant));
-        let element = match item.kind {
+        let mut element = match item.kind {
             ItemKind::User => {
                 let (message_text, references) = file_ref::split_prompt(&item.text);
                 let workspace = self.store.workspaces.iter().find(|workspace| {
@@ -5236,6 +5377,54 @@ impl ConduitApp {
                     .into_any_element()
             }
         };
+        if let Some((start, end)) = tool_group
+            && tool_group_expanded
+            && index == start
+        {
+            let group_key = session.messages[start].key.clone();
+            let toggle_key = group_key.clone();
+            let title = session.messages[start].text.clone();
+            let count = end - start;
+            let collapse = Button::new(SharedString::from(format!(
+                "tool-group-collapse-{session_id}-{start}"
+            )))
+            .ghost()
+            .w_full()
+            .h(px(28.))
+            .px_2()
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.expanded_tool_groups
+                    .remove(&(session_id, toggle_key.clone()));
+                this.scroll.remeasure_items(start..end);
+                cx.notify();
+            }))
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_left()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette().faint))
+                            .child(format!("收起 {title} × {count}")),
+                    )
+                    .child(
+                        Icon::new(IconName::ChevronDown)
+                            .small()
+                            .text_color(rgb(palette().faint)),
+                    ),
+            );
+            element = v_flex()
+                .w_full()
+                .gap_1()
+                .child(collapse)
+                .child(element)
+                .into_any_element();
+        }
         let highlighted = self
             .message_focus
             .as_ref()
@@ -12344,6 +12533,31 @@ mod tests {
             permission: PermissionLevel::default(),
             usage: Usage::default(),
         }
+    }
+    #[test]
+    fn contiguous_tool_groups_only_include_adjacent_completed_same_titles() {
+        let tool = |key: &str, title: &str, status: &str| ChatItem {
+            key: key.into(),
+            created_at: 0,
+            kind: ItemKind::Tool,
+            text: title.into(),
+            input: String::new(),
+            detail: String::new(),
+            status: status.into(),
+            approval: None,
+        };
+        let mut s = session();
+        s.messages = vec![
+            tool("a", "exec_command", "completed"),
+            tool("b", "exec_command", "completed"),
+            tool("c", "exec_command", "completed"),
+            tool("d", "other", "completed"),
+        ];
+        assert_eq!(super::contiguous_tool_group(&s, 1), Some((0, 3)));
+        assert_eq!(super::contiguous_tool_group(&s, 3), None);
+
+        s.messages[1].status = "运行中".into();
+        assert_eq!(super::contiguous_tool_group(&s, 0), None);
     }
     #[test]
     fn final_snapshot_replaces_stream_and_turns_keep_distinct_identity() {
