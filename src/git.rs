@@ -469,7 +469,7 @@ pub fn load(workspace: &Path, cancel: &AtomicBool) -> Result<Snapshot> {
     )?;
     let staged_diff = truncate_diff(staged_diff, &mut notes);
     if files.iter().any(|file| file.untracked()) {
-        notes.push("双击未跟踪文件可按新增文件查看内容".into());
+        notes.push("未跟踪文件按新增文件展示".into());
     }
     if commit_target(&git, workspace, cancel)? != target {
         bail!("读取期间分支或暂存区发生变化，请刷新后重试");

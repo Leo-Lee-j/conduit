@@ -6,7 +6,7 @@ Windows 本地 AI 编程 Chat 工作台，使用 **Rust + GPUI + GPUI Kit**，�
 
 ## CLI 历史会话导入
 
-启动时自动扫描 `~/.claude/projects` 与 `~/.codex/sessions`，把 cwd 匹配已添加工作区的终端 CLI 会话导入侧栏（按 CLI 原生会话 ID 去重并刷新既有记录，不会重复）。点击导入的会话即可查看历史消息并直接续聊——续聊走与 CLI 相同的原生 resume 路径（Claude `--resume`、Codex `thread/resume`），终端与 Conduit 共享同一份会话文件，任一侧的最新记录都可见。调试可用 `conduit --history [工作区路径]` 在命令行打印发现结果。
+启动时和新增工作区时自动扫描 `~/.claude/projects` 与 `~/.codex/sessions`，把 cwd 匹配已添加工作区的终端 CLI 会话导入侧栏（按 CLI 原生会话 ID 去重并刷新既有记录，不会重复）。新增工作区时扫描在后台进行，侧栏显示加载状态，不阻塞界面。点击导入的会话即可查看历史消息并直接续聊——续聊走与 CLI 相同的原生 resume 路径（Claude `--resume`、Codex `thread/resume`），终端与 Conduit 共享同一份会话文件，任一侧的最新记录都可见。调试可用 `conduit --history [工作区路径]` 在命令行打印发现结果。
 
 ## 运行
 

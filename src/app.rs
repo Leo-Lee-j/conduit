@@ -43,7 +43,7 @@ use gpui_kit::{
 };
 use std::{
     collections::{HashMap, HashSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -1286,14 +1286,18 @@ impl GitDiffDialog {
         cx.notify();
     }
 
-    fn header(&self, cx: &mut Context<Self>) -> AnyElement {
-        let kind = self.file.kind();
-        let color = git_change_color(kind);
-        let (before, after) = match kind {
+    fn versions(&self) -> (&'static str, &'static str) {
+        match self.file.kind() {
             git::ChangeKind::Added => ("空（新增前）", "工作区"),
             git::ChangeKind::Modified => ("HEAD", "工作区（含暂存）"),
             git::ChangeKind::Deleted => ("HEAD", "已删除"),
-        };
+        }
+    }
+
+    fn header(&self, cx: &mut Context<Self>) -> AnyElement {
+        let kind = self.file.kind();
+        let color = git_change_color(kind);
+        let (before, after) = self.versions();
         let version_tag = |label: &'static str, emphasized: bool| {
             div()
                 .flex_shrink_0()
@@ -1546,6 +1550,41 @@ impl GitDiffDialog {
             .into_any_element()
     }
 
+    /// Captions above the two panes. Without them a one-sided change (an added
+    /// or deleted file) leaves an empty half that reads like a single column.
+    fn split_titles(&self, cx: &App) -> AnyElement {
+        if self.loading || self.error.is_some() || self.state.read(cx).mode() != DiffMode::Split {
+            return div().into_any_element();
+        }
+        let files = self.state.read(cx).files();
+        if files.is_empty() || files.iter().any(DiffFile::is_binary) {
+            return div().into_any_element();
+        }
+        let (before, after) = self.versions();
+        let caption = |text: &'static str| {
+            div()
+                .flex_1()
+                .min_w_0()
+                .px(px(16.))
+                .truncate()
+                .text_size(px(10.))
+                .text_color(rgb(palette().faint))
+                .child(text)
+        };
+        h_flex()
+            .w_full()
+            .flex_shrink_0()
+            .h(px(26.))
+            .items_center()
+            .border_b_1()
+            .border_color(rgb(palette().border))
+            .bg(rgb(palette().surface))
+            .child(caption(before))
+            .child(div().w(px(1.)).h(px(12.)).bg(rgb(palette().border)))
+            .child(caption(after))
+            .into_any_element()
+    }
+
     fn body(&self, cx: &mut Context<Self>) -> AnyElement {
         if self.loading {
             return v_flex()
@@ -1641,6 +1680,9 @@ impl GitDiffDialog {
                 )
                 .into_any_element();
         }
+        // Split columns are each half the viewport; a long line would push the
+        // right column out of view, so wrap instead of scrolling horizontally.
+        let split = self.state.read(cx).mode() == DiffMode::Split;
         Diff::new(&self.state)
             .header_visible(false)
             .line_number(true)
@@ -1648,7 +1690,7 @@ impl GitDiffDialog {
             .change_indicator(DiffChangeIndicator::Bars)
             .hunk_separator(DiffHunkSeparator::LineInfo)
             .hover_highlight(DiffHoverHighlight::Line)
-            .soft_wrap(false)
+            .soft_wrap(split)
             .into_any_element()
     }
 
@@ -1731,6 +1773,7 @@ impl Render for GitDiffDialog {
             .when(!self.notes.is_empty(), |dialog| {
                 dialog.child(self.notes_banner())
             })
+            .child(self.split_titles(cx))
             .child(div().flex_1().min_h_0().w_full().child(self.body(cx)))
             .child(self.footer(cx))
     }
@@ -1824,6 +1867,8 @@ pub struct ConduitApp {
     approval_details: HashSet<String>,
     /// Workspaces whose session list was expanded past the configured limit.
     expanded_workspaces: HashSet<usize>,
+    /// Workspace paths whose CLI history is being imported in the background.
+    history_loading: HashSet<PathBuf>,
     /// Sidebar session search filter.
     search: Entity<InputState>,
     search_query: String,
@@ -2169,6 +2214,7 @@ impl ConduitApp {
             commit_and_push: false,
             approval_details: HashSet::new(),
             expanded_workspaces: HashSet::new(),
+            history_loading: HashSet::new(),
             search,
             search_query: String::new(),
             show_archived: false,
@@ -3031,6 +3077,7 @@ impl ConduitApp {
             return;
         }
         let removed = self.store.workspaces.remove(index);
+        self.history_loading.remove(&removed.path);
         self.expanded_workspaces.clear();
         for session in &removed.sessions {
             self.drafts.remove(&session.id);
@@ -3654,10 +3701,14 @@ impl ConduitApp {
                                         });
                                         this.store.workspaces.len() - 1
                                     });
-                                let session =
-                                    this.store.workspaces[index].sessions.first().map(|s| s.id);
+                                let session = this.store.workspaces[index]
+                                    .sessions
+                                    .iter()
+                                    .find(|session| !session.archived)
+                                    .map(|session| session.id);
                                 this.switch(index, session, window, cx);
                                 this.persist();
+                                this.start_history_import(index, window, cx);
                             }
                             _ => this.message = Some("目录不存在或不可访问".into()),
                         }
@@ -3674,6 +3725,70 @@ impl ConduitApp {
             }
         })
         .detach();
+    }
+    /// Scans the workspace's CLI history off the UI thread. The sidebar shows a
+    /// loading state until [`Self::finish_history_import`] merges the result.
+    fn start_history_import(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(workspace) = self.store.workspaces.get(index) else {
+            return;
+        };
+        let path = workspace.path.clone();
+        if !self.history_loading.insert(path.clone()) {
+            return;
+        }
+        cx.spawn_in(window, async move |this, cx| {
+            let scan_path = path.clone();
+            let imported = cx
+                .background_executor()
+                .spawn(async move { crate::history::scan_workspace(&scan_path) })
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.finish_history_import(&path, imported, window, cx);
+            });
+        })
+        .detach();
+    }
+    fn finish_history_import(
+        &mut self,
+        path: &Path,
+        imported: Vec<crate::history::ImportedSession>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.history_loading.remove(path);
+        // The workspace may have been removed while the scan was running.
+        let Some(index) = self
+            .store
+            .workspaces
+            .iter()
+            .position(|workspace| workspace.path == path)
+        else {
+            return;
+        };
+        let discovered = !imported.is_empty();
+        crate::history::merge_imported(
+            &mut self.store.workspaces[index],
+            &mut self.next_id,
+            imported,
+        );
+        // Open the newest session on the workspace the user just added, unless
+        // they already picked one or started typing while history loaded.
+        let follow = self.selected_workspace == Some(index)
+            && self.selected_session.is_none()
+            && self.input.read(cx).value().trim().is_empty();
+        if follow
+            && let Some(session) = self.store.workspaces[index]
+                .sessions
+                .iter()
+                .find(|session| !session.archived)
+                .map(|session| session.id)
+        {
+            self.switch(index, Some(session), window, cx);
+        }
+        if discovered {
+            self.persist();
+        }
+        cx.notify();
     }
     fn new_session(
         &mut self,
@@ -5345,6 +5460,10 @@ impl ConduitApp {
         let staged = self.git_snapshot.as_ref().is_some_and(|snapshot| {
             !snapshot.target.staged.is_empty() && snapshot.target.branch.is_some()
         });
+        let staged_count = self
+            .git_snapshot
+            .as_ref()
+            .map_or(0, |snapshot| snapshot.staged_count());
         let disabled = self.closing
             || !self.writable
             || busy
@@ -5369,6 +5488,7 @@ impl ConduitApp {
                     .ghost()
                     .small()
                     .compact()
+                    .h(px(26.))
                     .icon(IconName::ChevronDown)
                     .tooltip("选择提交操作")
                     .disabled(busy || self.closing)
@@ -5423,10 +5543,23 @@ impl ConduitApp {
                     .child(
                         div()
                             .flex_1()
-                            .text_size(px(11.))
+                            .text_size(px(12.))
                             .font_semibold()
                             .child("Commit Message"),
                     )
+                    .when(staged_count > 0, |row| {
+                        row.child(
+                            h_flex()
+                                .h(px(18.))
+                                .px_2()
+                                .items_center()
+                                .rounded_full()
+                                .bg(rgb(palette().surface_strong))
+                                .text_size(px(10.))
+                                .text_color(rgb(palette().muted))
+                                .child(format!("已暂存 {staged_count}")),
+                        )
+                    })
                     .child(
                         Button::new("git-generate-message")
                             .ghost()
@@ -5464,30 +5597,33 @@ impl ConduitApp {
             .child(
                 v_flex()
                     .p_2()
-                    .gap_2()
-                    .rounded(px(8.))
+                    .gap_1()
+                    .rounded(px(14.))
                     .bg(rgb(palette().surface))
                     .border_1()
                     .border_color(rgb(palette().border))
                     .child(
-                        Textarea::new(&draft.input)
-                            .appearance(false)
-                            .bordered(false)
-                            .h(px(78.))
-                            .text_size(px(12.))
-                            .aria_label("Git Commit Message")
-                            .disabled(
-                                self.closing
-                                    || !self.writable
-                                    || generating
-                                    || self
-                                        .git_operation
-                                        .as_ref()
-                                        .is_some_and(|operation| operation.probe.path == path),
-                            ),
+                        div().px_1().child(
+                            Textarea::new(&draft.input)
+                                .appearance(false)
+                                .bordered(false)
+                                .h(px(96.))
+                                .text_size(px(13.))
+                                .aria_label("Git Commit Message")
+                                .disabled(
+                                    self.closing
+                                        || !self.writable
+                                        || generating
+                                        || self
+                                            .git_operation
+                                            .as_ref()
+                                            .is_some_and(|operation| operation.probe.path == path),
+                                ),
+                        ),
                     )
                     .child(
                         h_flex()
+                            .px_1()
                             .justify_end()
                             .gap_1()
                             .child(
@@ -5495,6 +5631,7 @@ impl ConduitApp {
                                     .label(action_label)
                                     .primary()
                                     .small()
+                                    .h(px(26.))
                                     .disabled(!can_commit)
                                     .loading(
                                         self.git_operation
@@ -5511,7 +5648,8 @@ impl ConduitApp {
             )
             .child(
                 div()
-                    .text_size(px(10.))
+                    .text_size(px(11.))
+                    .line_height(relative(1.4))
                     .text_color(rgb(palette().faint))
                     .child(if !self.runs.is_empty() {
                         "CLI 任务运行中，结束后可提交"
@@ -5538,6 +5676,7 @@ impl ConduitApp {
                     .max_h(px(60.))
                     .overflow_y_scroll()
                     .text_size(px(11.))
+                    .line_height(relative(1.4))
                     .text_color(rgb(if feedback.error {
                         palette().error_text
                     } else {
@@ -5854,10 +5993,25 @@ impl ConduitApp {
     }
     /// Read-only Git view for the right-side detail panel.
     fn git_panel(&self, view: Entity<Self>) -> AnyElement {
-        let refresh = |label: &'static str, id: &'static str| -> AnyElement {
+        let refresh_icon = |id: &'static str| -> AnyElement {
             let app = view.clone();
             Button::new(id)
-                .label(label)
+                .ghost()
+                .small()
+                .compact()
+                .icon(IconName::RefreshCw)
+                .accessibility_label("刷新 Git 状态")
+                .tooltip("刷新 Git 状态")
+                .cursor_pointer()
+                .on_click(move |_, _, cx| {
+                    app.update(cx, |this, cx| this.refresh_git(cx));
+                })
+                .into_any_element()
+        };
+        let retry = |id: &'static str| -> AnyElement {
+            let app = view.clone();
+            Button::new(id)
+                .label("重新读取")
                 .small()
                 .ghost()
                 .cursor_pointer()
@@ -5875,14 +6029,19 @@ impl ConduitApp {
         if self.git_probe.is_some() {
             return body
                 .child(
-                    h_flex().child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(rgb(palette().muted))
-                            .child("正在读取工作区 Git 状态…"),
-                    ),
+                    h_flex()
+                        .items_center()
+                        .gap_2()
+                        .py_2()
+                        .child(Spinner::new().small().color(rgb(palette().muted).into()))
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(rgb(palette().muted))
+                                .child("正在读取工作区 Git 状态…"),
+                        ),
                 )
-                .child(h_flex().child(refresh("重新读取", "git-refresh-loading")))
+                .child(h_flex().child(retry("git-refresh-loading")))
                 .into_any_element();
         }
         if let Some(error) = &self.git_error {
@@ -5891,78 +6050,109 @@ impl ConduitApp {
                     v_flex()
                         .w_full()
                         .p_3()
-                        .rounded(px(8.))
+                        .gap_2()
+                        .rounded(px(10.))
                         .border_1()
                         .border_color(rgb(palette().danger_border))
                         .bg(rgb(palette().danger_bg))
-                        .text_size(px(11.))
-                        .line_height(relative(1.4))
-                        .text_color(rgb(palette().danger_text))
-                        .child(error.clone()),
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .font_semibold()
+                                .text_color(rgb(palette().danger_text))
+                                .child("无法读取 Git 状态"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .line_height(relative(1.5))
+                                .text_color(rgb(palette().danger_text))
+                                .child(error.clone()),
+                        )
+                        .child(h_flex().justify_end().child(retry("git-refresh-error"))),
                 )
-                .child(h_flex().child(refresh("重新读取", "git-refresh-error")))
                 .into_any_element();
         }
         let Some(snapshot) = &self.git_snapshot else {
             return body
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(px(12.))
                         .text_color(rgb(palette().faint))
                         .child("打开面板时读取工作区 Git 状态"),
                 )
                 .into_any_element();
         };
-        body = body
-            .child(
-                h_flex()
+        body = body.child(
+            v_flex()
+                .w_full()
+                .gap_1()
+                .child(
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            Icon::new(gpui_kit::assets::IconName::GitBranch)
+                                .small()
+                                .text_color(rgb(palette().faint)),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(12.))
+                                .font_semibold()
+                                .text_color(rgb(palette().text))
+                                .child(snapshot.branch.clone()),
+                        )
+                        .child(refresh_icon("git-refresh")),
+                )
+                .when(!snapshot.is_clean(), |column| {
+                    column.child(
+                        div()
+                            .pl(px(22.))
+                            .text_size(px(11.))
+                            .text_color(rgb(palette().muted))
+                            .child(format!(
+                                "暂存 {} · 未暂存 {} · 未跟踪 {}",
+                                snapshot.staged_count(),
+                                snapshot.unstaged_count(),
+                                snapshot.untracked_count()
+                            )),
+                    )
+                }),
+        );
+        if snapshot.is_clean() {
+            body = body.child(
+                v_flex()
+                    .flex_1()
                     .w_full()
-                    .gap_2()
                     .items_center()
+                    .justify_center()
+                    .gap_2()
+                    .py_10()
                     .child(
-                        Icon::new(gpui_kit::assets::IconName::GitBranch)
-                            .small()
+                        Icon::new(IconName::CircleCheck)
+                            .with_size(px(20.))
                             .text_color(rgb(palette().faint)),
                     )
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(11.))
-                            .font_semibold()
-                            .text_color(rgb(palette().text))
-                            .child(snapshot.branch.clone()),
+                            .text_size(px(12.))
+                            .text_color(rgb(palette().muted))
+                            .child("工作区没有未提交变更"),
                     )
                     .child(
                         div()
-                            .flex_shrink_0()
-                            .text_size(px(9.))
+                            .text_size(px(10.))
                             .text_color(rgb(palette().faint))
-                            .child("变更列表"),
-                    )
-                    .child(refresh("刷新", "git-refresh")),
-            )
-            .child(
-                div()
-                    .text_size(px(10.))
-                    .text_color(rgb(palette().faint))
-                    .child(format!(
-                        "暂存 {} · 未暂存 {} · 未跟踪 {} · 双击文件查看差异",
-                        snapshot.staged_count(),
-                        snapshot.unstaged_count(),
-                        snapshot.untracked_count()
-                    )),
-            );
-        if snapshot.is_clean() {
-            body = body.child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(rgb(palette().muted))
-                    .child("工作区没有未提交变更"),
+                            .child("在终端修改文件后点击右上角刷新"),
+                    ),
             );
         } else {
-            let mut groups = v_flex().w_full().gap_1();
+            let mut groups = v_flex().w_full().gap_2();
             for kind in git::ChangeKind::ALL {
                 let files: Vec<_> = snapshot
                     .files
@@ -5976,13 +6166,13 @@ impl ConduitApp {
                 let collapsed = self.collapsed_git_groups.contains(&kind);
                 let toggle_kind = kind;
                 let app = view.clone();
-                let mut group = v_flex().w_full().gap(px(1.)).child(
+                let mut group = v_flex().w_full().gap_1().child(
                     Button::new(SharedString::from(format!("git-group-{kind:?}")))
                         .ghost()
                         .small()
                         .compact()
                         .w_full()
-                        .h(px(24.))
+                        .h(px(28.))
                         .px_1()
                         .cursor_pointer()
                         .tooltip(format!(
@@ -6008,7 +6198,7 @@ impl ConduitApp {
                                 .w_full()
                                 .min_w_0()
                                 .items_center()
-                                .gap_1()
+                                .gap_2()
                                 .child(
                                     Icon::new(if collapsed {
                                         IconName::ChevronRight
@@ -6020,7 +6210,15 @@ impl ConduitApp {
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(10.))
+                                        .w(px(6.))
+                                        .h(px(6.))
+                                        .flex_shrink_0()
+                                        .rounded_full()
+                                        .bg(rgb(color)),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
                                         .font_semibold()
                                         .text_color(rgb(color))
                                         .child(kind.label()),
@@ -6028,20 +6226,14 @@ impl ConduitApp {
                                 .child(div().flex_1())
                                 .child(
                                     div()
-                                        .text_size(px(9.))
+                                        .text_size(px(10.))
                                         .text_color(rgb(palette().faint))
                                         .child(files.len().to_string()),
                                 ),
                         ),
                 );
                 if !collapsed {
-                    let mut rows = v_flex()
-                        .w_full()
-                        .gap(px(1.))
-                        .ml(px(6.))
-                        .pl(px(9.))
-                        .border_l_1()
-                        .border_color(rgb(palette().border));
+                    let mut rows = v_flex().w_full().gap(px(1.)).pl(px(32.));
                     for file in files {
                         let app = view.clone();
                         let target = file.clone();
@@ -6049,14 +6241,14 @@ impl ConduitApp {
                             h_flex()
                                 .id(SharedString::from(format!("git-file-{}", file.path)))
                                 .role(Role::Button)
-                                .aria_label(format!("{}，双击查看差异", file.path))
+                                .aria_label(format!("{}，查看只读差异", file.path))
                                 .w_full()
                                 .min_w_0()
                                 .gap_2()
                                 .items_center()
-                                .py(px(2.))
-                                .px(px(4.))
-                                .rounded(px(4.))
+                                .h(px(28.))
+                                .px_2()
+                                .rounded(px(6.))
                                 .cursor_pointer()
                                 .hover(|style| style.bg(rgb(palette().surface_hover)))
                                 .on_double_click(move |_, window, cx| {
@@ -6070,15 +6262,17 @@ impl ConduitApp {
                                         .flex_1()
                                         .min_w_0()
                                         .truncate()
-                                        .text_size(px(11.))
-                                        .text_color(rgb(color))
+                                        .text_size(px(13.))
+                                        .text_color(rgb(palette().text))
                                         .child(file.path.clone()),
                                 )
                                 .when_some(file.original.clone(), |row, original| {
                                     row.child(
                                         div()
                                             .flex_shrink_0()
-                                            .text_size(px(9.))
+                                            .max_w(px(132.))
+                                            .truncate()
+                                            .text_size(px(10.))
                                             .text_color(rgb(palette().faint))
                                             .child(format!("← {original}")),
                                     )
@@ -6090,15 +6284,17 @@ impl ConduitApp {
                 groups = groups.child(group);
             }
             body = body.child(groups);
-        }
-        for note in &snapshot.notes {
-            body = body.child(
-                div()
-                    .text_size(px(10.))
-                    .line_height(relative(1.4))
-                    .text_color(rgb(palette().faint))
-                    .child(note.clone()),
-            );
+            if !snapshot.notes.is_empty() {
+                body = body.child(v_flex().w_full().gap_1().pt_1().children(
+                    snapshot.notes.iter().map(|note| {
+                        div()
+                            .text_size(px(10.))
+                            .line_height(relative(1.4))
+                            .text_color(rgb(palette().faint))
+                            .child(note.clone())
+                    }),
+                ));
+            }
         }
         body.into_any_element()
     }
@@ -10033,6 +10229,7 @@ impl Render for ConduitApp {
             let count = sessions.len();
             let limit = self.store.ui.sessions_per_workspace.clamp(1, 30);
             let expanded = self.expanded_workspaces.contains(&index);
+            let importing = self.history_loading.contains(&workspace.path);
             let total = sessions.len();
             list =
                 list.child(
@@ -10061,12 +10258,18 @@ impl Render for ConduitApp {
                                 .text_color(rgb(palette().faint)),
                         )
                         .child(div().flex_1().truncate().child(workspace.name()))
-                        .child(
+                        .child(if importing {
+                            Spinner::new()
+                                .small()
+                                .color(rgb(palette().faint).into())
+                                .into_any_element()
+                        } else {
                             div()
                                 .text_size(px(10.))
                                 .text_color(rgb(palette().faint))
-                                .child(count.to_string()),
-                        )
+                                .child(count.to_string())
+                                .into_any_element()
+                        })
                         .child(
                             Button::new(("workspace-new-session", index))
                                 .ghost()
@@ -10086,6 +10289,20 @@ impl Render for ConduitApp {
                         )
                         .child(self.workspace_menu(index, app_entity.clone())),
                 );
+            if importing && sessions.is_empty() {
+                list = list.child(
+                    h_flex()
+                        .h(px(30.))
+                        .pl(px(24.))
+                        .pr(px(8.))
+                        .gap_2()
+                        .items_center()
+                        .text_size(px(12.))
+                        .text_color(rgb(palette().faint))
+                        .child(Spinner::new().small().color(rgb(palette().faint).into()))
+                        .child("正在加载会话历史…"),
+                );
+            }
             for session in sessions.iter().take(if expanded { total } else { limit }) {
                 let id = session.id;
                 let active = self.selected_session == Some(id);

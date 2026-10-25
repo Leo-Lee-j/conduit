@@ -42,6 +42,16 @@ pub fn scan_workspace(workspace: &Path) -> Vec<ImportedSession> {
 /// Returns the number of newly imported sessions.
 pub fn merge_into(workspace: &mut crate::domain::Workspace, next_id: &mut u64) -> usize {
     let sessions = scan_workspace(&workspace.path);
+    merge_imported(workspace, next_id, sessions)
+}
+
+/// Applies an already-scanned batch to a workspace. Kept separate from
+/// [`merge_into`] so the UI can scan off the main thread and merge on it.
+pub fn merge_imported(
+    workspace: &mut crate::domain::Workspace,
+    next_id: &mut u64,
+    sessions: Vec<ImportedSession>,
+) -> usize {
     let mut imported = 0;
     for session in sessions {
         imported += merge_session(workspace, next_id, session);
@@ -743,8 +753,8 @@ mod tests {
             }],
             interrupted: false,
         });
-        // scan_workspace would hit the real CLI dirs; patch through
-        // merge_from instead by injecting parsed sessions directly.
+        // scan_workspace would hit the real CLI dirs; inject parsed sessions
+        // through merge_imported instead.
         let imported = vec![
             ImportedSession {
                 provider: Provider::Claude,
@@ -782,7 +792,7 @@ mod tests {
             },
         ];
         let mut next_id = 8u64;
-        let count = merge_from(&mut workspace, &mut next_id, imported);
+        let count = merge_imported(&mut workspace, &mut next_id, imported);
         assert_eq!(count, 1, "only the unknown session is newly imported");
         assert_eq!(workspace.sessions.len(), 2);
         let refreshed = workspace.sessions.iter().find(|s| s.id == 7).unwrap();
@@ -800,29 +810,6 @@ mod tests {
         assert_eq!(next_id, 9);
         // Newest first ordering.
         assert!(workspace.sessions[0].created_at >= workspace.sessions[1].created_at);
-    }
-
-    fn merge_from(
-        workspace: &mut crate::domain::Workspace,
-        next_id: &mut u64,
-        imported: Vec<ImportedSession>,
-    ) -> usize {
-        let mut count = 0;
-        for session in imported {
-            count += merge_one(workspace, next_id, session);
-        }
-        workspace
-            .sessions
-            .sort_by_key(|session| std::cmp::Reverse(session.created_at));
-        count
-    }
-
-    fn merge_one(
-        workspace: &mut crate::domain::Workspace,
-        next_id: &mut u64,
-        session: ImportedSession,
-    ) -> usize {
-        merge_session(workspace, next_id, session)
     }
 
     #[test]
