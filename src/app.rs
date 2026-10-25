@@ -4,6 +4,7 @@ use crate::{
     chat_runtime::ChatRuntime,
     cli::{self, VersionProbe},
     domain::{ChatItem, ItemKind, PermissionLevel, Provider, SessionRecord, Usage, Workspace},
+    file_ref::{self, FileReference, RejectedFile, display_path},
     git::{self, BranchProbe, GitProbe},
     models::{self, ModelCatalog},
     performance::PerformanceMonitor,
@@ -517,13 +518,24 @@ fn message_action_button(id: SharedString, icon: Icon, tooltip: &'static str) ->
         .cursor_pointer()
 }
 
-fn display_path(path: &std::path::Path) -> String {
-    let text = path.display().to_string();
-    if let Some(path) = text.strip_prefix(r"\\?\UNC\") {
-        format!(r"\\{path}")
-    } else {
-        text.strip_prefix(r"\\?\").unwrap_or(&text).to_string()
+/// Show actionable file names, bounding the message for large multi-selections.
+fn rejection_summary(rejected: &[RejectedFile]) -> String {
+    let mut details = rejected
+        .iter()
+        .take(3)
+        .map(|file| {
+            let name = file
+                .path
+                .file_name()
+                .unwrap_or(file.path.as_os_str())
+                .to_string_lossy();
+            format!("{name}：{}", file.reason.label())
+        })
+        .collect::<Vec<_>>();
+    if rejected.len() > 3 {
+        details.push(format!("另 {} 项", rejected.len() - 3));
     }
+    format!(" {} 项（{}）", rejected.len(), details.join("；"))
 }
 
 fn settings_label(text: &'static str) -> impl IntoElement {
@@ -1858,6 +1870,19 @@ fn session_menu_button(id: (&'static str, u64), label: &'static str, icon: IconN
         )
 }
 
+/// A file selection belongs to a conversation, including a workspace's new-chat draft.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct ComposerTarget {
+    workspace: PathBuf,
+    session: Option<u64>,
+}
+
+#[derive(Default)]
+struct ComposerFiles {
+    references: Vec<FileReference>,
+    feedback: Option<String>,
+}
+
 pub struct ConduitApp {
     store: Store,
     writable: bool,
@@ -1868,6 +1893,8 @@ pub struct ConduitApp {
     open_tabs: Vec<u64>,
     input: Entity<TextareaState>,
     drafts: HashMap<u64, String>,
+    workspace_drafts: HashMap<PathBuf, String>,
+    composer_files: HashMap<ComposerTarget, ComposerFiles>,
     runs: HashMap<u64, ActiveRun>,
     probes: HashMap<Provider, VersionProbe>,
     diagnostics: HashMap<Provider, String>,
@@ -2121,6 +2148,11 @@ impl ConduitApp {
                 .placeholder("描述任务，或继续提问…")
                 .auto_grow(3, 8)
         });
+        let input_subscription = cx.subscribe(&input, |_, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        });
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索会话"));
         let search_subscription = cx.subscribe(&search, |this, search, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
@@ -2220,6 +2252,8 @@ impl ConduitApp {
             open_tabs: selected_session.into_iter().collect(),
             input,
             drafts: HashMap::new(),
+            workspace_drafts: HashMap::new(),
+            composer_files: HashMap::new(),
             runs: HashMap::new(),
             probes: HashMap::new(),
             diagnostics: HashMap::new(),
@@ -2272,6 +2306,7 @@ impl ConduitApp {
             delete_target: None,
             remove_workspace_target: None,
             _subscriptions: vec![
+                input_subscription,
                 search_subscription,
                 git_prompt_subscription,
                 appearance_subscription,
@@ -2541,6 +2576,8 @@ impl ConduitApp {
             workspace.sessions.retain(|session| session.id != id);
         }
         self.drafts.remove(&id);
+        self.composer_files
+            .retain(|target, _| target.session != Some(id));
         self.expanded_tools.retain(|(session, _)| *session != id);
         self.expanded_reasoning
             .retain(|(session, _)| *session != id);
@@ -3126,6 +3163,9 @@ impl ConduitApp {
         }
         let removed = self.store.workspaces.remove(index);
         self.history_loading.remove(&removed.path);
+        self.workspace_drafts.remove(&removed.path);
+        self.composer_files
+            .retain(|target, _| target.workspace != removed.path);
         self.expanded_workspaces.clear();
         for session in &removed.sessions {
             self.drafts.remove(&session.id);
@@ -3684,6 +3724,9 @@ impl ConduitApp {
         if let Some(id) = self.selected_session {
             self.drafts
                 .insert(id, self.input.read(cx).value().to_string());
+        } else if let Some(target) = self.composer_target() {
+            self.workspace_drafts
+                .insert(target.workspace, self.input.read(cx).value().to_string());
         }
         self.selected_workspace = Some(workspace);
         self.selected_session = session;
@@ -3694,10 +3737,14 @@ impl ConduitApp {
         self.pending_message_jump = false;
         self.detail_text = None;
         self.message = None;
-        let draft = session
-            .and_then(|id| self.drafts.get(&id))
-            .cloned()
-            .unwrap_or_default();
+        let draft = match session {
+            Some(id) => self.drafts.get(&id),
+            None => self
+                .workspace_drafts
+                .get(&self.store.workspaces[workspace].path),
+        }
+        .cloned()
+        .unwrap_or_default();
         self.input
             .update(cx, |input, cx| input.set_value(draft, window, cx));
         if session.is_some() {
@@ -3774,6 +3821,208 @@ impl ConduitApp {
         })
         .detach();
     }
+    fn composer_target(&self) -> Option<ComposerTarget> {
+        self.selected_workspace
+            .and_then(|index| self.store.workspaces.get(index))
+            .map(|workspace| ComposerTarget {
+                workspace: workspace.path.clone(),
+                session: self.selected_session,
+            })
+    }
+    fn current_files(&self) -> Option<&ComposerFiles> {
+        self.composer_target()
+            .and_then(|target| self.composer_files.get(&target))
+    }
+    /// All three entry points share validation, deduplication and inline feedback.
+    fn attach_paths(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing || !self.writable || paths.is_empty() {
+            return;
+        }
+        let Some(target) = self.composer_target() else {
+            self.message = Some("请先在左上角选择工作区。".into());
+            cx.notify();
+            return;
+        };
+        let (references, rejected) = file_ref::resolve(paths, &target.workspace);
+        let draft = self.composer_files.entry(target).or_default();
+        let added = file_ref::merge_references(&mut draft.references, references);
+        draft.feedback = if !rejected.is_empty() {
+            Some(format!(
+                "已添加 {added} 个文件，跳过{}",
+                rejection_summary(&rejected)
+            ))
+        } else if added == 0 {
+            Some("这些文件已在待发送列表中，无需重复添加。".into())
+        } else {
+            None
+        };
+        self.input.read(cx).focus_handle(cx).focus(window, cx);
+        cx.notify();
+    }
+    fn remove_file(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing || !self.writable {
+            return;
+        }
+        if let Some(target) = self.composer_target()
+            && let Some(draft) = self.composer_files.get_mut(&target)
+        {
+            draft.references.retain(|reference| reference.path != path);
+            draft.feedback = None;
+        }
+        self.input.read(cx).focus_handle(cx).focus(window, cx);
+        cx.notify();
+    }
+    fn render_composer_files(&self, enabled: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let files = self.current_files()?;
+        if files.references.is_empty() && files.feedback.is_none() {
+            return None;
+        }
+        let mut tray = v_flex().id("composer-files").px(px(3.)).pt(px(3.)).gap_2();
+        if !files.references.is_empty() {
+            let cards = files
+                .references
+                .iter()
+                .enumerate()
+                .map(|(index, reference)| {
+                    let path = reference.path.clone();
+                    let full_path = display_path(&path);
+                    let name = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    h_flex()
+                        .id(("composer-file", index))
+                        .debug_selector(|| format!("composer-file-{index}"))
+                        .max_w(px(220.))
+                        .h(px(26.))
+                        .flex_shrink_0()
+                        .min_w_0()
+                        .gap_1()
+                        .px_2()
+                        .items_center()
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(rgb(palette().border))
+                        .bg(rgb(palette().surface_strong))
+                        .tooltip(move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(full_path.clone())
+                                .build(window, cx)
+                        })
+                        .child(
+                            Icon::new(file_ref::icon_for(&path))
+                                .small()
+                                .text_color(rgb(palette().muted)),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(11.))
+                                .text_color(rgb(palette().text))
+                                .child(name),
+                        )
+                        .child(
+                            Button::new(("remove-composer-file", index))
+                                .ghost()
+                                .small()
+                                .compact()
+                                .w(px(18.))
+                                .h(px(18.))
+                                .flex_shrink_0()
+                                .icon(FullIconName::X)
+                                .tooltip("移除文件")
+                                .accessibility_label("移除文件")
+                                .disabled(!enabled)
+                                .when(enabled, |button| button.cursor_pointer())
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.remove_file(&path, window, cx);
+                                })),
+                        )
+                });
+            tray = tray.child(
+                h_flex()
+                    .id("composer-file-cards")
+                    .flex_wrap()
+                    .gap_1()
+                    .max_h(px(144.))
+                    .overflow_y_scroll()
+                    .children(cards),
+            );
+        }
+        if let Some(feedback) = &files.feedback {
+            tray = tray.child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(rgb(palette().muted))
+                            .child(feedback.clone()),
+                    )
+                    .child(
+                        Button::new("dismiss-file-feedback")
+                            .ghost()
+                            .small()
+                            .compact()
+                            .icon(FullIconName::X)
+                            .tooltip("关闭提示")
+                            .accessibility_label("关闭文件提示")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                if let Some(target) = this.composer_target()
+                                    && let Some(files) = this.composer_files.get_mut(&target)
+                                {
+                                    files.feedback = None;
+                                }
+                                cx.notify();
+                            })),
+                    ),
+            );
+        }
+        Some(tray.into_any_element())
+    }
+    fn pick_files(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing || !self.writable {
+            return;
+        }
+        let Some(target) = self.composer_target() else {
+            return;
+        };
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("添加文件到对话".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| match paths.await {
+            Ok(Ok(Some(paths))) => {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    // Native dialogs are asynchronous: a later selection must never
+                    // land in a different workspace or conversation.
+                    if this.composer_target().as_ref() == Some(&target) {
+                        this.attach_paths(&paths, window, cx);
+                    }
+                });
+            }
+            Ok(Ok(None)) => {}
+            other => {
+                let _ = this.update(cx, |this, cx| {
+                    if this.composer_target().as_ref() == Some(&target) {
+                        this.composer_files.entry(target).or_default().feedback =
+                            Some(format!("打开文件选择器失败：{other:?}"));
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
+    }
     /// Scans the workspace's CLI history off the UI thread. The sidebar shows a
     /// loading state until [`Self::finish_history_import`] merges the result.
     fn start_history_import(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -3823,7 +4072,10 @@ impl ConduitApp {
         // they already picked one or started typing while history loaded.
         let follow = self.selected_workspace == Some(index)
             && self.selected_session.is_none()
-            && self.input.read(cx).value().trim().is_empty();
+            && self.input.read(cx).value().trim().is_empty()
+            && self
+                .current_files()
+                .is_none_or(|files| files.references.is_empty());
         if follow
             && let Some(session) = self.store.workspaces[index]
                 .sessions
@@ -3845,7 +4097,13 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let previous_workspace = self.selected_workspace;
+        let previous_session = self.selected_session;
         if let Some(id) = self.create_session(index, provider, cx) {
+            // create_session selects its result; switch must first save the draft
+            // from the conversation the user was actually editing.
+            self.selected_workspace = previous_workspace;
+            self.selected_session = previous_session;
             self.switch(index, Some(id), window, cx);
         }
     }
@@ -3930,8 +4188,48 @@ impl ConduitApp {
         self.send_prompt(window, cx);
     }
     fn send_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let prompt = self.input.read(cx).value().to_string();
-        self.send_text(prompt, true, window, cx);
+        if self.closing || !self.writable {
+            return;
+        }
+        let target = self.composer_target();
+        let text = self.input.read(cx).value().to_string();
+        let references = self
+            .current_files()
+            .map(|files| files.references.as_slice())
+            .unwrap_or_default();
+        if let Some(target) = &target {
+            let paths = references
+                .iter()
+                .map(|file| file.path.clone())
+                .collect::<Vec<_>>();
+            let (_, rejected) = file_ref::resolve(&paths, &target.workspace);
+            if !rejected.is_empty() {
+                self.composer_files
+                    .entry(target.clone())
+                    .or_default()
+                    .feedback = Some(format!(
+                    "文件已不可引用，请移除或重新添加后发送：{}",
+                    rejection_summary(&rejected)
+                ));
+                cx.notify();
+                return;
+            }
+        }
+        let prompt = file_ref::compose_prompt(&text, references);
+        if self.send_text(prompt, true, window, cx) {
+            if let Some(target) = target {
+                self.composer_files.remove(&target);
+                if let Some(id) = target.session {
+                    self.drafts.remove(&id);
+                } else {
+                    self.workspace_drafts.remove(&target.workspace);
+                }
+            }
+        } else if let Some(target) = target {
+            // A failed send may have attempted to create or retarget a session.
+            // Keep the draft and its files visible in their original conversation.
+            self.selected_session = target.session;
+        }
     }
     /// Starts one engine turn. `append_user` is false when regenerating: the
     /// user message is already in the transcript and must not be duplicated.
@@ -4432,6 +4730,71 @@ impl ConduitApp {
                 .any(|message| matches!(message.kind, ItemKind::User | ItemKind::Assistant));
         let element = match item.kind {
             ItemKind::User => {
+                let (message_text, references) = file_ref::split_prompt(&item.text);
+                let workspace = self.store.workspaces.iter().find(|workspace| {
+                    workspace
+                        .sessions
+                        .iter()
+                        .any(|session| session.id == session_id)
+                });
+                let attachments = h_flex()
+                    .id(("user-attachments", index))
+                    .debug_selector(|| format!("user-attachments-{index}"))
+                    .w_full()
+                    .min_w_0()
+                    .flex_row_reverse()
+                    .flex_wrap()
+                    .justify_end()
+                    .gap_1()
+                    .children(references.iter().enumerate().map(|(file_index, mention)| {
+                        let path = Path::new(mention);
+                        let name = path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string();
+                        let full_path = if path.is_absolute() {
+                            display_path(path)
+                        } else {
+                            workspace
+                                .map(|workspace| display_path(&workspace.path.join(path)))
+                                .unwrap_or_else(|| mention.to_string())
+                        };
+                        h_flex()
+                            .id(SharedString::from(format!(
+                                "user-file-{index}-{file_index}"
+                            )))
+                            .debug_selector(|| format!("user-file-{index}-{file_index}"))
+                            .max_w(px(200.))
+                            .h(px(24.))
+                            .flex_shrink_0()
+                            .min_w_0()
+                            .items_center()
+                            .gap_1()
+                            .px_2()
+                            .rounded(px(6.))
+                            .border_1()
+                            .border_color(rgb(palette().border))
+                            .bg(rgb(palette().surface_strong))
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(full_path.clone())
+                                    .build(window, cx)
+                            })
+                            .child(
+                                Icon::new(file_ref::icon_for(path))
+                                    .small()
+                                    .text_color(rgb(palette().muted)),
+                            )
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex_shrink_1()
+                                    .truncate()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(palette().muted))
+                                    .child(name),
+                            )
+                    }));
                 let copy_text = item.text.clone();
                 let copy_id = SharedString::from(format!("user-copy-{}-{}", session_id, item.key));
                 let copied = self.copied_action.as_ref() == Some(&copy_id);
@@ -4442,8 +4805,8 @@ impl ConduitApp {
                 };
                 let message_group =
                     SharedString::from(format!("user-message-{}-{}", session_id, item.key));
-                // Keep the whole user message as one literal, selectable text run.
-                // In particular, do not reinterpret Markdown-looking user input.
+                // Keep user prose literal and selectable; generated file references
+                // render separately below it without changing the engine prompt.
                 let body = div()
                     // SelectableText does not subscribe this view to its selection
                     // state, so request a repaint as the pointer moves during drag.
@@ -4457,31 +4820,36 @@ impl ConduitApp {
                     .cursor_text()
                     .child(gpui_kit::base::SelectableText::new(
                         SharedString::from(format!("user-text-{}-{}", session_id, item.key)),
-                        item.text.clone(),
+                        message_text.to_string(),
                     ));
                 v_flex()
                     .w_full()
+                    .debug_selector(|| format!("user-message-{index}"))
                     .items_end()
                     .gap_1()
                     .group(message_group.clone())
-                    .child(
-                        div()
-                            .id(("user-bubble", index))
-                            .max_w(px(680.))
-                            .rounded(px(16.))
-                            .px_4()
-                            .py_3()
-                            // A restrained prompt surface distinguishes the user
-                            // without turning each turn into a separate card.
-                            .bg(rgb(0x252525))
-                            .text_size(px(typography.body_size))
-                            .line_height(relative(typography.line_height))
-                            .when_some(typography.body_font.clone(), |bubble, family| {
-                                bubble.font_family(family)
-                            })
-                            .text_color(rgb(0xf3f3f4))
-                            .child(body),
-                    )
+                    .when(!message_text.is_empty(), |message| {
+                        message.child(
+                            div()
+                                .id(("user-bubble", index))
+                                .debug_selector(|| format!("user-bubble-{index}"))
+                                .max_w(px(680.))
+                                .rounded(px(16.))
+                                .px_4()
+                                .py_3()
+                                // A restrained prompt surface distinguishes the user
+                                // without turning each turn into a separate card.
+                                .bg(rgb(0x252525))
+                                .text_size(px(typography.body_size))
+                                .line_height(relative(typography.line_height))
+                                .when_some(typography.body_font.clone(), |bubble, family| {
+                                    bubble.font_family(family)
+                                })
+                                .text_color(rgb(0xf3f3f4))
+                                .child(body),
+                        )
+                    })
+                    .when(!references.is_empty(), |message| message.child(attachments))
                     .child(
                         h_flex()
                             .items_center()
@@ -6305,6 +6673,11 @@ impl ConduitApp {
                                         this.open_git_diff(target, window, cx);
                                     });
                                 })
+                                .child(
+                                    Icon::new(file_ref::icon_for(Path::new(&file.path)))
+                                        .size(px(14.))
+                                        .text_color(rgb(palette().faint)),
+                                )
                                 .child(
                                     div()
                                         .flex_1()
@@ -10660,8 +11033,8 @@ impl Render for ConduitApp {
             .overflow_y_scroll()
             .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
             .min_w_0()
-            .px_6()
-            .py_5()
+            .px_2()
+            .py_1()
             .gap_5();
         if let Some(session) = &selected {
             if session.message_count == 0 {
@@ -10723,7 +11096,7 @@ impl Render for ConduitApp {
                             app.update(cx, |this, cx| this.render_message(index, cx))
                         })
                         .size_full()
-                        .pt_5(),
+                        .pt(px(5.)),
                     )
                     .vertical_scrollbar(&self.scroll);
             }
@@ -10807,7 +11180,7 @@ impl Render for ConduitApp {
             .map(|run| run.activity.clone());
         if let Some(activity) = run_activity {
             conversation = conversation.child(
-                div().w_full().px_6().pb_3().child(
+                div().w_full().px_2().pb_2().child(
                     h_flex()
                         .items_center()
                         .gap_2()
@@ -11017,7 +11390,11 @@ impl Render for ConduitApp {
         }
         let input_focused = self.input.read(cx).focus_handle(cx).is_focused(window);
         let provider = selected.as_ref().map(|session| session.provider);
-        let send_ready = can_edit && !busy && has_workspace;
+        let has_content = !self.input.read(cx).value().trim().is_empty()
+            || self
+                .current_files()
+                .is_some_and(|files| !files.references.is_empty());
+        let send_ready = can_edit && !busy && has_workspace && has_content;
         // The latest-message arrow appears
         // only when the user has scrolled away from the end of the message list.
         let show_latest_button = !self.at_bottom
@@ -11060,7 +11437,8 @@ impl Render for ConduitApp {
                 cx.notify();
             }))
             .w_full()
-            .p_2()
+            .px(px(3.))
+            .py(px(3.))
             .gap_1()
             .rounded(px(22.))
             .bg(rgb(palette().surface))
@@ -11075,42 +11453,21 @@ impl Render for ConduitApp {
                     this.input.read(cx).focus_handle(cx).focus(window, cx);
                 }
             }))
-            .child(
-                h_flex()
-                    .id("composer-workspace")
-                    .h(px(32.))
-                    .px_2()
-                    .gap_2()
-                    .items_center()
-                    .rounded(px(10.))
-                    .bg(rgb(palette().surface_strong))
-                    // This row is only for the model/workspace context. Do not
-                    // let clicks on its empty area bubble to the composer shell:
-                    // when no workspace is selected, that handler opens the
-                    // workspace directory picker.
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .when(!has_workspace, |row| {
-                        row.cursor_pointer()
-                            .hover(|style| style.bg(rgb(palette().control_hover)))
-                            .on_click(cx.listener(Self::add_workspace))
-                    })
-                    .child(
-                        Icon::new(IconName::Folder)
-                            .small()
-                            .text_color(rgb(palette().faint)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(12.))
-                            .text_color(rgb(palette().muted))
-                            .child(directory.clone()),
-                    )
-                    .when(selected.is_some(), |row| row.child(model_picker)),
+            // 资源管理器拖入的文件由 gpui 翻译成 ExternalPaths 载荷的拖拽事件，
+            // 与右栏调宽、文本选择这些内部拖拽按载荷类型隔离，不会互相抢事件。
+            .on_drop(cx.listener(|this, dropped: &ExternalPaths, window, cx| {
+                this.attach_paths(dropped.paths(), window, cx);
+            }))
+            .drag_over::<ExternalPaths>(|style, _, _, _| {
+                style
+                    .bg(rgb(palette().surface_hover))
+                    .border_color(rgb(palette().focus))
+            })
+            .when_some(
+                self.render_composer_files(composer_enabled, cx),
+                |composer, files| composer.child(files),
             )
-            .child(div().px_2().pt_2().child({
+            .child(div().px(px(3.)).pt(px(3.)).child({
                 let mut composer_input = Textarea::new(&self.input)
                     .appearance(false)
                     .bordered(false)
@@ -11120,13 +11477,35 @@ impl Render for ConduitApp {
                 if let Some(family) = typography.body_font.clone() {
                     composer_input = composer_input.font_family(family);
                 }
-                composer_input
+                // 资源管理器 Ctrl+C 文件后在这里 Ctrl+V，剪贴板会以 ExternalPaths
+                // 报出路径；没有文件时返回 false，交回默认文本粘贴。
+                let paste_app = app_entity.clone();
+                composer_input.on_paste(move |item, window, cx| {
+                    let paths: Vec<PathBuf> = item
+                        .entries
+                        .iter()
+                        .filter_map(|entry| match entry {
+                            ClipboardEntry::ExternalPaths(dropped) => {
+                                Some(dropped.paths().to_vec())
+                            }
+                            _ => None,
+                        })
+                        .flatten()
+                        .collect();
+                    if paths.is_empty() {
+                        return false;
+                    }
+                    paste_app.update(cx, |this, cx| {
+                        this.attach_paths(&paths, window, cx);
+                    });
+                    true
+                })
             }))
             .child(
                 h_flex()
-                    .px_2()
-                    .pb_1()
-                    .pt_1()
+                    .px(px(3.))
+                    .pb(px(3.))
+                    .pt(px(3.))
                     .gap_2()
                     .items_center()
                     .child(self.engine_picker(app_entity.clone()))
@@ -11137,6 +11516,17 @@ impl Render for ConduitApp {
                         row.child(h_flex().gap_3().items_center().min_w_0().children(parts))
                     })
                     .child(div().flex_1())
+                    .when(selected.is_some(), |row| row.child(model_picker))
+                    .when(composer_enabled, |row| {
+                        row.child(
+                            message_action_button(
+                                "attach-file".into(),
+                                Icon::new(FullIconName::Paperclip),
+                                "添加文件（支持拖入或粘贴文件）",
+                            )
+                            .on_click(cx.listener(Self::pick_files)),
+                        )
+                    })
                     .child(if active {
                         h_flex()
                             .id("stop")
@@ -11205,7 +11595,7 @@ impl Render for ConduitApp {
         // area, just above the composer's top-right corner, and only exists
         // while the list is scrolled away from its end.
         conversation = conversation.child(
-            div().px_6().pt_3().pb_2().child(
+            div().px_2().pt_1().pb(px(5.)).child(
                 div()
                     .relative()
                     .w_full()
@@ -11259,7 +11649,7 @@ impl Render for ConduitApp {
         let toolbar = h_flex()
             .h(px(34.))
             .flex_shrink_0()
-            .px_6()
+            .px_2()
             .gap_3()
             .items_center()
             .border_t_1()
@@ -12161,7 +12551,7 @@ mod tests {
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod ui_tests {
-    use super::{ChatItem, ChatTypography, tool_content};
+    use super::{ChatItem, ChatTypography, file_ref, tool_content};
     use gpui_kit::{
         Context, InteractiveElement, IntoElement, ParentElement, Render, ScrollDelta, ScrollHandle,
         ScrollWheelEvent, StatefulInteractiveElement, Styled, TestAppContext, Window,
@@ -12686,5 +13076,454 @@ mod ui_tests {
             assert!(!window.has_active_dialog(cx));
             let _ = window.draw(cx);
         });
+    }
+
+    /// 资源管理器把文件拖到窗口上时，gpui 会发出一个载荷为 `ExternalPaths` 的拖拽；
+    /// 这里从平台事件一路打到输入框，验证 composer 的 drop 接线确实生效。
+    #[gpui_kit::test]
+    fn platform_file_drop_becomes_a_reference_in_the_composer(cx: &mut TestAppContext) {
+        use crate::{domain::Workspace, store::Store};
+        use gpui_kit::{AppContext as _, ExternalPaths, FileDropEvent};
+
+        let workspace = std::env::temp_dir();
+        let dropped = workspace.join(format!("conduit-drop-{}.rs", std::process::id()));
+        std::fs::write(&dropped, b"fn dropped() {}\n").unwrap();
+        let mention = dropped.file_name().unwrap().to_string_lossy().to_string();
+
+        cx.update(gpui_kit::init);
+        let app_slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let slot = app_slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let mut app = super::ConduitApp::new(window, cx, false, false);
+                app.store = Store {
+                    workspaces: vec![Workspace {
+                        path: workspace.clone(),
+                        sessions: vec![],
+                    }],
+                    ..Default::default()
+                };
+                app.selected_workspace = Some(0);
+                app.writable = true;
+                app
+            });
+            *slot.borrow_mut() = Some(app.clone());
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        let app = app_slot.borrow().as_ref().unwrap().clone();
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        let mut paths = ExternalPaths::default();
+        paths.0.push(dropped.clone());
+        let pending_prompt = |cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|_, cx| {
+                let app = app.read(cx);
+                assert!(
+                    app.input.read(cx).value().is_empty(),
+                    "adding files must leave prose untouched"
+                );
+                file_ref::compose_prompt(
+                    "",
+                    app.current_files()
+                        .map(|files| files.references.as_slice())
+                        .unwrap_or_default(),
+                )
+            })
+        };
+        // 输入区贴在对话列底部，从下往上找它的命中区域，避免写死窗口坐标。
+        let height = cx.update(|window, _| f32::from(window.viewport_size().height));
+        let width = cx.update(|window, _| f32::from(window.viewport_size().width));
+        let mut added = false;
+        for offset in [30., 70., 110., 150.] {
+            let position = point(px(width / 2.), px(height - offset));
+            cx.simulate_event(FileDropEvent::Entered {
+                position,
+                paths: paths.clone(),
+            });
+            cx.simulate_event(FileDropEvent::Submit { position });
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            if pending_prompt(cx).contains(&mention) {
+                added = true;
+                break;
+            }
+        }
+        assert!(
+            added,
+            "a drop inside the composer must add a file reference"
+        );
+        let text = pending_prompt(cx);
+        assert!(
+            text.contains("引用文件："),
+            "the reference block must be labelled: {text}"
+        );
+        assert!(
+            !text.contains(&workspace.display().to_string()),
+            "the mention must stay workspace-relative: {text}"
+        );
+        let _ = std::fs::remove_file(&dropped);
+    }
+
+    /// 工作区之外的文件也必须能引用：既已证明拖拽会走到 attach_paths，这里验证它的
+    /// 引用形式——相对化无从谈起，就用绝对路径，两类路径可以同时挂进输入框。
+    #[gpui_kit::test]
+    fn attaching_a_file_outside_the_workspace_uses_an_absolute_mention(cx: &mut TestAppContext) {
+        use crate::{domain::Workspace, store::Store};
+        use gpui_kit::AppContext as _;
+
+        let workspace =
+            std::env::temp_dir().join(format!("conduit-drop-workspace-{}", std::process::id()));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let outside =
+            std::env::temp_dir().join(format!("conduit-drop-outside-{}.rs", std::process::id()));
+        std::fs::write(&outside, b"fn outside() {}\n").unwrap();
+        let inside = workspace.join(format!("conduit-drop-inside-{}.rs", std::process::id()));
+        std::fs::write(&inside, b"fn inside() {}\n").unwrap();
+
+        cx.update(gpui_kit::init);
+        let app_slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let slot = app_slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let mut app = super::ConduitApp::new(window, cx, false, false);
+                app.store = Store {
+                    workspaces: vec![Workspace {
+                        path: workspace.clone(),
+                        sessions: vec![],
+                    }],
+                    ..Default::default()
+                };
+                app.selected_workspace = Some(0);
+                app.writable = true;
+                app
+            });
+            *slot.borrow_mut() = Some(app.clone());
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        let app = app_slot.borrow().as_ref().unwrap().clone();
+        cx.run_until_parked();
+
+        cx.update(|window, cx| {
+            app.update(cx, |this, cx| {
+                this.attach_paths(&[outside.clone(), inside.clone()], window, cx);
+            });
+        });
+        cx.update(|_, cx| {
+            let app = app.read(cx);
+            assert!(
+                app.message.is_none(),
+                "both paths are usable, so nothing may be skipped: {:?}",
+                app.message
+            );
+            assert!(app.input.read(cx).value().is_empty());
+            let files = app
+                .current_files()
+                .expect("files must be staged separately");
+            assert!(files.feedback.is_none());
+            let text = file_ref::compose_prompt("", &files.references);
+            let name =
+                |path: &std::path::Path| path.file_name().unwrap().to_string_lossy().to_string();
+            let outside_mention = text
+                .lines()
+                .find(|line| line.contains(&name(&outside)))
+                .expect("the outside file must appear as a reference");
+            let outside_mention = outside_mention
+                .strip_prefix("- ")
+                .expect("references are listed one per line")
+                .to_string();
+            assert!(
+                std::path::Path::new(&outside_mention).is_absolute(),
+                "an outside reference has to stay resolvable: {outside_mention}"
+            );
+            assert!(
+                text.contains(&format!("- {}", name(&inside))),
+                "the inside reference stays relative: {text}"
+            );
+        });
+        let _ = std::fs::remove_file(&outside);
+        let _ = std::fs::remove_file(&inside);
+        let _ = std::fs::remove_dir(&workspace);
+    }
+    #[gpui_kit::test]
+    fn composer_files_paste_drafts_removal_and_failed_send(cx: &mut TestAppContext) {
+        use crate::{
+            domain::{Provider, SessionRecord, Workspace},
+            store::Store,
+        };
+        use gpui_kit::{AppContext as _, ClipboardEntry, ClipboardItem, ExternalPaths, Focusable};
+
+        let root =
+            std::env::temp_dir().join(format!("conduit-composer-files-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let first = root.join("first.rs");
+        let second = root.join("second.rs");
+        std::fs::write(&first, b"fn first() {}").unwrap();
+        std::fs::write(&second, b"fn second() {}").unwrap();
+        let session = |id| SessionRecord {
+            id,
+            provider: Provider::Claude,
+            created_at: 0,
+            exit_code: None,
+            title: format!("Chat {id}"),
+            archived: false,
+            native_id: None,
+            model: None,
+            messages: vec![],
+            interrupted: false,
+            permission: Default::default(),
+            usage: Default::default(),
+        };
+        cx.update(gpui_kit::init);
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let mut app = super::ConduitApp::new(window, cx, false, false);
+                app.store = Store {
+                    workspaces: vec![Workspace {
+                        path: root.clone(),
+                        sessions: vec![session(1), session(2)],
+                    }],
+                    ..Default::default()
+                };
+                app.store.ui.last_provider = Some(Provider::Claude);
+                app.selected_workspace = Some(0);
+                app.selected_session = None;
+                app.writable = true;
+                app
+            });
+            *output.borrow_mut() = Some(app.clone());
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        let app = slot.borrow().as_ref().unwrap().clone();
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            app.update(cx, |this, cx| {
+                this.input
+                    .update(cx, |input, cx| input.set_value("保留正文", window, cx));
+                this.attach_paths(&[first.clone(), root.join("missing.rs")], window, cx);
+                let files = this.current_files().unwrap();
+                assert_eq!(files.references.len(), 1);
+                assert!(files.feedback.as_ref().unwrap().contains("missing.rs"));
+                assert_eq!(this.input.read(cx).value().as_ref(), "保留正文");
+                cx.write_to_clipboard(ClipboardItem {
+                    entries: vec![ClipboardEntry::ExternalPaths(ExternalPaths(
+                        [first.clone(), second.clone()].into_iter().collect(),
+                    ))],
+                });
+            })
+        });
+        cx.simulate_keystrokes("ctrl-v");
+        cx.update(|window, cx| {
+            app.update(cx, |this, cx| {
+                assert_eq!(
+                    this.current_files().unwrap().references.len(),
+                    2,
+                    "paste must merge files without duplicates"
+                );
+                assert_eq!(this.input.read(cx).value().as_ref(), "保留正文");
+                this.attach_paths(std::slice::from_ref(&first), window, cx);
+                assert!(
+                    this.current_files()
+                        .unwrap()
+                        .feedback
+                        .as_ref()
+                        .unwrap()
+                        .contains("无需重复")
+                );
+                this.switch(0, Some(1), window, cx);
+                assert!(this.current_files().is_none());
+                this.attach_paths(std::slice::from_ref(&second), window, cx);
+                this.switch(0, Some(2), window, cx);
+                assert!(this.current_files().is_none());
+                this.switch(0, Some(1), window, cx);
+                let path = this.current_files().unwrap().references[0].path.clone();
+                this.remove_file(&path, window, cx);
+                assert!(this.current_files().unwrap().references.is_empty());
+                this.switch(0, None, window, cx);
+                assert_eq!(this.current_files().unwrap().references.len(), 2);
+                assert_eq!(this.input.read(cx).value().as_ref(), "保留正文");
+                std::fs::remove_file(&first).unwrap();
+                this.send_prompt(window, cx);
+                assert_eq!(this.selected_session, None);
+                assert!(this.runs.is_empty(), "invalid files must not start a CLI");
+                assert_eq!(
+                    this.current_files().unwrap().references.len(),
+                    2,
+                    "failed send must preserve files"
+                );
+                assert!(
+                    this.current_files()
+                        .unwrap()
+                        .feedback
+                        .as_ref()
+                        .unwrap()
+                        .contains("first.rs")
+                );
+                assert_eq!(this.input.read(cx).value().as_ref(), "保留正文");
+                // Read-only input must reject drops without changing its draft.
+                this.writable = false;
+                this.attach_paths(&[root.join("readonly.rs")], window, cx);
+                assert_eq!(this.current_files().unwrap().references.len(), 2);
+                this.writable = true;
+                this.input.read(cx).focus_handle(cx).focus(window, cx);
+                cx.write_to_clipboard(ClipboardItem::new_string("纯文本".into()));
+            })
+        });
+        cx.simulate_keystrokes("ctrl-v");
+        cx.update(|_, cx| {
+            assert!(
+                app.read(cx).input.read(cx).value().contains("纯文本"),
+                "ordinary text paste must keep working"
+            );
+        });
+        std::fs::remove_file(second).unwrap();
+        let _ = std::fs::remove_dir(root);
+    }
+    #[gpui_kit::test]
+    fn attachment_tags_size_to_names_and_sent_files_start_at_the_right(cx: &mut TestAppContext) {
+        use crate::{
+            domain::{ItemKind, Provider, SessionRecord, Workspace},
+            file_ref::FileReference,
+            store::Store,
+        };
+        use gpui_kit::AppContext as _;
+
+        let workspace = std::env::temp_dir();
+        let references = [
+            "a.rs".to_string(),
+            "a_descriptive_filename.rs".to_string(),
+            format!("{}.rs", "long_name_".repeat(18)),
+        ]
+        .into_iter()
+        .map(|name| FileReference {
+            path: workspace.join(&name),
+            mention: name,
+        })
+        .collect::<Vec<_>>();
+        let prompt = file_ref::compose_prompt("这个文档里有什么内容", &references);
+        cx.update(gpui_kit::init);
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let mut app = super::ConduitApp::new(window, cx, false, false);
+                app.store = Store {
+                    workspaces: vec![Workspace {
+                        path: workspace.clone(),
+                        sessions: vec![SessionRecord {
+                            id: 1,
+                            provider: Provider::Claude,
+                            created_at: 0,
+                            exit_code: None,
+                            title: "Files".into(),
+                            archived: false,
+                            native_id: None,
+                            model: None,
+                            messages: vec![ChatItem {
+                                key: "user-files".into(),
+                                created_at: 0,
+                                kind: ItemKind::User,
+                                text: prompt.clone(),
+                                input: String::new(),
+                                detail: String::new(),
+                                status: String::new(),
+                                approval: None,
+                            }],
+                            interrupted: false,
+                            permission: Default::default(),
+                            usage: Default::default(),
+                        }],
+                    }],
+                    ..Default::default()
+                };
+                app.selected_workspace = Some(0);
+                app.selected_session = Some(1);
+                app.writable = true;
+                app.composer_files.insert(
+                    app.composer_target().unwrap(),
+                    super::ComposerFiles {
+                        references: references.clone(),
+                        feedback: None,
+                    },
+                );
+                app
+            });
+            *output.borrow_mut() = Some(app.clone());
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        let app = slot.borrow().as_ref().unwrap().clone();
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let short = cx
+            .debug_bounds("composer-file-0")
+            .expect("short composer tag");
+        let medium = cx
+            .debug_bounds("composer-file-1")
+            .expect("medium composer tag");
+        let long = cx
+            .debug_bounds("composer-file-2")
+            .expect("long composer tag");
+        assert!(
+            short.size.width < medium.size.width,
+            "short names must shrink: {short:?} / {medium:?}"
+        );
+        assert!(medium.size.width <= long.size.width);
+        assert!(
+            long.size.width <= px(220.),
+            "long names must be bounded: {long:?}"
+        );
+        assert!(short.size.height <= px(26.));
+        let message = cx.debug_bounds("user-message-0").unwrap();
+        let row = cx.debug_bounds("user-attachments-0").unwrap();
+        let body = cx.debug_bounds("user-bubble-0").unwrap();
+        let first = cx.debug_bounds("user-file-0-0").unwrap();
+        let second = cx.debug_bounds("user-file-0-1").unwrap();
+        let last = cx.debug_bounds("user-file-0-2").unwrap();
+        assert!((row.right() - message.right()).abs() < px(1.));
+        assert!(
+            (first.right() - body.right()).abs() < px(1.),
+            "attachment tags must start at the message's right edge: {first:?} / {body:?}"
+        );
+        assert!(
+            row.top() >= body.bottom(),
+            "attachments belong below the message body"
+        );
+        assert!(
+            second.right() < first.left(),
+            "attachments must flow right to left"
+        );
+        assert!(first.size.width < second.size.width);
+        assert!(last.size.width <= px(200.));
+        assert!(first.size.height <= px(24.));
+        cx.update(|_, cx| {
+            assert_eq!(
+                app.read(cx).store.workspaces[0].sessions[0].messages[0].text,
+                prompt,
+                "display changes must preserve engine and retry context"
+            );
+        });
+        cx.update(|_, cx| {
+            app.update(cx, |this, cx| {
+                this.store.workspaces[0].sessions[0].messages[0].text =
+                    file_ref::compose_prompt("", &references);
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(
+            cx.debug_bounds("user-bubble-0").is_none(),
+            "file-only messages must not show an empty bubble"
+        );
+        assert!(cx.debug_bounds("user-file-0-0").is_some());
     }
 }
