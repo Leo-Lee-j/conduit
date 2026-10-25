@@ -61,6 +61,57 @@ impl ModelCatalog {
     }
 }
 
+/// Vendor family behind a model ID, used to pick the official mark.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModelBrand {
+    Anthropic,
+    Xai,
+    DeepSeek,
+    Qwen,
+    Kimi,
+    Zhipu,
+    MiniMax,
+    Doubao,
+    Hunyuan,
+    Gemini,
+    OpenAI,
+    Other,
+}
+
+/// Family tokens ordered from the most specific vendor name to the generic
+/// OpenAI-compatible aliases, because the aliases (`o1`, `o3`, `o4`) collide
+/// with version digits in other vendors' IDs.
+const BRAND_TOKENS: &[(ModelBrand, &[&str])] = &[
+    (
+        ModelBrand::Anthropic,
+        &["claude", "anthropic", "sonnet", "opus", "haiku"],
+    ),
+    (ModelBrand::Xai, &["grok", "xai"]),
+    (ModelBrand::DeepSeek, &["deepseek"]),
+    (ModelBrand::Qwen, &["qwen", "qwq", "tongyi"]),
+    (ModelBrand::Kimi, &["kimi", "moonshot"]),
+    (ModelBrand::Zhipu, &["glm", "chatglm", "zhipu", "cogvlm"]),
+    (ModelBrand::MiniMax, &["minimax", "hailuo", "abab"]),
+    (ModelBrand::Doubao, &["doubao", "seed-", "seedream"]),
+    (ModelBrand::Hunyuan, &["hunyuan"]),
+    (ModelBrand::Gemini, &["gemini"]),
+    (
+        ModelBrand::OpenAI,
+        &["gpt", "openai", "chatgpt", "codex", "o1", "o3", "o4"],
+    ),
+];
+
+/// Resolve a vendor from a model ID. Routed and proxy-rewritten IDs keep the
+/// family name as a prefix (`grok-4.7`, `kimi-k3[1m]`, `glm-5.3`), so a
+/// substring scan is enough and no catalog field is required.
+pub fn brand_of(id: &str) -> ModelBrand {
+    let id = id.to_lowercase();
+    BRAND_TOKENS
+        .iter()
+        .find(|(_, tokens)| tokens.iter().any(|token| id.contains(token)))
+        .map_or(ModelBrand::Other, |(brand, _)| *brand)
+}
+
 pub fn load(provider: Provider) -> ModelCatalog {
     let home = std::env::var_os("USERPROFILE")
         .map(PathBuf::from)
@@ -469,6 +520,32 @@ base_url = "https://example.invalid"
         assert!(merged.models[0].note.contains("CCS · anyrouter"));
         assert_eq!(merged.label("ccs-only"), "CCS Only");
         assert_eq!(merged.models[1].note, "CCS · anyrouter");
+    }
+
+    #[test]
+    fn brand_of_resolves_each_marked_family() {
+        for (id, brand) in [
+            ("claude-sonnet-4-6", ModelBrand::Anthropic),
+            ("claude-fable-5-1-reversed[1M]", ModelBrand::Anthropic),
+            ("gpt-6.1-sol", ModelBrand::OpenAI),
+            ("gpt-6-astra-cc-format", ModelBrand::OpenAI),
+            ("grok-4.7[1M]", ModelBrand::Xai),
+            ("kimi-k3[1M]", ModelBrand::Kimi),
+            ("deepseek-v4-flash", ModelBrand::DeepSeek),
+            ("deepseek-reasoner", ModelBrand::DeepSeek),
+            ("glm-5.3[1M]", ModelBrand::Zhipu),
+            ("qwen3-max", ModelBrand::Qwen),
+            ("MiniMax-M2", ModelBrand::MiniMax),
+            ("doubao-seed-1-6", ModelBrand::Doubao),
+            ("hunyuan-t1", ModelBrand::Hunyuan),
+            ("gemini-2.5-pro", ModelBrand::Gemini),
+        ] {
+            assert_eq!(brand_of(id), brand, "{id}");
+        }
+        // Unmarked or proxy-rewritten IDs must not borrow another vendor's mark.
+        for id in ["proxy-model", "ccs-only", "custom-route"] {
+            assert_eq!(brand_of(id), ModelBrand::Other, "{id}");
+        }
     }
 
     #[test]

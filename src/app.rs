@@ -447,11 +447,59 @@ impl Render for PerformanceMonitor {
     }
 }
 
+/// Engine and model marks compiled into the binary; provenance and licensing
+/// notes live in `assets/icons/README.md`.
+const CLAUDE_ACCENT: u32 = 0xd97757;
+const MARK_CLAUDE: &[u8] = include_bytes!("../assets/icons/claude.svg");
+const MARK_OPENAI: &[u8] = include_bytes!("../assets/icons/openai.svg");
+const MARK_GROK: &[u8] = include_bytes!("../assets/icons/grok.svg");
+const MARK_DEEPSEEK: &[u8] = include_bytes!("../assets/icons/deepseek.svg");
+const MARK_QWEN: &[u8] = include_bytes!("../assets/icons/qwen.svg");
+const MARK_KIMI: &[u8] = include_bytes!("../assets/icons/kimi.svg");
+const MARK_ZHIPU: &[u8] = include_bytes!("../assets/icons/zhipu.svg");
+const MARK_MINIMAX: &[u8] = include_bytes!("../assets/icons/minimax.svg");
+const MARK_DOUBAO: &[u8] = include_bytes!("../assets/icons/doubao.svg");
+const MARK_HUNYUAN: &[u8] = include_bytes!("../assets/icons/hunyuan.svg");
+const MARK_GEMINI: &[u8] = include_bytes!("../assets/icons/gemini.svg");
+
 fn provider_icon(provider: Provider) -> Icon {
-    let (data, color): (&[u8], u32) = match provider {
-        Provider::Claude => (include_bytes!("../assets/icons/claude.svg"), 0xd97757),
-        Provider::Codex => (include_bytes!("../assets/icons/openai.svg"), palette().text),
-    };
+    match provider {
+        Provider::Claude => svg_mark(MARK_CLAUDE, CLAUDE_ACCENT),
+        Provider::Codex => svg_mark(MARK_OPENAI, palette().text),
+    }
+}
+
+/// Vendor mark for a model ID. Marks stay monochrome so they read in both
+/// themes; IDs whose vendor has no local mark keep the engine mark rather
+/// than borrowing an unrelated brand.
+fn model_icon(provider: Provider, id: &str) -> Icon {
+    let neutral = palette().text;
+    match models::brand_of(id) {
+        models::ModelBrand::Anthropic => svg_mark(MARK_CLAUDE, CLAUDE_ACCENT),
+        models::ModelBrand::OpenAI => svg_mark(MARK_OPENAI, neutral),
+        models::ModelBrand::Xai => svg_mark(MARK_GROK, neutral),
+        models::ModelBrand::DeepSeek => svg_mark(MARK_DEEPSEEK, neutral),
+        models::ModelBrand::Qwen => svg_mark(MARK_QWEN, neutral),
+        models::ModelBrand::Kimi => svg_mark(MARK_KIMI, neutral),
+        models::ModelBrand::Zhipu => svg_mark(MARK_ZHIPU, neutral),
+        models::ModelBrand::MiniMax => svg_mark(MARK_MINIMAX, neutral),
+        models::ModelBrand::Doubao => svg_mark(MARK_DOUBAO, neutral),
+        models::ModelBrand::Hunyuan => svg_mark(MARK_HUNYUAN, neutral),
+        models::ModelBrand::Gemini => svg_mark(MARK_GEMINI, neutral),
+        models::ModelBrand::Other => provider_icon(provider),
+    }
+}
+
+/// Mark for a picker or chip that may still follow the CLI default: without a
+/// model override there is no vendor to show, only the engine.
+fn model_mark(provider: Provider, id: Option<&str>) -> Icon {
+    match id {
+        Some(id) => model_icon(provider, id),
+        None => provider_icon(provider),
+    }
+}
+
+fn svg_mark(data: &'static [u8], color: u32) -> Icon {
     Icon::default()
         .data(data)
         .size(px(14.))
@@ -6801,11 +6849,7 @@ impl ConduitApp {
                 h_flex()
                     .gap_1()
                     .items_center()
-                    .child(
-                        Icon::new(IconName::Cpu)
-                            .small()
-                            .text_color(rgb(palette().faint)),
-                    )
+                    .child(model_mark(provider, selected_model.as_deref()))
                     .child(
                         div()
                             .max_w(px(160.))
@@ -6858,6 +6902,7 @@ impl ConduitApp {
                  -> AnyElement {
                     let view = view.clone();
                     let popover = popover.clone();
+                    let mark = model_mark(provider, id.as_deref());
                     Button::new(("model-option", index))
                         .ghost()
                         .h(px(38.))
@@ -6881,6 +6926,7 @@ impl ConduitApp {
                                 .w_full()
                                 .gap_2()
                                 .items_center()
+                                .child(mark)
                                 .child(
                                     v_flex()
                                         .flex_1()
@@ -7049,6 +7095,80 @@ impl ConduitApp {
                 .content(move |content, window, cx| {
                     let body = view.read(cx).settings_modal_content(window, view.clone());
                     content.child(body)
+                })
+        });
+        cx.notify();
+    }
+    fn open_about_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog
+                .w(px(440.))
+                .margin_top(px(120.))
+                .title("关于")
+                .content(move |content, _, _| {
+                    content.child(
+                        v_flex()
+                            .gap_4()
+                            .child(
+                                h_flex()
+                                    .gap_3()
+                                    .items_center()
+                                    .child(
+                                        h_flex()
+                                            .w(px(40.))
+                                            .h(px(40.))
+                                            .flex_shrink_0()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded(px(10.))
+                                            .bg(rgb(palette().text))
+                                            .text_size(px(20.))
+                                            .font_bold()
+                                            .text_color(rgb(palette().on_text))
+                                            .child("C"),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .gap_1()
+                                            .min_w_0()
+                                            .child(
+                                                div()
+                                                    .text_size(px(18.))
+                                                    .font_semibold()
+                                                    .text_color(rgb(palette().text))
+                                                    .child("Conduit"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(11.))
+                                                    .text_color(rgb(palette().faint))
+                                                    .child(format!(
+                                                        "版本 {} · Windows",
+                                                        env!("CARGO_PKG_VERSION")
+                                                    )),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .line_height(relative(1.6))
+                                    .text_color(rgb(palette().muted))
+                                    .child(
+                                        "Conduit 是本地 CLI 会话工作台：把 Claude Code 与 Codex 的对话、工作区和 Git 变更收进一个界面。所有文件与历史都保留在你自己的机器上，不上传云端。",
+                                    ),
+                            )
+                            .child(
+                                h_flex().justify_end().child(
+                                    Button::new("about-check-update")
+                                        .label("检查更新")
+                                        .small()
+                                        .secondary()
+                                        .cursor_pointer()
+                                        .tooltip("更新检查暂未开放"),
+                                ),
+                            ),
+                    )
                 })
         });
         cx.notify();
@@ -7285,6 +7405,7 @@ impl ConduitApp {
                         .items_center()
                         .border_t_1()
                         .border_color(rgb(palette().border))
+                        .child(model_mark(provider, Some(&model.id)))
                         .child(value)
                         .when(!model.note.is_empty(), |row| {
                             row.child(
@@ -7600,6 +7721,7 @@ impl ConduitApp {
         };
         let model_row =
             |label: String, id: String, note: String, tag: Option<&'static str>| -> AnyElement {
+                let mark = model_mark(provider, Some(&id));
                 let mut value = v_flex().flex_1().min_w_0().gap(px(1.)).child(
                     div()
                         .truncate()
@@ -7623,6 +7745,7 @@ impl ConduitApp {
                     .items_center()
                     .border_t_1()
                     .border_color(rgb(palette().border))
+                    .child(mark)
                     .child(value)
                     .when(!note.is_empty(), |row| {
                         row.child(
@@ -8131,11 +8254,7 @@ impl ConduitApp {
                 h_flex()
                     .gap_1()
                     .items_center()
-                    .child(
-                        Icon::new(IconName::Cpu)
-                            .small()
-                            .text_color(rgb(palette().faint)),
-                    )
+                    .child(model_mark(provider, selected_model.as_deref()))
                     .child(
                         div()
                             .max_w(px(180.))
@@ -8185,6 +8304,7 @@ impl ConduitApp {
                     let view = view.clone();
                     let popover = popover.clone();
                     let selected = selected_model == id;
+                    let mark = model_mark(provider, id.as_deref());
                     list = list.child(
                         Button::new(("naming-model-option", index))
                             .ghost()
@@ -8214,6 +8334,7 @@ impl ConduitApp {
                                     .w_full()
                                     .gap_2()
                                     .items_center()
+                                    .child(mark)
                                     .child(
                                         v_flex()
                                             .flex_1()
@@ -8413,11 +8534,7 @@ impl ConduitApp {
                 h_flex()
                     .gap_1()
                     .items_center()
-                    .child(
-                        Icon::new(IconName::Cpu)
-                            .small()
-                            .text_color(rgb(palette().faint)),
-                    )
+                    .child(model_mark(provider, selected_model.as_deref()))
                     .child(
                         div()
                             .max_w(px(180.))
@@ -8467,6 +8584,7 @@ impl ConduitApp {
                     let view = view.clone();
                     let popover = popover.clone();
                     let selected = selected_model == id;
+                    let mark = model_mark(provider, id.as_deref());
                     list = list.child(
                         Button::new(("git-model-option", index))
                             .ghost()
@@ -8496,6 +8614,7 @@ impl ConduitApp {
                                     .w_full()
                                     .gap_2()
                                     .items_center()
+                                    .child(mark)
                                     .child(
                                         v_flex()
                                             .flex_1()
@@ -10094,7 +10213,10 @@ impl Render for ConduitApp {
             .h_full()
             .w_full()
             .bg(rgb(palette().sidebar_bg))
-            .p_2()
+            // No bottom padding: the bottom bar must sit on the window edge so
+            // its 34px strip lines up with the conversation toolbar.
+            .px_2()
+            .pt_2()
             .gap_1()
             .child(
                 h_flex()
@@ -10491,44 +10613,43 @@ impl Render for ConduitApp {
                     ),
             );
         }
+        // Mirrors the conversation toolbar height so the two bottom bars read
+        // as one strip; icons are packed right-to-left like the right side.
         sidebar = sidebar.child(list).child(
-            v_flex()
+            h_flex()
+                .h(px(34.))
+                .flex_shrink_0()
+                .px_2()
                 .gap_1()
-                .pt_2()
+                .items_center()
                 .border_t_1()
                 .border_color(rgb(palette().border))
+                .child(div().flex_1())
                 .child(
-                    h_flex()
-                        .id("settings")
-                        .h(px(32.))
-                        .px_2()
-                        .gap_2()
-                        .items_center()
-                        .rounded(px(8.))
-                        .text_size(px(13.))
-                        .text_color(rgb(palette().muted))
+                    Button::new("sidebar-about")
+                        .ghost()
+                        .small()
+                        .compact()
+                        .icon(IconName::Info)
+                        .tooltip("关于 Conduit")
+                        .accessibility_label("关于")
                         .cursor_pointer()
-                        .hover(|style| {
-                            style
-                                .bg(rgb(palette().surface_hover))
-                                .text_color(rgb(palette().text))
-                        })
                         .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_settings(window, cx);
-                        }))
-                        .child(
-                            Icon::new(IconName::Settings)
-                                .small()
-                                .text_color(rgb(palette().faint)),
-                        )
-                        .child("设置"),
+                            this.open_about_dialog(window, cx);
+                        })),
                 )
                 .child(
-                    div()
-                        .px_2()
-                        .text_size(px(10.))
-                        .text_color(rgb(palette().faint))
-                        .child("本地 CLI · Windows · Preview"),
+                    Button::new("sidebar-settings")
+                        .ghost()
+                        .small()
+                        .compact()
+                        .icon(IconName::Settings)
+                        .tooltip("设置")
+                        .accessibility_label("设置")
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_settings(window, cx);
+                        })),
                 ),
         );
         let mut messages = div()
@@ -12044,7 +12165,8 @@ mod ui_tests {
     use gpui_kit::{
         Context, InteractiveElement, IntoElement, ParentElement, Render, ScrollDelta, ScrollHandle,
         ScrollWheelEvent, StatefulInteractiveElement, Styled, TestAppContext, Window,
-        component::v_flex, div, point, px,
+        component::{WindowExt, v_flex},
+        div, point, px,
     };
 
     #[gpui_kit::test]
@@ -12496,5 +12618,73 @@ mod ui_tests {
             Modifiers::default(),
         );
         cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn sidebar_bottom_bar_matches_the_toolbar_and_opens_about(cx: &mut TestAppContext) {
+        use gpui_kit::AppContext;
+        cx.update(gpui_kit::init);
+        let app_slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let slot = app_slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| super::ConduitApp::new(window, cx, false, false));
+            *slot.borrow_mut() = Some(app.clone());
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        let app = app_slot.borrow().as_ref().unwrap().clone();
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            // Both bottom bars are 34px strips pinned to the window edge. The
+            // rail used to carry its own bottom padding, which lifted the left
+            // bar above the conversation toolbar.
+            let scale = window.scale_factor();
+            let height = f32::from(window.viewport_size().height);
+            let mut bars: Vec<(f32, f32, f32)> = Vec::new();
+            for quad in window.painted_quads() {
+                let bounds = quad.bounds.map(|value| px(value.0 / scale));
+                let top = f32::from(bounds.top());
+                let bar_height = f32::from(bounds.size.height);
+                if top < height - 60.
+                    || (bar_height - 34.).abs() > 4.
+                    || f32::from(bounds.size.width) < 60.
+                {
+                    continue;
+                }
+                bars.push((top, f32::from(bounds.left()), bar_height));
+            }
+            let rail = bars
+                .iter()
+                .find(|(_, left, _)| *left < 100.)
+                .expect("the sidebar bottom bar must be painted");
+            let toolbar = bars
+                .iter()
+                .find(|(_, left, _)| *left > 200.)
+                .expect("the conversation toolbar must be painted");
+            assert!(
+                (rail.0 - toolbar.0).abs() < 1. && (rail.2 - toolbar.2).abs() < 1.,
+                "both bottom bars must be the same height on the same line: {bars:?}"
+            );
+            assert!(
+                (rail.0 + rail.2 - height).abs() < 1.,
+                "the bottom bars must reach the window edge: {bars:?} / {height}"
+            );
+        });
+        cx.update(|window, cx| {
+            app.update(cx, |this, cx| this.open_about_dialog(window, cx));
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(
+                window.has_active_dialog(cx),
+                "about icon must open a dialog"
+            );
+            let _ = window.draw(cx);
+        });
+        cx.update(|window, cx| {
+            window.close_dialog(cx);
+            assert!(!window.has_active_dialog(cx));
+            let _ = window.draw(cx);
+        });
     }
 }
