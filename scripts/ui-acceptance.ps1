@@ -42,9 +42,12 @@ param(
     [int[]]$ClickButtonIndex = @(),
     [string[]]$PreClickAt = @(),
     [string[]]$ClickAt = @(),
+    [string[]]$DoubleClickAt = @(),
+    [string[]]$DoubleClickElement = @(),
     [string[]]$RightClickAt = @(),
     [string[]]$PostClickAt = @(),
     [string[]]$PostClickButton = @(),
+    [int[]]$PostClickButtonIndex = @(),
     [string[]]$SendClickAt = @(),
     [string[]]$ScrollAt = @(),
     [string[]]$ClickAtAfterScroll = @(),
@@ -52,12 +55,14 @@ param(
     [string]$TypeText = '',
     [string]$UiaSetText = '',
     [string]$SendKeys = '',
+    [string]$PostSendKeys = '',
     [int]$FocusEditIndex = -1,
     [switch]$PasteClipboard,
     [int]$Width = 0,
     [int]$Height = 0,
     [int]$SettleMs = 800,
     [int]$WaitSeconds = 0,
+    [int]$PreActionDelayMs = 0,
     [ValidateSet('all', 'claude', 'codex')]
     [string]$SeedProfile = 'all',
     [switch]$Seed,
@@ -254,12 +259,23 @@ function Set-TargetForeground($handle) {
     Start-Sleep -Milliseconds 200
 }
 
+# The app may reposition or resize its window after launch (centered bounds,
+# DPI change, or our own SetWindowPos), so coordinate clicks resolve against
+# the window rect as it is right now rather than the startup snapshot.
+function Get-WindowRectNow($handle) {
+    $current = New-Object ConduitWin+RECT
+    [ConduitWin]::GetWindowRect($handle, [ref]$current) | Out-Null
+    return $current
+}
+
 if ($Action -eq 'seed' -or $Seed) { Invoke-Seed }
 if ($Action -eq 'seed') { exit 0 }
 
 # -File argument parsing joins comma lists; allow "x,y;x,y" in one value.
 $ClickButton = @($ClickButton | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $ClickAt = @($ClickAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
+$DoubleClickAt = @($DoubleClickAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
+$DoubleClickElement = @($DoubleClickElement | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $RightClickAt = @($RightClickAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $PreClickAt = @($PreClickAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $PostClickAt = @($PostClickAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
@@ -374,12 +390,17 @@ try {
         $buttons = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $buttonCondition)
     }
 
+    # Panel contents (Git changes in particular) arrive from background
+    # probes, so allow the caller to wait for them before coordinate clicks.
+    if ($PreActionDelayMs -gt 0) { Start-Sleep -Milliseconds $PreActionDelayMs }
+
     foreach ($position in $PreClickAt) {
         $parts = $position.Split(',')
         if ($parts.Count -ne 2) { throw "PreClickAt must be 'x,y': $position" }
-        $x = $rect.Left + [int]$parts[0]
-        $y = $rect.Top + [int]$parts[1]
         Set-TargetForeground $handle
+        $clickRect = Get-WindowRectNow $handle
+        $x = $clickRect.Left + [int]$parts[0]
+        $y = $clickRect.Top + [int]$parts[1]
         [ConduitWin]::SetCursorPos($x, $y) | Out-Null
         Start-Sleep -Milliseconds 150
         [ConduitWin]::mouse_event(0x02, 0, 0, 0, [UIntPtr]::Zero)
@@ -410,9 +431,10 @@ try {
     foreach ($position in $ClickAt) {
         $parts = $position.Split(',')
         if ($parts.Count -ne 2) { throw "ClickAt must be 'x,y': $position" }
-        $x = $rect.Left + [int]$parts[0]
-        $y = $rect.Top + [int]$parts[1]
         Set-TargetForeground $handle
+        $clickRect = Get-WindowRectNow $handle
+        $x = $clickRect.Left + [int]$parts[0]
+        $y = $clickRect.Top + [int]$parts[1]
         [ConduitWin]::SetCursorPos($x, $y) | Out-Null
         Start-Sleep -Milliseconds 150
         # MOUSEEVENTF_LEFTDOWN / LEFTUP
@@ -421,12 +443,57 @@ try {
         Start-Sleep -Milliseconds 700
     }
 
+    # Two presses within the system double-click interval. A plain ClickAt
+    # waits 700ms afterwards, which is too slow to produce a double click.
+    foreach ($position in $DoubleClickAt) {
+        $parts = $position.Split(',')
+        if ($parts.Count -ne 2) { throw "DoubleClickAt must be 'x,y': $position" }
+        Set-TargetForeground $handle
+        $clickRect = Get-WindowRectNow $handle
+        $x = $clickRect.Left + [int]$parts[0]
+        $y = $clickRect.Top + [int]$parts[1]
+        [ConduitWin]::SetCursorPos($x, $y) | Out-Null
+        Start-Sleep -Milliseconds 150
+        for ($press = 0; $press -lt 2; $press++) {
+            [ConduitWin]::mouse_event(0x02, 0, 0, 0, [UIntPtr]::Zero)
+            [ConduitWin]::mouse_event(0x04, 0, 0, 0, [UIntPtr]::Zero)
+            if ($press -eq 0) { Start-Sleep -Milliseconds 80 }
+        }
+        Start-Sleep -Milliseconds 900
+    }
+
+    # Element-targeted double click: resolve the widget through the UIA tree
+    # and press twice at its live bounding-rectangle center, which survives
+    # window movement and panel reflow that break fixed coordinates.
+    foreach ($wanted in $DoubleClickElement) {
+        Set-TargetForeground $handle
+        $all = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+        $target = $null
+        for ($i = 0; $i -lt $all.Count; $i++) {
+            if ((Get-ElementName $all.Item($i)) -like "*$wanted*") { $target = $all.Item($i); break }
+        }
+        if ($null -eq $target) { throw "UIA element not found: $wanted" }
+        $bounds = $target.Current.BoundingRectangle
+        if ($bounds.Width -le 0 -or $bounds.Height -le 0) { throw "UIA element has no bounds: $wanted" }
+        $x = [int]($bounds.Left + $bounds.Width / 2)
+        $y = [int]($bounds.Top + $bounds.Height / 2)
+        [ConduitWin]::SetCursorPos($x, $y) | Out-Null
+        Start-Sleep -Milliseconds 150
+        for ($press = 0; $press -lt 2; $press++) {
+            [ConduitWin]::mouse_event(0x02, 0, 0, 0, [UIntPtr]::Zero)
+            [ConduitWin]::mouse_event(0x04, 0, 0, 0, [UIntPtr]::Zero)
+            if ($press -eq 0) { Start-Sleep -Milliseconds 80 }
+        }
+        Start-Sleep -Milliseconds 900
+    }
+
     foreach ($position in $RightClickAt) {
         $parts = $position.Split(',')
         if ($parts.Count -ne 2) { throw "RightClickAt must be 'x,y': $position" }
-        $x = $rect.Left + [int]$parts[0]
-        $y = $rect.Top + [int]$parts[1]
         Set-TargetForeground $handle
+        $clickRect = Get-WindowRectNow $handle
+        $x = $clickRect.Left + [int]$parts[0]
+        $y = $clickRect.Top + [int]$parts[1]
         [ConduitWin]::SetCursorPos($x, $y) | Out-Null
         Start-Sleep -Milliseconds 150
         # MOUSEEVENTF_RIGHTDOWN / RIGHTUP
@@ -438,10 +505,11 @@ try {
     foreach ($scroll in $ScrollAt) {
         $parts = $scroll.Split(',')
         if ($parts.Count -ne 3) { throw "ScrollAt must be 'x,y,notches': $scroll" }
-        $x = $rect.Left + [int]$parts[0]
-        $y = $rect.Top + [int]$parts[1]
-        $notches = [int]$parts[2]
         Set-TargetForeground $handle
+        $clickRect = Get-WindowRectNow $handle
+        $x = $clickRect.Left + [int]$parts[0]
+        $y = $clickRect.Top + [int]$parts[1]
+        $notches = [int]$parts[2]
         [ConduitWin]::SetCursorPos($x, $y) | Out-Null
         Start-Sleep -Milliseconds 150
         # A positive notch count scrolls the content down; MOUSEEVENTF_WHEEL
@@ -459,9 +527,10 @@ try {
     foreach ($position in $ClickAtAfterScroll) {
         $parts = $position.Split(',')
         if ($parts.Count -ne 2) { throw "ClickAtAfterScroll must be 'x,y': $position" }
-        $x = $rect.Left + [int]$parts[0]
-        $y = $rect.Top + [int]$parts[1]
         Set-TargetForeground $handle
+        $clickRect = Get-WindowRectNow $handle
+        $x = $clickRect.Left + [int]$parts[0]
+        $y = $clickRect.Top + [int]$parts[1]
         [ConduitWin]::SetCursorPos($x, $y) | Out-Null
         Start-Sleep -Milliseconds 200
         [ConduitWin]::mouse_event(0x02, 0, 0, 0, [UIntPtr]::Zero)
@@ -472,11 +541,12 @@ try {
     foreach ($drag in $DragAt) {
         $parts = $drag.Split(',')
         if ($parts.Count -ne 4) { throw "DragAt must be 'x1,y1,x2,y2': $drag" }
-        $x1 = $rect.Left + [int]$parts[0]
-        $y1 = $rect.Top + [int]$parts[1]
-        $x2 = $rect.Left + [int]$parts[2]
-        $y2 = $rect.Top + [int]$parts[3]
         Set-TargetForeground $handle
+        $clickRect = Get-WindowRectNow $handle
+        $x1 = $clickRect.Left + [int]$parts[0]
+        $y1 = $clickRect.Top + [int]$parts[1]
+        $x2 = $clickRect.Left + [int]$parts[2]
+        $y2 = $clickRect.Top + [int]$parts[3]
         # Drag detection needs real pointer-move messages; SetCursorPos alone
         # does not reliably produce them, so move through mouse_event with
         # MOUSEEVENTF_MOVE|MOUSEEVENTF_ABSOLUTE (normalized screen coords).
@@ -545,13 +615,13 @@ try {
         }
     }
     if ($SendClickAt.Count -gt 0) {
-        [ConduitWin]::GetWindowRect($handle, [ref]$rect) | Out-Null
         foreach ($position in $SendClickAt) {
             $parts = $position.Split(',')
             if ($parts.Count -ne 2) { throw "SendClickAt must be 'x,y': $position" }
-            $x = $rect.Left + [int]$parts[0]
-            $y = $rect.Top + [int]$parts[1]
             [ConduitWin]::SetForegroundWindow($handle) | Out-Null
+            $clickRect = Get-WindowRectNow $handle
+            $x = $clickRect.Left + [int]$parts[0]
+            $y = $clickRect.Top + [int]$parts[1]
             [ConduitWin]::SetCursorPos($x, $y) | Out-Null
             Start-Sleep -Milliseconds 150
             [ConduitWin]::mouse_event(0x02, 0, 0, 0, [UIntPtr]::Zero)
@@ -561,6 +631,18 @@ try {
         Start-Sleep -Milliseconds 800
     }
     if ($WaitSeconds -gt 0) { Start-Sleep -Seconds $WaitSeconds }
+
+    if ($PostClickButtonIndex.Count -gt 0) {
+        Set-TargetForeground $handle
+        foreach ($index in $PostClickButtonIndex) {
+            $buttons = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $buttonCondition)
+            if ($index -lt 0 -or $index -ge $buttons.Count) { throw "UIA post button index out of range: $index" }
+            $pattern = $buttons.Item($index).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+            $pattern.Invoke()
+            Start-Sleep -Milliseconds 700
+        }
+        Start-Sleep -Milliseconds 500
+    }
 
     if ($PostClickButton.Count -gt 0) {
         Set-TargetForeground $handle
@@ -578,14 +660,34 @@ try {
         Start-Sleep -Milliseconds 800
     }
 
+    if ($PostSendKeys -ne '') {
+        Add-Type -AssemblyName System.Windows.Forms
+        Set-TargetForeground $handle
+        Start-Sleep -Milliseconds 250
+        $keyError = ''
+        for ($attempt = 0; $attempt -lt 4; $attempt++) {
+            try {
+                [System.Windows.Forms.SendKeys]::SendWait($PostSendKeys)
+                $keyError = ''
+                break
+            } catch {
+                $keyError = $_.Exception.Message
+                Set-TargetForeground $handle
+                Start-Sleep -Milliseconds 300
+            }
+        }
+        if ($keyError -ne '') { Write-Output "POST_SENDKEYS_ERROR=$keyError" }
+        Start-Sleep -Milliseconds 900
+    }
+
     if ($PostClickAt.Count -gt 0) {
-        [ConduitWin]::GetWindowRect($handle, [ref]$rect) | Out-Null
         foreach ($position in $PostClickAt) {
             $parts = $position.Split(',')
             if ($parts.Count -ne 2) { throw "PostClickAt must be 'x,y': $position" }
-            $x = $rect.Left + [int]$parts[0]
-            $y = $rect.Top + [int]$parts[1]
             [ConduitWin]::SetForegroundWindow($handle) | Out-Null
+            $clickRect = Get-WindowRectNow $handle
+            $x = $clickRect.Left + [int]$parts[0]
+            $y = $clickRect.Top + [int]$parts[1]
             [ConduitWin]::SetCursorPos($x, $y) | Out-Null
             Start-Sleep -Milliseconds 150
             [ConduitWin]::mouse_event(0x02, 0, 0, 0, [UIntPtr]::Zero)
@@ -617,7 +719,7 @@ try {
     $uia = New-Object System.Collections.Generic.List[string]
     for ($i = 0; $i -lt $buttons.Count; $i++) {
         $element = $buttons.Item($i)
-        $uia.Add(("BUTTON {0} | {1} | enabled={2}" -f $i, (Get-ElementName $element), $element.Current.IsEnabled))
+        $uia.Add(("BUTTON {0} | {1} | enabled={2} | id={3}" -f $i, (Get-ElementName $element), $element.Current.IsEnabled, $element.Current.AutomationId))
     }
     for ($i = 0; $i -lt $edits.Count; $i++) {
         $uia.Add(("EDIT {0} | {1}" -f $i, (Get-ElementName $edits.Item($i))))

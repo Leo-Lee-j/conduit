@@ -15,12 +15,17 @@ use crate::{
     },
 };
 use chrono::{DateTime, Local};
+use gpui_kit::assets::IconName as FullIconName;
 use gpui_kit::{
     base::TextSelection,
     component::{
         Size,
         button::*,
         clipboard::Clipboard,
+        diff::{
+            Diff, DiffChangeIndicator, DiffFile, DiffHoverHighlight, DiffHunkSeparator, DiffMode,
+            DiffState,
+        },
         highlighter::HighlightTheme,
         input::{Input, InputEvent, InputState, Textarea, TextareaState},
         menu::{ContextMenuExt, PopupMenuItem},
@@ -39,6 +44,10 @@ use gpui_kit::{
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -180,7 +189,7 @@ impl Render for DetailResize {
     }
 }
 
-actions!(conduit, [SendPrompt, Newline]);
+actions!(conduit, [SendPrompt, Newline, NextDiff, PreviousDiff]);
 
 /// Application colors that are not owned by the component theme. The dark
 /// values preserve the original palette; the light variant is derived from the
@@ -1145,6 +1154,588 @@ fn git_change_color(kind: git::ChangeKind) -> u32 {
     }
 }
 
+/// Read-only diff window for one Git change, modelled on JetBrains' diff
+/// viewer: a version bar, navigation and folding tools, and a split view.
+struct GitDiffDialog {
+    workspace: PathBuf,
+    file: git::ChangedFile,
+    state: Entity<DiffState>,
+    loading: bool,
+    error: Option<String>,
+    notes: Vec<String>,
+    /// Whether the viewer currently reveals every unchanged line.
+    unchanged_expanded: bool,
+    cancelled: Arc<AtomicBool>,
+    _load_task: Task<()>,
+    _state_subscription: Subscription,
+}
+
+impl GitDiffDialog {
+    fn new(
+        workspace: PathBuf,
+        file: git::ChangedFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let state = cx.new(|cx| {
+            DiffState::new(Vec::new(), cx)
+                .with_mode(DiffMode::Split)
+                .with_context_lines(Some(3))
+        });
+        let subscription = cx.observe(&state, |_, _, cx| cx.notify());
+        let mut dialog = Self {
+            workspace,
+            file,
+            state,
+            loading: true,
+            error: None,
+            notes: Vec::new(),
+            unchanged_expanded: false,
+            cancelled: Arc::new(AtomicBool::new(false)),
+            _load_task: Task::ready(()),
+            _state_subscription: subscription,
+        };
+        dialog.reload(window, cx);
+        dialog
+    }
+
+    fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancelled.store(true, Ordering::Relaxed);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        self.cancelled = cancelled.clone();
+        self.loading = true;
+        self.error = None;
+        self.notes.clear();
+        self.unchanged_expanded = false;
+        self.state
+            .update(cx, |state, cx| state.set_files(Vec::new(), cx));
+        cx.notify();
+        let workspace = self.workspace.clone();
+        let file = self.file.clone();
+        self._load_task = cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { git::load_file_diff(&workspace, &file, &cancelled) })
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                if this.cancelled.load(Ordering::Relaxed) {
+                    return;
+                }
+                this.finish_load(result, window, cx);
+            });
+        });
+    }
+
+    fn finish_load(
+        &mut self,
+        result: anyhow::Result<git::FileDiff>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.loading = false;
+        match result {
+            Ok(diff) => match DiffFile::parse(&diff.patch) {
+                Ok(files) => {
+                    self.notes = diff.notes;
+                    self.state
+                        .update(cx, |state, cx| state.set_files(files, cx));
+                    self.focus_diff(window, cx);
+                }
+                Err(error) => self.error = Some(format!("无法解析该文件的差异：{error}")),
+            },
+            Err(error) => self.error = Some(format!("{error:#}")),
+        }
+        cx.notify();
+    }
+
+    fn focus_diff(&self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.state.read(cx).focus_handle(cx), cx);
+    }
+
+    fn set_mode(&mut self, mode: DiffMode, window: &mut Window, cx: &mut Context<Self>) {
+        if self.state.read(cx).mode() == mode {
+            self.focus_diff(window, cx);
+            return;
+        }
+        self.state.update(cx, |state, cx| state.set_mode(mode, cx));
+        self.focus_diff(window, cx);
+        cx.notify();
+    }
+
+    fn next_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, cx| state.next_change(cx));
+        self.focus_diff(window, cx);
+    }
+
+    fn previous_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, cx| state.previous_change(cx));
+        self.focus_diff(window, cx);
+    }
+
+    fn toggle_unchanged(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.unchanged_expanded = !self.unchanged_expanded;
+        let expanded = self.unchanged_expanded;
+        self.state.update(cx, |state, cx| {
+            if expanded {
+                state.expand_unchanged(cx);
+            } else {
+                state.collapse_unchanged(cx);
+            }
+        });
+        self.focus_diff(window, cx);
+        cx.notify();
+    }
+
+    fn header(&self, cx: &mut Context<Self>) -> AnyElement {
+        let kind = self.file.kind();
+        let color = git_change_color(kind);
+        let (before, after) = match kind {
+            git::ChangeKind::Added => ("空（新增前）", "工作区"),
+            git::ChangeKind::Modified => ("HEAD", "工作区（含暂存）"),
+            git::ChangeKind::Deleted => ("HEAD", "已删除"),
+        };
+        let version_tag = |label: &'static str, emphasized: bool| {
+            div()
+                .flex_shrink_0()
+                .px(px(6.))
+                .py(px(1.))
+                .rounded(px(4.))
+                .bg(rgb(palette().surface_strong))
+                .text_size(px(9.))
+                .text_color(rgb(if emphasized {
+                    palette().text
+                } else {
+                    palette().muted
+                }))
+                .child(label)
+        };
+        let files = self.state.read(cx).files();
+        let additions: usize = files.iter().map(DiffFile::additions).sum();
+        let deletions: usize = files.iter().map(DiffFile::deletions).sum();
+        let binary = files.iter().any(DiffFile::is_binary);
+        let stats = h_flex()
+            .flex_shrink_0()
+            .gap(px(5.))
+            .text_size(px(10.))
+            .child(
+                div()
+                    .text_color(rgb(palette().git_added_text))
+                    .child(format!("+{additions}")),
+            )
+            .child(
+                div()
+                    .text_color(rgb(palette().git_deleted_text))
+                    .child(format!("-{deletions}")),
+            );
+        let mut details = h_flex()
+            .w_full()
+            .min_w_0()
+            .gap(px(8.))
+            .items_center()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(13.))
+                    .font_semibold()
+                    .text_color(rgb(palette().text))
+                    .child(self.file.path.clone()),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .px(px(6.))
+                    .py(px(1.))
+                    .rounded(px(4.))
+                    .bg(rgb(palette().surface_strong))
+                    .text_size(px(9.))
+                    .font_semibold()
+                    .text_color(rgb(color))
+                    .child(kind.label()),
+            )
+            .when(!binary, |row| row.child(stats))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .px(px(5.))
+                    .py(px(1.))
+                    .rounded(px(4.))
+                    .border_1()
+                    .border_color(rgb(palette().border))
+                    .text_size(px(9.))
+                    .text_color(rgb(palette().faint))
+                    .child("只读"),
+            );
+        if let Some(original) = &self.file.original {
+            details = details.child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(9.))
+                    .text_color(rgb(palette().faint))
+                    .child(format!("← {original}")),
+            );
+        }
+        v_flex()
+            .w_full()
+            .flex_shrink_0()
+            .gap(px(4.))
+            .px(px(16.))
+            .pt(px(14.))
+            .pb(px(10.))
+            .child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap(px(10.))
+                    .items_center()
+                    .child(
+                        Icon::new(FullIconName::FileDiff)
+                            .size(px(16.))
+                            .text_color(rgb(palette().muted)),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(5.))
+                            .child(details)
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .min_w_0()
+                                    .gap(px(5.))
+                                    .items_center()
+                                    .child(version_tag(before, true))
+                                    .child(
+                                        Icon::new(IconName::ChevronRight)
+                                            .size(px(11.))
+                                            .text_color(rgb(palette().faint)),
+                                    )
+                                    .child(version_tag(after, true))
+                                    .when(binary, |row| {
+                                        row.child(
+                                            div()
+                                                .text_size(px(9.))
+                                                .text_color(rgb(palette().warning_text))
+                                                .child("二进制"),
+                                        )
+                                    }),
+                            ),
+                    )
+                    .child(
+                        Button::new("git-diff-close")
+                            .ghost()
+                            .small()
+                            .compact()
+                            .icon(FullIconName::X)
+                            .tooltip("关闭差异窗口 (Esc)")
+                            .accessibility_label("关闭差异窗口")
+                            .cursor_pointer()
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let mode = self.state.read(cx).mode();
+        let separator = || {
+            div()
+                .w(px(1.))
+                .h(px(16.))
+                .flex_shrink_0()
+                .bg(rgb(palette().border))
+        };
+        let mode_button = |id: &'static str, label: &'static str, icon: FullIconName, value| {
+            Button::new(id)
+                .label(label)
+                .icon(icon)
+                .ghost()
+                .small()
+                .selected(mode == value)
+                .tooltip(format!("{label}显示"))
+                .accessibility_label(format!("{label}显示"))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.set_mode(value, window, cx);
+                }))
+        };
+        h_flex()
+            .w_full()
+            .flex_shrink_0()
+            .gap(px(6.))
+            .items_center()
+            .px(px(12.))
+            .py(px(6.))
+            .border_t_1()
+            .border_b_1()
+            .border_color(rgb(palette().border))
+            .bg(rgb(palette().sidebar_bg))
+            .child(mode_button(
+                "git-diff-split",
+                "并排",
+                FullIconName::Columns2,
+                DiffMode::Split,
+            ))
+            .child(mode_button(
+                "git-diff-unified",
+                "统一",
+                FullIconName::Rows3,
+                DiffMode::Unified,
+            ))
+            .child(separator())
+            .child(
+                Button::new("git-diff-previous")
+                    .ghost()
+                    .small()
+                    .compact()
+                    .icon(IconName::ChevronUp)
+                    .tooltip("上一个差异 (Shift+F7)")
+                    .accessibility_label("上一个差异")
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.previous_change(window, cx);
+                    })),
+            )
+            .child(
+                Button::new("git-diff-next")
+                    .ghost()
+                    .small()
+                    .compact()
+                    .icon(IconName::ChevronDown)
+                    .tooltip("下一个差异 (F7)")
+                    .accessibility_label("下一个差异")
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.next_change(window, cx);
+                    })),
+            )
+            .child(separator())
+            .child(
+                Button::new("git-diff-fold")
+                    .label(if self.unchanged_expanded {
+                        "折叠未变更"
+                    } else {
+                        "展开未变更"
+                    })
+                    .ghost()
+                    .small()
+                    .tooltip(if self.unchanged_expanded {
+                        "恢复只显示变更附近的上下文"
+                    } else {
+                        "显示所有未变更行"
+                    })
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_unchanged(window, cx);
+                    })),
+            )
+            .child(div().flex_1())
+            .child(
+                Button::new("git-diff-refresh")
+                    .ghost()
+                    .small()
+                    .compact()
+                    .icon(IconName::RefreshCw)
+                    .tooltip("重新读取差异")
+                    .accessibility_label("重新读取差异")
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, window, cx| this.reload(window, cx))),
+            )
+            .into_any_element()
+    }
+
+    fn body(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.loading {
+            return v_flex()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .gap(px(8.))
+                .child(Spinner::new().small().color(rgb(palette().muted).into()))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(palette().muted))
+                        .child("正在读取差异…"),
+                )
+                .into_any_element();
+        }
+        if let Some(error) = &self.error {
+            return v_flex()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .gap(px(10.))
+                .px(px(48.))
+                .child(
+                    Icon::new(IconName::TriangleAlert)
+                        .size(px(22.))
+                        .text_color(rgb(palette().danger_text)),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .line_height(relative(1.5))
+                        .text_align(gpui::TextAlign::Center)
+                        .text_color(rgb(palette().danger_text))
+                        .child(error.clone()),
+                )
+                .child(
+                    Button::new("git-diff-retry")
+                        .label("重新读取")
+                        .small()
+                        .ghost()
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, window, cx| this.reload(window, cx))),
+                )
+                .into_any_element();
+        }
+        let files = self.state.read(cx).files();
+        if files.is_empty() {
+            return v_flex()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(palette().muted))
+                        .child("没有可显示的文本差异"),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(rgb(palette().faint))
+                        .child("文件可能已被还原，或只有属性变更"),
+                )
+                .into_any_element();
+        }
+        if files.iter().any(DiffFile::is_binary) {
+            return v_flex()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .gap(px(8.))
+                .px(px(48.))
+                .child(
+                    Icon::new(FullIconName::File)
+                        .size(px(24.))
+                        .text_color(rgb(palette().muted)),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(palette().text))
+                        .child("二进制文件已更改"),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .line_height(relative(1.5))
+                        .text_align(gpui::TextAlign::Center)
+                        .text_color(rgb(palette().muted))
+                        .child("此窗口仅显示文本差异，请在外部工具中查看二进制内容。"),
+                )
+                .into_any_element();
+        }
+        Diff::new(&self.state)
+            .header_visible(false)
+            .line_number(true)
+            .syntax_highlight(true)
+            .change_indicator(DiffChangeIndicator::Bars)
+            .hunk_separator(DiffHunkSeparator::LineInfo)
+            .hover_highlight(DiffHoverHighlight::Line)
+            .soft_wrap(false)
+            .into_any_element()
+    }
+
+    fn notes_banner(&self) -> AnyElement {
+        v_flex()
+            .w_full()
+            .flex_shrink_0()
+            .gap(px(2.))
+            .px(px(16.))
+            .py(px(6.))
+            .border_b_1()
+            .border_color(rgb(palette().warning_border))
+            .bg(rgb(palette().warning_bg))
+            .children(self.notes.iter().map(|note| {
+                div()
+                    .text_size(px(10.))
+                    .line_height(relative(1.4))
+                    .text_color(rgb(palette().warning_text))
+                    .child(note.clone())
+            }))
+            .into_any_element()
+    }
+
+    fn footer(&self, cx: &mut Context<Self>) -> AnyElement {
+        let files = self.state.read(cx).files();
+        let binary = files.iter().any(DiffFile::is_binary);
+        h_flex()
+            .w_full()
+            .flex_shrink_0()
+            .gap(px(12.))
+            .items_center()
+            .px(px(14.))
+            .py(px(6.))
+            .border_t_1()
+            .border_color(rgb(palette().border))
+            .child(
+                div()
+                    .text_size(px(9.))
+                    .text_color(rgb(palette().faint))
+                    .child(if binary {
+                        "二进制文件无法显示逐行差异"
+                    } else {
+                        "只读差异 · 与 HEAD 对比"
+                    }),
+            )
+            .child(div().flex_1())
+            .child(
+                div()
+                    .text_size(px(9.))
+                    .text_color(rgb(palette().faint))
+                    .child("F7 下一处差异 · Shift+F7 上一处 · Esc 关闭"),
+            )
+            .into_any_element()
+    }
+}
+
+impl Drop for GitDiffDialog {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Render for GitDiffDialog {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .id("git-diff-dialog")
+            .size_full()
+            .min_h_0()
+            .bg(rgb(palette().surface))
+            .rounded(px(16.))
+            .overflow_hidden()
+            .on_action(cx.listener(|this, _: &NextDiff, window, cx| {
+                this.next_change(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &PreviousDiff, window, cx| {
+                this.previous_change(window, cx);
+            }))
+            .child(self.header(cx))
+            .child(self.toolbar(cx))
+            .when(!self.notes.is_empty(), |dialog| {
+                dialog.child(self.notes_banner())
+            })
+            .child(div().flex_1().min_h_0().w_full().child(self.body(cx)))
+            .child(self.footer(cx))
+    }
+}
+
 /// Menu popovers render only compact buttons, so the default `p_3()` popover
 /// padding (12px on every side) makes the menu look sparse. This refinement is
 /// applied through `Popover`'s own `Styled` impl, which `refine_style`s the
@@ -1286,6 +1877,11 @@ impl ConduitApp {
             KeyBinding::new("ctrl-enter", Newline, Some("ConduitComposer")),
             KeyBinding::new("shift-enter", Newline, Some("ConduitComposer > Input")),
             KeyBinding::new("shift-enter", Newline, Some("ConduitComposer")),
+            // JetBrains' diff navigation shortcuts, scoped to the diff window.
+            KeyBinding::new("f7", NextDiff, Some("GitDiffDialog")),
+            KeyBinding::new("shift-f7", PreviousDiff, Some("GitDiffDialog")),
+            KeyBinding::new("f7", NextDiff, Some("Diff")),
+            KeyBinding::new("shift-f7", PreviousDiff, Some("Diff")),
         ]);
         let (mut store, message, writable) = match Store::load() {
             Ok(store) => (store, None, true),
@@ -5167,6 +5763,46 @@ impl ConduitApp {
         })
         .into_any_element()
     }
+    /// Open the read-only diff window for one file of the selected workspace.
+    fn open_git_diff(
+        &mut self,
+        file: git::ChangedFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(workspace) = self.selected_workspace_path() else {
+            self.message = Some("请先选择工作区再查看差异".into());
+            cx.notify();
+            return;
+        };
+        let view = cx.new(|cx| GitDiffDialog::new(workspace, file, window, cx));
+        window.open_dialog(cx, move |dialog, window, _| {
+            let view = view.clone();
+            let viewport = window.viewport_size();
+            let width = (f32::from(viewport.width) - 96.).clamp(720., 1180.);
+            let height = (f32::from(viewport.height) - 96.).clamp(420., 820.);
+            let margin_top = ((f32::from(viewport.height) - height) * 0.5).max(24.);
+            dialog
+                .w(px(width))
+                .margin_top(px(margin_top))
+                .p_0()
+                .gap(px(0.))
+                .rounded(px(16.))
+                .bg(rgb(palette().surface))
+                .border_color(rgb(palette().border))
+                .close_button(false)
+                .overlay_closable(true)
+                .content(move |content, _, _| {
+                    content.child(
+                        div()
+                            .key_context("GitDiffDialog")
+                            .w_full()
+                            .h(px(height))
+                            .child(view.clone()),
+                    )
+                })
+        });
+    }
     /// Start a background read-only Git snapshot for the selected workspace.
     fn refresh_git(&mut self, cx: &mut Context<Self>) {
         if self.last_branch_check.elapsed() >= Duration::from_secs(1) {
@@ -5312,7 +5948,7 @@ impl ConduitApp {
                     .text_size(px(10.))
                     .text_color(rgb(palette().faint))
                     .child(format!(
-                        "暂存 {} · 未暂存 {} · 未跟踪 {}",
+                        "暂存 {} · 未暂存 {} · 未跟踪 {} · 双击文件查看差异",
                         snapshot.staged_count(),
                         snapshot.unstaged_count(),
                         snapshot.untracked_count()
@@ -5407,13 +6043,28 @@ impl ConduitApp {
                         .border_l_1()
                         .border_color(rgb(palette().border));
                     for file in files {
+                        let app = view.clone();
+                        let target = file.clone();
                         rows = rows.child(
                             h_flex()
+                                .id(SharedString::from(format!("git-file-{}", file.path)))
+                                .role(Role::Button)
+                                .aria_label(format!("{}，双击查看差异", file.path))
                                 .w_full()
                                 .min_w_0()
                                 .gap_2()
                                 .items_center()
                                 .py(px(2.))
+                                .px(px(4.))
+                                .rounded(px(4.))
+                                .cursor_pointer()
+                                .hover(|style| style.bg(rgb(palette().surface_hover)))
+                                .on_double_click(move |_, window, cx| {
+                                    let target = target.clone();
+                                    app.update(cx, |this, cx| {
+                                        this.open_git_diff(target, window, cx);
+                                    });
+                                })
                                 .child(
                                     div()
                                         .flex_1()

@@ -257,6 +257,31 @@ Get-Clipboard
 
 仍待人工确认：跨正文段与代码段的连续选区观感、触控板拖动选中、明暗主题下选区高亮对比度，以及"选中后焦点离开输入框"是否会影响连续打字习惯。
 
+## 第十三轮：2026-10-25 Git 文件 Diff 弹窗
+
+目标：模仿 IDEA 的 Git 文件 diff——列表只保留状态，双击文件后在应用中间打开独立 diff 窗口。
+
+| 问题 | 处理 |
+| --- | --- |
+| 合成双击最初无反应 | 不是事件机制问题；验收脚本缓存了启动时的窗口矩形，窗口后续移动导致坐标偏移。改为每次点击前重读 `GetWindowRect`，并按 UIA Name 定位文件行，双击恢复可靠 |
+| 展开未变更仍显示“N lines not in patch” | 默认 3 行上下文之外的未变更行不在补丁内，`expand_unchanged` 无法凭空补齐；改为 `git diff HEAD --unified=1000000` 取完整文件上下文 |
+| F7 看似无效 | 调试确认 action 与 `next_change` 均触发；折叠后内容不足一屏，列表没有可滚动空间。展开未变更后 F7/Shift+F7 可正确滚动到后续/前面的差异 |
+| 二进制正文暴露原始补丁头 | gpui-kit 的 `render_notice` 会列出 extended headers；改为检测 `DiffFile::is_binary` 后渲染专用中文占位，并隐藏无意义的 `+0 -0` |
+| 超 4 MiB 长时间停在加载 | 读取到上限后仍继续消费完整输出；改为读满立即结束 Git 进程并报错，同时让有数据时连续读取、仅在空闲时休眠 |
+
+复现命令（隔离仓库含已暂存、未暂存、未跟踪、删除、二进制和 5.5 MiB 文件）：
+
+```powershell
+cargo build --locked
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ui-acceptance.ps1 -Action capture -Name git-diff-final-split -AppArgs '--git' -DataDir target\ui-acceptance\data-git-groups -WorkspacePath target\ui-acceptance\workspace-git-groups -DoubleClickElement 'both.txt' -SettleMs 2200
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ui-acceptance.ps1 -Action capture -Name git-diff-final-binary -AppArgs '--git' -DataDir target\ui-acceptance\data-git-groups -DoubleClickElement 'binary.bin' -SettleMs 2200
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ui-acceptance.ps1 -Action capture -Name git-diff-final-large -AppArgs '--git' -DataDir target\ui-acceptance\data-git-groups -DoubleClickElement 'large.txt' -SettleMs 8000
+```
+
+证据：`git-diff-final-split.png`（默认并排、HEAD → 工作区）、`git-diff-unified.png`、`git-diff-fold2.png`（展开未变更）、`git-diff-f7-expanded.png` / `git-diff-shiftf7-expanded.png`（差异跳转）、`git-diff-esc.png`（关闭）、`git-diff-deleted.png`、`git-diff-untracked.png`、`git-diff-final-binary.png`（专用占位）、`git-diff-final-large.png`（4 MiB 错误与重试），均在 `target/ui-acceptance/out/`，目录未入库。
+
+验证：fmt、严格 Clippy、build 通过；`cargo test --locked -- --test-threads=1` 为 86 passed / 0 failed / 11 ignored。file diff 6 项测试通过，新增 5 MiB 超限回归。自动截图不替代人工检查窄窗、DPI、超大补丁读取耗时与真实仓库手感。
+
 ## 仍未覆盖，必须人工完成
 
 清单 1、2、5、6、8、9 全项；3 的复制一致性；4 的动态滚动跟随；7 的 100%–200% DPI 与多屏；10 的取消检测与文件选择；5 的真实审批允许/拒绝与多审批队列。人工完成后把结果写回 [验证记录](m0-validation.md#手工-ui-验收清单)，不得用本预验代替。

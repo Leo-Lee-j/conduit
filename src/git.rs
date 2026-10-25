@@ -8,9 +8,9 @@
 use crate::child::{Child, available};
 use anyhow::{Context, Result, anyhow, bail};
 use std::{
-    fs::File,
+    fs::{self, File},
     io::Read,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -27,6 +27,11 @@ pub const MAX_BRANCHES: usize = 2_000;
 pub const MAX_DIFF_BYTES: usize = 200 * 1024;
 /// Hard cap on the bytes read from one Git command (the rest is drained).
 const MAX_COMMAND_BYTES: usize = 512 * 1024;
+/// Upper bound for a single file diff shown in the diff window.
+const MAX_FILE_DIFF_BYTES: usize = 4 * 1024 * 1024;
+/// Context large enough that Git emits the whole file on both sides, so the
+/// viewer can reveal unchanged lines instead of merely widening hunk context.
+const FULL_FILE_CONTEXT_LINES: usize = 1_000_000;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
 const READ_CHUNK: usize = 64 * 1024;
 
@@ -102,6 +107,13 @@ pub struct Snapshot {
     pub staged_diff: String,
     pub notes: Vec<String>,
     pub target: CommitTarget,
+}
+
+/// Patch for one file, compared against HEAD in the diff window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileDiff {
+    pub patch: String,
+    pub notes: Vec<String>,
 }
 
 /// Identity of the index and HEAD the user reviewed before clicking Commit.
@@ -457,7 +469,7 @@ pub fn load(workspace: &Path, cancel: &AtomicBool) -> Result<Snapshot> {
     )?;
     let staged_diff = truncate_diff(staged_diff, &mut notes);
     if files.iter().any(|file| file.untracked()) {
-        notes.push("未跟踪文件只列出路径，不读取内容".into());
+        notes.push("双击未跟踪文件可按新增文件查看内容".into());
     }
     if commit_target(&git, workspace, cancel)? != target {
         bail!("读取期间分支或暂存区发生变化，请刷新后重试");
@@ -469,6 +481,162 @@ pub fn load(workspace: &Path, cancel: &AtomicBool) -> Result<Snapshot> {
         notes,
         target,
     })
+}
+
+/// Read the patch for one changed file. Tracked files are compared against
+/// HEAD, so the result includes both staged and unstaged edits. Untracked and
+/// still-uncommitted added files are shown as a new file against an empty side.
+pub fn load_file_diff(
+    workspace: &Path,
+    file: &ChangedFile,
+    cancel: &AtomicBool,
+) -> Result<FileDiff> {
+    if !workspace.is_dir() {
+        bail!("工作目录不存在：{}", workspace.display());
+    }
+    let git = resolve_git()
+        .ok_or_else(|| anyhow!("未找到 git.exe；请安装 Git 或将其加入 PATH 后重试"))?;
+    let root = run_git(&git, workspace, &["rev-parse", "--show-toplevel"], cancel)
+        .context("该工作区不是 Git 仓库")?;
+    let root = PathBuf::from(root.trim());
+    let mut notes = vec![];
+    let patch = if file.untracked() {
+        let content = read_file_content(&root, &file.path)?;
+        if content.truncated {
+            notes.push(format!(
+                "文件超过 {} MiB，仅显示前部分内容",
+                MAX_FILE_DIFF_BYTES / (1024 * 1024)
+            ));
+        }
+        added_file_patch(&file.path, content.text.as_deref())
+    } else if run_git(&git, &root, &["rev-parse", "--verify", "HEAD"], cancel).is_err() {
+        if file.kind() != ChangeKind::Added {
+            bail!("仓库尚无提交，无法对比该文件");
+        }
+        notes.push("仓库尚无提交，按新增文件展示".into());
+        let content = read_file_content(&root, &file.path)?;
+        if content.truncated {
+            notes.push(format!(
+                "文件超过 {} MiB，仅显示前部分内容",
+                MAX_FILE_DIFF_BYTES / (1024 * 1024)
+            ));
+        }
+        added_file_patch(&file.path, content.text.as_deref())
+    } else {
+        let context = format!("--unified={FULL_FILE_CONTEXT_LINES}");
+        let output = run_git_bounded(
+            &git,
+            &root,
+            &[
+                "--no-optional-locks",
+                "--no-pager",
+                "-c",
+                "core.quotepath=false",
+                "diff",
+                "HEAD",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                &context,
+                "--",
+                &file.path,
+            ],
+            cancel,
+            MAX_FILE_DIFF_BYTES,
+            COMMAND_TIMEOUT,
+            true,
+        )?;
+        if output.truncated {
+            bail!(
+                "文件差异超过 {} MiB，无法在此窗口完整显示",
+                MAX_FILE_DIFF_BYTES / (1024 * 1024)
+            );
+        }
+        output.text
+    };
+    Ok(FileDiff { patch, notes })
+}
+
+struct FileContent {
+    text: Option<String>,
+    truncated: bool,
+}
+
+fn read_file_content(root: &Path, path: &str) -> Result<FileContent> {
+    if path.chars().any(char::is_control) {
+        bail!("Git 文件路径包含不支持的控制字符");
+    }
+    let relative = Path::new(path);
+    if relative.is_absolute()
+        || relative.components().any(|part| {
+            matches!(
+                part,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        bail!("Git 文件路径超出仓库范围");
+    }
+    let canonical_root = fs::canonicalize(root)?;
+    let absolute =
+        fs::canonicalize(root.join(relative)).with_context(|| format!("无法读取文件：{path}"))?;
+    if !absolute.starts_with(&canonical_root) {
+        bail!("Git 文件路径超出仓库范围");
+    }
+    let mut file = File::open(&absolute)?;
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take((MAX_FILE_DIFF_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    let truncated = bytes.len() > MAX_FILE_DIFF_BYTES;
+    if truncated {
+        bytes.truncate(MAX_FILE_DIFF_BYTES);
+    }
+    Ok(FileContent {
+        text: decode_text(&bytes, truncated),
+        truncated,
+    })
+}
+
+fn decode_text(bytes: &[u8], truncated: bool) -> Option<String> {
+    if bytes[..bytes.len().min(8 * 1024)].contains(&0) {
+        return None;
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(text) => Some(text.to_owned()),
+        // A read cut through the last glyph is still text; a genuinely invalid
+        // sequence is treated as binary, matching Git's own preview behavior.
+        Err(error) if truncated && error.error_len().is_none() => {
+            Some(String::from_utf8_lossy(&bytes[..error.valid_up_to()]).into_owned())
+        }
+        Err(_) => None,
+    }
+}
+
+fn added_file_patch(path: &str, text: Option<&str>) -> String {
+    let mut patch = format!("--- /dev/null\n+++ b/{path}\n");
+    let Some(text) = text else {
+        patch.push_str(&format!("Binary files /dev/null and b/{path} differ\n"));
+        return patch;
+    };
+    if text.is_empty() {
+        return patch;
+    }
+    let final_newline = text.ends_with('\n');
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    if final_newline {
+        lines.pop();
+    }
+    patch.push_str(&format!("@@ -0,0 +1,{} @@\n", lines.len()));
+    for (index, line) in lines.iter().enumerate() {
+        patch.push('+');
+        patch.push_str(line);
+        patch.push('\n');
+        if index + 1 == lines.len() && !final_newline {
+            patch.push_str("\\ No newline at end of file\n");
+        }
+    }
+    patch
 }
 
 fn commit_target(git: &Path, workspace: &Path, cancel: &AtomicBool) -> Result<CommitTarget> {
@@ -693,24 +861,31 @@ fn truncate_diff(diff: String, notes: &mut Vec<String>) -> String {
     truncated
 }
 
-fn read_available(file: &mut File, output: &mut Vec<u8>, truncated: &mut bool) -> Result<()> {
-    if let Ok(count) = available(file)
-        && count > 0
-    {
-        let mut buffer = [0; READ_CHUNK];
-        let count = file.read(&mut buffer[..(count as usize).min(READ_CHUNK)])?;
-        let room = MAX_COMMAND_BYTES.saturating_sub(output.len());
-        if room == 0 {
+fn read_available(
+    file: &mut File,
+    output: &mut Vec<u8>,
+    truncated: &mut bool,
+    limit: usize,
+) -> Result<usize> {
+    let Ok(available) = available(file) else {
+        return Ok(0);
+    };
+    if available == 0 {
+        return Ok(0);
+    }
+    let mut buffer = [0; READ_CHUNK];
+    let count = file.read(&mut buffer[..(available as usize).min(READ_CHUNK)])?;
+    let room = limit.saturating_sub(output.len());
+    if room == 0 {
+        *truncated = true;
+    } else {
+        let keep = count.min(room);
+        output.extend_from_slice(&buffer[..keep]);
+        if keep < count {
             *truncated = true;
-        } else {
-            let keep = count.min(room);
-            output.extend_from_slice(&buffer[..keep]);
-            if keep < count {
-                *truncated = true;
-            }
         }
     }
-    Ok(())
+    Ok(count)
 }
 
 /// Run one Git command in `workspace`, bounded in time and output size.
@@ -725,6 +900,32 @@ fn run_git_with_timeout(
     cancel: &AtomicBool,
     timeout: Duration,
 ) -> Result<String> {
+    run_git_bounded(
+        git,
+        workspace,
+        args,
+        cancel,
+        MAX_COMMAND_BYTES,
+        timeout,
+        false,
+    )
+    .map(|output| output.text)
+}
+
+struct CommandOutput {
+    text: String,
+    truncated: bool,
+}
+
+fn run_git_bounded(
+    git: &Path,
+    workspace: &Path,
+    args: &[&str],
+    cancel: &AtomicBool,
+    limit: usize,
+    timeout: Duration,
+    stop_when_full: bool,
+) -> Result<CommandOutput> {
     if cancel.load(Ordering::Acquire) {
         bail!("Git 读取已取消");
     }
@@ -744,15 +945,20 @@ fn run_git_with_timeout(
             if started.elapsed() > timeout {
                 bail!("Git 命令超时，已停止进程树");
             }
-            read_available(&mut pipes.stdout, &mut stdout, &mut truncated)?;
-            read_available(&mut pipes.stderr, &mut stderr, &mut truncated)?;
+            let mut progressed = false;
+            progressed |=
+                read_available(&mut pipes.stdout, &mut stdout, &mut truncated, limit)? > 0;
+            progressed |=
+                read_available(&mut pipes.stderr, &mut stderr, &mut truncated, limit)? > 0;
+            if stop_when_full && truncated {
+                return Ok(CommandOutput {
+                    text: String::from_utf8_lossy(&stdout).into_owned(),
+                    truncated,
+                });
+            }
             if let Some(code) = child.exit_code()? {
-                while available(&pipes.stdout).unwrap_or(0) > 0 {
-                    read_available(&mut pipes.stdout, &mut stdout, &mut truncated)?;
-                }
-                while available(&pipes.stderr).unwrap_or(0) > 0 {
-                    read_available(&mut pipes.stderr, &mut stderr, &mut truncated)?;
-                }
+                while read_available(&mut pipes.stdout, &mut stdout, &mut truncated, limit)? > 0 {}
+                while read_available(&mut pipes.stderr, &mut stderr, &mut truncated, limit)? > 0 {}
                 if code != 0 {
                     let stderr = String::from_utf8_lossy(&stderr);
                     let stdout = String::from_utf8_lossy(&stdout);
@@ -762,9 +968,14 @@ fn run_git_with_timeout(
                         stdout.trim()
                     );
                 }
-                return Ok(String::from_utf8_lossy(&stdout).into_owned());
+                return Ok(CommandOutput {
+                    text: String::from_utf8_lossy(&stdout).into_owned(),
+                    truncated,
+                });
             }
-            thread::sleep(Duration::from_millis(10));
+            if !progressed {
+                thread::sleep(Duration::from_millis(10));
+            }
         }
     })();
     child.terminate()?;
@@ -1213,5 +1424,188 @@ mod tests {
             bytes.extend(std::fs::read(path).unwrap());
         }
         bytes
+    }
+
+    fn changed_file(path: &str, index: char, worktree: char) -> ChangedFile {
+        ChangedFile {
+            index,
+            worktree,
+            path: path.into(),
+            original: None,
+        }
+    }
+
+    fn parse_file_diff(patch: &str) -> Vec<gpui_kit::component::diff::DiffFile> {
+        gpui_kit::component::diff::DiffFile::parse(patch)
+            .expect("generated patch should parse as a Git diff")
+    }
+
+    #[test]
+    fn file_diff_compares_working_tree_with_head() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        repo.stage("top\nalpha\nbeta\ngamma\ndelta\n");
+        assert!(repo.commit("seed", false).committed);
+        std::fs::write(
+            repo.path.join("tracked.txt"),
+            "top\nalpha\nBETA\ngamma\ndelta\n",
+        )
+        .unwrap();
+
+        let diff = load_file_diff(
+            &repo.path,
+            &changed_file("tracked.txt", ' ', 'M'),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(diff.patch.contains("-beta"));
+        assert!(diff.patch.contains("+BETA"));
+        // Full-file context keeps untouched lines in the patch so the viewer
+        // can expand unchanged regions instead of dropping them.
+        assert!(diff.patch.contains(" top"));
+        assert!(diff.patch.contains(" delta"));
+        let files = parse_file_diff(&diff.patch);
+        assert_eq!(files.len(), 1);
+        assert_eq!(
+            files[0].status(),
+            gpui_kit::component::diff::DiffFileStatus::Modified
+        );
+        assert_eq!(files[0].path().as_str(), "tracked.txt");
+        assert_eq!(files[0].additions(), 1);
+        assert_eq!(files[0].deletions(), 1);
+    }
+
+    #[test]
+    fn file_diff_treats_untracked_and_added_files_as_new() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        std::fs::write(repo.path.join("notes.md"), "alpha\nbeta\n").unwrap();
+        let untracked = load_file_diff(
+            &repo.path,
+            &changed_file("notes.md", '?', '?'),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let files = parse_file_diff(&untracked.patch);
+        assert_eq!(files.len(), 1);
+        assert_eq!(
+            files[0].status(),
+            gpui_kit::component::diff::DiffFileStatus::Added
+        );
+        assert_eq!(files[0].additions(), 2);
+        assert_eq!(files[0].deletions(), 0);
+
+        // An added file in a repository without HEAD still gets a readable
+        // empty-to-working-tree preview.
+        repo.run(&["add", "notes.md"]);
+        let added = load_file_diff(
+            &repo.path,
+            &changed_file("notes.md", 'A', ' '),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(added.notes.iter().any(|note| note.contains("尚无提交")));
+        let files = parse_file_diff(&added.patch);
+        assert_eq!(
+            files[0].status(),
+            gpui_kit::component::diff::DiffFileStatus::Added
+        );
+        assert_eq!(files[0].additions(), 2);
+    }
+
+    #[test]
+    fn file_diff_shows_deletions_and_binary_markers() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        repo.stage("initial\n");
+        assert!(repo.commit("seed", false).committed);
+        std::fs::remove_file(repo.path.join("tracked.txt")).unwrap();
+        let deleted = load_file_diff(
+            &repo.path,
+            &changed_file("tracked.txt", ' ', 'D'),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let files = parse_file_diff(&deleted.patch);
+        assert_eq!(
+            files[0].status(),
+            gpui_kit::component::diff::DiffFileStatus::Deleted
+        );
+        assert_eq!(files[0].deletions(), 1);
+
+        std::fs::write(repo.path.join("blob.bin"), b"abc\0def").unwrap();
+        let binary = load_file_diff(
+            &repo.path,
+            &changed_file("blob.bin", '?', '?'),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let files = parse_file_diff(&binary.patch);
+        assert!(files[0].is_binary());
+        assert_eq!(
+            files[0].status(),
+            gpui_kit::component::diff::DiffFileStatus::Added
+        );
+    }
+
+    #[test]
+    fn file_diff_rejects_oversized_patches() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        let line = "0123456789abcdef\n";
+        let body = line.repeat(5 * 1024 * 1024 / line.len());
+        repo.stage(&body);
+        assert!(repo.commit("seed large file", false).committed);
+        std::fs::write(
+            repo.path.join("tracked.txt"),
+            format!("modified\n{}", &body[line.len()..]),
+        )
+        .unwrap();
+
+        let error = load_file_diff(
+            &repo.path,
+            &changed_file("tracked.txt", ' ', 'M'),
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("超过 4 MiB"));
+    }
+
+    #[test]
+    fn file_diff_resolves_paths_from_a_workspace_subdirectory() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        repo.stage("initial\n");
+        assert!(repo.commit("seed", false).committed);
+        std::fs::create_dir(repo.path.join("nested")).unwrap();
+        std::fs::write(repo.path.join("tracked.txt"), "nested edit\n").unwrap();
+        let diff = load_file_diff(
+            &repo.path.join("nested"),
+            &changed_file("tracked.txt", ' ', 'M'),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let files = parse_file_diff(&diff.patch);
+        assert_eq!(files[0].path().as_str(), "tracked.txt");
+        assert_eq!(files[0].additions(), 1);
+    }
+
+    #[test]
+    fn file_diff_rejects_paths_outside_the_repository() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        let error = load_file_diff(
+            &repo.path,
+            &changed_file("../outside.txt", '?', '?'),
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("仓库范围"));
     }
 }
