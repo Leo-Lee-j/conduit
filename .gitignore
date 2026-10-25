@@ -2,3 +2,7 @@
 /.ccgui/
 *.log
 docs/screenshots/
+.omc
+.workbuddy-ai
+.claude
+bash.exe.stackdump
