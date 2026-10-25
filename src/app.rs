@@ -10589,12 +10589,12 @@ impl Render for ConduitApp {
             // No bottom padding: the bottom bar must sit on the window edge so
             // its 34px strip lines up with the conversation toolbar.
             .px_2()
-            .pt_2()
+            .pt_1()
             .gap_1()
             .child(
                 h_flex()
-                    .h(px(36.))
-                    .px_2()
+                    .h(px(30.))
+                    .px_1()
                     .gap_1()
                     .items_center()
                     .child(
