@@ -113,15 +113,20 @@ fn usage_is_zero(usage: &Usage) -> bool {
 pub enum ItemKind {
     User,
     Assistant,
+    /// Provider-supplied reasoning summary; never raw private chain-of-thought.
+    Reasoning,
     Tool,
     Notice,
-    /// CLI stream error shown as a banner instead of inline transcript text.
+    /// CLI stream error shown as an actionable inline message card.
     Error,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatItem {
     pub key: String,
+    /// Unix timestamp for when this visible item first appeared.
+    #[serde(default)]
+    pub created_at: u64,
     pub kind: ItemKind,
     pub text: String,
     #[serde(default)]
@@ -194,6 +199,7 @@ impl SessionRecord {
             .unwrap_or_else(|| {
                 self.messages.push(ChatItem {
                     key: key.unwrap_or_else(|| format!("{turn}permission-{request}")),
+                    created_at: 0,
                     kind: ItemKind::Tool,
                     text: tool_name.into(),
                     input: details

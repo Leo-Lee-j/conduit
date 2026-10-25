@@ -1,4 +1,4 @@
-﻿//! Provider-specific wire formats translated into presentation events.
+//! Provider-specific wire formats translated into presentation events.
 use crate::domain::{PermissionLevel, Provider};
 use serde_json::{Value, json};
 
@@ -38,6 +38,13 @@ pub enum Event {
     Text {
         key: String,
         text: String,
+    },
+    /// Public summary text explicitly emitted by the provider, not hidden reasoning.
+    ReasoningSummary {
+        key: String,
+        text: String,
+        summary_index: u64,
+        snapshot: bool,
     },
     Tool {
         key: String,
@@ -365,6 +372,12 @@ impl Protocol {
                 key: text(p, "itemId").into(),
                 text: text(p, "delta").into(),
             }),
+            "item/reasoning/summaryTextDelta" => step.events.push(Event::ReasoningSummary {
+                key: format!("{}-summary", text(p, "itemId")),
+                text: text(p, "delta").into(),
+                summary_index: p["summaryIndex"].as_u64().unwrap_or(0),
+                snapshot: false,
+            }),
             "item/started" | "item/completed" => {
                 let item = &p["item"];
                 let key = text(item, "id").to_string();
@@ -376,7 +389,28 @@ impl Protocol {
                             text: text(item, "text").into(),
                         });
                     }
-                } else if kind != "userMessage" && kind != "reasoning" {
+                } else if kind == "reasoning" {
+                    if method == "item/completed" {
+                        let summary = item["summary"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|part| {
+                                part.as_str()
+                                    .or_else(|| part.get("text").and_then(Value::as_str))
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        if !summary.trim().is_empty() {
+                            step.events.push(Event::ReasoningSummary {
+                                key: format!("{key}-summary"),
+                                text: summary,
+                                summary_index: 0,
+                                snapshot: true,
+                            });
+                        }
+                    }
+                } else if kind != "userMessage" {
                     let input = match kind {
                         "commandExecution" => json!({"command":item["command"],"cwd":item["cwd"]}),
                         "fileChange" => item["changes"].clone(),
@@ -824,6 +858,29 @@ mod tests {
         assert_eq!(step.writes[1]["method"], "thread/resume");
         assert_eq!(step.writes[1]["params"]["model"], "gpt-custom");
     }
+    #[test]
+    fn codex_exposes_only_provider_reasoning_summaries() {
+        let mut p = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
+        let delta = p.accept(json!({
+            "method":"item/reasoning/summaryTextDelta",
+            "params":{"itemId":"reason-1","summaryIndex":0,"delta":"Inspect the relevant files."}
+        }));
+        assert!(matches!(
+            delta.events.as_slice(),
+            [Event::ReasoningSummary { key, text, snapshot: false, .. }]
+                if key == "reason-1-summary" && text == "Inspect the relevant files."
+        ));
+
+        let hidden = p.accept(json!({
+            "method":"item/completed",
+            "params":{"item":{"type":"reasoning","id":"reason-hidden","text":"private reasoning"}}
+        }));
+        assert!(
+            hidden.events.is_empty(),
+            "raw reasoning must never enter the transcript"
+        );
+    }
+
     #[test]
     fn codex_ignores_other_threads_and_previous_turn_completion() {
         let mut p = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);

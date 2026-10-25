@@ -23,7 +23,7 @@ use std::{
 /// Files listed in the panel; beyond this only a note is shown.
 pub const MAX_FILES: usize = 2_000;
 pub const MAX_BRANCHES: usize = 2_000;
-/// Bytes of each diff section kept for rendering.
+/// Bytes of the staged diff kept for commit-message generation.
 pub const MAX_DIFF_BYTES: usize = 200 * 1024;
 /// Hard cap on the bytes read from one Git command (the rest is drained).
 const MAX_COMMAND_BYTES: usize = 512 * 1024;
@@ -42,23 +42,22 @@ pub struct ChangedFile {
 }
 
 impl ChangedFile {
-    /// User-facing change kind, preferring the worktree status for readability.
-    pub fn label(&self) -> &'static str {
-        let code = if self.worktree != ' ' && self.worktree != '?' {
+    /// Status code that best describes the change for display purposes.
+    fn code(&self) -> char {
+        if self.worktree != ' ' && self.worktree != '?' {
             self.worktree
         } else {
             self.index
-        };
-        match code {
-            '?' => "未跟踪",
-            'A' => "新增",
-            'D' => "删除",
-            'R' => "重命名",
-            'C' => "复制",
-            'M' => "修改",
-            'T' => "类型变更",
-            'U' => "冲突",
-            _ => "变更",
+        }
+    }
+
+    /// Collapsed sidebar group: untracked and added files count as additions,
+    /// deletions stay separate, and every other status is a modification.
+    pub fn kind(&self) -> ChangeKind {
+        match self.code() {
+            '?' | 'A' => ChangeKind::Added,
+            'D' => ChangeKind::Deleted,
+            _ => ChangeKind::Modified,
         }
     }
 
@@ -75,12 +74,32 @@ impl ChangedFile {
     }
 }
 
+/// Collapsed change groups shown in the Git sidebar, in display order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ChangeKind {
+    Added,
+    Modified,
+    Deleted,
+}
+
+impl ChangeKind {
+    pub const ALL: [Self; 3] = [Self::Added, Self::Modified, Self::Deleted];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Added => "新增",
+            Self::Modified => "修改",
+            Self::Deleted => "删除",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Snapshot {
     pub branch: String,
     pub files: Vec<ChangedFile>,
+    /// Staged patch used only for commit-message generation.
     pub staged_diff: String,
-    pub unstaged_diff: String,
     pub notes: Vec<String>,
     pub target: CommitTarget,
 }
@@ -436,23 +455,7 @@ pub fn load(workspace: &Path, cancel: &AtomicBool) -> Result<Snapshot> {
         ],
         cancel,
     )?;
-    let unstaged_diff = run_git(
-        &git,
-        workspace,
-        &[
-            "--no-optional-locks",
-            "--no-pager",
-            "-c",
-            "core.quotepath=false",
-            "diff",
-            "--no-color",
-            "--no-ext-diff",
-            "--no-textconv",
-        ],
-        cancel,
-    )?;
     let staged_diff = truncate_diff(staged_diff, &mut notes);
-    let unstaged_diff = truncate_diff(unstaged_diff, &mut notes);
     if files.iter().any(|file| file.untracked()) {
         notes.push("未跟踪文件只列出路径，不读取内容".into());
     }
@@ -463,7 +466,6 @@ pub fn load(workspace: &Path, cancel: &AtomicBool) -> Result<Snapshot> {
         branch,
         files,
         staged_diff,
-        unstaged_diff,
         notes,
         target,
     })
@@ -673,75 +675,17 @@ pub fn parse_status(bytes: &[u8]) -> Vec<ChangedFile> {
     files
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DiffLine {
-    Header,
-    Hunk,
-    Added,
-    Removed,
-}
-
-/// Classify diff lines so the UI can colour them without per-line elements.
-/// Returns byte ranges into `diff` and only lines that carry a style.
-pub fn diff_highlights(diff: &str) -> Vec<(std::ops::Range<usize>, DiffLine)> {
-    let mut ranges = vec![];
-    let mut offset = 0;
-    let mut in_hunk = false;
-    for line in diff.split_inclusive('\n') {
-        let text = line.trim_end_matches(['\r', '\n']);
-        // Inside a hunk every line is content/context, so a payload line that
-        // happens to start with "+++" or "---" must stay Added/Removed. Only
-        // the file headers before the first "@@" are metadata.
-        let kind = if text.starts_with("diff --git") {
-            in_hunk = false;
-            Some(DiffLine::Header)
-        } else if text.starts_with("@@") {
-            in_hunk = true;
-            Some(DiffLine::Hunk)
-        } else if text.starts_with("\\ No newline") || text.starts_with("Binary files") {
-            Some(DiffLine::Header)
-        } else if in_hunk {
-            if text.starts_with('+') {
-                Some(DiffLine::Added)
-            } else if text.starts_with('-') {
-                Some(DiffLine::Removed)
-            } else {
-                None
-            }
-        } else if text.starts_with("index ")
-            || text.starts_with("+++")
-            || text.starts_with("---")
-            || text.starts_with("new file")
-            || text.starts_with("deleted file")
-            || text.starts_with("old mode")
-            || text.starts_with("new mode")
-            || text.starts_with("similarity ")
-            || text.starts_with("rename ")
-            || text.starts_with("copy ")
-        {
-            Some(DiffLine::Header)
-        } else {
-            None
-        };
-        if let Some(kind) = kind {
-            ranges.push((offset..offset + line.len(), kind));
-        }
-        offset += line.len();
-    }
-    ranges
-}
-
 fn truncate_diff(diff: String, notes: &mut Vec<String>) -> String {
     if diff.len() <= MAX_DIFF_BYTES {
         return diff;
     }
-    // Keep the prefix on a UTF-8 boundary so StyledText never splits a glyph.
+    // Keep the prefix on a UTF-8 boundary so prompts never cut a glyph.
     let mut end = MAX_DIFF_BYTES;
     while end > 0 && !diff.is_char_boundary(end) {
         end -= 1;
     }
     notes.push(format!(
-        "diff 已截断，仅显示前 {} KiB",
+        "暂存 diff 已截断，仅保留前 {} KiB",
         MAX_DIFF_BYTES / 1024
     ));
     let mut truncated = diff[..end].to_string();
@@ -1092,42 +1036,23 @@ mod tests {
     }
 
     #[test]
-    fn status_parser_handles_tracked_untracked_and_renames() {
+    fn status_parser_handles_tracked_untracked_renames_and_kinds() {
         let files = parse_status(
-            b" M src/main.rs\0?? notes.md\0R  src/new.rs\0src/old.rs\0A  staged.txt\0",
+            b" M src/main.rs\0?? notes.md\0R  src/new.rs\0src/old.rs\0A  staged.txt\0 D gone.txt\0",
         );
-        assert_eq!(files.len(), 4);
+        assert_eq!(files.len(), 5);
         assert_eq!(files[0].path, "src/main.rs");
-        assert_eq!(files[0].label(), "修改");
+        assert_eq!(files[0].kind(), ChangeKind::Modified);
         assert!(files[0].unstaged() && !files[0].staged());
-        assert_eq!(files[1].label(), "未跟踪");
+        assert_eq!(files[1].kind(), ChangeKind::Added);
         assert!(files[1].untracked());
-        assert_eq!(files[2].label(), "重命名");
+        assert_eq!(files[2].kind(), ChangeKind::Modified);
         assert_eq!(files[2].original.as_deref(), Some("src/old.rs"));
-        assert_eq!(files[3].label(), "新增");
+        assert_eq!(files[3].kind(), ChangeKind::Added);
         assert!(files[3].staged());
+        assert_eq!(files[4].kind(), ChangeKind::Deleted);
         assert!(parse_status(b"").is_empty());
         assert!(parse_status(b"broken\0").is_empty());
-    }
-
-    #[test]
-    fn diff_highlights_classify_git_patch_lines() {
-        let diff = "diff --git a/a b/a\nindex 1..2 100644\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-old\n+new\n context\n\\ No newline at end of file\ndiff --git a/b b/b\nindex 3..4 100644\n--- a/b\n+++ b/b\n@@ -1 +1 @@\n+++payload\n---payload\n";
-        let kinds: Vec<_> = diff_highlights(diff)
-            .into_iter()
-            .map(|(range, kind)| (&diff[range], kind))
-            .collect();
-        assert!(kinds.contains(&("diff --git a/a b/a\n", DiffLine::Header)));
-        assert!(kinds.contains(&("+++ b/a\n", DiffLine::Header)));
-        assert!(kinds.contains(&("@@ -1 +1 @@\n", DiffLine::Hunk)));
-        assert!(kinds.contains(&("-old\n", DiffLine::Removed)));
-        assert!(kinds.contains(&("+new\n", DiffLine::Added)));
-        assert!(!kinds.iter().any(|(text, _)| *text == " context\n"));
-        // A second file resets hunk state, and payload lines that look like
-        // headers stay coloured as additions/deletions.
-        assert!(kinds.contains(&("+++ b/b\n", DiffLine::Header)));
-        assert!(kinds.contains(&("+++payload\n", DiffLine::Added)));
-        assert!(kinds.contains(&("---payload\n", DiffLine::Removed)));
     }
 
     #[test]
@@ -1150,7 +1075,6 @@ mod tests {
             branch: "main".into(),
             files: parse_status(b"M  staged\0 M worktree\0MM both\0?? new\0"),
             staged_diff: String::new(),
-            unstaged_diff: String::new(),
             notes: vec![],
             target: CommitTarget::default(),
         };
@@ -1246,18 +1170,15 @@ mod tests {
         );
         let snapshot = load(&directory, &AtomicBool::new(false)).unwrap();
         assert!(!snapshot.branch.is_empty());
-        assert!(
-            snapshot.files.iter().any(|file| file.path == "tracked.txt"
-                && file.label() == "修改"
-                && file.unstaged())
-        );
+        assert!(snapshot.files.iter().any(|file| file.path == "tracked.txt"
+            && file.kind() == ChangeKind::Modified
+            && file.unstaged()));
         assert!(
             snapshot
                 .files
                 .iter()
                 .any(|file| file.path == "new.txt" && file.untracked())
         );
-        assert!(snapshot.unstaged_diff.contains("+two"));
         assert!(snapshot.staged_diff.is_empty());
         // Loading the panel must not touch the repository (no index lock, no
         // staging, no commits).

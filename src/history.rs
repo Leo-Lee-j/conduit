@@ -175,6 +175,11 @@ fn parse_claude(text: &str, workspace: &Path) -> Option<ImportedSession> {
         {
             created_at = rfc3339_to_unix(ts);
         }
+        let event_created_at = value
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(rfc3339_to_unix_opt)
+            .unwrap_or(created_at);
         if same_dir(
             value.get("cwd").and_then(Value::as_str).unwrap_or(""),
             workspace,
@@ -202,6 +207,7 @@ fn parse_claude(text: &str, workspace: &Path) -> Option<ImportedSession> {
                     }
                     messages.push(ChatItem {
                         key: format!("import-{index}"),
+                        created_at: event_created_at,
                         kind: ItemKind::User,
                         text,
                         input: String::new(),
@@ -229,6 +235,7 @@ fn parse_claude(text: &str, workspace: &Path) -> Option<ImportedSession> {
                             }
                             messages.push(ChatItem {
                                 key: format!("import-{index}-{part_index}"),
+                                created_at: event_created_at,
                                 kind: ItemKind::Assistant,
                                 text: text.to_owned(),
                                 input: String::new(),
@@ -244,6 +251,7 @@ fn parse_claude(text: &str, workspace: &Path) -> Option<ImportedSession> {
                                     "import-{index}-{part_index}-{}",
                                     part.get("id").and_then(Value::as_str).unwrap_or("call")
                                 ),
+                                created_at: event_created_at,
                                 kind: ItemKind::Tool,
                                 text: name.to_owned(),
                                 input: serde_json::to_string_pretty(
@@ -367,6 +375,12 @@ fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
             continue;
         };
         let payload = value.get("payload").unwrap_or(&value);
+        let event_created_at = value
+            .get("timestamp")
+            .or_else(|| payload.get("timestamp"))
+            .and_then(Value::as_str)
+            .and_then(rfc3339_to_unix_opt)
+            .unwrap_or(created_at);
         match value.get("type").and_then(Value::as_str) {
             Some("session_meta") => {
                 native_id = payload
@@ -431,6 +445,7 @@ fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
                             }
                             messages.push(ChatItem {
                                 key: format!("import-{index}-{part_index}"),
+                                created_at: event_created_at,
                                 kind: if role == "user" {
                                     ItemKind::User
                                 } else {
@@ -451,6 +466,7 @@ fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
                             .unwrap_or("tool");
                         messages.push(ChatItem {
                             key: format!("import-{index}-call"),
+                            created_at: event_created_at,
                             kind: ItemKind::Tool,
                             text: name.to_owned(),
                             input: payload
@@ -717,6 +733,7 @@ mod tests {
             usage: crate::domain::Usage::default(),
             messages: vec![ChatItem {
                 key: "old".into(),
+                created_at: 0,
                 kind: ItemKind::User,
                 text: "旧消息".into(),
                 input: String::new(),
@@ -737,6 +754,7 @@ mod tests {
                 model: Some("m1".into()),
                 messages: vec![ChatItem {
                     key: "a".into(),
+                    created_at: 0,
                     kind: ItemKind::Assistant,
                     text: "刷新后的内容".into(),
                     input: String::new(),
@@ -753,6 +771,7 @@ mod tests {
                 model: None,
                 messages: vec![ChatItem {
                     key: "b".into(),
+                    created_at: 0,
                     kind: ItemKind::User,
                     text: "hi".into(),
                     input: String::new(),

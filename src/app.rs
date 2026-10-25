@@ -19,7 +19,6 @@ use gpui_kit::{
     base::TextSelection,
     component::{
         Size,
-        alert::Alert,
         button::*,
         clipboard::Clipboard,
         highlighter::HighlightTheme,
@@ -199,14 +198,13 @@ struct Palette {
     focus: u32,
     on_text: u32,
     control_hover: u32,
-    code_bg: u32,
     highlight_text: u32,
     highlight_bg: u32,
     diff_add_text: u32,
-    diff_add_bg: u32,
     diff_remove_text: u32,
-    diff_remove_bg: u32,
-    diff_hunk_text: u32,
+    git_added_text: u32,
+    git_modified_text: u32,
+    git_deleted_text: u32,
     danger_border: u32,
     danger_bg: u32,
     danger_text: u32,
@@ -237,14 +235,13 @@ static DARK_PALETTE: Palette = Palette {
     focus: 0x4b4b54,
     on_text: 0x111113,
     control_hover: 0xffffff,
-    code_bg: 0x141417,
     highlight_text: 0xf0d49b,
     highlight_bg: 0x3a3220,
     diff_add_text: 0x9fdcab,
-    diff_add_bg: 0x18261c,
     diff_remove_text: 0xe6a1a1,
-    diff_remove_bg: 0x2a1a1a,
-    diff_hunk_text: 0x8fb8e6,
+    git_added_text: 0x8fb8e6,
+    git_modified_text: 0x9fdcab,
+    git_deleted_text: 0xe6a1a1,
     danger_border: 0x5c332c,
     danger_bg: 0x2a1d1a,
     danger_text: 0xe6b4a8,
@@ -275,14 +272,13 @@ static LIGHT_PALETTE: Palette = Palette {
     focus: 0xb4b4bd,
     on_text: 0xffffff,
     control_hover: 0xe8e8ec,
-    code_bg: 0xf4f4f6,
     highlight_text: 0x6b4a00,
     highlight_bg: 0xfff0bf,
     diff_add_text: 0x1e6631,
-    diff_add_bg: 0xe9f7ed,
     diff_remove_text: 0xa43636,
-    diff_remove_bg: 0xfdecec,
-    diff_hunk_text: 0x2c5f9e,
+    git_added_text: 0x2c5f9e,
+    git_modified_text: 0x1e6631,
+    git_deleted_text: 0xa43636,
     danger_border: 0xe7b8b1,
     danger_bg: 0xfdf1ef,
     danger_text: 0x8f2f29,
@@ -1141,47 +1137,12 @@ fn highlighted_text(text: &str, query: &str, size: f32, color: u32) -> AnyElemen
         .into_any_element()
 }
 
-/// Render a Git patch as one highlighted monospace text block, so large diffs
-/// stay a single text layout instead of thousands of per-line elements.
-fn diff_element(diff: &str) -> AnyElement {
-    let mut styled = StyledText::new(diff.to_string());
-    let highlights: Vec<_> = git::diff_highlights(diff)
-        .into_iter()
-        .map(|(range, kind)| {
-            let (color, background) = match kind {
-                git::DiffLine::Added => (palette().diff_add_text, Some(palette().diff_add_bg)),
-                git::DiffLine::Removed => {
-                    (palette().diff_remove_text, Some(palette().diff_remove_bg))
-                }
-                git::DiffLine::Hunk => (palette().diff_hunk_text, None),
-                git::DiffLine::Header => (palette().faint, None),
-            };
-            (
-                range,
-                HighlightStyle {
-                    color: Some(Hsla::from(rgb(color))),
-                    background_color: background.map(|background| Hsla::from(rgb(background))),
-                    ..Default::default()
-                },
-            )
-        })
-        .collect();
-    if !highlights.is_empty() {
-        styled = styled.with_highlights(highlights);
+fn git_change_color(kind: git::ChangeKind) -> u32 {
+    match kind {
+        git::ChangeKind::Added => palette().git_added_text,
+        git::ChangeKind::Modified => palette().git_modified_text,
+        git::ChangeKind::Deleted => palette().git_deleted_text,
     }
-    div()
-        .w_full()
-        .p_2()
-        .rounded(px(8.))
-        .border_1()
-        .border_color(rgb(palette().border))
-        .bg(rgb(palette().code_bg))
-        .font_family("Consolas")
-        .text_size(px(10.))
-        .line_height(relative(1.35))
-        .text_color(rgb(palette().muted))
-        .child(styled)
-        .into_any_element()
 }
 
 /// Menu popovers render only compact buttons, so the default `p_3()` popover
@@ -1265,6 +1226,8 @@ pub struct ConduitApp {
     session_namings: HashMap<u64, SessionNaming>,
     git_operation: Option<GitOperation>,
     git_feedback: HashMap<PathBuf, GitFeedback>,
+    /// Git sidebar groups the user collapsed; empty means all expanded.
+    collapsed_git_groups: HashSet<git::ChangeKind>,
     commit_and_push: bool,
     /// Approval tickets whose raw request detail the user expanded.
     approval_details: HashSet<String>,
@@ -1294,6 +1257,7 @@ pub struct ConduitApp {
     at_bottom: bool,
     /// Scoped by session and tool key, independent of the right detail dock.
     expanded_tools: HashSet<(u64, String)>,
+    expanded_reasoning: HashSet<(u64, String)>,
     tool_scrolls: HashMap<(u64, String), ScrollHandle>,
     message_focus: Option<(u64, String, Instant)>,
     pending_message_jump: bool,
@@ -1605,6 +1569,7 @@ impl ConduitApp {
             session_namings: HashMap::new(),
             git_operation: None,
             git_feedback: HashMap::new(),
+            collapsed_git_groups: HashSet::new(),
             commit_and_push: false,
             approval_details: HashSet::new(),
             expanded_workspaces: HashSet::new(),
@@ -1631,6 +1596,7 @@ impl ConduitApp {
             outline: MessageOutlineCache::default(),
             at_bottom: true,
             expanded_tools: HashSet::new(),
+            expanded_reasoning: HashSet::new(),
             tool_scrolls: HashMap::new(),
             message_focus: None,
             pending_message_jump: false,
@@ -1886,6 +1852,8 @@ impl ConduitApp {
         }
         self.drafts.remove(&id);
         self.expanded_tools.retain(|(session, _)| *session != id);
+        self.expanded_reasoning
+            .retain(|(session, _)| *session != id);
         self.tool_scrolls.retain(|(session, _), _| *session != id);
         self.remove_tab(id);
         self.detail_text = None;
@@ -2471,6 +2439,7 @@ impl ConduitApp {
         for session in &removed.sessions {
             self.drafts.remove(&session.id);
             self.expanded_tools.retain(|(id, _)| *id != session.id);
+            self.expanded_reasoning.retain(|(id, _)| *id != session.id);
             self.tool_scrolls.retain(|(id, _), _| *id != session.id);
         }
         let removed_ids: Vec<u64> = removed.sessions.iter().map(|session| session.id).collect();
@@ -3320,6 +3289,7 @@ impl ConduitApp {
             }
             session.messages.push(ChatItem {
                 key: format!("{prefix}-user"),
+                created_at: unix_now(),
                 kind: ItemKind::User,
                 text: prompt.clone(),
                 input: String::new(),
@@ -3384,6 +3354,48 @@ impl ConduitApp {
         cx.notify();
         true
     }
+    /// Retry the failed exchange in place, preserving the original user prompt.
+    fn retry_error(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing || !self.writable {
+            return;
+        }
+        let Some(id) = self.selected_session else {
+            return;
+        };
+        let Some(session) = self.session(id) else {
+            return;
+        };
+        if self.runs.contains_key(&id)
+            || session
+                .messages
+                .get(index)
+                .is_none_or(|item| item.kind != ItemKind::Error)
+            || session.messages[index + 1..]
+                .iter()
+                .any(|item| matches!(item.kind, ItemKind::User | ItemKind::Assistant))
+            || session.native_id.is_none()
+        {
+            return;
+        }
+        let Some(user_index) = session.messages[..index]
+            .iter()
+            .rposition(|item| item.kind == ItemKind::User)
+        else {
+            return;
+        };
+        let prompt = session.messages[user_index].text.clone();
+        let removed = self
+            .session_mut(id)
+            .map(|session| session.messages.split_off(user_index + 1))
+            .unwrap_or_default();
+        if !self.send_text(prompt, false, window, cx)
+            && let Some(session) = self.session_mut(id)
+        {
+            session.messages.extend(removed);
+            cx.notify();
+        }
+    }
+
     /// Re-runs the latest exchange: keeps its user message, drops everything
     /// after it, and starts a fresh engine turn with the same prompt.
     fn regenerate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -3648,6 +3660,7 @@ impl ConduitApp {
         let session_id = session.id;
         let provider = session.provider;
         let typography = self.chat_typography();
+        let timestamp = message_timestamp(item.created_at.max(session.created_at));
         let regenerable = item.kind == ItemKind::Assistant
             && self.writable
             && !self.closing
@@ -3696,37 +3709,52 @@ impl ConduitApp {
                         div()
                             .id(("user-bubble", index))
                             .max_w(px(680.))
-                            .rounded(px(18.))
+                            .rounded(px(16.))
                             .px_4()
                             .py_3()
-                            .bg(rgb(palette().surface))
+                            // A restrained prompt surface distinguishes the user
+                            // without turning each turn into a separate card.
+                            .bg(rgb(0x252525))
                             .text_size(px(typography.body_size))
                             .line_height(relative(typography.line_height))
                             .when_some(typography.body_font.clone(), |bubble, family| {
                                 bubble.font_family(family)
                             })
-                            .text_color(rgb(palette().text))
+                            .text_color(rgb(0xf3f3f4))
                             .child(body),
                     )
                     .child(
                         h_flex()
-                            .gap(px(2.))
-                            .opacity(0.)
-                            .group_hover(message_group, |this| this.opacity(1.))
+                            .items_center()
+                            .gap(px(8.))
                             .child(
-                                message_action_button(
-                                    copy_id.clone(),
-                                    copy_icon,
-                                    if copied { "已复制" } else { "复制消息" },
-                                )
-                                .on_click(cx.listener(
-                                    move |this, _, window, cx| {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(
-                                            copy_text.clone(),
-                                        ));
-                                        this.show_copied(copy_id.clone(), window, cx);
-                                    },
-                                )),
+                                h_flex()
+                                    .gap(px(2.))
+                                    .opacity(0.)
+                                    .group_hover(message_group.clone(), |this| this.opacity(1.))
+                                    .child(
+                                        message_action_button(
+                                            copy_id.clone(),
+                                            copy_icon,
+                                            if copied { "已复制" } else { "复制消息" },
+                                        )
+                                        .on_click(
+                                            cx.listener(move |this, _, window, cx| {
+                                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                                    copy_text.clone(),
+                                                ));
+                                                this.show_copied(copy_id.clone(), window, cx);
+                                            }),
+                                        ),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(rgb(palette().faint))
+                                    .opacity(0.)
+                                    .group_hover(message_group, |this| this.opacity(1.))
+                                    .child(timestamp.clone()),
                             ),
                     )
                     .into_any_element()
@@ -3742,7 +3770,7 @@ impl ConduitApp {
                 };
                 let message_group =
                     SharedString::from(format!("reply-message-{}-{}", session_id, item.key));
-                let mut actions = h_flex()
+                let mut controls = h_flex()
                     .gap(px(2.))
                     .opacity(0.)
                     .group_hover(message_group.clone(), |this| this.opacity(1.))
@@ -3760,7 +3788,7 @@ impl ConduitApp {
                         )),
                     );
                 if regenerable {
-                    actions = actions.child(
+                    controls = controls.child(
                         message_action_button(
                             SharedString::from(format!(
                                 "reply-regenerate-{}-{}",
@@ -3774,6 +3802,14 @@ impl ConduitApp {
                         )),
                     );
                 }
+                let actions = h_flex().items_center().gap(px(8.)).child(controls).child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(rgb(palette().faint))
+                        .opacity(0.)
+                        .group_hover(message_group.clone(), |this| this.opacity(1.))
+                        .child(timestamp.clone()),
+                );
                 v_flex()
                     .w_full()
                     .gap_1()
@@ -3782,11 +3818,9 @@ impl ConduitApp {
                         v_flex()
                             .w_full()
                             .gap_2()
-                            .p_4()
-                            .rounded(px(14.))
-                            .border_1()
-                            .border_color(rgb(palette().border))
-                            .bg(rgb(palette().surface))
+                            // Keep provider identity as quiet metadata. The reply
+                            // itself stays on the conversation canvas, like Codex,
+                            // instead of being boxed in a second card.
                             .child(
                                 h_flex()
                                     .items_center()
@@ -3795,7 +3829,7 @@ impl ConduitApp {
                                     .child(
                                         div()
                                             .text_size(px(11.))
-                                            .text_color(rgb(palette().faint))
+                                            .text_color(rgb(palette().muted))
                                             .child(provider.label()),
                                     ),
                             )
@@ -3809,6 +3843,63 @@ impl ConduitApp {
                     )
                     .child(actions)
                     .into_any_element()
+            }
+            ItemKind::Reasoning => {
+                let detail_key = (session_id, item.key.clone());
+                let expanded = self.expanded_reasoning.contains(&detail_key);
+                let toggle_key = detail_key.clone();
+                let mut summary = v_flex().w_full().gap_1().child(
+                    Button::new(SharedString::from(format!(
+                        "reasoning-{}-{}",
+                        session_id, item.key
+                    )))
+                    .ghost()
+                    .small()
+                    .compact()
+                    .w_full()
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                Icon::new(if expanded {
+                                    IconName::ChevronDown
+                                } else {
+                                    IconName::ChevronRight
+                                })
+                                .small()
+                                .text_color(rgb(palette().faint)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(palette().muted))
+                                    .child("思考摘要"),
+                            ),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.scroll.remeasure_items(index..index + 1);
+                        if !this.expanded_reasoning.remove(&toggle_key) {
+                            this.expanded_reasoning.insert(toggle_key.clone());
+                        }
+                        cx.notify();
+                    })),
+                );
+                if expanded {
+                    summary = summary.child(
+                        div()
+                            .ml_3()
+                            .pl_3()
+                            .py_1()
+                            .border_l_1()
+                            .border_color(rgb(palette().border))
+                            .text_size(px(typography.body_size))
+                            .line_height(relative(typography.line_height))
+                            .text_color(rgb(palette().muted))
+                            .child(item.text.clone()),
+                    );
+                }
+                summary.into_any_element()
             }
             ItemKind::Tool => {
                 let detail_key = (session_id, item.key.clone());
@@ -3956,12 +4047,63 @@ impl ConduitApp {
                 .text_color(rgb(palette().muted))
                 .child(item.text.clone())
                 .into_any_element(),
-            ItemKind::Error => Alert::error(
-                SharedString::from(format!("error-{}-{}", session_id, item.key)),
-                item.text.clone(),
-            )
-            .banner()
-            .into_any_element(),
+            ItemKind::Error => {
+                let copy_text = item.text.clone();
+                let copy_id = SharedString::from(format!("error-copy-{}-{}", session_id, item.key));
+                let can_retry = self.writable
+                    && !self.closing
+                    && !self.runs.contains_key(&session_id)
+                    && session.native_id.is_some()
+                    && session.messages[..index]
+                        .iter()
+                        .any(|message| message.kind == ItemKind::User)
+                    && !session.messages[index + 1..].iter().any(|message| {
+                        matches!(message.kind, ItemKind::User | ItemKind::Assistant)
+                    });
+                let mut actions = h_flex().items_center().gap(px(4.)).justify_end();
+                actions = actions.child(
+                    message_action_button(
+                        copy_id.clone(),
+                        Icon::new(IconName::Copy),
+                        "复制错误详情",
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
+                        this.show_copied(copy_id.clone(), window, cx);
+                    })),
+                );
+                if can_retry {
+                    actions = actions.child(
+                        Button::new(SharedString::from(format!(
+                            "error-retry-{}-{}",
+                            session_id, item.key
+                        )))
+                        .ghost()
+                        .small()
+                        .compact()
+                        .child("重试")
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| this.retry_error(index, window, cx),
+                        )),
+                    );
+                }
+                v_flex()
+                    .w_full()
+                    .gap_2()
+                    .rounded(px(10.))
+                    .border_1()
+                    .border_color(rgb(palette().danger_border))
+                    .bg(rgb(palette().danger_bg))
+                    .p_3()
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(rgb(palette().danger_text))
+                            .child(item.text.clone()),
+                    )
+                    .child(actions)
+                    .into_any_element()
+            }
         };
         let highlighted = self
             .message_focus
@@ -5161,7 +5303,7 @@ impl ConduitApp {
                             .flex_shrink_0()
                             .text_size(px(9.))
                             .text_color(rgb(palette().faint))
-                            .child("变更预览"),
+                            .child("变更列表"),
                     )
                     .child(refresh("刷新", "git-refresh")),
             )
@@ -5184,79 +5326,119 @@ impl ConduitApp {
                     .child("工作区没有未提交变更"),
             );
         } else {
-            let mut list = v_flex().w_full().gap(px(1.));
-            for file in &snapshot.files {
-                let color = match file.label() {
-                    "新增" => palette().diff_add_text,
-                    "删除" => palette().diff_remove_text,
-                    "冲突" => palette().warning_text,
-                    "未跟踪" => palette().faint,
-                    _ => palette().muted,
-                };
-                list = list.child(
-                    h_flex()
+            let mut groups = v_flex().w_full().gap_1();
+            for kind in git::ChangeKind::ALL {
+                let files: Vec<_> = snapshot
+                    .files
+                    .iter()
+                    .filter(|file| file.kind() == kind)
+                    .collect();
+                if files.is_empty() {
+                    continue;
+                }
+                let color = git_change_color(kind);
+                let collapsed = self.collapsed_git_groups.contains(&kind);
+                let toggle_kind = kind;
+                let app = view.clone();
+                let mut group = v_flex().w_full().gap(px(1.)).child(
+                    Button::new(SharedString::from(format!("git-group-{kind:?}")))
+                        .ghost()
+                        .small()
+                        .compact()
                         .w_full()
-                        .gap_2()
-                        .items_center()
-                        .py(px(2.))
+                        .h(px(24.))
+                        .px_1()
+                        .cursor_pointer()
+                        .tooltip(format!(
+                            "点击{}变更",
+                            if collapsed { "展开" } else { "收起" }
+                        ))
+                        .accessibility_label(format!(
+                            "{}变更 {} 个，点击{}",
+                            kind.label(),
+                            files.len(),
+                            if collapsed { "展开" } else { "收起" }
+                        ))
+                        .on_click(move |_, _, cx| {
+                            app.update(cx, |this, cx| {
+                                if !this.collapsed_git_groups.remove(&toggle_kind) {
+                                    this.collapsed_git_groups.insert(toggle_kind);
+                                }
+                                cx.notify();
+                            })
+                        })
                         .child(
-                            div()
-                                .w(px(48.))
-                                .flex_shrink_0()
-                                .text_size(px(10.))
-                                .text_color(rgb(color))
-                                .child(file.label()),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
+                            h_flex()
+                                .w_full()
                                 .min_w_0()
-                                .truncate()
-                                .text_size(px(11.))
-                                .text_color(rgb(palette().text))
-                                .child(file.path.clone()),
-                        )
-                        .when_some(file.original.clone(), |row, original| {
-                            row.child(
-                                div()
-                                    .flex_shrink_0()
-                                    .text_size(px(9.))
-                                    .text_color(rgb(palette().faint))
-                                    .child(format!("← {original}")),
-                            )
-                        }),
-                );
-            }
-            body = body.child(list);
-        }
-        for (title, diff) in [
-            ("暂存变更", snapshot.staged_diff.as_str()),
-            ("未暂存变更", snapshot.unstaged_diff.as_str()),
-        ] {
-            if diff.is_empty() {
-                continue;
-            }
-            body = body
-                .child(
-                    h_flex()
-                        .items_center()
-                        .gap_2()
-                        .pt_1()
-                        .child(
-                            div()
-                                .text_size(px(10.))
-                                .font_semibold()
-                                .text_color(rgb(palette().muted))
-                                .child(title),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(9.))
-                                .text_color(rgb(palette().faint))
-                                .child(format!("{} 行", diff.lines().count())),
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    Icon::new(if collapsed {
+                                        IconName::ChevronRight
+                                    } else {
+                                        IconName::ChevronDown
+                                    })
+                                    .small()
+                                    .text_color(rgb(palette().faint)),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .font_semibold()
+                                        .text_color(rgb(color))
+                                        .child(kind.label()),
+                                )
+                                .child(div().flex_1())
+                                .child(
+                                    div()
+                                        .text_size(px(9.))
+                                        .text_color(rgb(palette().faint))
+                                        .child(files.len().to_string()),
+                                ),
                         ),
-                )
-                .child(diff_element(diff));
+                );
+                if !collapsed {
+                    let mut rows = v_flex()
+                        .w_full()
+                        .gap(px(1.))
+                        .ml(px(6.))
+                        .pl(px(9.))
+                        .border_l_1()
+                        .border_color(rgb(palette().border));
+                    for file in files {
+                        rows = rows.child(
+                            h_flex()
+                                .w_full()
+                                .min_w_0()
+                                .gap_2()
+                                .items_center()
+                                .py(px(2.))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_size(px(11.))
+                                        .text_color(rgb(color))
+                                        .child(file.path.clone()),
+                                )
+                                .when_some(file.original.clone(), |row, original| {
+                                    row.child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .text_size(px(9.))
+                                            .text_color(rgb(palette().faint))
+                                            .child(format!("← {original}")),
+                                    )
+                                }),
+                        );
+                    }
+                    group = group.child(rows);
+                }
+                groups = groups.child(group);
+            }
+            body = body.child(groups);
         }
         for note in &snapshot.notes {
             body = body.child(
@@ -5365,6 +5547,7 @@ impl ConduitApp {
                     Event::Approval(_)
                         | Event::ApprovalCancelled(_)
                         | Event::ApprovalResolved { .. }
+                        | Event::ReasoningSummary { .. }
                         | Event::Finished { .. }
                 )
             {
@@ -5495,31 +5678,38 @@ impl ConduitApp {
                                 "未返回结果"
                             },
                         );
-                        // Some CLIs print the failure as assistant text and then
-                        // also report it through the result event. Do not show the
-                        // same failure twice: the assistant message already carries
-                        // the explanation.
+                        // Do not duplicate a failure already surfaced by the stream.
                         let already_shown = error.as_deref().is_some_and(|error| {
                             session
                                 .messages
                                 .iter()
                                 .rev()
                                 .filter(|item| {
-                                    matches!(item.kind, ItemKind::Assistant | ItemKind::Tool)
+                                    matches!(
+                                        item.kind,
+                                        ItemKind::Assistant | ItemKind::Tool | ItemKind::Error
+                                    )
                                 })
-                                .take(3)
+                                .take(5)
                                 .any(|item| same_failure(&item.text, error))
                         });
-                        if !already_shown {
+                        if cancelled || (error.is_some() && !already_shown) {
+                            let failed = error.is_some();
                             session.messages.push(ChatItem {
                                 key: format!("{prefix}-finish"),
-                                kind: ItemKind::Notice,
+                                created_at: unix_now(),
+                                kind: if failed {
+                                    ItemKind::Error
+                                } else {
+                                    ItemKind::Notice
+                                },
                                 text: if cancelled {
                                     "已取消；不会自动重试。".into()
-                                } else if let Some(error) = error {
-                                    format!("执行失败：{}", friendly_failure(&error))
                                 } else {
-                                    "本轮已完成".into()
+                                    format!(
+                                        "执行失败：{}",
+                                        friendly_failure(error.as_deref().unwrap_or_default())
+                                    )
                                 },
                                 input: String::new(),
                                 detail: String::new(),
@@ -5535,7 +5725,7 @@ impl ConduitApp {
                     }
                     if let Some(run) = self.runs.get_mut(&id) {
                         run.status = "正在执行…".into();
-                        run.activity = "已连接 CLI，正在等待模型响应…".into();
+                        run.activity = "正在思考…".into();
                     }
                     self.dirty = true;
                     self.persist();
@@ -8805,6 +8995,26 @@ fn finish_tool_cards(session: &mut SessionRecord, prefix: &str, status: &str) {
     }
 }
 
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn message_timestamp(timestamp: u64) -> String {
+    if timestamp == 0 {
+        return String::new();
+    }
+    DateTime::from_timestamp(timestamp as i64, 0)
+        .map(|time| {
+            time.with_timezone(&Local)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 pub fn apply_event(session: &mut SessionRecord, prefix: &str, event: Event) {
     apply_event_indexed(session, prefix, event, &mut MessageIndex::default());
@@ -8816,6 +9026,41 @@ fn apply_event_indexed(
     event: Event,
     index: &mut MessageIndex,
 ) -> Option<usize> {
+    if let Event::ReasoningSummary {
+        key,
+        text,
+        summary_index,
+        snapshot,
+    } = event
+    {
+        let key = format!("{prefix}-{key}");
+        if let Some(position) = index.find(&session.messages, &key) {
+            let item = &mut session.messages[position];
+            if snapshot {
+                item.text = text;
+                item.detail.clear();
+            } else {
+                let part = summary_index.to_string();
+                if !item.text.is_empty() && item.detail != part {
+                    item.text.push('\n');
+                }
+                item.detail = part;
+                item.text.push_str(&text);
+            }
+            return Some(position);
+        }
+        session.messages.push(ChatItem {
+            key,
+            created_at: unix_now(),
+            kind: ItemKind::Reasoning,
+            text,
+            input: String::new(),
+            detail: summary_index.to_string(),
+            status: String::new(),
+            approval: None,
+        });
+        return Some(session.messages.len() - 1);
+    }
     if let Event::ToolInput { key, input } = event {
         let key = format!("{prefix}-{key}");
         if let Some(position) = index.find(&session.messages, &key) {
@@ -8824,6 +9069,7 @@ fn apply_event_indexed(
         } else {
             session.messages.push(ChatItem {
                 key,
+                created_at: 0,
                 kind: ItemKind::Tool,
                 text: "工具调用".into(),
                 input,
@@ -8915,6 +9161,7 @@ fn apply_event_indexed(
         if !duplicate_text && !duplicate_notice {
             session.messages.push(ChatItem {
                 key,
+                created_at: unix_now(),
                 kind,
                 text,
                 input: String::new(),
@@ -10497,6 +10744,7 @@ mod tests {
         ] {
             s.messages.push(ChatItem {
                 key: key.into(),
+                created_at: 0,
                 kind,
                 text: text.into(),
                 input: String::new(),
@@ -10527,6 +10775,7 @@ mod tests {
         let mut cache = super::MessageOutlineCache::default();
         let item = |key: &str, kind| ChatItem {
             key: key.into(),
+            created_at: 0,
             kind,
             text: "用户消息".into(),
             input: String::new(),
@@ -10843,6 +11092,7 @@ mod tests {
         {
             s.messages.push(ChatItem {
                 key: format!("m{index}"),
+                created_at: 0,
                 kind,
                 text: text.into(),
                 input: String::new(),
@@ -10857,6 +11107,7 @@ mod tests {
         );
         s.messages.push(ChatItem {
             key: "long".into(),
+            created_at: 0,
             kind: ItemKind::Assistant,
             text: "长".repeat(1_000),
             input: String::new(),
@@ -10880,6 +11131,7 @@ mod tests {
         s.title = "Rust 重构计划".into();
         s.messages.push(ChatItem {
             key: "m1".into(),
+            created_at: 0,
             kind: ItemKind::Assistant,
             text: "let me check the ALPHA dependency".into(),
             input: String::new(),
@@ -10943,6 +11195,7 @@ mod ui_tests {
                 let messages = (0..10_000)
                     .map(|index| ChatItem {
                         key: format!("message-{index}"),
+                        created_at: 0,
                         kind: if index % 2 == 0 {
                             ItemKind::User
                         } else {
@@ -11162,6 +11415,7 @@ mod ui_tests {
                 let mut app = super::ConduitApp::new(window, cx, false, false);
                 let item = |key: &str, kind: ItemKind, text: &str| ChatItem {
                     key: key.into(),
+                    created_at: 0,
                     kind,
                     text: text.into(),
                     input: String::new(),

@@ -262,6 +262,7 @@ impl Store {
                     session.title = format!("旧终端会话 #{}", session.id);
                     session.messages.push(crate::domain::ChatItem {
                         key: "legacy-migration".into(),
+                        created_at: 0,
                         kind: crate::domain::ItemKind::Notice,
                         text: "从终端原型迁移，仅保留元数据；发送消息将建立新的 CLI 对话。".into(),
                         input: String::new(),
@@ -285,6 +286,7 @@ impl Store {
                     }
                     session.messages.push(crate::domain::ChatItem {
                         key: format!("restart-{}", session.messages.len()),
+                        created_at: 0,
                         kind: crate::domain::ItemKind::Notice,
                         text: "上次执行已中断，未自动重试；可以检查现有结果后继续。".into(),
                         input: String::new(),
