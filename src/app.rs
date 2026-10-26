@@ -5857,7 +5857,7 @@ impl ConduitApp {
         )))
         .ghost()
         .w_full()
-        .h(px(30.))
+        .h(px(28.))
         .px(px(0.))
         .rounded(px(6.))
         .when(!running, |button| button.cursor_pointer())
@@ -5925,7 +5925,7 @@ impl ConduitApp {
         div()
             .w_full()
             .px_6()
-            .pb_2()
+            .pb_3()
             .child(
                 div()
                     .id(SharedString::from(format!(
@@ -6346,9 +6346,9 @@ impl ConduitApp {
                         .group_hover(message_group.clone(), |this| this.opacity(1.))
                         .child(timestamp.clone()),
                 );
-                v_flex()
+                div()
+                    .relative()
                     .w_full()
-                    .gap_1()
                     .group(message_group)
                     .child(
                         v_flex()
@@ -6399,7 +6399,7 @@ impl ConduitApp {
                                 true,
                             )),
                     )
-                    .child(actions)
+                    .child(actions.absolute().top_0().right_0())
                     .into_any_element()
             }
             ItemKind::Reasoning => {
@@ -6682,19 +6682,15 @@ impl ConduitApp {
         let is_tool = item.kind == ItemKind::Tool;
         let compact_activity = item.kind == ItemKind::Reasoning
             || (is_tool && item.approval.is_none() && !is_tool_edit(item));
-        let follows_activity = index > 0
-            && matches!(
-                session.messages[index - 1].kind,
-                ItemKind::Tool | ItemKind::Reasoning
-            );
+        // One rhythm for the whole transcript: 12px between blocks, dense inside
+        // an expanded tool group. `activity_container` already contributes 2px.
         let row = div()
             .w_full()
             .px_6()
-            .when(compact_activity, |row| row.pb(px(0.)))
-            .when(!compact_activity && is_tool, |row| row.pb_2())
-            .when(!compact_activity && !is_tool, |row| {
-                row.pb_5().when(follows_activity, |row| row.pt_3())
+            .when(compact_activity, |row| {
+                row.pb(if tool_group.is_some() { px(0.) } else { px(10.) })
             })
+            .when(!compact_activity, |row| row.pb_3())
             .child(
                 div()
                     .id(SharedString::from(format!(
