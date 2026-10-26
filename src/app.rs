@@ -107,6 +107,8 @@ pub struct ConduitApp {
     workspace_drafts: HashMap<PathBuf, String>,
     composer_files: HashMap<ComposerTarget, ComposerFiles>,
     runs: HashMap<u64, ActiveRun>,
+    /// Successful background replies waiting for the user to open the session.
+    unread_completed: HashSet<u64>,
     probes: HashMap<Provider, VersionProbe>,
     diagnostics: HashMap<Provider, String>,
     catalogs: HashMap<Provider, ModelCatalog>,
@@ -183,11 +185,12 @@ pub struct ConduitApp {
     /// Groups manually pinned open after the assistant starts replying.
     expanded_tool_groups: HashSet<(u64, String)>,
     expanded_reasoning: HashSet<(u64, String)>,
+    expanded_errors: HashSet<(u64, String)>,
     /// Live plan reported by the current turn, keyed by session.
     plans: HashMap<u64, Vec<PlanStep>>,
     /// Whether the floating turn summary expands into its step/file details.
     stats_details: bool,
-    /// Last per-second repaint while a turn is active, for elapsed labels.
+    /// Last elapsed-label repaint: every second during turns, every minute idle.
     last_live_tick: Instant,
     tool_scrolls: HashMap<(u64, String), ScrollHandle>,
     message_focus: Option<(u64, String, Instant)>,
@@ -475,6 +478,7 @@ impl ConduitApp {
             workspace_drafts: HashMap::new(),
             composer_files: HashMap::new(),
             runs: HashMap::new(),
+            unread_completed: HashSet::new(),
             probes: HashMap::new(),
             diagnostics: HashMap::new(),
             catalogs: [Provider::Claude, Provider::Codex]
@@ -543,6 +547,7 @@ impl ConduitApp {
             expanded_tools: HashSet::new(),
             expanded_tool_groups: HashSet::new(),
             expanded_reasoning: HashSet::new(),
+            expanded_errors: HashSet::new(),
             plans: HashMap::new(),
             stats_details: false,
             last_live_tick: Instant::now(),

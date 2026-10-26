@@ -53,23 +53,11 @@ impl ConduitApp {
             .items_center()
             .border_t_1()
             .border_color(rgb(palette().border))
-            .when(self.git_repository.is_some(), |bar| {
-                bar.child(self.branch_picker(app_entity.clone()))
-            })
-            .when_some(toolbar_hint, |bar, hint| {
-                bar.child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(11.))
-                        .text_color(rgb(palette().faint))
-                        .child(hint),
-                )
-            })
-            .child(div().flex_1())
             .when_some(workspace_label, |bar, label| {
                 bar.child(
                     h_flex()
+                        .id("toolbar-workspace")
+                        .debug_selector(|| "toolbar-workspace".to_string())
                         .min_w_0()
                         .max_w(px(180.))
                         .items_center()
@@ -89,6 +77,20 @@ impl ConduitApp {
                         ),
                 )
             })
+            .when(self.git_repository.is_some(), |bar| {
+                bar.child(self.branch_picker(app_entity.clone()))
+            })
+            .when_some(toolbar_hint, |bar, hint| {
+                bar.child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(11.))
+                        .text_color(rgb(palette().faint))
+                        .child(hint),
+                )
+            })
+            .child(div().flex_1())
             .when_some(naming_status, |bar, status| {
                 let failed = status.is_err();
                 let text = match &status {

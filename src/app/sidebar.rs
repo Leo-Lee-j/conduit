@@ -156,6 +156,7 @@ impl ConduitApp {
                 list.child(
                     h_flex()
                         .id(("workspace", index))
+                        .group("workspace-row")
                         .h(px(30.))
                         .flex_shrink_0()
                         .px_2()
@@ -180,36 +181,70 @@ impl ConduitApp {
                                 .text_color(rgb(palette().faint)),
                         )
                         .child(div().flex_1().truncate().child(workspace.name()))
-                        .child(if importing {
-                            Spinner::new()
-                                .small()
-                                .color(rgb(palette().faint).into())
-                                .into_any_element()
-                        } else {
-                            div()
-                                .text_size(px(10.))
-                                .text_color(rgb(palette().faint))
-                                .child(count.to_string())
-                                .into_any_element()
-                        })
                         .child(
-                            Button::new(("workspace-new-session", index))
-                                .ghost()
-                                .small()
-                                .compact()
-                                .icon(IconName::Plus)
-                                .tooltip("在此工作区新建会话")
-                                .disabled(!can_edit)
-                                .when(can_edit, |button| button.cursor_pointer())
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    // Keep the workspace row's own click
-                                    // handler from reselecting the previous
-                                    // session right after creation.
-                                    cx.stop_propagation();
-                                    this.new_session_here(index, window, cx)
-                                })),
-                        )
-                        .child(self.workspace_menu(index, app_entity.clone())),
+                            h_flex()
+                                // Share one slot so the count and actions swap
+                                // without moving the workspace title.
+                                .relative()
+                                .w(px(44.))
+                                .h(px(22.))
+                                .flex_shrink_0()
+                                .gap_0()
+                                .items_center()
+                                .child(
+                                    h_flex()
+                                        .absolute()
+                                        .top_0()
+                                        .right_0()
+                                        .h(px(22.))
+                                        .items_center()
+                                        .opacity(1.)
+                                        .group_hover("workspace-row", |style| style.opacity(0.))
+                                        .child(if importing {
+                                            Spinner::new()
+                                                .small()
+                                                .color(rgb(palette().faint).into())
+                                                .into_any_element()
+                                        } else {
+                                            h_flex()
+                                                .min_w(px(22.))
+                                                .h(px(18.))
+                                                .px(px(5.))
+                                                .items_center()
+                                                .justify_center()
+                                                .rounded(px(4.))
+                                                .bg(rgb(palette().surface_strong))
+                                                .text_size(px(10.))
+                                                .text_color(rgb(palette().faint))
+                                                .child(count.to_string())
+                                                .into_any_element()
+                                        }),
+                                )
+                                .child(
+                                    Button::new(("workspace-new-session", index))
+                                        .ghost()
+                                        .small()
+                                        .compact()
+                                        .w(px(22.))
+                                        .h(px(22.))
+                                        .p_0()
+                                        .opacity(0.)
+                                        .group_hover("workspace-row", |style| style.opacity(1.))
+                                        .focus_visible(|style| style.opacity(1.))
+                                        .icon(IconName::Plus)
+                                        .tooltip("在此工作区新建会话")
+                                        .disabled(!can_edit)
+                                        .when(can_edit, |button| button.cursor_pointer())
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            // Keep the workspace row's own click
+                                            // handler from reselecting the previous
+                                            // session right after creation.
+                                            cx.stop_propagation();
+                                            this.new_session_here(index, window, cx)
+                                        })),
+                                )
+                                .child(self.workspace_menu(index, app_entity.clone())),
+                        ),
                 );
             if importing && sessions.is_empty() {
                 list = list.child(
@@ -228,150 +263,153 @@ impl ConduitApp {
             }
             for session in sessions.iter().take(if expanded { total } else { limit }) {
                 let id = session.id;
+                let native_id = session.native_id.clone();
                 let active = self.selected_session == Some(id);
-                let run_status = self.runs.get(&id).map(|r| r.status.clone());
+                let running = self.runs.contains_key(&id);
+                let unread = self.unread_completed.contains(&id);
                 let archived = session.archived;
                 let can_ai_rename = can_edit
                     && session
                         .messages
                         .iter()
                         .any(|item| item.kind == ItemKind::User);
-                list =
-                    list.child(
-                        h_flex()
-                            .id(("session", id))
-                            .h(px(30.))
-                            .flex_shrink_0()
-                            .pl(px(24.))
-                            .pr(px(8.))
-                            .gap_2()
-                            .items_center()
-                            .rounded(px(8.))
-                            .text_size(px(13.))
-                            .text_color(rgb(if archived {
-                                palette().faint
-                            } else if active {
-                                palette().text
-                            } else {
-                                palette().muted
-                            }))
-                            .when(active, |row| row.bg(rgb(palette().surface_hover)))
-                            .cursor_pointer()
-                            .hover(|style| {
-                                style
-                                    .bg(rgb(palette().surface_hover))
-                                    .text_color(rgb(palette().text))
-                            })
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.switch(index, Some(id), window, cx)
-                            }))
-                            .context_menu({
-                                let menu_app = app_entity.clone();
-                                move |menu, _, _| {
-                                    let rename_app = menu_app.clone();
-                                    let ai_rename_app = menu_app.clone();
-                                    let archive_app = menu_app.clone();
-                                    let delete_app = menu_app.clone();
-                                    menu.min_w(px(150.))
-                                        .item(
-                                            PopupMenuItem::new("重命名")
-                                                .icon(IconName::Replace)
-                                                .on_click(move |_, window, cx| {
-                                                    rename_app.update(cx, |this, cx| {
-                                                        this.open_rename_dialog(id, window, cx)
-                                                    });
-                                                }),
-                                        )
-                                        .item(
-                                            PopupMenuItem::new("AI 重命名")
-                                                .icon(gpui_kit::assets::IconName::Sparkles)
-                                                .disabled(!can_ai_rename)
-                                                .on_click(move |_, window, cx| {
-                                                    ai_rename_app.update(cx, |this, cx| {
-                                                        this.switch(index, Some(id), window, cx);
-                                                        this.ai_rename_session(id, cx);
-                                                    });
-                                                }),
-                                        )
-                                        .item(
-                                            PopupMenuItem::new("复制会话 ID")
-                                                .icon(IconName::Copy)
-                                                .on_click(move |_, _, cx| {
-                                                    cx.write_to_clipboard(
-                                                        ClipboardItem::new_string(id.to_string()),
-                                                    );
-                                                }),
-                                        )
-                                        .item(
-                                            PopupMenuItem::new(if archived {
-                                                "取消归档"
-                                            } else {
-                                                "归档"
-                                            })
-                                            .icon(IconName::Inbox)
+                list = list.child(
+                    h_flex()
+                        .id(("session", id))
+                        .h(px(30.))
+                        .flex_shrink_0()
+                        .pl(px(24.))
+                        .pr(px(8.))
+                        .gap_2()
+                        .items_center()
+                        .rounded(px(8.))
+                        .text_size(px(13.))
+                        .text_color(rgb(if archived {
+                            palette().faint
+                        } else if active {
+                            palette().text
+                        } else {
+                            palette().muted
+                        }))
+                        .when(active, |row| row.bg(rgb(palette().surface_hover)))
+                        .cursor_pointer()
+                        .hover(|style| {
+                            style
+                                .bg(rgb(palette().surface_hover))
+                                .text_color(rgb(palette().text))
+                        })
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.switch(index, Some(id), window, cx)
+                        }))
+                        .context_menu({
+                            let menu_app = app_entity.clone();
+                            move |menu, _, _| {
+                                let rename_app = menu_app.clone();
+                                let ai_rename_app = menu_app.clone();
+                                let archive_app = menu_app.clone();
+                                let delete_app = menu_app.clone();
+                                let has_native_id = native_id.is_some();
+                                let copy_native_id = native_id.clone();
+                                menu.min_w(px(150.))
+                                    .item(
+                                        PopupMenuItem::new("重命名")
+                                            .icon(IconName::Replace)
+                                            .on_click(move |_, window, cx| {
+                                                rename_app.update(cx, |this, cx| {
+                                                    this.open_rename_dialog(id, window, cx)
+                                                });
+                                            }),
+                                    )
+                                    .item(
+                                        PopupMenuItem::new("AI 重命名")
+                                            .icon(gpui_kit::assets::IconName::Sparkles)
+                                            .disabled(!can_ai_rename)
+                                            .on_click(move |_, window, cx| {
+                                                ai_rename_app.update(cx, |this, cx| {
+                                                    this.switch(index, Some(id), window, cx);
+                                                    this.ai_rename_session(id, cx);
+                                                });
+                                            }),
+                                    )
+                                    .item(
+                                        PopupMenuItem::new("复制会话 ID")
+                                            .icon(IconName::Copy)
+                                            .disabled(!has_native_id)
                                             .on_click(move |_, _, cx| {
+                                                if let Some(native_id) = copy_native_id.clone() {
+                                                    cx.write_to_clipboard(
+                                                        ClipboardItem::new_string(native_id),
+                                                    );
+                                                }
+                                            }),
+                                    )
+                                    .item(
+                                        PopupMenuItem::new(if archived {
+                                            "取消归档"
+                                        } else {
+                                            "归档"
+                                        })
+                                        .icon(IconName::Inbox)
+                                        .on_click(
+                                            move |_, _, cx| {
                                                 archive_app.update(cx, |this, cx| {
                                                     this.toggle_archive(id, cx)
                                                 });
-                                            }),
-                                        )
-                                        .item(
-                                            PopupMenuItem::new("删除")
-                                                .icon(IconName::Delete)
-                                                .on_click(move |_, window, cx| {
-                                                    delete_app.update(cx, |this, cx| {
-                                                        this.open_delete_dialog(id, window, cx)
-                                                    });
-                                                }),
-                                        )
-                                }
-                            })
-                            .child(provider_icon(session.provider))
-                            .child(
+                                            },
+                                        ),
+                                    )
+                                    .item(
+                                        PopupMenuItem::new("删除").icon(IconName::Delete).on_click(
+                                            move |_, window, cx| {
+                                                delete_app.update(cx, |this, cx| {
+                                                    this.open_delete_dialog(id, window, cx)
+                                                });
+                                            },
+                                        ),
+                                    )
+                            }
+                        })
+                        .child(provider_icon(session.provider))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .line_height(px(16.))
+                                .child(if session.title.is_empty() {
+                                    "新会话".to_string()
+                                } else {
+                                    single_line_title(&session.title)
+                                }),
+                        )
+                        .when(self.session_namings.contains_key(&id), |row| {
+                            row.child(Spinner::new().small().color(rgb(palette().muted).into()))
+                        })
+                        .when(archived, |row| {
+                            row.child(
                                 div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .line_height(px(16.))
-                                    .child(if session.title.is_empty() {
-                                        "新会话".to_string()
-                                    } else {
-                                        single_line_title(&session.title)
-                                    }),
+                                    .text_size(px(9.))
+                                    .text_color(rgb(palette().faint))
+                                    .child("已归档"),
                             )
-                            .when(self.session_namings.contains_key(&id), |row| {
-                                row.child(Spinner::new().small().color(rgb(palette().muted).into()))
-                            })
-                            .when(archived, |row| {
-                                row.child(
-                                    div()
-                                        .text_size(px(9.))
-                                        .text_color(rgb(palette().faint))
-                                        .child("已归档"),
-                                )
-                            })
-                            .when_some(run_status, |row, status| {
-                                row.child(
-                                    div()
-                                        .text_size(px(10.))
-                                        .text_color(rgb(palette().faint))
-                                        .child(status),
-                                )
-                            })
-                            .when_some(session_age_label(session.created_at), |row, age| {
-                                row.child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .px(px(5.))
-                                        .py(px(1.))
-                                        .rounded(px(4.))
-                                        .bg(rgb(palette().surface_strong))
-                                        .text_size(px(9.))
-                                        .text_color(rgb(palette().faint))
-                                        .child(age),
-                                )
-                            }),
-                    );
+                        })
+                        .when(running || unread, |row| {
+                            row.child(session_activity_dot(id, running))
+                        })
+                        .when_some(session_age_label(session.created_at), |row, age| {
+                            row.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .px(px(5.))
+                                    .py(px(1.))
+                                    .rounded(px(4.))
+                                    .bg(rgb(palette().surface_strong))
+                                    .text_size(px(9.))
+                                    .text_color(rgb(palette().faint))
+                                    .child(age),
+                            )
+                        }),
+                );
             }
             if total > limit {
                 let toggle_app = app_entity.clone();

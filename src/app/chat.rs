@@ -2,6 +2,32 @@
 
 use super::*;
 
+/// Text segments separated by tools still belong to one user-facing reply.
+/// Derive the bounds from user messages so imported histories work as well.
+pub(super) fn assistant_reply_range(
+    session: &SessionRecord,
+    index: usize,
+) -> std::ops::Range<usize> {
+    let start = session.messages[..index]
+        .iter()
+        .rposition(|item| item.kind == ItemKind::User)
+        .map_or(0, |position| position + 1);
+    let end = session.messages[index..]
+        .iter()
+        .position(|item| item.kind == ItemKind::User)
+        .map_or(session.messages.len(), |position| index + position);
+    start..end
+}
+
+pub(super) fn assistant_reply_text(session: &SessionRecord, index: usize) -> String {
+    session.messages[assistant_reply_range(session, index)]
+        .iter()
+        .filter(|item| item.kind == ItemKind::Assistant && !item.text.trim().is_empty())
+        .map(|item| item.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 impl ConduitApp {
     /// Shows the copied check mark on `id` for a short moment. Each call gets a
     /// fresh generation so a previous timer cannot hide newer feedback.
@@ -421,7 +447,6 @@ impl ConduitApp {
         session_id: u64,
         index: usize,
         item: &ChatItem,
-        indented: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let reasoning = item.kind == ItemKind::Reasoning;
@@ -448,7 +473,7 @@ impl ConduitApp {
         .debug_selector(move || format!("activity-{session_id}-{index}"))
         .w_full()
         .h(px(28.))
-        .px(if indented { px(8.) } else { px(0.) })
+        .px_3()
         .rounded(px(6.))
         .cursor_pointer()
         .accessibility_label(format!(
@@ -494,8 +519,21 @@ impl ConduitApp {
                         .flex_shrink_0()
                         .text_size(px(12.))
                         .text_color(rgb(palette().text))
+                        .debug_selector(move || format!("activity-category-{session_id}-{index}"))
                         .child(category),
                 )
+                .when_some(item.approval.as_ref(), |row, approval| {
+                    row.child(
+                        div()
+                            .debug_selector(move || {
+                                format!("activity-approval-{session_id}-{index}")
+                            })
+                            .flex_shrink_0()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette().muted))
+                            .child(approval.status.clone()),
+                    )
+                })
                 .when(running && !reasoning, |row| {
                     row.child(
                         h_flex()
@@ -625,7 +663,7 @@ impl ConduitApp {
                     .min_w_0()
                     .flex_row_reverse()
                     .flex_wrap()
-                    .justify_end()
+                    .justify_start()
                     .gap_1()
                     .children(references.iter().enumerate().map(|(file_index, mention)| {
                         let path = Path::new(mention);
@@ -687,8 +725,9 @@ impl ConduitApp {
                 let message_group =
                     SharedString::from(format!("user-message-{}-{}", session_id, item.key));
                 // Keep user prose literal and selectable; generated file references
-                // render separately below it without changing the engine prompt.
+                // render below it inside the same bubble without changing the prompt.
                 let body = div()
+                    .debug_selector(|| format!("user-body-{index}"))
                     // SelectableText does not subscribe this view to its selection
                     // state, so request a repaint as the pointer moves during drag.
                     .on_mouse_move(cx.listener(|_, event: &MouseMoveEvent, _, cx| {
@@ -709,28 +748,28 @@ impl ConduitApp {
                     .items_end()
                     .gap_1()
                     .group(message_group.clone())
-                    .when(!message_text.is_empty(), |message| {
-                        message.child(
-                            div()
-                                .id(("user-bubble", index))
-                                .debug_selector(|| format!("user-bubble-{index}"))
-                                .max_w(px(680.))
-                                .rounded(px(16.))
-                                .px_4()
-                                .py_3()
-                                // A restrained prompt surface distinguishes the user
-                                // without turning each turn into a separate card.
-                                .bg(rgb(0x252525))
-                                .text_size(px(typography.body_size))
-                                .line_height(relative(typography.line_height))
-                                .when_some(typography.body_font.clone(), |bubble, family| {
-                                    bubble.font_family(family)
-                                })
-                                .text_color(rgb(0xf3f3f4))
-                                .child(body),
-                        )
-                    })
-                    .when(!references.is_empty(), |message| message.child(attachments))
+                    .child(
+                        v_flex()
+                            .id(("user-bubble", index))
+                            .debug_selector(|| format!("user-bubble-{index}"))
+                            .max_w(px(680.))
+                            .min_w_0()
+                            .gap_2()
+                            .rounded(px(16.))
+                            .px_4()
+                            .py_3()
+                            // A restrained prompt surface distinguishes the user
+                            // without turning each turn into a separate card.
+                            .bg(rgb(palette().surface_hover))
+                            .text_size(px(typography.body_size))
+                            .line_height(relative(typography.line_height))
+                            .when_some(typography.body_font.clone(), |bubble, family| {
+                                bubble.font_family(family)
+                            })
+                            .text_color(rgb(palette().text))
+                            .when(!message_text.is_empty(), |bubble| bubble.child(body))
+                            .when(!references.is_empty(), |bubble| bubble.child(attachments)),
+                    )
                     .child(
                         h_flex()
                             .items_center()
@@ -768,7 +807,15 @@ impl ConduitApp {
                     .into_any_element()
             }
             ItemKind::Assistant => {
-                let copy_text = item.text.clone();
+                let reply_range = assistant_reply_range(session, index);
+                let show_actions = !session.messages[index + 1..reply_range.end]
+                    .iter()
+                    .any(|item| item.kind == ItemKind::Assistant && !item.text.trim().is_empty());
+                let copy_text = if show_actions {
+                    assistant_reply_text(session, index)
+                } else {
+                    String::new()
+                };
                 let catalog = self.catalogs.get(&provider);
                 let model_id = item
                     .model
@@ -860,19 +907,17 @@ impl ConduitApp {
                         &format!("code-copy-{}-{}", session_id, item.key),
                         true,
                     ))
-                    .child(actions)
+                    .when(show_actions, |message| message.child(actions))
                     .into_any_element()
             }
             ItemKind::Reasoning => {
                 let detail_key = (session_id, item.key.clone());
                 let expanded = self.expanded_reasoning.contains(&detail_key);
-                let mut content = v_flex().w_full().min_w_0().gap_1().child(self.activity_row(
-                    session_id,
-                    index,
-                    item,
-                    tool_group.is_some(),
-                    cx,
-                ));
+                let mut content = v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_1()
+                    .child(self.activity_row(session_id, index, item, cx));
                 if expanded {
                     content = content.child(
                         v_flex()
@@ -891,17 +936,15 @@ impl ConduitApp {
                 }
                 activity_container(content.into_any_element(), tool_group.is_some())
             }
-            ItemKind::Tool if item.approval.is_none() && !is_tool_edit(item) => {
+            ItemKind::Tool if is_compact_tool(item) => {
                 let detail_key = (session_id, item.key.clone());
                 let expanded = self.expanded_tools.contains(&detail_key);
                 let tool_id = format!("tool-{}-{}", session_id, item.key);
-                let mut content = v_flex().w_full().min_w_0().gap_1().child(self.activity_row(
-                    session_id,
-                    index,
-                    item,
-                    tool_group.is_some(),
-                    cx,
-                ));
+                let mut content = v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_1()
+                    .child(self.activity_row(session_id, index, item, cx));
                 if expanded {
                     let tool_scroll = self
                         .tool_scrolls
@@ -1066,8 +1109,17 @@ impl ConduitApp {
                 .child(item.text.clone())
                 .into_any_element(),
             ItemKind::Error => {
-                let copy_text = item.text.clone();
+                let raw_error = if item.detail.trim().is_empty() {
+                    item.text.clone()
+                } else {
+                    item.detail.clone()
+                };
+                let summary = failure_summary(&item.text);
+                let error_key = (session_id, item.key.clone());
+                let expanded = self.expanded_errors.contains(&error_key);
+                let copy_text = raw_error.clone();
                 let copy_id = SharedString::from(format!("error-copy-{}-{}", session_id, item.key));
+                let copied = self.copied_action.as_ref() == Some(&copy_id);
                 let can_retry = self.writable
                     && !self.closing
                     && !self.runs.contains_key(&session_id)
@@ -1078,13 +1130,22 @@ impl ConduitApp {
                     && !session.messages[index + 1..].iter().any(|message| {
                         matches!(message.kind, ItemKind::User | ItemKind::Assistant)
                     });
-                let mut actions = h_flex().items_center().gap(px(4.)).justify_end();
+                let mut actions = h_flex().flex_shrink_0().items_center().gap(px(4.));
                 actions = actions.child(
                     message_action_button(
                         copy_id.clone(),
-                        Icon::new(IconName::Copy),
-                        "复制错误详情",
+                        Icon::new(if copied {
+                            IconName::Check
+                        } else {
+                            IconName::Copy
+                        }),
+                        if copied {
+                            "已复制"
+                        } else {
+                            "复制错误详情"
+                        },
                     )
+                    .debug_selector(|| format!("cli-error-copy-{index}"))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
                         this.show_copied(copy_id.clone(), window, cx);
@@ -1099,6 +1160,7 @@ impl ConduitApp {
                         .ghost()
                         .small()
                         .compact()
+                        .cursor_pointer()
                         .child("重试")
                         .on_click(cx.listener(
                             move |this, _, window, cx| this.retry_error(index, window, cx),
@@ -1106,20 +1168,103 @@ impl ConduitApp {
                     );
                 }
                 v_flex()
+                    .id(("cli-error", index))
+                    .debug_selector(|| format!("cli-error-{index}"))
                     .w_full()
                     .gap_2()
                     .rounded(px(10.))
                     .border_1()
-                    .border_color(rgb(palette().danger_border))
-                    .bg(rgb(palette().danger_bg))
+                    .border_color(rgb(palette().border))
+                    .bg(rgb(palette().surface))
                     .p_3()
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                Icon::new(IconName::TriangleAlert)
+                                    .small()
+                                    .text_color(rgb(palette().error_text)),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(12.))
+                                    .font_semibold()
+                                    .text_color(rgb(palette().text))
+                                    .child("本次回复未完成"),
+                            )
+                            .child(actions),
+                    )
                     .child(
                         div()
                             .text_size(px(12.))
-                            .text_color(rgb(palette().danger_text))
-                            .child(item.text.clone()),
+                            .line_height(relative(1.5))
+                            .text_color(rgb(palette().muted))
+                            .child(summary),
                     )
-                    .child(actions)
+                    .child(
+                        h_flex().child(
+                            Button::new(SharedString::from(format!(
+                                "error-details-{session_id}-{}",
+                                item.key
+                            )))
+                            .debug_selector(|| format!("cli-error-toggle-{index}"))
+                            .ghost()
+                            .small()
+                            .compact()
+                            .cursor_pointer()
+                            .icon(if expanded {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .label(if expanded {
+                                "收起详情"
+                            } else {
+                                "查看详情"
+                            })
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    if !this.expanded_errors.insert(error_key.clone()) {
+                                        this.expanded_errors.remove(&error_key);
+                                    }
+                                    this.scroll.remeasure();
+                                    cx.notify();
+                                },
+                            )),
+                        ),
+                    )
+                    .when(expanded, |card| {
+                        card.child(
+                            div()
+                                .id(("cli-error-details", index))
+                                .debug_selector(|| format!("cli-error-details-{index}"))
+                                .max_h(px(200.))
+                                .overflow_y_scroll()
+                                .rounded(px(6.))
+                                .p_3()
+                                .bg(rgb(palette().surface_strong))
+                                .font_family(typography.code_font.clone())
+                                .text_size(px(11.))
+                                .line_height(relative(1.5))
+                                .text_color(rgb(palette().muted))
+                                .cursor_text()
+                                .on_mouse_move(cx.listener(|_, event: &MouseMoveEvent, _, cx| {
+                                    if event.pressed_button == Some(MouseButton::Left) {
+                                        cx.notify();
+                                    }
+                                }))
+                                .child(gpui_kit::base::SelectableText::new(
+                                    SharedString::from(format!(
+                                        "error-text-{session_id}-{}",
+                                        item.key
+                                    )),
+                                    raw_error,
+                                )),
+                        )
+                    })
                     .into_any_element()
             }
         };
@@ -1140,9 +1285,7 @@ impl ConduitApp {
             .message_focus
             .as_ref()
             .is_some_and(|(id, key, _)| *id == session_id && key == &item.key);
-        let is_tool = item.kind == ItemKind::Tool;
-        let compact_activity = item.kind == ItemKind::Reasoning
-            || (is_tool && item.approval.is_none() && !is_tool_edit(item));
+        let compact_activity = item.kind == ItemKind::Reasoning || is_compact_tool(item);
         // One rhythm for the whole transcript: 12px between blocks, dense inside
         // an expanded tool group. `activity_container` already contributes 2px.
         let row = div()

@@ -276,6 +276,7 @@ impl ConduitApp {
             .map(|session| session.usage)
             .unwrap_or_default();
         self.plans.remove(&id);
+        self.unread_completed.remove(&id);
         self.runs
             .insert(id, ActiveRun::new(runtime, worktree, prefix, usage, model));
         if append_user {
@@ -389,9 +390,10 @@ impl ConduitApp {
     }
 
     pub(super) fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Elapsed labels in the running group header and the stats pill only
-        // change once a second; avoid repainting every 33 ms poll otherwise.
-        if !self.runs.is_empty() && self.last_live_tick.elapsed() >= Duration::from_secs(1) {
+        // Refresh session ages every minute while idle, and running elapsed
+        // labels once a second; avoid repainting every 33 ms poll otherwise.
+        let label_interval = if self.runs.is_empty() { 60 } else { 1 };
+        if self.last_live_tick.elapsed() >= Duration::from_secs(label_interval) {
             self.last_live_tick = Instant::now();
             cx.notify();
         }
@@ -623,9 +625,13 @@ impl ConduitApp {
                 }
                 Event::Finished { error, cancelled } => {
                     self.runs.remove(&id);
+                    self.unread_completed.remove(&id);
                     terminal = true;
                     if error.is_none() && !cancelled {
                         completed_turns.push(id);
+                        if self.selected_session != Some(id) {
+                            self.unread_completed.insert(id);
+                        }
                     }
                     if let Some(session) = self.session_mut(id) {
                         session.interrupted = false;
@@ -672,7 +678,7 @@ impl ConduitApp {
                                     )
                                 },
                                 input: String::new(),
-                                detail: String::new(),
+                                detail: error.clone().unwrap_or_default(),
                                 status: String::new(),
                                 approval: None,
                                 model: None,
@@ -755,11 +761,17 @@ impl ConduitApp {
                             if selected {
                                 // New tools can merge earlier rows into a group;
                                 // text arriving in an empty block can split it.
+                                // A new reply segment also removes the footer
+                                // and its reserved height from the previous one.
                                 // Invalidate those rows as well as the event's row.
                                 let current_shape = shape(&session.messages[changed_index]);
                                 structural_change |= previous_shape
                                     .is_some_and(|previous| previous != current_shape)
-                                    || (changed_index >= old_len && current_shape.1);
+                                    || (changed_index >= old_len
+                                        && (current_shape.1
+                                            || (session.messages[changed_index].kind
+                                                == ItemKind::Assistant
+                                                && !current_shape.0)));
                                 dirty_messages.push(changed_index);
                             }
                         }

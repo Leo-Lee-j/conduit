@@ -7,6 +7,44 @@ use crate::{
     protocol::Event,
 };
 #[test]
+fn assistant_reply_combines_text_across_tools_within_user_boundaries() {
+    let mut s = session();
+    for (key, kind, text) in [
+        ("old", ItemKind::Assistant, "导入的早期回复"),
+        ("user", ItemKind::User, "提交修改"),
+        ("before", ItemKind::Assistant, "我会提交并推送。"),
+        ("tool", ItemKind::Tool, "exec_command"),
+        ("reasoning", ItemKind::Reasoning, "检查结果"),
+        ("empty", ItemKind::Assistant, " \n"),
+        ("final", ItemKind::Assistant, "已提交并推送。"),
+        ("notice", ItemKind::Notice, "提示"),
+        ("next-user", ItemKind::User, "继续"),
+        ("next", ItemKind::Assistant, "下一轮回复"),
+    ] {
+        s.messages.push(ChatItem {
+            key: key.into(),
+            created_at: 0,
+            kind,
+            text: text.into(),
+            input: String::new(),
+            detail: String::new(),
+            status: String::new(),
+            approval: None,
+            model: None,
+        });
+    }
+    for index in [2, 6] {
+        assert_eq!(super::chat::assistant_reply_range(&s, index), 2..8);
+        assert_eq!(
+            super::chat::assistant_reply_text(&s, index),
+            "我会提交并推送。\n\n已提交并推送。"
+        );
+    }
+    assert_eq!(super::chat::assistant_reply_text(&s, 0), "导入的早期回复");
+    assert_eq!(super::chat::assistant_reply_text(&s, 9), "下一轮回复");
+}
+
+#[test]
 fn indexed_events_keep_order_inputs_and_stream_snapshots_across_batches() {
     let mut s = session();
     let mut index = super::MessageIndex::default();
@@ -497,6 +535,52 @@ fn tool_groups_skip_file_edits() {
     assert_eq!(super::contiguous_tool_group(&s, 3), Some((0, 4)));
     assert_eq!(super::contiguous_tool_group(&s, 4), None);
 }
+
+#[test]
+fn approved_tools_share_normal_activity_layout_without_hiding_unresolved_decisions() {
+    let mut s = session();
+    for (key, title, input) in [
+        ("search", "WebSearch", r#"{"query":"gpui"}"#),
+        ("fetch", "WebFetch", r#"{"url":"https://example.com"}"#),
+    ] {
+        apply_event(
+            &mut s,
+            "turn",
+            Event::Tool {
+                key: key.into(),
+                title: title.into(),
+                detail: String::new(),
+                status: "completed".into(),
+            },
+        );
+        apply_event(
+            &mut s,
+            "turn",
+            Event::ToolInput {
+                key: key.into(),
+                input: input.into(),
+            },
+        );
+        s.record_tool_approval(
+            "turn",
+            key,
+            &format!("请求使用 {title}"),
+            &format!(r#"{{"tool_use_id":"{key}"}}"#),
+            "已允许",
+        );
+    }
+    assert_eq!(super::contiguous_tool_group(&s, 0), Some((0, 2)));
+    assert_eq!(super::tool_category(&s.messages[1]), "读取网页");
+    assert_eq!(super::tool_summary(&s.messages[1]), "https://example.com");
+    for status in ["等待中", "已拒绝", "已取消", "已中断"] {
+        s.messages[0].approval.as_mut().unwrap().status = status.into();
+        assert!(!super::is_compact_tool(&s.messages[0]), "{status}");
+        assert_eq!(super::contiguous_tool_group(&s, 1), None);
+    }
+    s.messages[0].approval.as_mut().unwrap().status = "已允许".into();
+    s.messages[0].text = "Write".into();
+    assert!(!super::is_compact_tool(&s.messages[0]));
+}
 #[test]
 fn activity_rows_classify_failures_and_summaries() {
     let item = |kind: ItemKind, title: &str, input: &str, status: &str, detail: &str| ChatItem {
@@ -844,6 +928,23 @@ fn single_line_title_collapses_line_breaks() {
         "# AGENTS.md <INSTRUCTIONS>"
     );
     assert_eq!(single_line_title("第一行\r第二行"), "第一行 第二行");
+}
+
+#[test]
+fn error_summary_extracts_json_and_bounds_multiline_diagnostics() {
+    assert_eq!(
+        super::failure_summary(r#"执行失败：{"message":"连接已断开"}"#),
+        "连接已断开"
+    );
+    assert_eq!(
+        super::failure_summary("\n请求超时\n原始诊断信息"),
+        "请求超时"
+    );
+    assert_eq!(super::failure_summary(""), "CLI 执行失败，请查看详情。");
+    assert_eq!(
+        super::failure_summary(&"错".repeat(200)).chars().count(),
+        161
+    );
 }
 #[test]
 fn session_search_matches_title_and_message_text() {

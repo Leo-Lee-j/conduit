@@ -53,6 +53,25 @@ pub(super) fn same_failure(message: &str, error: &str) -> bool {
     message == error || message.contains(error) || error.contains(message)
 }
 
+/// Keep long diagnostics out of the transcript's default reading flow.
+pub(super) fn failure_summary(error: &str) -> String {
+    let error = error
+        .trim()
+        .strip_prefix("执行失败：")
+        .unwrap_or(error.trim());
+    let friendly = friendly_failure(error);
+    let line = friendly
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("CLI 执行失败，请查看详情。");
+    if line.chars().count() > 160 {
+        format!("{}…", line.chars().take(160).collect::<String>())
+    } else {
+        line.to_string()
+    }
+}
+
 pub(super) fn finish_tool_cards(session: &mut SessionRecord, prefix: &str, status: &str) {
     let prefix = format!("{prefix}-");
     for item in &mut session.messages {
@@ -92,22 +111,20 @@ pub(super) fn message_timestamp(timestamp: u64) -> String {
         .unwrap_or_default()
 }
 
-/// Whole local-calendar days between a session's creation and today, shown as
-/// a quiet tag on the right of each sidebar row.
+/// Elapsed minutes, hours, or days since creation, shown on each sidebar row.
 pub(super) fn session_age_label(created_at: u64) -> Option<String> {
     if created_at == 0 {
         return None;
     }
     let created = DateTime::from_timestamp(created_at as i64, 0)?;
-    let days = (Local::now().date_naive() - created.with_timezone(&Local).date_naive())
-        .num_days()
+    let minutes = Local::now()
+        .signed_duration_since(created)
+        .num_minutes()
         .max(0);
-    Some(match days {
-        0 => "今天".into(),
-        1 => "1 天".into(),
-        days if days < 30 => format!("{days} 天"),
-        days if days < 365 => format!("{} 个月", days / 30),
-        days => format!("{} 年", days / 365),
+    Some(match minutes {
+        minutes if minutes < 60 => format!("{minutes} 分"),
+        minutes if minutes < 24 * 60 => format!("{} 时", minutes / 60),
+        minutes => format!("{} 日", minutes / (24 * 60)),
     })
 }
 

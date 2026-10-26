@@ -31,6 +31,12 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
             };
             session.messages = vec![
                 item("user", super::ItemKind::User, "检查代码", ""),
+                item(
+                    "turn-before",
+                    super::ItemKind::Assistant,
+                    "先检查代码。",
+                    "",
+                ),
                 item("turn-a", super::ItemKind::Tool, "Read", "completed"),
                 item("turn-b", super::ItemKind::Tool, "Read", "completed"),
             ];
@@ -72,8 +78,10 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
     assert!((activity.center().y - stats.center().y).abs() < px(1.));
     assert!(spinner.left() >= text.right());
     assert!(spinner.left() - text.right() <= px(10.));
-    assert!(cx.debug_bounds("activity-1-1").is_some());
     assert!(cx.debug_bounds("activity-1-2").is_some());
+    assert!(cx.debug_bounds("activity-1-3").is_some());
+    assert!(cx.debug_bounds("reply-actions-1").is_some());
+    let before_height = cx.debug_bounds("message-row-1").unwrap().size.height;
 
     sender
         .send(Event::Delta {
@@ -86,12 +94,52 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
     cx.update(|window, cx| {
         let _ = window.draw(cx);
     });
-    assert!(cx.debug_bounds("tool-group-header-1-1").is_some());
-    assert!(cx.debug_bounds("activity-1-1").is_none());
+    assert!(cx.debug_bounds("tool-group-header-1-2").is_some());
     assert!(cx.debug_bounds("activity-1-2").is_none());
+    assert!(cx.debug_bounds("activity-1-3").is_none());
+    assert!(cx.debug_bounds("assistant-message-1").is_some());
+    assert!(cx.debug_bounds("reply-actions-1").is_none());
+    assert!(cx.debug_bounds("reply-actions-4").is_some());
+    assert!(cx.debug_bounds("message-row-1").unwrap().size.height < before_height);
     assert!(
         cx.update(|_, cx| app.read(cx).runs.contains_key(&1)),
         "collapse happens while the reply is streaming"
+    );
+
+    // A further segment can arrive without any intervening tool. Its footer
+    // replaces the previous one, including that row's cached list height.
+    let reply_height = cx.debug_bounds("message-row-4").unwrap().size.height;
+    sender
+        .send(Event::Delta {
+            key: "followup".into(),
+            text: "补充检查结果。".into(),
+        })
+        .unwrap();
+    cx.update(|window, cx| app.update(cx, |this, cx| this.poll(window, cx)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("reply-actions-4").is_none());
+    assert!(cx.debug_bounds("reply-actions-5").is_some());
+    assert!(cx.debug_bounds("message-row-4").unwrap().size.height < reply_height);
+
+    sender
+        .send(Event::Text {
+            key: "followup".into(),
+            text: " \n".into(),
+        })
+        .unwrap();
+    cx.update(|window, cx| app.update(cx, |this, cx| this.poll(window, cx)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("reply-actions-4").is_some());
+    assert!(cx.debug_bounds("reply-actions-5").is_none());
+    assert_eq!(
+        cx.debug_bounds("message-row-4").unwrap().size.height,
+        reply_height
     );
 }
 
@@ -128,6 +176,15 @@ fn empty_chat_blocks_have_no_chrome_and_streaming_replies_reflow_tool_groups(
                 item("turn-b", super::ItemKind::Tool, "exec_command"),
                 item("turn-reply", super::ItemKind::Assistant, ""),
             ];
+            session.messages[2].text = "WebFetch".into();
+            session.messages[2].input = r#"{"url":"https://example.com"}"#.into();
+            session.record_tool_approval(
+                "turn",
+                "fetch-approval",
+                "请求使用 WebFetch",
+                r#"{"tool_use_id":"a"}"#,
+                "已允许",
+            );
             let path = std::env::temp_dir().join("conduit-empty-chat-ui");
             let store = Store {
                 workspaces: vec![Workspace {
@@ -174,6 +231,14 @@ fn empty_chat_blocks_have_no_chrome_and_streaming_replies_reflow_tool_groups(
     let first = cx.debug_bounds("activity-1-2").unwrap();
     let second = cx.debug_bounds("activity-1-4").unwrap();
     assert!(second.top() - first.bottom() < px(10.));
+    assert_eq!(first.left(), second.left());
+    assert_eq!(first.size.height, second.size.height);
+    assert!(cx.debug_bounds("activity-approval-1-2").is_some());
+    let category_left = cx.debug_bounds("activity-category-1-2").unwrap().left();
+    assert_eq!(
+        category_left,
+        cx.debug_bounds("activity-category-1-4").unwrap().left()
+    );
     assert!(cx.debug_bounds("tool-group-header-1-2").is_some());
 
     sender
@@ -209,6 +274,15 @@ fn empty_chat_blocks_have_no_chrome_and_streaming_replies_reflow_tool_groups(
     assert!(cx.debug_bounds("tool-group-header-1-2").is_none());
     assert!(cx.debug_bounds("activity-1-2").is_some());
     assert!(cx.debug_bounds("activity-1-4").is_some());
+    assert!(cx.debug_bounds("activity-approval-1-2").is_some());
+    assert_eq!(
+        cx.debug_bounds("activity-category-1-2").unwrap().left(),
+        category_left
+    );
+    assert_eq!(
+        cx.debug_bounds("activity-category-1-4").unwrap().left(),
+        category_left
+    );
     assert!(cx.debug_bounds("message-row-4").unwrap().size.height > px(20.));
     cx.update(|_, cx| {
         let app = app.read(cx);
@@ -495,6 +569,10 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
                 .unwrap();
             this.poll(window, cx);
             assert!(!this.runs.contains_key(&1));
+            assert!(
+                !this.unread_completed.contains(&1),
+                "cancellation is not a completed reply"
+            );
             assert_eq!(this.runs.len(), 2);
             assert_eq!(
                 this.session(2).unwrap().messages[0].text,
@@ -511,6 +589,39 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
                 "workspace removal still waits for every task"
             );
             assert!(this.workspace_busy(1));
+            senders[&2]
+                .send(Event::Finished {
+                    error: None,
+                    cancelled: false,
+                })
+                .unwrap();
+            this.poll(window, cx);
+            assert!(
+                this.unread_completed.contains(&2),
+                "successful background replies become unread"
+            );
+            this.switch(0, Some(2), window, cx);
+            assert!(
+                !this.unread_completed.contains(&2),
+                "opening a session acknowledges its reply"
+            );
+            senders[&3]
+                .send(Event::Finished {
+                    error: Some("network timeout\nraw details".into()),
+                    cancelled: false,
+                })
+                .unwrap();
+            this.poll(window, cx);
+            assert!(
+                !this.unread_completed.contains(&3),
+                "failures are not marked as successful replies"
+            );
+            assert_eq!(
+                this.session(3).unwrap().messages.last().unwrap().detail,
+                "network timeout\nraw details"
+            );
+            this.selected_session = Some(1);
+            this.selected_workspace = Some(0);
             this.git_operation = Some(super::GitOperation {
                 probe: crate::git::OperationProbe::test_pending(root.clone()),
                 worktree: root.clone(),
@@ -1364,7 +1475,7 @@ fn composer_files_paste_drafts_removal_and_failed_send(cx: &mut TestAppContext) 
     let _ = std::fs::remove_dir(root);
 }
 #[gpui_kit::test]
-fn attachment_tags_size_to_names_and_sent_files_start_at_the_right(cx: &mut TestAppContext) {
+fn attachment_tags_size_to_names_and_stay_inside_the_user_bubble(cx: &mut TestAppContext) {
     use crate::{
         domain::{ItemKind, Provider, SessionRecord, Workspace},
         file_ref::FileReference,
@@ -1460,16 +1571,18 @@ fn attachment_tags_size_to_names_and_sent_files_start_at_the_right(cx: &mut Test
         "long names must be bounded: {long:?}"
     );
     assert!(short.size.height <= px(26.));
-    let message = cx.debug_bounds("user-message-0").unwrap();
     let row = cx.debug_bounds("user-attachments-0").unwrap();
-    let body = cx.debug_bounds("user-bubble-0").unwrap();
+    let bubble = cx.debug_bounds("user-bubble-0").unwrap();
+    let body = cx.debug_bounds("user-body-0").unwrap();
     let first = cx.debug_bounds("user-file-0-0").unwrap();
     let second = cx.debug_bounds("user-file-0-1").unwrap();
     let last = cx.debug_bounds("user-file-0-2").unwrap();
-    assert!((row.right() - message.right()).abs() < px(1.));
+    assert!(row.left() >= bubble.left() + px(15.));
+    assert!(row.right() <= bubble.right() - px(15.));
+    assert!(row.bottom() <= bubble.bottom() - px(11.));
     assert!(
         (first.right() - body.right()).abs() < px(1.),
-        "attachment tags must start at the message's right edge: {first:?} / {body:?}"
+        "attachment tags must align with the bubble content: {first:?} / {body:?}"
     );
     assert!(
         row.top() >= body.bottom(),
@@ -1501,11 +1614,86 @@ fn attachment_tags_size_to_names_and_sent_files_start_at_the_right(cx: &mut Test
         let _ = window.draw(cx);
     });
     assert!(
-        cx.debug_bounds("user-bubble-0").is_none(),
-        "file-only messages must not show an empty bubble"
+        cx.debug_bounds("user-bubble-0").is_some(),
+        "file-only messages keep their attachments inside the bubble"
     );
+    assert!(cx.debug_bounds("user-body-0").is_none());
     assert!(cx.debug_bounds("user-file-0-0").is_some());
 }
+#[gpui_kit::test]
+fn cli_error_details_expand_copy_raw_diagnostics_and_collapse(cx: &mut TestAppContext) {
+    use crate::{domain::Workspace, store::Store};
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+    cx.update(gpui_kit::init);
+    let raw = "connection closed\n".repeat(40);
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut session = super::tests::session();
+            session.messages = vec![ChatItem {
+                key: "error".into(),
+                created_at: 0,
+                kind: super::ItemKind::Error,
+                text: "执行失败：connection closed".into(),
+                detail: raw.clone(),
+                input: String::new(),
+                status: String::new(),
+                approval: None,
+                model: None,
+            }];
+            let store = Store {
+                workspaces: vec![Workspace {
+                    path: std::env::temp_dir().join("conduit-error-ui"),
+                    sessions: vec![session],
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.writable = false;
+            app
+        });
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("cli-error-details-0").is_none());
+    let collapsed = cx.debug_bounds("cli-error-0").unwrap();
+    let toggle = cx.debug_bounds("cli-error-toggle-0").unwrap().center();
+    cx.simulate_mouse_down(toggle, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(toggle, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let details = cx
+        .debug_bounds("cli-error-details-0")
+        .expect("expanded details");
+    assert!(details.size.height <= px(200.));
+    assert!(cx.debug_bounds("cli-error-0").unwrap().size.height > collapsed.size.height);
+    let copy = cx.debug_bounds("cli-error-copy-0").unwrap().center();
+    cx.simulate_mouse_down(copy, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(copy, MouseButton::Left, Modifiers::default());
+    cx.update(|_, cx| {
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some(raw.as_str())
+        );
+    });
+    let toggle = cx.debug_bounds("cli-error-toggle-0").unwrap().center();
+    cx.simulate_mouse_down(toggle, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(toggle, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("cli-error-details-0").is_none());
+    assert_eq!(
+        cx.debug_bounds("cli-error-0").unwrap().size.height,
+        collapsed.size.height
+    );
+}
+
 #[gpui_kit::test]
 fn deleting_blank_session_skips_confirmation(cx: &mut TestAppContext) {
     use crate::{

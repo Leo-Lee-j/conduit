@@ -3,7 +3,7 @@
 use super::*;
 
 /// Tool activity collapses into one quiet "执行工具" group. File edits and
-/// approval prompts stay outside so their diff/approval UI keeps its place.
+/// unresolved or rejected approvals stay outside so their UI keeps its place.
 pub(super) fn contiguous_tool_group(
     session: &SessionRecord,
     index: usize,
@@ -50,10 +50,21 @@ pub(super) fn is_empty_chat_placeholder(item: &ChatItem) -> bool {
 
 pub(super) fn is_groupable_activity(item: &ChatItem) -> bool {
     match item.kind {
-        ItemKind::Tool => item.approval.is_none() && !is_tool_edit(item),
+        ItemKind::Tool => is_compact_tool(item),
         ItemKind::Reasoning => !item.text.trim().is_empty(),
         _ => false,
     }
+}
+
+/// Approval history must not permanently change a normal tool's layout.
+/// Keep pending and unsuccessful decisions visible outside collapsed groups.
+pub(super) fn is_compact_tool(item: &ChatItem) -> bool {
+    item.kind == ItemKind::Tool
+        && !is_tool_edit(item)
+        && item
+            .approval
+            .as_ref()
+            .is_none_or(|approval| approval.status == "已允许")
 }
 
 /// A later turn must not hide the tool history of a turn that never replied.
@@ -136,6 +147,7 @@ pub(super) fn tool_category(item: &ChatItem) -> String {
     let lowered = title.to_lowercase();
     match lowered.as_str() {
         "websearch" | "web_search" | "web search" | "search" => "网络搜索".into(),
+        "webfetch" | "web_fetch" => "读取网页".into(),
         "read" | "read_file" | "readfile" | "view" => "读取文件".into(),
         "grep" | "glob" | "ls" | "list" => "检索工作区".into(),
         "task" | "agent" => "子任务".into(),
@@ -163,6 +175,7 @@ pub(super) fn tool_summary(item: &ChatItem) -> String {
         for key in [
             "command",
             "query",
+            "url",
             "pattern",
             "path",
             "file_path",
@@ -772,13 +785,18 @@ pub(super) fn tool_detail_panel(
 }
 
 pub(super) fn activity_container(content: AnyElement, grouped: bool) -> AnyElement {
-    let mut wrapper = v_flex().w_full().min_w_0().pb(px(2.));
+    let mut wrapper = v_flex().relative().w_full().min_w_0().pb(px(2.));
     if grouped {
-        wrapper = wrapper
-            .ml(px(8.))
-            .pl(px(10.))
-            .border_l_1()
-            .border_color(rgb(palette().border));
+        // The guide decorates the group without shifting its activity rows.
+        wrapper = wrapper.child(
+            div()
+                .absolute()
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w(px(1.))
+                .bg(rgb(palette().border)),
+        );
     }
     wrapper.child(content).into_any_element()
 }

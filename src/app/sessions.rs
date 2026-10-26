@@ -91,12 +91,15 @@ impl ConduitApp {
             .is_some_and(|id| self.session(id).is_some_and(|session| !session.archived))
         {
             self.push_tab(self.selected_session.unwrap());
+            self.unread_completed
+                .remove(&self.selected_session.unwrap());
             return;
         }
         for (index, workspace) in self.store.workspaces.iter().enumerate() {
             if let Some(session) = workspace.sessions.iter().find(|s| !s.archived) {
                 self.selected_workspace = Some(index);
                 self.selected_session = Some(session.id);
+                self.unread_completed.remove(&session.id);
                 self.push_tab(session.id);
                 return;
             }
@@ -359,6 +362,8 @@ impl ConduitApp {
             workspace.sessions.retain(|session| session.id != id);
         }
         self.drafts.remove(&id);
+        self.unread_completed.remove(&id);
+        self.expanded_errors.retain(|(session, _)| *session != id);
         self.composer_files
             .retain(|target, _| target.session != Some(id));
         self.expanded_tools.retain(|(session, _)| *session != id);
@@ -715,6 +720,8 @@ impl ConduitApp {
         self.expanded_workspaces.clear();
         for session in &removed.sessions {
             self.drafts.remove(&session.id);
+            self.unread_completed.remove(&session.id);
+            self.expanded_errors.retain(|(id, _)| *id != session.id);
             self.expanded_tools.retain(|(id, _)| *id != session.id);
             self.expanded_reasoning.retain(|(id, _)| *id != session.id);
             self.tool_scrolls.retain(|(id, _), _| *id != session.id);
@@ -741,6 +748,12 @@ impl ConduitApp {
             .ghost()
             .small()
             .compact()
+            .w(px(22.))
+            .h(px(22.))
+            .p_0()
+            .opacity(0.)
+            .group_hover("workspace-row", |style| style.opacity(1.))
+            .focus_visible(|style| style.opacity(1.))
             .icon(IconName::Ellipsis)
             .cursor_pointer()
             .on_click(|_, _, cx| cx.stop_propagation());
@@ -862,9 +875,11 @@ impl ConduitApp {
                 session.title.clone()
             };
             let title = single_line_title(&title);
+            let tab_group = SharedString::from(format!("session-tab-{id}"));
             tabs = tabs.child(
                 h_flex()
                     .id(("session-tab", id))
+                    .group(tab_group.clone())
                     .h(px(30.))
                     .my_auto()
                     .px(px(10.))
@@ -915,6 +930,9 @@ impl ConduitApp {
                             .small()
                             .compact()
                             .icon(gpui_kit::assets::IconName::X)
+                            .opacity(0.)
+                            .group_hover(tab_group, |style| style.opacity(1.))
+                            .focus_visible(|style| style.opacity(1.))
                             .cursor_pointer()
                             .tooltip(if running {
                                 "停止并关闭会话"
@@ -975,6 +993,7 @@ impl ConduitApp {
         self.selected_workspace = Some(workspace);
         self.selected_session = session;
         if let Some(id) = session {
+            self.unread_completed.remove(&id);
             self.push_tab(id);
         }
         self.message_focus = None;

@@ -2,6 +2,49 @@
 
 use super::*;
 
+/// A small, steady layout slot; only the running dot's opacity breathes.
+pub(super) fn session_activity_dot(id: u64, running: bool) -> AnyElement {
+    let label = if running {
+        "正在执行"
+    } else {
+        "回复完成，未读"
+    };
+    let dot = div().size(px(7.)).rounded_full().bg(rgb(if running {
+        palette().activity_running
+    } else {
+        palette().activity_completed
+    }));
+    let dot = if running {
+        dot.with_animation(
+            ("session-pulse", id),
+            Animation::new(Duration::from_millis(1600)).repeat(),
+            |dot, delta| {
+                dot.opacity(0.4 + 0.6 * (0.5 + 0.5 * (delta * std::f32::consts::TAU).cos()))
+            },
+        )
+        .into_any_element()
+    } else {
+        dot.into_any_element()
+    };
+    h_flex()
+        .id(("session-activity", id))
+        .debug_selector(move || {
+            format!(
+                "session-activity-{id}-{}",
+                if running { "running" } else { "unread" }
+            )
+        })
+        .size(px(14.))
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .tooltip(move |window, cx| {
+            gpui_kit::component::tooltip::Tooltip::new(label).build(window, cx)
+        })
+        .child(dot)
+        .into_any_element()
+}
+
 /// Engine and model marks compiled into the binary; provenance and licensing
 /// notes live in `assets/icons/README.md`.
 pub(super) const CLAUDE_ACCENT: u32 = 0xd97757;
