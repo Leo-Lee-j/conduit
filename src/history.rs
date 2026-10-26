@@ -421,21 +421,6 @@ fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
                         if role != "user" && role != "assistant" {
                             continue; // Skip developer/system injections.
                         }
-                        // Codex injects project instructions (AGENTS.md,
-                        // environment, approval notices) as user-role
-                        // messages. Newer rollouts mark real typed input with
-                        // `metadata.user_input_order`; older ones only carry
-                        // `internal_chat_message_metadata_passthrough` — which
-                        // synthetic injections lack.
-                        if role == "user"
-                            && payload.get("metadata").is_none()
-                            && value.get("metadata").is_none()
-                            && payload
-                                .get("internal_chat_message_metadata_passthrough")
-                                .is_none()
-                        {
-                            continue;
-                        }
                         let Some(parts) = payload.get("content").and_then(Value::as_array) else {
                             continue;
                         };
@@ -448,6 +433,15 @@ fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
                                 continue;
                             };
                             if text.trim().is_empty() {
+                                continue;
+                            }
+                            // Codex persists injected project context as
+                            // `role: user` messages too. Their structured
+                            // content kinds are distinct from real prompts;
+                            // older rollouts without those kinds are covered
+                            // by the narrow textual fallback below.
+                            if role == "user" && codex_injected_user_message(&value, payload, text)
+                            {
                                 continue;
                             }
                             if role == "user" && title.is_empty() {
@@ -518,6 +512,47 @@ fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
         model,
         messages,
     })
+}
+
+fn codex_injected_user_message(envelope: &Value, payload: &Value, text: &str) -> bool {
+    let has_synthetic_kind = [
+        payload
+            .get("internal_chat_message_metadata_passthrough")
+            .and_then(|meta| meta.get("content_item_kinds")),
+        envelope
+            .get("metadata")
+            .and_then(|meta| meta.get("content_item_kinds")),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(Value::as_array)
+    .flatten()
+    .filter_map(Value::as_str)
+    .any(|kind| {
+        matches!(
+            kind,
+            "agents_md.instructions" | "environments.environment_context" | "generic.turn_aborted"
+        )
+    });
+    if has_synthetic_kind {
+        return true;
+    }
+
+    // Pre-metadata Codex rollouts have no reliable marker. Keep this
+    // deliberately narrow so a typed prompt discussing AGENTS.md remains
+    // visible when it carries normal user-input metadata.
+    let has_user_input_marker = envelope
+        .get("metadata")
+        .and_then(|meta| meta.get("user_input_order"))
+        .is_some()
+        || payload
+            .get("internal_chat_message_metadata_passthrough")
+            .and_then(|meta| meta.get("content_item_kinds"))
+            .and_then(Value::as_array)
+            .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("user.text")));
+    !has_user_input_marker
+        && (text.trim_start().starts_with("# AGENTS.md instructions")
+            || text.contains("<environment_context>"))
 }
 
 // ---------------------------------------------------------------------------
@@ -631,7 +666,11 @@ mod tests {
         });
         let injected = serde_json::json!({
             "type":"response_item",
-            "payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions"}]}
+            "payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions"}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["agents_md.instructions","environments.environment_context"]}}
+        });
+        let environment = serde_json::json!({
+            "type":"response_item",
+            "payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>D:\\\\workspace</cwd>\n</environment_context>"}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["environments.environment_context"]}}
         });
         let user = serde_json::json!({
             "type":"response_item",
@@ -656,6 +695,7 @@ mod tests {
             meta,
             developer,
             injected,
+            environment,
             user,
             legacy_user,
             assistant,
