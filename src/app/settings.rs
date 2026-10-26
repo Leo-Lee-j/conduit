@@ -332,7 +332,10 @@ impl ConduitApp {
             SettingsTab::Git => ("Git", "配置 Commit Message 的 AI 生成提示词"),
             SettingsTab::Cli => ("CLI", "可执行文件路径查找顺序与版本检测说明"),
             SettingsTab::Provider(provider) => (provider.label(), "管理可执行文件路径与版本检测"),
-            SettingsTab::Models => ("模型同步", "查看 CLI 当前模型与 cc-switch 同步的模型"),
+            SettingsTab::Models => (
+                "模型与 Provider",
+                "管理自定义 Provider、CLI 模型与 CCS 渠道",
+            ),
         };
         let nav_item = |tab: SettingsTab, label: &'static str, leading: AnyElement| -> AnyElement {
             let view = view.clone();
@@ -511,7 +514,11 @@ impl ConduitApp {
                 provider_icon(Provider::Codex).into_any_element(),
             ))
             .child(section("模型"))
-            .child(nav_item(SettingsTab::Models, "模型同步", models_leading))
+            .child(nav_item(
+                SettingsTab::Models,
+                "模型与 Provider",
+                models_leading,
+            ))
             .child(div().flex_1())
             .child(
                 div()

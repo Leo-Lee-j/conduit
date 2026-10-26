@@ -26,8 +26,8 @@ impl Provider {
 /// Session permission level. The mapping to each CLI differs: Codex uses
 /// `sandbox=read-only | workspace-write | danger-full-access`, Claude uses
 /// `--permission-mode default | acceptEdits | bypassPermissions`.
-/// ReadOnly is approximated on Claude by plain `default`; the UI never claims
-/// more than the CLI enforces and FullAccess always renders with a warning.
+/// Claude read-only uses a restricted tool list and rejects approval requests.
+/// FullAccess also disables Codex approval gates and uses Claude bypass mode.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionLevel {
@@ -47,6 +47,13 @@ impl PermissionLevel {
             Self::ReadOnly => "仅可查看",
             Self::WorkspaceWrite => "工作区内修改",
             Self::FullAccess => "完全权限",
+        }
+    }
+
+    pub fn codex_approval_policy(self) -> &'static str {
+        match self {
+            Self::FullAccess | Self::ReadOnly => "never",
+            Self::WorkspaceWrite => "on-request",
         }
     }
 
@@ -93,6 +100,10 @@ pub struct SessionRecord {
     pub native_id: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub channel: crate::providers::ModelChannel,
+    #[serde(default)]
+    pub reasoning_effort: crate::providers::ReasoningEffort,
     #[serde(default)]
     pub messages: Vec<ChatItem>,
     #[serde(default)]

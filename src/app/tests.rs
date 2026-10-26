@@ -349,6 +349,8 @@ pub(super) fn session() -> SessionRecord {
         model: None,
         messages: vec![],
         interrupted: false,
+        channel: Default::default(),
+        reasoning_effort: Default::default(),
         permission: PermissionLevel::default(),
         usage: Usage::default(),
     }

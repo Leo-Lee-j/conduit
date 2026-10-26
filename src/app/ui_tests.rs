@@ -7,6 +7,154 @@ use gpui_kit::{
 };
 
 #[gpui_kit::test]
+fn model_picker_renders_search_provider_and_effort_without_overlapping(cx: &mut TestAppContext) {
+    use crate::{
+        domain::Workspace,
+        models::{ModelCatalog, ModelOption},
+        providers::{ModelChannel, ModelProvider, ProviderSource, ReasoningEffort},
+        store::Store,
+    };
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut session = super::tests::session();
+            session.title = "模型面板".into();
+            session.reasoning_effort = ReasoningEffort::High;
+            session.channel = ModelChannel::Cli;
+            let store = Store {
+                workspaces: vec![Workspace {
+                    path: std::env::temp_dir().join("conduit-model-picker-ui"),
+                    sessions: vec![session],
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.store.providers = vec![ModelProvider {
+                id: "synced-fixture".into(),
+                name: "Synced proxy".into(),
+                engine: super::Provider::Claude,
+                base_url: "https://fixture.invalid".into(),
+                api_key_env: String::new(),
+                models: vec!["synced-model".into()],
+                source: ProviderSource::Ccs {
+                    id: "fixture".into(),
+                },
+                model_metadata: vec![],
+            }];
+            app.catalogs.insert(
+                super::Provider::Claude,
+                ModelCatalog {
+                    models: (0..12)
+                        .map(|i| ModelOption {
+                            id: format!("model-{i}"),
+                            label: format!("Model {i}"),
+                            note: "上下文 200K".into(),
+                            context_window: Some(200_000),
+                        })
+                        .collect(),
+                    ..Default::default()
+                },
+            );
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let trigger = cx.debug_bounds("composer-model-control").unwrap().center();
+    cx.simulate_mouse_down(trigger, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(trigger, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    // An open panel must remain usable while the parent receives repeated
+    // runtime notifications, rather than recursively invalidating itself.
+    for _ in 0..20 {
+        cx.update(|window, cx| {
+            app.update(cx, |_, cx| cx.notify());
+            let _ = window.draw(cx);
+        });
+        cx.run_until_parked();
+    }
+    let provider = cx
+        .debug_bounds("session-channel-control")
+        .expect("Provider selector");
+    let models = cx
+        .debug_bounds("session-model-list")
+        .expect("scrollable model list");
+    let footer = cx
+        .debug_bounds("session-model-footer")
+        .expect("visible footer");
+    assert!(provider.bottom() <= models.top());
+    assert!(models.size.height <= px(250.));
+    assert!(models.bottom() < footer.top());
+    assert!(footer.bottom() < cx.debug_bounds("composer-model-control").unwrap().top());
+    for _ in 0..4 {
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(cx.debug_bounds("session-model-list").is_none());
+        let trigger = cx.debug_bounds("composer-model-control").unwrap().center();
+        cx.simulate_mouse_down(trigger, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(trigger, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(cx.debug_bounds("session-model-list").is_some());
+    }
+    // Synced and local entries share the same list. Test builds persist to
+    // their own temporary directory, never to the user's application state.
+    let provider = cx.debug_bounds("session-channel-control").unwrap().center();
+    cx.simulate_mouse_down(provider, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(provider, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let choice = cx
+        .debug_bounds("session-provider-option-1")
+        .unwrap()
+        .center();
+    cx.simulate_mouse_down(choice, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(choice, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let selected = &app.read(cx).store.workspaces[0].sessions[0];
+        assert_eq!(
+            selected.channel,
+            ModelChannel::Provider("synced-fixture".into())
+        );
+        assert_eq!(selected.reasoning_effort, ReasoningEffort::Default);
+        let _ = window.draw(cx);
+    });
+    let effort = cx.debug_bounds("session-effort-control").unwrap();
+    let position = point(effort.left() + effort.size.width * 0.75, effort.center().y);
+    cx.simulate_mouse_down(position, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(position, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    let search = cx.debug_bounds("session-model-search").unwrap().center();
+    cx.simulate_mouse_down(search, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(search, MouseButton::Left, Modifiers::default());
+    cx.simulate_keystrokes("n o m a t c h");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    cx.update(|_, cx| app.update(cx, |app, _| app.writable = false));
+}
+
+#[gpui_kit::test]
 fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut TestAppContext) {
     use crate::{domain::Workspace, protocol::Event, store::Store};
     use gpui_kit::AppContext as _;
@@ -342,6 +490,7 @@ fn session_naming_applies_success_and_reports_failure_without_starting_cli(
                 this.session_namings.insert(
                     1,
                     super::SessionNaming {
+                        automatic: true,
                         runtime,
                         started: std::time::Instant::now(),
                         parts: vec![],
@@ -391,6 +540,8 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
         model: None,
         messages: vec![],
         interrupted: true,
+        channel: Default::default(),
+        reasoning_effort: Default::default(),
         permission: Default::default(),
         usage: Default::default(),
     };
@@ -689,6 +840,8 @@ fn long_chat_virtualizes_real_rows_and_keeps_history_jump_on_append(cx: &mut Tes
                         model: None,
                         messages,
                         interrupted: false,
+                        channel: Default::default(),
+                        reasoning_effort: Default::default(),
                         permission: PermissionLevel::default(),
                         usage: Usage::default(),
                     }],
@@ -905,6 +1058,8 @@ fn drag_across_assistant_reply_tracks_the_pointer(cx: &mut TestAppContext) {
                             item("reply-1", ItemKind::Assistant, REPLY),
                         ],
                         interrupted: false,
+                        channel: Default::default(),
+                        reasoning_effort: Default::default(),
                         permission: PermissionLevel::default(),
                         usage: Usage::default(),
                     }],
@@ -1364,6 +1519,8 @@ fn composer_files_paste_drafts_removal_and_failed_send(cx: &mut TestAppContext) 
         model: None,
         messages: vec![],
         interrupted: false,
+        channel: Default::default(),
+        reasoning_effort: Default::default(),
         permission: Default::default(),
         usage: Default::default(),
     };
@@ -1526,6 +1683,8 @@ fn attachment_tags_size_to_names_and_stay_inside_the_user_bubble(cx: &mut TestAp
                             model: None,
                         }],
                         interrupted: false,
+                        channel: Default::default(),
+                        reasoning_effort: Default::default(),
                         permission: Default::default(),
                         usage: Default::default(),
                     }],
@@ -1713,6 +1872,8 @@ fn deleting_blank_session_skips_confirmation(cx: &mut TestAppContext) {
         model: None,
         messages,
         interrupted: false,
+        channel: Default::default(),
+        reasoning_effort: Default::default(),
         permission: Default::default(),
         usage: Default::default(),
     };

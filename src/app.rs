@@ -11,6 +11,7 @@ use crate::{
     models::{self, ModelCatalog},
     performance::PerformanceMonitor,
     protocol::Event,
+    providers::{ModelChannel, ModelProvider, ProviderSource, ReasoningEffort, RuntimeRoute},
     store::{
         AppearanceMode, MAX_CHAT_FONT_SIZE, MAX_CHAT_LINE_HEIGHT, MAX_CODE_FONT_SIZE,
         MAX_TAB_LIMIT, MIN_CHAT_FONT_SIZE, MIN_CHAT_LINE_HEIGHT, MIN_CODE_FONT_SIZE, NamingMode,
@@ -36,6 +37,7 @@ use gpui_kit::{
         scroll::ScrollableElement,
         searchable_list::{SearchableListItem, SearchableVec},
         select::{Select, SelectEvent, SelectState},
+        slider::{Slider, SliderEvent, SliderState},
         spinner::Spinner,
         switch::Switch,
         text::{TextView, TextViewStyle},
@@ -202,6 +204,8 @@ pub struct ConduitApp {
     /// Bumped on every copy so stale timers cannot clear a newer feedback.
     copied_action_seq: u64,
 }
+
+impl EventEmitter<crate::providers::ProviderCatalogChanged> for ConduitApp {}
 
 impl ConduitApp {
     #[cfg(any(test, feature = "ui-tests"))]
@@ -467,6 +471,8 @@ impl ConduitApp {
                 this.apply_appearance(window, cx);
             }
         });
+        let ccs = ccs::load();
+        store.sync_ccs_providers(&ccs);
         Self {
             store,
             writable,
@@ -485,7 +491,7 @@ impl ConduitApp {
                 .into_iter()
                 .map(|provider| (provider, models::load(provider)))
                 .collect(),
-            ccs: ccs::load(),
+            ccs,
             message,
             settings_tab: SettingsTab::General,
             git_prompt_input,

@@ -218,6 +218,19 @@ impl ConduitApp {
             .session(id)
             .map(|session| session.permission)
             .unwrap_or_default();
+        let effort = self
+            .session(id)
+            .map(|s| s.reasoning_effort)
+            .unwrap_or_default();
+        let route = match self.session_route(id) {
+            Ok(route) => route,
+            Err(error) => {
+                self.message = Some(format!("无法使用所选 Provider：{error:#}"));
+                cx.notify();
+                return false;
+            }
+        };
+        let model = model.or_else(|| route.default_model.clone());
         let session = self.session_mut(id).unwrap();
         let prefix = format!("turn-{}", session.messages.len());
         if append_user {
@@ -260,9 +273,11 @@ impl ConduitApp {
                     .iter()
                     .any(|message| message.kind == ItemKind::Assistant)
             });
-        let naming_snippet = (self.store.ui.naming_mode == NamingMode::FirstMessage && first_turn)
+        let naming_snippet = (self.store.ui.auto_rename
+            && self.store.ui.naming_mode == NamingMode::FirstMessage
+            && first_turn)
             .then(|| prompt.clone());
-        let runtime = ChatRuntime::start(
+        let runtime = ChatRuntime::start_with_options(
             provider,
             executable,
             cwd,
@@ -270,6 +285,8 @@ impl ConduitApp {
             native_id,
             model.clone(),
             permission,
+            effort,
+            route,
         );
         let usage = self
             .session(id)
@@ -782,7 +799,7 @@ impl ConduitApp {
                 }
             }
         }
-        if self.store.ui.naming_mode == NamingMode::Latest {
+        if self.store.ui.auto_rename && self.store.ui.naming_mode == NamingMode::Latest {
             for id in completed_turns {
                 if let Some(excerpt) = self.session(id).and_then(latest_naming_excerpt) {
                     self.start_session_naming(id, &excerpt, cx);

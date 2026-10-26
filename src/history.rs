@@ -122,6 +122,8 @@ fn merge_session(
         model: session.model,
         messages: session.messages,
         interrupted: false,
+        channel: Default::default(),
+        reasoning_effort: Default::default(),
         permission: crate::domain::PermissionLevel::default(),
         usage: crate::domain::Usage::default(),
     });
@@ -1388,6 +1390,8 @@ mod tests {
             archived: false,
             native_id: Some("known".into()),
             model: None,
+            channel: Default::default(),
+            reasoning_effort: Default::default(),
             permission: crate::domain::PermissionLevel::default(),
             usage: crate::domain::Usage::default(),
             messages: vec![ChatItem {

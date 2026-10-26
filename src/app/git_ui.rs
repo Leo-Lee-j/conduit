@@ -230,6 +230,7 @@ impl ConduitApp {
         let model = self.store.git.generation_model.clone().or_else(|| {
             self.selected_session
                 .and_then(|id| self.session(id))
+                .filter(|session| session.provider == provider)
                 .and_then(|session| session.model.clone())
         });
         let executable = match cli::resolve(provider, &self.store.cli) {
@@ -241,6 +242,20 @@ impl ConduitApp {
                     true,
                     cx,
                 );
+                return;
+            }
+        };
+        let route = match self
+            .selected_session
+            .filter(|id| self.session(*id).is_some_and(|s| s.provider == provider))
+        {
+            Some(id) => self.session_route(id),
+            None => Ok(RuntimeRoute::default()),
+        };
+        let route = match route {
+            Ok(route) => route,
+            Err(error) => {
+                self.git_feedback(path, format!("生成 Provider 不可用：{error:#}"), true, cx);
                 return;
             }
         };
@@ -261,7 +276,7 @@ impl ConduitApp {
             .generation_prompt(&files, &snapshot.staged_diff);
         self.commit_generation = Some(CommitGeneration {
             path: path.clone(),
-            runtime: ChatRuntime::start_text(provider, executable, prompt, model),
+            runtime: ChatRuntime::start_text_with_route(provider, executable, prompt, model, route),
             started: Instant::now(),
             original,
             parts: vec![],

@@ -71,19 +71,32 @@ impl ChatRuntime {
         )
     }
     /// Isolated helper turn; never resumes or mutates the chat conversation.
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn start_text(
         provider: Provider,
         executable: PathBuf,
         prompt: String,
         model: Option<String>,
     ) -> Self {
+        Self::start_text_with_route(provider, executable, prompt, model, Default::default())
+    }
+    pub fn start_text_with_route(
+        provider: Provider,
+        executable: PathBuf,
+        prompt: String,
+        model: Option<String>,
+        route: crate::providers::RuntimeRoute,
+    ) -> Self {
         let cwd = std::env::temp_dir();
         let protocol = Protocol::new(provider, cwd.to_string_lossy().into_owned(), prompt, None)
             .with_model(model)
+            .with_options(Default::default(), route)
             .text_only();
         let args = protocol.args();
         Self::start_command(protocol, executable, args, cwd)
     }
+    #[cfg(test)]
     pub fn start(
         provider: Provider,
         executable: PathBuf,
@@ -93,6 +106,29 @@ impl ChatRuntime {
         model: Option<String>,
         permission: PermissionLevel,
     ) -> Self {
+        Self::start_with_options(
+            provider,
+            executable,
+            cwd,
+            prompt,
+            native_id,
+            model,
+            permission,
+            Default::default(),
+            Default::default(),
+        )
+    }
+    pub fn start_with_options(
+        provider: Provider,
+        executable: PathBuf,
+        cwd: PathBuf,
+        prompt: String,
+        native_id: Option<String>,
+        model: Option<String>,
+        permission: PermissionLevel,
+        effort: crate::providers::ReasoningEffort,
+        route: crate::providers::RuntimeRoute,
+    ) -> Self {
         let protocol = Protocol::new(
             provider,
             cwd.to_string_lossy().into_owned(),
@@ -100,7 +136,8 @@ impl ChatRuntime {
             native_id,
         )
         .with_model(model)
-        .with_permission(permission);
+        .with_permission(permission)
+        .with_options(effort, route);
         let args = protocol.args();
         Self::start_command(protocol, executable, args, cwd)
     }
@@ -247,7 +284,8 @@ fn execute(
     events: &Sender<Event>,
 ) -> Result<()> {
     let (program, full_args) = crate::cli::command_for(&executable, &args);
-    let (child, mut pipes) = Child::spawn(&program, &full_args, &cwd)?;
+    let (child, mut pipes) =
+        Child::spawn_with_env(&program, &full_args, &cwd, protocol.environment())?;
     let (writer, input) = mpsc::sync_channel::<Vec<u8>>(128);
     let done = Arc::new(AtomicBool::new(false));
     let writer_done = done.clone();
@@ -297,7 +335,16 @@ fn execute(
                 }
                 for event in step.events {
                     let event = match event {
-                        Event::Approval(approval) => Event::Approval(approvals.issue(approval)?),
+                        Event::Approval(approval) => {
+                            let decision = protocol.automatic_approval(&approval);
+                            let approval = approvals.issue(approval)?;
+                            if let Some(allow) = decision {
+                                let pending = approvals.take(&approval.id).unwrap();
+                                send(&writer, protocol.approval_response(&pending, allow))?;
+                                continue;
+                            }
+                            Event::Approval(approval)
+                        }
                         Event::ApprovalCancelled(source) => match approvals.revoke(&source) {
                             Some(ticket) => Event::ApprovalCancelled(ticket),
                             None => continue,
@@ -671,6 +718,62 @@ mod tests {
         assert_eq!(response(42)["result"]["decision"], "decline");
         std::fs::remove_file(log).unwrap();
     }
+
+    #[test]
+    fn full_access_answers_tool_permission_without_showing_an_approval() {
+        let log =
+            std::env::temp_dir().join(format!("conduit-full-access-{}.jsonl", std::process::id()));
+        let command = r#"
+            [Console]::WriteLine('{"id":61,"method":"item/commandExecution/requestApproval","params":{"itemId":"tool"}}')
+            $lines = @([Console]::ReadLine(), [Console]::ReadLine())
+            Set-Content -LiteralPath '__LOG__' -Value $lines -Encoding utf8
+            [Console]::WriteLine('{"method":"turn/completed","params":{"turn":{"status":"completed"}}}')
+            Start-Sleep -Seconds 5
+        "#.replace("__LOG__", &log.display().to_string());
+        let protocol = Protocol::new(
+            Provider::Codex,
+            std::env::temp_dir().to_string_lossy().into_owned(),
+            "fixture".into(),
+            None,
+        )
+        .with_permission(PermissionLevel::FullAccess);
+        let executable = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        let runtime = ChatRuntime::start_command(
+            protocol,
+            executable,
+            ["-NoProfile", "-NonInteractive", "-Command", &command]
+                .map(String::from)
+                .into(),
+            std::env::temp_dir(),
+        );
+        loop {
+            match runtime
+                .events
+                .recv_timeout(Duration::from_secs(15))
+                .unwrap()
+            {
+                Event::Approval(_) => panic!("full access must not ask for tool permission"),
+                Event::Finished { error, cancelled } => {
+                    assert!(error.is_none(), "{error:?}");
+                    assert!(!cancelled);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let values: Vec<Value> = std::fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .filter_map(|v| serde_json::from_str(v).ok())
+            .collect();
+        assert!(
+            values
+                .iter()
+                .any(|v| v["id"] == 61 && v["result"]["decision"] == "accept")
+        );
+        std::fs::remove_file(log).unwrap();
+    }
     #[test]
     fn runtime_reports_premature_exit_and_malformed_protocol() {
         for (command, expected) in [
@@ -772,6 +875,66 @@ mod tests {
             }
             assert!(initialized, "{provider:?} helper handshake timed out");
             println!("{provider:?} commit helper initialized; no model request sent");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires installed Codex; custom provider handshake only, no model request"]
+    fn installed_custom_codex_route_initializes_without_model_request() {
+        use crate::providers::{ReasoningEffort, RuntimeRoute};
+        let executable = Provider::Codex.executable().expect("Codex not installed");
+        for permission in [
+            PermissionLevel::ReadOnly,
+            PermissionLevel::WorkspaceWrite,
+            PermissionLevel::FullAccess,
+        ] {
+            let route = RuntimeRoute::endpoint(
+                Provider::Codex,
+                "Conduit fixture",
+                "http://127.0.0.1:1/v1",
+                Some("fixture-key".into()),
+            );
+            let mut protocol = Protocol::new(
+                Provider::Codex,
+                std::env::temp_dir().to_string_lossy().into_owned(),
+                "unused".into(),
+                None,
+            )
+            .with_model(Some("fixture-model".into()))
+            .with_permission(permission)
+            .with_options(ReasoningEffort::High, route);
+            let (program, args) = crate::cli::command_for(&executable, &protocol.args());
+            let (child, mut pipes) = Child::spawn_with_env(
+                &program,
+                &args,
+                &std::env::temp_dir(),
+                protocol.environment(),
+            )
+            .unwrap();
+            writeln!(pipes.stdin, "{}", protocol.initialize()).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(20);
+            let mut lines = Lines::new();
+            let mut ready = false;
+            while Instant::now() < deadline && !ready {
+                for value in lines.poll(&mut pipes.stdout).unwrap() {
+                    if value["id"] == 1 {
+                        assert!(value.get("error").is_none(), "{value}");
+                        for mut write in protocol.accept(value).writes {
+                            if write["id"] == 2 {
+                                write["params"]["ephemeral"] = serde_json::json!(true);
+                            }
+                            writeln!(pipes.stdin, "{write}").unwrap();
+                        }
+                    } else if value["id"] == 2 {
+                        assert!(value.get("error").is_none(), "{permission:?}: {value}");
+                        assert_eq!(value["result"]["modelProvider"], "conduit");
+                        ready = true;
+                    }
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            child.terminate().unwrap();
+            assert!(ready, "{permission:?} route handshake timed out");
         }
     }
     #[test]

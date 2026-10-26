@@ -141,6 +141,75 @@ impl ConduitApp {
         self.open_tabs.retain(|tab| *tab != id);
     }
 
+    /// Close a group of tabs while keeping the conversation records in the
+    /// sidebar. If the active tab is among them, select the newest remaining
+    /// open tab, matching the single-tab close behavior.
+    pub(super) fn close_tabs(&mut self, ids: &[u64], cx: &mut Context<Self>) {
+        if ids.is_empty() {
+            return;
+        }
+        let closing_active = self.selected_session.is_some_and(|id| ids.contains(&id));
+        if closing_active {
+            if let Some(id) = self.selected_session {
+                self.drafts
+                    .insert(id, self.input.read(cx).value().to_string());
+            }
+        }
+        self.open_tabs.retain(|tab| !ids.contains(tab));
+        if !closing_active {
+            cx.notify();
+            return;
+        }
+
+        let next = self
+            .open_tabs
+            .iter()
+            .rev()
+            .copied()
+            .find(|id| self.session(*id).is_some());
+        if let Some(next) = next {
+            let window = cx
+                .windows()
+                .into_iter()
+                .find_map(|handle| handle.downcast::<Self>());
+            if let Some(window) = window {
+                let _ = window.update(cx, |_, window, cx| {
+                    if let Some(workspace) = self.store.workspaces.iter().position(|workspace| {
+                        workspace.sessions.iter().any(|session| session.id == next)
+                    }) {
+                        self.switch(workspace, Some(next), window, cx);
+                    }
+                });
+            }
+        } else {
+            self.selected_session = None;
+            self.detail_text = None;
+            self.message = None;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn close_tabs_left(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(position) = self.open_tabs.iter().position(|tab| *tab == id) else {
+            return;
+        };
+        let ids = self.open_tabs[..position].to_vec();
+        self.close_tabs(&ids, cx);
+    }
+
+    pub(super) fn close_tabs_right(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(position) = self.open_tabs.iter().position(|tab| *tab == id) else {
+            return;
+        };
+        let ids = self.open_tabs[position + 1..].to_vec();
+        self.close_tabs(&ids, cx);
+    }
+
+    pub(super) fn close_all_tabs(&mut self, cx: &mut Context<Self>) {
+        let ids = self.open_tabs.clone();
+        self.close_tabs(&ids, cx);
+    }
+
     pub(super) fn toggle_archive(&mut self, id: u64, cx: &mut Context<Self>) {
         if let Some(session) = self.session_mut(id) {
             session.archived = !session.archived;
@@ -472,26 +541,26 @@ impl ConduitApp {
             let window = if usage.context_window > 0 {
                 Some(usage.context_window)
             } else {
-                let model_id = session
-                    .and_then(|s| s.model.as_deref())
-                    .map(str::to_owned)
-                    .or_else(|| {
-                        // No session model override: use the CLI's current model.
-                        self.catalogs
-                            .get(
-                                &session
-                                    .map(|s| s.provider)
-                                    .unwrap_or(self.new_session_provider),
-                            )
-                            .and_then(|catalog| catalog.current.clone())
-                    });
                 let provider = session
                     .map(|s| s.provider)
                     .unwrap_or(self.new_session_provider);
+                let channel = session.map(|s| s.channel.clone()).unwrap_or_default();
+                let (_, models) = self.channel_models(provider, &channel);
+                let default_model = match &channel {
+                    ModelChannel::Cli => {
+                        self.catalogs.get(&provider).and_then(|c| c.current.clone())
+                    }
+                    ModelChannel::Ccs(_) | ModelChannel::Provider(_) => {
+                        models.first().map(|m| m.id.clone())
+                    }
+                };
+                let model_id = session.and_then(|s| s.model.clone()).or(default_model);
                 model_id.and_then(|id| {
-                    self.catalogs
-                        .get(&provider)
-                        .and_then(|catalog| catalog.context_window(&id))
+                    models
+                        .iter()
+                        .find(|m| m.id == id)
+                        .and_then(|m| m.context_window)
+                        .or_else(|| ModelCatalog::default().context_window(&id))
                 })
             };
             match window {
@@ -744,6 +813,7 @@ impl ConduitApp {
     }
 
     pub(super) fn workspace_menu(&self, index: usize, app: Entity<Self>) -> AnyElement {
+        let selected = self.selected_workspace == Some(index);
         let trigger = Button::new(("workspace-menu-trigger", index))
             .ghost()
             .small()
@@ -764,8 +834,21 @@ impl ConduitApp {
             .trigger(trigger)
             .content(move |_, _, cx| {
                 let popover = cx.entity().downgrade();
+                let clear_app = app.clone();
                 let remove_app = app.clone();
+                let clear_popover = popover.clone();
                 let remove_popover = popover.clone();
+                let clear = session_menu_button(
+                    ("workspace-clear-selection", index as u64),
+                    "取消选择工作区",
+                    IconName::CircleX,
+                )
+                .on_click(move |_, window, cx| {
+                    clear_app.update(cx, |this, cx| this.clear_workspace_selection(window, cx));
+                    if let Some(popover) = clear_popover.clone().upgrade() {
+                        popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                    }
+                });
                 let remove = session_menu_button(
                     ("workspace-remove", index as u64),
                     "移除工作区",
@@ -779,7 +862,11 @@ impl ConduitApp {
                         popover.update(cx, |popover, cx| popover.dismiss(window, cx));
                     }
                 });
-                v_flex().w(px(170.)).gap(px(1.)).child(remove)
+                let mut content = v_flex().w(px(170.)).gap(px(1.));
+                if selected {
+                    content = content.child(clear);
+                }
+                content.child(remove)
             })
             .into_any_element()
     }
@@ -849,9 +936,35 @@ impl ConduitApp {
         }
     }
 
+    pub(super) fn clear_workspace_selection(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(id) = self.selected_session {
+            self.drafts
+                .insert(id, self.input.read(cx).value().to_string());
+        } else if let Some(target) = self.composer_target() {
+            self.workspace_drafts
+                .insert(target.workspace, self.input.read(cx).value().to_string());
+        }
+        self.selected_workspace = None;
+        self.selected_session = None;
+        self.detail_text = None;
+        self.message = None;
+        self.message_focus = None;
+        self.pending_message_jump = false;
+        self.timeline_session = None;
+        self.input
+            .update(cx, |input, cx| input.set_value(String::new(), window, cx));
+        self.sync_git_workspace(cx);
+        cx.notify();
+    }
+
     /// Conversation tab strip: one tab per open session, horizontally
     /// scrollable, with a fixed-width action area pinned to the right.
     pub(super) fn session_tab_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let app_entity = cx.entity();
         let active = self.selected_session;
         let mut tabs = h_flex()
             .id("session-tabs")
@@ -870,12 +983,13 @@ impl ConduitApp {
             let selected = active == Some(id);
             let running = self.runs.contains_key(&id);
             let title = if session.title.is_empty() {
-                "???".to_string()
+                "新会话".to_string()
             } else {
                 session.title.clone()
             };
             let title = single_line_title(&title);
             let tab_group = SharedString::from(format!("session-tab-{id}"));
+            let tab_app = app_entity.clone();
             tabs = tabs.child(
                 h_flex()
                     .id(("session-tab", id))
@@ -912,6 +1026,39 @@ impl ConduitApp {
                             this.switch(workspace, Some(id), window, cx);
                         }
                     }))
+                    .context_menu({
+                        move |menu, _, _| {
+                            let left_app = tab_app.clone();
+                            let right_app = tab_app.clone();
+                            let all_app = tab_app.clone();
+                            menu.min_w(px(170.))
+                                .item(
+                                    PopupMenuItem::new("关闭右侧会话")
+                                        .icon(IconName::ChevronRight)
+                                        .on_click(move |_, _, cx| {
+                                            right_app.update(cx, |this, cx| {
+                                                this.close_tabs_right(id, cx)
+                                            });
+                                        }),
+                                )
+                                .item(
+                                    PopupMenuItem::new("关闭左侧会话")
+                                        .icon(IconName::ChevronLeft)
+                                        .on_click(move |_, _, cx| {
+                                            left_app.update(cx, |this, cx| {
+                                                this.close_tabs_left(id, cx)
+                                            });
+                                        }),
+                                )
+                                .item(
+                                    PopupMenuItem::new("全部关闭")
+                                        .icon(IconName::Delete)
+                                        .on_click(move |_, _, cx| {
+                                            all_app.update(cx, |this, cx| this.close_all_tabs(cx));
+                                        }),
+                                )
+                        }
+                    })
                     .child(provider_icon(session.provider))
                     .child(
                         div()
@@ -954,7 +1101,7 @@ impl ConduitApp {
                     .items_center()
                     .text_size(px(12.))
                     .text_color(rgb(palette().faint))
-                    .child("???????????"),
+                    .child("未选择工作区"),
             );
         }
         h_flex()
@@ -1241,6 +1388,7 @@ impl ConduitApp {
         self.next_id += 1;
         self.catalogs.insert(provider, models::load(provider));
         self.ccs = ccs::load();
+        self.store.sync_ccs_providers(&self.ccs);
         let model = self
             .catalogs
             .get(&provider)
@@ -1261,6 +1409,8 @@ impl ConduitApp {
                 model,
                 messages: vec![],
                 interrupted: false,
+                channel: Default::default(),
+                reasoning_effort: Default::default(),
                 permission: PermissionLevel::default(),
                 usage: Usage::default(),
             },

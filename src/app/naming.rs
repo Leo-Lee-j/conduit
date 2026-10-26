@@ -16,17 +16,29 @@ impl ConduitApp {
             .naming_provider
             .or_else(|| self.session(id).map(|session| session.provider))
             .unwrap_or(self.new_session_provider);
-        let model = self
-            .store
-            .ui
-            .naming_model
-            .clone()
-            .or_else(|| self.session(id).and_then(|session| session.model.clone()));
+        let model = self.store.ui.naming_model.clone().or_else(|| {
+            self.session(id)
+                .filter(|s| s.provider == provider)
+                .and_then(|session| session.model.clone())
+        });
         let executable = match cli::resolve(provider, &self.store.cli) {
             Ok(cli) => cli.path,
             Err(error) => {
                 self.naming_errors
                     .insert(id, format!("无法启动命名引擎：{error:#}"));
+                cx.notify();
+                return;
+            }
+        };
+        let route = match self.session(id).filter(|s| s.provider == provider) {
+            Some(_) => self.session_route(id),
+            None => Ok(RuntimeRoute::default()),
+        };
+        let route = match route {
+            Ok(route) => route,
+            Err(error) => {
+                self.naming_errors
+                    .insert(id, format!("命名 Provider 不可用：{error:#}"));
                 cx.notify();
                 return;
             }
@@ -38,7 +50,14 @@ impl ConduitApp {
         self.session_namings.insert(
             id,
             SessionNaming {
-                runtime: ChatRuntime::start_text(provider, executable, naming_prompt, model),
+                automatic: true,
+                runtime: ChatRuntime::start_text_with_route(
+                    provider,
+                    executable,
+                    naming_prompt,
+                    model,
+                    route,
+                ),
                 started: Instant::now(),
                 parts: vec![],
                 error: None,
@@ -63,6 +82,9 @@ impl ConduitApp {
             naming.runtime.cancel();
         }
         self.start_session_naming(id, &excerpt, cx);
+        if let Some(naming) = self.session_namings.get_mut(&id) {
+            naming.automatic = false;
+        }
         cx.notify();
     }
 

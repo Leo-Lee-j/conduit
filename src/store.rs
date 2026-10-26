@@ -46,6 +46,8 @@ pub struct UiSettings {
     /// What automatic titling reacts to.
     #[serde(default)]
     pub naming_mode: NamingMode,
+    #[serde(default = "default_auto_rename")]
+    pub auto_rename: bool,
     /// CLI engine used to auto-name sessions; `None` follows the session's
     /// own engine.
     #[serde(default)]
@@ -112,6 +114,10 @@ fn default_code_syntax_highlight() -> bool {
     true
 }
 
+fn default_auto_rename() -> bool {
+    true
+}
+
 fn default_performance_monitor() -> bool {
     true
 }
@@ -133,6 +139,7 @@ impl Default for UiSettings {
             full_width_content: false,
             max_tabs: default_max_tabs(),
             naming_mode: NamingMode::default(),
+            auto_rename: true,
             naming_provider: None,
             naming_model: None,
             chat_font_family: None,
@@ -201,13 +208,56 @@ pub struct Store {
     pub ui: UiSettings,
     #[serde(default)]
     pub git: GitSettings,
+    #[serde(default, alias = "custom_providers")]
+    pub providers: Vec<crate::providers::ModelProvider>,
 }
 
 impl Store {
+    /// Merge imported providers by stable origin id and migrate the earlier
+    /// CCS-only session selection to the shared provider registry.
+    pub fn sync_ccs_providers(&mut self, catalog: &crate::ccs::CcsCatalog) {
+        if catalog.error.is_none() && catalog.database_path.is_file() {
+            self.providers.retain(|p| match &p.source {
+                crate::providers::ProviderSource::Local => true,
+                crate::providers::ProviderSource::Ccs { id } => catalog
+                    .providers
+                    .iter()
+                    .any(|entry| entry.id == *id && entry.provider == p.engine),
+            });
+        }
+        for imported in catalog.imported_providers() {
+            if let Some(provider) = self.providers.iter_mut().find(|p| p.id == imported.id) {
+                if matches!(
+                    provider.source,
+                    crate::providers::ProviderSource::Ccs { .. }
+                ) {
+                    *provider = imported;
+                }
+            } else {
+                self.providers.push(imported);
+            }
+        }
+        for session in self.workspaces.iter_mut().flat_map(|w| &mut w.sessions) {
+            if let crate::providers::ModelChannel::Ccs(id) = &session.channel {
+                session.channel = crate::providers::ModelChannel::Provider(
+                    crate::providers::ModelProvider::ccs_id(session.provider, id),
+                );
+            }
+        }
+    }
+
     pub fn path() -> PathBuf {
         std::env::var_os("CONDUIT_DATA_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
+                // UI tests invoke the same persistence paths as user actions.
+                // Never let their synthetic sessions replace real app state.
+                #[cfg(test)]
+                {
+                    return std::env::temp_dir()
+                        .join(format!("conduit-tests-{}", std::process::id()));
+                }
+                #[cfg(not(test))]
                 PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_else(|| ".".into()))
                     .join("Conduit")
             })
@@ -225,6 +275,7 @@ impl Store {
                 cli: Default::default(),
                 ui: Default::default(),
                 git: Default::default(),
+                providers: vec![],
             });
         }
         let mut state: Self = serde_json::from_slice(&fs::read(path)?)
@@ -377,6 +428,72 @@ fn same_failure_text(message: &str, error: &str) -> bool {
 mod tests {
     use super::*;
     use crate::domain::{Provider, SessionRecord};
+
+    #[test]
+    fn ccs_sync_merges_into_provider_registry_and_migrates_session_selection() {
+        use crate::providers::{ModelChannel, ModelProvider, ProviderSource};
+        let entry = |engine, id: &str, name: &str, model: &str| crate::ccs::CcsProvider {
+            provider: engine,
+            id: id.into(),
+            name: name.into(),
+            current: false,
+            base_url: "https://proxy.invalid/v1".into(),
+            models: vec![crate::models::ModelOption {
+                id: model.into(),
+                label: model.into(),
+                note: String::new(),
+                context_window: Some(200_000),
+            }],
+        };
+        let mut catalog = crate::ccs::CcsCatalog {
+            providers: vec![
+                entry(Provider::Claude, "same-id", "Claude proxy", "claude-model"),
+                entry(Provider::Codex, "same-id", "Codex proxy", "codex-model"),
+            ],
+            ..Default::default()
+        };
+        let mut store = Store::default();
+        store.providers.push(ModelProvider {
+            id: "local".into(),
+            name: "Local".into(),
+            engine: Provider::Codex,
+            base_url: "https://local.invalid/v1".into(),
+            api_key_env: "MY_KEY".into(),
+            models: vec!["local-model".into()],
+            source: ProviderSource::Local,
+            model_metadata: vec![],
+        });
+        let mut session: SessionRecord = serde_json::from_value(serde_json::json!({"id":1,"provider":"Codex","created_at":0,"exit_code":null,"channel":{"ccs":"same-id"}})).unwrap();
+        store.workspaces.push(crate::domain::Workspace {
+            path: PathBuf::from("C:\\work"),
+            sessions: vec![session.clone()],
+        });
+        store.sync_ccs_providers(&catalog);
+        store.sync_ccs_providers(&catalog);
+        assert_eq!(store.providers.len(), 3);
+        assert_eq!(store.providers[0].name, "Local");
+        assert_ne!(store.providers[1].id, store.providers[2].id);
+        assert_eq!(store.providers[2].name, "Codex proxy");
+        assert_eq!(
+            store.providers[2].catalog()[0].context_window,
+            Some(200_000)
+        );
+        assert_eq!(
+            store.workspaces[0].sessions[0].channel,
+            ModelChannel::Provider(ModelProvider::ccs_id(Provider::Codex, "same-id"))
+        );
+        catalog.providers[1].name = "Updated proxy".into();
+        store.sync_ccs_providers(&catalog);
+        assert_eq!(store.providers.len(), 3);
+        assert_eq!(store.providers[2].name, "Updated proxy");
+        let mut legacy = serde_json::to_value(&store).unwrap();
+        let providers = legacy.as_object_mut().unwrap().remove("providers").unwrap();
+        legacy["custom_providers"] = providers;
+        let restored: Store = serde_json::from_value(legacy).unwrap();
+        assert_eq!(restored.providers.len(), 3);
+        session.channel = serde_json::from_value(serde_json::json!({"custom":"local"})).unwrap();
+        assert_eq!(session.channel, ModelChannel::Provider("local".into()));
+    }
     #[test]
     fn legacy_migration_preserves_identity_without_fabricating_context() {
         let path =
@@ -443,6 +560,7 @@ mod tests {
             cli: Default::default(),
             ui: Default::default(),
             git: Default::default(),
+            providers: vec![],
             workspaces: vec![Workspace {
                 path: directory.clone(),
                 sessions: vec![],
@@ -460,6 +578,8 @@ mod tests {
             model: None,
             messages: vec![],
             interrupted: false,
+            channel: Default::default(),
+            reasoning_effort: Default::default(),
             permission: crate::domain::PermissionLevel::default(),
             usage: crate::domain::Usage::default(),
         });
@@ -652,5 +772,51 @@ mod tests {
         );
         let restored: GitSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(restored.commit_message_prompt, DEFAULT_COMMIT_PROMPT);
+    }
+    #[test]
+    fn model_preferences_restore_old_defaults_and_roundtrip_new_routes() {
+        use crate::providers::{ModelChannel, ModelProvider, ReasoningEffort};
+        let ui: UiSettings = serde_json::from_str("{}").unwrap();
+        assert!(ui.auto_rename);
+        let mut session: crate::domain::SessionRecord = serde_json::from_value(
+            serde_json::json!({"id":1,"provider":"Codex","created_at":0,"exit_code":null}),
+        )
+        .unwrap();
+        let mut old = serde_json::to_value(&session).unwrap();
+        old.as_object_mut().unwrap().remove("channel");
+        old.as_object_mut().unwrap().remove("reasoning_effort");
+        let restored: crate::domain::SessionRecord = serde_json::from_value(old).unwrap();
+        assert_eq!(restored.channel, ModelChannel::Cli);
+        assert_eq!(restored.reasoning_effort, ReasoningEffort::Default);
+        session.channel = ModelChannel::Provider("custom".into());
+        session.reasoning_effort = ReasoningEffort::High;
+        let mut store = Store::default();
+        store.ui.auto_rename = false;
+        store.providers.push(ModelProvider {
+            id: "custom".into(),
+            name: "proxy".into(),
+            engine: crate::domain::Provider::Codex,
+            base_url: "https://proxy.invalid/v1".into(),
+            api_key_env: "MY_PROXY_KEY".into(),
+            models: vec!["custom-model".into()],
+            source: Default::default(),
+            model_metadata: vec![],
+        });
+        store.workspaces.push(crate::domain::Workspace {
+            path: PathBuf::from("C:\\work"),
+            sessions: vec![session],
+        });
+        let restored: Store =
+            serde_json::from_str(&serde_json::to_string(&store).unwrap()).unwrap();
+        assert!(!restored.ui.auto_rename);
+        assert_eq!(restored.providers[0].api_key_env, "MY_PROXY_KEY");
+        assert_eq!(
+            restored.workspaces[0].sessions[0].channel,
+            ModelChannel::Provider("custom".into())
+        );
+        assert_eq!(
+            restored.workspaces[0].sessions[0].reasoning_effort,
+            ReasoningEffort::High
+        );
     }
 }

@@ -12,6 +12,7 @@ mod history;
 mod models;
 mod performance;
 mod protocol;
+mod providers;
 mod store;
 
 use app::ConduitApp;

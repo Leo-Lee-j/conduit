@@ -2,7 +2,325 @@
 
 use super::*;
 
+struct ProviderEditor {
+    app: Entity<ConduitApp>,
+    id: Option<String>,
+    engine: Provider,
+    fields: [Entity<InputState>; 4],
+    error: Option<String>,
+}
+
+impl ProviderEditor {
+    fn new(
+        app: Entity<ConduitApp>,
+        provider: Option<ModelProvider>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let values = provider
+            .as_ref()
+            .map(|p| {
+                [
+                    p.name.clone(),
+                    p.base_url.clone(),
+                    p.api_key_env.clone(),
+                    p.models.join(", "),
+                ]
+            })
+            .unwrap_or_default();
+        let placeholders = [
+            "例如：我的代理",
+            "https://api.example.com/v1",
+            "例如：MY_PROVIDER_API_KEY（可留空）",
+            "模型 ID，多个用逗号分隔",
+        ];
+        let fields = std::array::from_fn(|i| {
+            cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(placeholders[i])
+                    .default_value(values[i].clone())
+            })
+        });
+        Self {
+            app,
+            id: provider.as_ref().map(|p| p.id.clone()),
+            engine: provider.map(|p| p.engine).unwrap_or(Provider::Codex),
+            fields,
+            error: None,
+        }
+    }
+
+    fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let values: Vec<_> = self
+            .fields
+            .iter()
+            .map(|f| f.read(cx).value().trim().to_string())
+            .collect();
+        let mut ids = vec![];
+        for id in values[3]
+            .split([',', '，', ';', '\n'])
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if !ids.iter().any(|s| s == id) {
+                ids.push(id.to_string());
+            }
+        }
+        let provider = ModelProvider {
+            id: self.id.clone().unwrap_or_else(|| {
+                format!(
+                    "custom-{}-{}",
+                    std::process::id(),
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos()
+                )
+            }),
+            name: values[0].clone(),
+            engine: self.engine,
+            base_url: values[1].clone(),
+            api_key_env: values[2].clone(),
+            models: ids,
+            source: Default::default(),
+            model_metadata: vec![],
+        };
+        if let Err(error) = provider.validate() {
+            self.error = Some(error.to_string());
+            cx.notify();
+            return;
+        }
+        let saved = self.app.update(cx, |app, cx| {
+            if !app.writable || app.closing {
+                return false;
+            }
+            if let Some(current) = app.store.providers.iter_mut().find(|p| p.id == provider.id) {
+                *current = provider;
+            } else {
+                app.store.providers.push(provider);
+            }
+            let saved = app.persist();
+            cx.notify();
+            saved
+        });
+        if saved {
+            window.close_dialog(cx);
+        } else {
+            self.error = Some("保存失败，请检查存储状态".into());
+            cx.notify();
+        }
+    }
+}
+
+impl Render for ProviderEditor {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut form = v_flex().id("provider-editor-body").debug_selector(|| "provider-editor-body".into()).w_full().max_h((window.viewport_size().height - px(150.)).max(px(240.))).overflow_y_scroll().gap_3()
+            .child(div().text_size(px(11.)).text_color(rgb(palette().faint)).child("按会话选择 Provider，不修改 CLI 的全局配置。Codex 使用 Responses 协议，Claude Code 使用 Anthropic 协议。"));
+        let mut engines = h_flex().gap_2();
+        for (i, engine) in [Provider::Codex, Provider::Claude].into_iter().enumerate() {
+            engines = engines.child(
+                Button::new(("custom-provider-engine", i))
+                    .ghost()
+                    .small()
+                    .label(engine.label())
+                    .disabled(self.id.is_some())
+                    .cursor_pointer()
+                    .when(self.engine == engine, |b| {
+                        b.bg(rgb(palette().surface_hover))
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.engine = engine;
+                        cx.notify();
+                    })),
+            );
+        }
+        form = form.child(engines);
+        for (i, label) in ["名称", "Base URL", "API Key 环境变量名", "模型列表"]
+            .into_iter()
+            .enumerate()
+        {
+            form = form.child(
+                v_flex()
+                    .debug_selector(move || format!("provider-editor-field-{i}"))
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette().muted))
+                            .child(label),
+                    )
+                    .child(Input::new(&self.fields[i]).h(px(32.)).aria_label(label)),
+            );
+        }
+        form.child(div().text_size(px(10.)).line_height(relative(1.5)).text_color(rgb(palette().faint)).child("填写保存 API Key 的环境变量名称；应用只保存变量名。修改系统环境变量后请重新启动 Conduit。"))
+            .when_some(self.error.clone(), |c, error| c.child(div().text_size(px(11.)).text_color(rgb(palette().danger_text)).child(error)))
+            .child(h_flex().debug_selector(|| "provider-editor-actions".into()).justify_end().gap_2()
+                .child(Button::new("custom-provider-cancel").ghost().small().label("取消").cursor_pointer().on_click(|_, w, cx| w.close_dialog(cx)))
+                .child(Button::new("custom-provider-save").primary().small().label("保存").cursor_pointer().on_click(cx.listener(|this, _, w, cx| this.save(w, cx)))))
+    }
+}
+
 impl ConduitApp {
+    fn open_provider_editor(
+        &mut self,
+        provider: Option<ModelProvider>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.writable || self.closing {
+            return;
+        }
+        let title = if provider.is_some() {
+            "编辑 Provider"
+        } else {
+            "添加 Provider"
+        };
+        let app = cx.entity();
+        let editor = cx.new(|cx| ProviderEditor::new(app, provider, window, cx));
+        window.open_dialog(cx, move |dialog, _, _| {
+            let editor = editor.clone();
+            dialog
+                .w(px(480.))
+                .title(title)
+                .content(move |content, _, _| content.child(editor.clone()))
+        });
+    }
+
+    fn providers_card(&self, view: Entity<Self>) -> AnyElement {
+        let add_view = view.clone();
+        let disabled = !self.writable || self.closing;
+        let mut card = settings_card(
+            "Provider 列表",
+            Button::new("add-custom-provider")
+                .small()
+                .ghost()
+                .label("添加 Provider")
+                .disabled(disabled)
+                .cursor_pointer()
+                .on_click(move |_, window, cx| {
+                    add_view.update(cx, |app, cx| app.open_provider_editor(None, window, cx))
+                })
+                .into_any_element(),
+        );
+        if self.store.providers.is_empty() {
+            card = card.child(
+                div()
+                    .px_4()
+                    .py_3()
+                    .text_size(px(11.))
+                    .text_color(rgb(palette().faint))
+                    .child("添加 API 端点、模型列表和凭证环境变量，即可在聊天模型面板中选择。"),
+            );
+        }
+        for (index, provider) in self.store.providers.iter().enumerate() {
+            let edit_view = view.clone();
+            let delete_view = view.clone();
+            let provider = provider.clone();
+            let edit_provider = provider.clone();
+            let id = provider.id.clone();
+            let imported = matches!(provider.source, ProviderSource::Ccs { .. });
+            let in_use = self
+                .store
+                .workspaces
+                .iter()
+                .flat_map(|w| &w.sessions)
+                .any(|s| s.channel == ModelChannel::Provider(id.clone()));
+            card = card.child(
+                h_flex()
+                    .px_4()
+                    .py_3()
+                    .gap_2()
+                    .items_center()
+                    .border_t_1()
+                    .border_color(rgb(palette().border))
+                    .child(provider_icon(provider.engine))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(palette().text))
+                                    .child(provider.name),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(10.))
+                                    .text_color(rgb(palette().faint))
+                                    .child(format!(
+                                        "{} · {} 个模型 · {} · {}",
+                                        provider.engine.label(),
+                                        provider.models.len(),
+                                        provider.base_url,
+                                        if imported { "来自 CCS" } else { "自定义" }
+                                    )),
+                            ),
+                    )
+                    .child(
+                        Button::new(("edit-custom-provider", index))
+                            .small()
+                            .ghost()
+                            .label("编辑")
+                            .disabled(disabled || imported)
+                            .tooltip(if imported {
+                                "此 Provider 的配置跟随 CCS 同步，请在 cc-switch 编辑后同步"
+                            } else {
+                                "编辑 Provider"
+                            })
+                            .cursor_pointer()
+                            .on_click(move |_, window, cx| {
+                                edit_view.update(cx, |app, cx| {
+                                    app.open_provider_editor(
+                                        Some(edit_provider.clone()),
+                                        window,
+                                        cx,
+                                    )
+                                })
+                            }),
+                    )
+                    .child(
+                        Button::new(("delete-custom-provider", index))
+                            .small()
+                            .ghost()
+                            .label("删除")
+                            .disabled(disabled || in_use || imported)
+                            .cursor_pointer()
+                            .tooltip(if imported {
+                                "此 Provider 的配置由 CCS 同步管理"
+                            } else if in_use {
+                                "请先将使用此 Provider 的会话切换到其他渠道"
+                            } else {
+                                "删除 Provider"
+                            })
+                            .on_click(move |_, _, cx| {
+                                delete_view.update(cx, |app, cx| {
+                                    if !app.writable
+                                        || app.closing
+                                        || app
+                                            .store
+                                            .workspaces
+                                            .iter()
+                                            .flat_map(|w| &w.sessions)
+                                            .any(|s| {
+                                                s.channel == ModelChannel::Provider(id.clone())
+                                            })
+                                    {
+                                        return;
+                                    }
+                                    app.store.providers.retain(|p| p.id != id);
+                                    app.persist();
+                                    cx.notify();
+                                })
+                            }),
+                    ),
+            );
+        }
+        card.into_any_element()
+    }
     pub(in crate::app) fn reload_all_models_async(
         &mut self,
         window: &mut Window,
@@ -26,6 +344,11 @@ impl ConduitApp {
                 this.catalogs.insert(Provider::Claude, loaded.0);
                 this.catalogs.insert(Provider::Codex, loaded.1);
                 this.ccs = loaded.2;
+                this.store.sync_ccs_providers(&this.ccs);
+                cx.emit(crate::providers::ProviderCatalogChanged);
+                if this.writable {
+                    this.dirty = true;
+                }
                 cx.notify();
             });
         })
@@ -113,14 +436,14 @@ impl ConduitApp {
                     )
                     .child(
                         Button::new("settings-models-refresh")
-                            .label("重新读取")
+                            .label("同步配置")
                             .small()
                             .ghost()
                             .disabled(self.closing)
                             .when(!self.closing, |button| button.cursor_pointer())
-                            .on_click(move |_, _, cx| {
+                            .on_click(move |_, window, cx| {
                                 refresh_view.update(cx, |this, cx| {
-                                    this.reload_all_models(cx);
+                                    this.reload_all_models_async(window, cx);
                                 });
                             }),
                     ),
@@ -156,8 +479,9 @@ impl ConduitApp {
                     .text_size(px(11.))
                     .line_height(relative(1.5))
                     .text_color(rgb(palette().faint))
-                    .child("当前模型来自 CLI 正在使用的配置；CCS 模型来自 cc-switch 的 Provider 目录。只读取模型名与上下文信息，不查询凭证，也不修改任一配置。"),
+                    .child("CCS 中的 Provider 配置会自动同步到下方 Provider 列表，与自定义 Provider 一起供聊天选择。同步不会切换 cc-switch 当前 Provider。"),
             )
+            .child(self.providers_card(view.clone()))
             .child(source_card);
         for provider in [Provider::Claude, Provider::Codex] {
             page = page.child(self.settings_models_provider(provider));
@@ -318,96 +642,7 @@ impl ConduitApp {
                 );
             }
         }
-        let providers: Vec<_> = self.ccs.for_provider(provider).collect();
-        let ccs_count: usize = providers.iter().map(|entry| entry.models.len()).sum();
-        let mut ccs_card = v_flex()
-            .w_full()
-            .overflow_hidden()
-            .rounded(px(12.))
-            .border_1()
-            .border_color(rgb(palette().border))
-            .bg(rgb(palette().surface_strong))
-            .child(
-                h_flex()
-                    .px_4()
-                    .py_3()
-                    .gap_2()
-                    .items_center()
-                    .border_b_1()
-                    .border_color(rgb(palette().border))
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .font_semibold()
-                            .text_color(rgb(palette().text))
-                            .child("CCS 同步"),
-                    )
-                    .child(badge("只读"))
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .text_color(rgb(palette().faint))
-                            .child(format!(
-                                "{} 个 Provider · {ccs_count} 个模型",
-                                providers.len()
-                            )),
-                    ),
-            );
-        for entry in &providers {
-            ccs_card = ccs_card.child(
-                h_flex()
-                    .px_4()
-                    .py_2()
-                    .gap_2()
-                    .items_center()
-                    .border_t_1()
-                    .border_color(rgb(palette().border))
-                    .bg(rgb(palette().surface))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(11.))
-                            .font_semibold()
-                            .text_color(rgb(palette().text))
-                            .child(entry.name.clone()),
-                    )
-                    .when(entry.current, |row| row.child(badge("当前 Provider")))
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .text_size(px(10.))
-                            .text_color(rgb(palette().faint))
-                            .child(format!("{} 个模型", entry.models.len())),
-                    ),
-            );
-            for model in &entry.models {
-                ccs_card = ccs_card.child(model_row(
-                    model.label.clone(),
-                    model.id.clone(),
-                    model.note.clone(),
-                    None,
-                ));
-            }
-        }
-        if providers.is_empty() {
-            ccs_card = ccs_card.child(
-                div()
-                    .px_4()
-                    .py_3()
-                    .border_t_1()
-                    .border_color(rgb(palette().border))
-                    .text_size(px(11.))
-                    .text_color(rgb(palette().faint))
-                    .child(if provider == Provider::Claude {
-                        "cc-switch 中没有可列出的 Claude 模型目录。"
-                    } else {
-                        "cc-switch 中没有可列出的 Codex 模型目录。"
-                    }),
-            );
-        }
+
         v_flex()
             .w_full()
             .gap_3()
@@ -431,7 +666,43 @@ impl ConduitApp {
                     ),
             )
             .child(current_card)
-            .child(ccs_card)
             .into_any_element()
+    }
+}
+
+#[cfg(all(test, feature = "ui-tests"))]
+mod tests {
+    use super::{ConduitApp, ProviderEditor, Store};
+    use gpui_kit::{AppContext as _, TestAppContext};
+
+    #[gpui_kit::test]
+    fn provider_editor_renders_all_fields_and_save_actions(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app =
+                cx.new(|cx| ConduitApp::with_store(window, cx, Ok(Store::default()), false, false));
+            let editor = cx.new(|cx| ProviderEditor::new(app, None, window, cx));
+            gpui_kit::component::Root::new(editor, window, cx)
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let mut previous = cx
+            .debug_bounds("provider-editor-field-0")
+            .expect("name field");
+        for selector in [
+            "provider-editor-field-1",
+            "provider-editor-field-2",
+            "provider-editor-field-3",
+        ] {
+            let field = cx.debug_bounds(selector).expect("provider field");
+            assert!(field.top() >= previous.bottom());
+            previous = field;
+        }
+        let actions = cx
+            .debug_bounds("provider-editor-actions")
+            .expect("save and cancel actions");
+        assert!(actions.top() > previous.bottom());
     }
 }

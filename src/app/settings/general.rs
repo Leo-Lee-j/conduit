@@ -7,7 +7,9 @@ impl ConduitApp {
         let disabled = !self.writable || self.closing;
         let provider_picker = self.naming_provider_picker(view.clone(), disabled);
         let model_picker = self.naming_model_picker(view.clone(), disabled);
-        let mode_picker = self.naming_mode_picker(view.clone(), disabled);
+        let mode_picker =
+            self.naming_mode_picker(view.clone(), disabled || !self.store.ui.auto_rename);
+        let rename_view = view.clone();
         v_flex()
             .w_full()
             .gap_4()
@@ -41,6 +43,22 @@ impl ConduitApp {
                                     .child("立即生效"),
                             ),
                     )
+                    .child(settings_control_row(
+                        "自动命名", "自动生成和更新会话标题；关闭后仍可在会话菜单手动使用 AI 重命名",
+                        Switch::new("auto-rename-setting").checked(self.store.ui.auto_rename).disabled(disabled)
+                            .on_change(move |checked, _, cx| {
+                                rename_view.update(cx, |this, cx| {
+                                    if !this.writable || this.closing { return; }
+                                    this.store.ui.auto_rename = *checked;
+                                    if !*checked {
+                                        this.session_namings.retain(|_, naming| {
+                                            if naming.automatic { naming.runtime.cancel(); false } else { true }
+                                        });
+                                    }
+                                    this.persist();
+                                    cx.notify();
+                                });
+                            }).into_any_element(), false))
                     .child(
                         h_flex()
                             .px_4()
@@ -85,7 +103,7 @@ impl ConduitApp {
                             .items_center()
                             .border_t_1()
                             .border_color(rgb(palette().border))
-                            .child(settings_label("自动重命名"))
+                            .child(settings_label("触发方式"))
                             .child(
                                 div()
                                     .flex_1()

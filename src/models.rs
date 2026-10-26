@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ModelOption {
     pub id: String,
     pub label: String,

@@ -264,6 +264,7 @@ pub(super) struct GitOperation {
 
 /// One-shot background request that proposes a short session title.
 pub(super) struct SessionNaming {
+    pub(super) automatic: bool,
     pub(super) runtime: ChatRuntime,
     pub(super) started: Instant,
     pub(super) parts: Vec<(String, String)>,

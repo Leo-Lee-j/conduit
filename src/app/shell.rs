@@ -128,8 +128,7 @@ impl Render for ConduitApp {
                         })
                         .size_full()
                         .pt(px(5.)),
-                    )
-                    .vertical_scrollbar(&self.scroll);
+                    );
             }
         } else if has_workspace {
             messages = messages.child(

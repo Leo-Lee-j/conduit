@@ -152,6 +152,36 @@ pub struct Pipes {
 }
 impl Child {
     pub fn spawn(executable: &Path, args: &[String], cwd: &Path) -> Result<(Self, Pipes)> {
+        Self::spawn_with_env(executable, args, cwd, &Default::default())
+    }
+
+    pub fn spawn_with_env(
+        executable: &Path,
+        args: &[String],
+        cwd: &Path,
+        overrides: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(Self, Pipes)> {
+        // Build a process-local environment block; changing the parent's env
+        // would race with concurrent turns using different providers.
+        let mut environment: std::collections::BTreeMap<String, (String, String)> =
+            std::env::vars()
+                .map(|(key, value)| (key.to_uppercase(), (key, value)))
+                .collect();
+        for (key, value) in overrides {
+            if key.is_empty() || key.contains(['=', '\0']) || value.contains('\0') {
+                bail!("Provider 环境变量格式无效");
+            }
+            environment.insert(key.to_uppercase(), (key.clone(), value.clone()));
+        }
+        let mut environment: Vec<u16> = environment
+            .values()
+            .flat_map(|(key, value)| {
+                format!("{key}={value}\0")
+                    .encode_utf16()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        environment.push(0);
         let (stdin_child, stdin) = pipe()?;
         let (stdout, stdout_child) = pipe()?;
         let (stderr, stderr_child) = pipe()?;
@@ -204,8 +234,11 @@ impl Child {
                 null(),
                 null(),
                 1,
-                EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW,
-                null(),
+                EXTENDED_STARTUPINFO_PRESENT
+                    | CREATE_SUSPENDED
+                    | CREATE_NO_WINDOW
+                    | CREATE_UNICODE_ENVIRONMENT,
+                environment.as_ptr().cast(),
                 cwd.as_ptr(),
                 &startup.StartupInfo,
                 &mut info,
@@ -365,5 +398,29 @@ mod tests {
                 WAIT_OBJECT_0
             );
         }
+    }
+
+    #[test]
+    fn concurrent_provider_environments_do_not_modify_parent_or_other_children() {
+        let name = "CONDUIT_ROUTE_FIXTURE";
+        let before = std::env::var_os(name);
+        let args = [
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[Console]::WriteLine($env:CONDUIT_ROUTE_FIXTURE); Start-Sleep -Seconds 10",
+        ]
+        .map(String::from);
+        let a = std::collections::BTreeMap::from([(name.into(), "provider-a".into())]);
+        let b = std::collections::BTreeMap::from([(name.into(), "provider-b".into())]);
+        let (child_a, mut pipes_a) =
+            Child::spawn_with_env(&powershell(), &args, &std::env::temp_dir(), &a).unwrap();
+        let (child_b, mut pipes_b) =
+            Child::spawn_with_env(&powershell(), &args, &std::env::temp_dir(), &b).unwrap();
+        assert_eq!(output_line(&mut pipes_a.stdout).trim(), "provider-a");
+        assert_eq!(output_line(&mut pipes_b.stdout).trim(), "provider-b");
+        assert_eq!(std::env::var_os(name), before);
+        drop(child_a);
+        drop(child_b);
     }
 }
