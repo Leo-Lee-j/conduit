@@ -46,6 +46,10 @@ pub enum Event {
         summary_index: u64,
         snapshot: bool,
     },
+    /// Step list of the current turn, as reported by the provider's plan tool.
+    Plan {
+        steps: Vec<(String, String)>,
+    },
     Tool {
         key: String,
         title: String,
@@ -162,6 +166,37 @@ fn id_text(v: &Value) -> String {
     v.as_str()
         .map(str::to_owned)
         .unwrap_or_else(|| v.to_string())
+}
+
+/// Claude's TodoWrite uses `todos`, Codex's update_plan uses `plan`; both carry
+/// a short label plus a status. Accept either shape.
+fn plan_steps(input: &Value) -> Option<Vec<(String, String)>> {
+    let entries = input
+        .get("plan")
+        .or_else(|| input.get("todos"))?
+        .as_array()?;
+    let steps = entries
+        .iter()
+        .filter_map(|entry| {
+            let label = entry
+                .get("step")
+                .or_else(|| entry.get("content"))
+                .or_else(|| entry.get("activeForm"))
+                .and_then(Value::as_str)?;
+            if label.trim().is_empty() {
+                return None;
+            }
+            Some((
+                label.to_string(),
+                entry
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("pending")
+                    .to_string(),
+            ))
+        })
+        .collect::<Vec<_>>();
+    (!steps.is_empty()).then_some(steps)
 }
 
 impl Protocol {
@@ -463,6 +498,19 @@ impl Protocol {
                 detail: text(p, "delta").into(),
                 status: "输出中".into(),
             }),
+            "turn/plan/updated" => {
+                let steps = p["plan"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|entry| {
+                        let label = text(entry, "step");
+                        (!label.trim().is_empty())
+                            .then(|| (label.to_string(), text(entry, "status").to_string()))
+                    })
+                    .collect();
+                step.events.push(Event::Plan { steps });
+            }
             "thread/tokenUsage/updated" => {
                 let usage = &p["tokenUsage"];
                 let number = |value: &Value| value.as_u64().unwrap_or(0);
@@ -700,6 +748,13 @@ impl Protocol {
                             _ => {}
                         }
                         if text(block, "type") == "tool_use" {
+                            if matches!(
+                                text(block, "name"),
+                                "TodoWrite" | "todo_write" | "update_plan"
+                            ) && let Some(steps) = plan_steps(&block["input"])
+                            {
+                                step.events.push(Event::Plan { steps });
+                            }
                             step.events.push(Event::ToolInput {
                                 key: text(block, "id").into(),
                                 input: pretty(&block["input"]),
@@ -983,6 +1038,51 @@ mod tests {
         let snapshot = protocol.accept(json!({"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"Hello"}]}}));
         assert!(matches!(&partial.events[0], Event::Delta { key, .. } if key == "m1-0"));
         assert!(matches!(&snapshot.events[0], Event::Text { key, .. } if key == "m1-0"));
+    }
+    #[test]
+    fn plan_updates_from_both_providers_become_plan_events() {
+        let mut codex = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
+        codex.accept(json!({"id":2,"result":{"thread":{"id":"thread-1"}}}));
+        codex.accept(json!({"id":3,"result":{"turn":{"id":"turn-1"}}}));
+        let step = codex.accept(json!({
+            "method":"turn/plan/updated",
+            "params":{
+                "threadId":"thread-1",
+                "turnId":"turn-1",
+                "plan":[
+                    {"step":"Inspect","status":"completed"},
+                    {"step":"Edit","status":"inProgress"}
+                ]
+            }
+        }));
+        assert!(matches!(
+            &step.events[0],
+            Event::Plan { steps }
+                if steps == &vec![
+                    ("Inspect".to_string(), "completed".to_string()),
+                    ("Edit".to_string(), "inProgress".to_string()),
+                ]
+        ));
+
+        let mut claude = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None);
+        let step = claude.accept(json!({
+            "type":"assistant",
+            "message":{
+                "id":"m1",
+                "content":[{
+                    "type":"tool_use",
+                    "id":"tool-1",
+                    "name":"TodoWrite",
+                    "input":{"todos":[{"content":"Read code","status":"in_progress"}]}
+                }]
+            }
+        }));
+        assert!(matches!(
+            &step.events[1],
+            Event::Plan { steps }
+                if steps == &vec![("Read code".to_string(), "in_progress".to_string())]
+        ));
+        assert!(matches!(&step.events[2], Event::ToolInput { key, .. } if key == "tool-1"));
     }
     #[test]
     fn unknown_interactive_requests_are_never_auto_approved() {

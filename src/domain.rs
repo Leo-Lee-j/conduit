@@ -138,6 +138,10 @@ pub struct ChatItem {
     /// Permission decisions are independent of the tool's execution status.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<ToolApproval>,
+    /// Model that produced this reply; absent for messages written by older
+    /// builds or imported without model metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -210,6 +214,7 @@ impl SessionRecord {
                     detail: String::new(),
                     status: String::new(),
                     approval: None,
+                    model: None,
                 });
                 self.messages.len() - 1
             });

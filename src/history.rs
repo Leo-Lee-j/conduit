@@ -12,6 +12,7 @@
 
 use crate::domain::{ChatItem, ItemKind, Provider};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// A CLI-side session discovered on disk, ready to become a `SessionRecord`.
@@ -224,6 +225,7 @@ fn parse_claude(text: &str, workspace: &Path) -> Option<ImportedSession> {
                         detail: String::new(),
                         status: String::new(),
                         approval: None,
+                        model: None,
                     });
                 }
             }
@@ -252,6 +254,7 @@ fn parse_claude(text: &str, workspace: &Path) -> Option<ImportedSession> {
                                 detail: String::new(),
                                 status: String::new(),
                                 approval: None,
+                                model: None,
                             });
                         }
                         Some("tool_use") => {
@@ -271,6 +274,7 @@ fn parse_claude(text: &str, workspace: &Path) -> Option<ImportedSession> {
                                 detail: String::new(),
                                 status: "已完成".into(),
                                 approval: None,
+                                model: None,
                             });
                         }
                         _ => {}
@@ -371,20 +375,46 @@ pub fn scan_codex(workspace: &Path) -> Vec<ImportedSession> {
     out
 }
 
-/// Parses one Codex rollout jsonl. The first line is `session_meta` with the
-/// session id, timestamp and `cwd` used for workspace grouping.
+/// Parses one Codex rollout jsonl. Structured `event_msg/item_completed`
+/// records are the primary source because they carry commands, file changes,
+/// MCP calls, web searches and reasoning summaries; raw `response_item`
+/// messages remain as a fallback for older rollouts without those events.
 fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
-    let mut native_id: Option<String> = None;
-    let mut created_at = 0u64;
-    let mut model: Option<String> = None;
-    let mut messages: Vec<ChatItem> = Vec::new();
-    let mut title = String::new();
+    let values: Vec<Value> = text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect();
+    let meta = values
+        .iter()
+        .find(|value| value.get("type").and_then(Value::as_str) == Some("session_meta"))?;
+    let meta = meta.get("payload").unwrap_or(meta);
+    let native_id = meta
+        .get("id")
+        .or_else(|| meta.get("session_id"))
+        .and_then(Value::as_str)?
+        .to_owned();
+    let created_at = meta
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .and_then(rfc3339_to_unix_opt)
+        .unwrap_or(0);
+    let cwd = meta.get("cwd").and_then(Value::as_str).unwrap_or("");
+    if !same_dir(cwd, workspace) {
+        return None;
+    }
 
-    for (index, line) in text.lines().enumerate() {
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        let payload = value.get("payload").unwrap_or(&value);
+    let mut model: Option<String> = None;
+    let mut current_model: Option<String> = None;
+    let mut event_rows: Vec<(usize, usize, ChatItem)> = Vec::new();
+    let mut response_rows: Vec<(usize, usize, ChatItem)> = Vec::new();
+    let mut event_reasoning: Vec<(usize, String, String)> = Vec::new();
+    let mut response_reasoning: Vec<(usize, String, String)> = Vec::new();
+    let mut event_users = 0usize;
+    let mut event_assistants = 0usize;
+    let mut event_tools = 0usize;
+
+    for (index, value) in values.iter().enumerate() {
+        let payload = value.get("payload").unwrap_or(value);
         let event_created_at = value
             .get("timestamp")
             .or_else(|| payload.get("timestamp"))
@@ -392,29 +422,15 @@ fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
             .and_then(rfc3339_to_unix_opt)
             .unwrap_or(created_at);
         match value.get("type").and_then(Value::as_str) {
-            Some("session_meta") => {
-                native_id = payload
-                    .get("id")
-                    .or_else(|| payload.get("session_id"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                created_at = payload
-                    .get("timestamp")
-                    .and_then(Value::as_str)
-                    .and_then(rfc3339_to_unix_opt)
-                    .unwrap_or(0);
-                let cwd = payload.get("cwd").and_then(Value::as_str).unwrap_or("");
-                if !same_dir(cwd, workspace) {
-                    return None;
+            Some("turn_context") => {
+                if let Some(entry) = payload.get("model").and_then(Value::as_str) {
+                    current_model = Some(entry.to_owned());
+                    if model.is_none() {
+                        model = Some(entry.to_owned());
+                    }
                 }
             }
             Some("response_item") => {
-                if model.is_none()
-                    && payload.get("model").is_some()
-                    && let Some(m) = payload.get("model").and_then(Value::as_str)
-                {
-                    model = Some(m.to_owned());
-                }
                 match payload.get("type").and_then(Value::as_str) {
                     Some("message") => {
                         let role = payload.get("role").and_then(Value::as_str).unwrap_or("");
@@ -426,7 +442,8 @@ fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
                         };
                         for (part_index, part) in parts.iter().enumerate() {
                             let part_type = part.get("type").and_then(Value::as_str).unwrap_or("");
-                            if part_type != "input_text" && part_type != "output_text" {
+                            if !matches!(part_type, "input_text" | "output_text" | "text" | "Text")
+                            {
                                 continue;
                             }
                             let Some(text) = part.get("text").and_then(Value::as_str) else {
@@ -444,23 +461,33 @@ fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
                             {
                                 continue;
                             }
-                            if role == "user" && title.is_empty() {
-                                title = truncate_title(text);
-                            }
-                            messages.push(ChatItem {
-                                key: format!("import-{index}-{part_index}"),
-                                created_at: event_created_at,
-                                kind: if role == "user" {
-                                    ItemKind::User
-                                } else {
-                                    ItemKind::Assistant
+                            response_rows.push((
+                                index,
+                                part_index,
+                                ChatItem {
+                                    key: format!("import-{index}-{part_index}"),
+                                    created_at: event_created_at,
+                                    kind: if role == "user" {
+                                        ItemKind::User
+                                    } else {
+                                        ItemKind::Assistant
+                                    },
+                                    text: text.to_owned(),
+                                    input: String::new(),
+                                    detail: String::new(),
+                                    status: String::new(),
+                                    approval: None,
+                                    model: (role == "assistant")
+                                        .then(|| {
+                                            payload
+                                                .get("model")
+                                                .and_then(Value::as_str)
+                                                .map(str::to_owned)
+                                                .or_else(|| current_model.clone())
+                                        })
+                                        .flatten(),
                                 },
-                                text: text.to_owned(),
-                                input: String::new(),
-                                detail: String::new(),
-                                status: String::new(),
-                                approval: None,
-                            });
+                            ));
                         }
                     }
                     Some("function_call") => {
@@ -468,42 +495,350 @@ fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
                             .get("name")
                             .and_then(Value::as_str)
                             .unwrap_or("tool");
-                        messages.push(ChatItem {
-                            key: format!("import-{index}-call"),
-                            created_at: event_created_at,
-                            kind: ItemKind::Tool,
-                            text: name.to_owned(),
-                            input: payload
-                                .get("arguments")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                                .to_owned(),
-                            detail: String::new(),
-                            status: "已完成".into(),
-                            approval: None,
-                        });
+                        response_rows.push((
+                            index,
+                            0,
+                            ChatItem {
+                                key: format!("import-{index}-call"),
+                                created_at: event_created_at,
+                                kind: ItemKind::Tool,
+                                text: name.to_owned(),
+                                input: payload
+                                    .get("arguments")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_owned(),
+                                detail: String::new(),
+                                status: "已完成".into(),
+                                approval: None,
+                                model: None,
+                            },
+                        ));
+                    }
+                    Some("custom_tool_call") => {
+                        let name = payload
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("tool");
+                        response_rows.push((
+                            index,
+                            0,
+                            ChatItem {
+                                key: format!("import-{index}-call"),
+                                created_at: event_created_at,
+                                kind: ItemKind::Tool,
+                                text: name.to_owned(),
+                                input: payload
+                                    .get("input")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_owned(),
+                                detail: String::new(),
+                                status: "已完成".into(),
+                                approval: None,
+                                model: None,
+                            },
+                        ));
+                    }
+                    Some("reasoning") => {
+                        let text = codex_reasoning_text(payload);
+                        if !text.is_empty() {
+                            response_reasoning.push((
+                                index,
+                                payload
+                                    .get("id")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_owned)
+                                    .unwrap_or_else(|| format!("reasoning-{index}")),
+                                text,
+                            ));
+                        }
                     }
                     _ => {}
                 }
             }
-            _ => {
-                if model.is_none()
-                    && payload.get("type").and_then(Value::as_str) == Some("turn_context")
-                    && let Some(m) = payload.get("model").and_then(Value::as_str)
-                {
-                    model = Some(m.to_owned());
+            Some("event_msg")
+                if payload.get("type").and_then(Value::as_str) == Some("item_completed") =>
+            {
+                let Some(item) = payload.get("item") else {
+                    continue;
+                };
+                let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
+                let item_id = item.get("id").and_then(Value::as_str).unwrap_or("item");
+                let key = format!("import-{index}-{item_id}");
+                match item_type {
+                    "UserMessage" => {
+                        let Some(text) = codex_event_text(item) else {
+                            continue;
+                        };
+                        if codex_injected_event_text(&text) {
+                            continue;
+                        }
+                        event_users += 1;
+                        event_rows.push((
+                            index,
+                            0,
+                            ChatItem {
+                                key,
+                                created_at: event_created_at,
+                                kind: ItemKind::User,
+                                text,
+                                input: String::new(),
+                                detail: String::new(),
+                                status: String::new(),
+                                approval: None,
+                                model: None,
+                            },
+                        ));
+                    }
+                    "AgentMessage" => {
+                        let Some(text) = codex_event_text(item) else {
+                            continue;
+                        };
+                        event_assistants += 1;
+                        event_rows.push((
+                            index,
+                            0,
+                            ChatItem {
+                                key,
+                                created_at: event_created_at,
+                                kind: ItemKind::Assistant,
+                                text,
+                                input: String::new(),
+                                detail: String::new(),
+                                status: String::new(),
+                                approval: None,
+                                model: current_model.clone(),
+                            },
+                        ));
+                    }
+                    "CommandExecution" => {
+                        let command = codex_command(item);
+                        let status = item.get("status").and_then(Value::as_str).unwrap_or("");
+                        let exit_code = item.get("exit_code").and_then(Value::as_i64);
+                        let failed = status.eq_ignore_ascii_case("failed")
+                            || status.eq_ignore_ascii_case("error")
+                            || exit_code.is_some_and(|code| code != 0);
+                        let output = item
+                            .get("aggregated_output")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        event_tools += 1;
+                        event_rows.push((
+                            index,
+                            0,
+                            ChatItem {
+                                key,
+                                created_at: event_created_at,
+                                kind: ItemKind::Tool,
+                                text: if command.is_empty() {
+                                    "终端命令".into()
+                                } else {
+                                    command.clone()
+                                },
+                                input: serde_json::to_string_pretty(&serde_json::json!({
+                                    "command": command,
+                                    "cwd": item.get("cwd").and_then(Value::as_str).unwrap_or("")
+                                }))
+                                .unwrap_or_default(),
+                                detail: serde_json::to_string_pretty(&serde_json::json!({
+                                    "output": output,
+                                    "exitCode": exit_code
+                                }))
+                                .unwrap_or_default(),
+                                status: if failed {
+                                    "运行失败".into()
+                                } else {
+                                    "已完成".into()
+                                },
+                                approval: None,
+                                model: None,
+                            },
+                        ));
+                    }
+                    "FileChange" => {
+                        let Some(changes) = item.get("changes").and_then(Value::as_object) else {
+                            continue;
+                        };
+                        let files: Vec<Value> = changes
+                            .iter()
+                            .map(|(path, change)| {
+                                serde_json::json!({
+                                    "path": relative_workspace_path(path, workspace),
+                                    "kind": change.get("type").cloned().unwrap_or(Value::Null),
+                                    "diff": change.get("unified_diff").cloned().unwrap_or(Value::Null),
+                                    "content": change.get("content").cloned().unwrap_or(Value::Null),
+                                })
+                            })
+                            .collect();
+                        if files.is_empty() {
+                            continue;
+                        }
+                        event_tools += 1;
+                        event_rows.push((
+                            index,
+                            0,
+                            ChatItem {
+                                key,
+                                created_at: event_created_at,
+                                kind: ItemKind::Tool,
+                                text: "修改文件".into(),
+                                input: serde_json::to_string_pretty(&Value::Array(files))
+                                    .unwrap_or_default(),
+                                detail: String::new(),
+                                status: "已完成".into(),
+                                approval: None,
+                                model: None,
+                            },
+                        ));
+                    }
+                    "McpToolCall" => {
+                        let tool = item
+                            .get("tool")
+                            .and_then(Value::as_str)
+                            .unwrap_or("工具调用");
+                        let status = item.get("status").and_then(Value::as_str).unwrap_or("");
+                        let failed = status.eq_ignore_ascii_case("failed")
+                            || item
+                                .pointer("/result/isError")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false)
+                            || item.get("error").is_some_and(|error| !error.is_null());
+                        event_tools += 1;
+                        event_rows.push((
+                            index,
+                            0,
+                            ChatItem {
+                                key,
+                                created_at: event_created_at,
+                                kind: ItemKind::Tool,
+                                text: tool.to_owned(),
+                                input: serde_json::to_string_pretty(&serde_json::json!({
+                                    "server": item.get("server"),
+                                    "tool": item.get("tool"),
+                                    "arguments": item.get("arguments")
+                                }))
+                                .unwrap_or_default(),
+                                detail: serde_json::to_string_pretty(&serde_json::json!({
+                                    "result": item.get("result"),
+                                    "error": item.get("error")
+                                }))
+                                .unwrap_or_default(),
+                                status: if failed {
+                                    "运行失败".into()
+                                } else {
+                                    "已完成".into()
+                                },
+                                approval: None,
+                                model: None,
+                            },
+                        ));
+                    }
+                    "WebSearch" => {
+                        let query = item.get("query").and_then(Value::as_str).unwrap_or("");
+                        event_tools += 1;
+                        event_rows.push((
+                            index,
+                            0,
+                            ChatItem {
+                                key,
+                                created_at: event_created_at,
+                                kind: ItemKind::Tool,
+                                text: "WebSearch".into(),
+                                input: serde_json::to_string_pretty(&serde_json::json!({
+                                    "query": query,
+                                    "queries": item.pointer("/action/queries").cloned().unwrap_or(Value::Null)
+                                }))
+                                .unwrap_or_default(),
+                                detail: String::new(),
+                                status: "已完成".into(),
+                                approval: None,
+                                model: None,
+                            },
+                        ));
+                    }
+                    "Reasoning" => {
+                        let text = codex_reasoning_text(item);
+                        if text.is_empty() {
+                            continue;
+                        }
+                        event_reasoning.push((
+                            index,
+                            item.get("id")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| format!("reasoning-{index}")),
+                            text,
+                        ));
+                    }
+                    _ => {}
                 }
             }
+            _ => {}
         }
     }
 
-    let native_id = native_id?;
+    let mut rows = event_rows;
+    rows.extend(
+        response_rows
+            .into_iter()
+            .filter(|(_, _, item)| match item.kind {
+                ItemKind::User => event_users == 0,
+                ItemKind::Assistant => event_assistants == 0,
+                ItemKind::Tool => event_tools == 0,
+                _ => true,
+            }),
+    );
+
+    let known_reasoning: HashSet<String> = event_reasoning
+        .iter()
+        .map(|(_, id, _)| id.clone())
+        .collect();
+    let mut reasoning = event_reasoning;
+    reasoning.extend(
+        response_reasoning
+            .into_iter()
+            .filter(|(_, id, _)| !known_reasoning.contains(id)),
+    );
+    for (index, id, text) in reasoning {
+        rows.push((
+            index,
+            0,
+            ChatItem {
+                key: format!("import-{index}-{id}"),
+                created_at: values
+                    .get(index)
+                    .and_then(|value| {
+                        value
+                            .get("timestamp")
+                            .and_then(Value::as_str)
+                            .and_then(rfc3339_to_unix_opt)
+                    })
+                    .unwrap_or(created_at),
+                kind: ItemKind::Reasoning,
+                text,
+                input: String::new(),
+                detail: String::new(),
+                status: String::new(),
+                approval: None,
+                model: None,
+            },
+        ));
+    }
+
+    rows.sort_by_key(|(index, part, _)| (*index, *part));
+    let messages: Vec<ChatItem> = rows.into_iter().map(|(_, _, item)| item).collect();
     if messages.is_empty() {
         return None;
     }
-    if title.is_empty() {
-        title = format!("Codex 会话 {native_id}");
+    if model.is_none() {
+        model = messages.iter().find_map(|item| item.model.clone());
     }
+    let title = messages
+        .iter()
+        .find(|item| item.kind == ItemKind::User)
+        .map(|item| truncate_title(&item.text))
+        .unwrap_or_else(|| format!("Codex 会话 {native_id}"));
     Some(ImportedSession {
         provider: Provider::Codex,
         native_id,
@@ -512,6 +847,91 @@ fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
         model,
         messages,
     })
+}
+
+fn codex_event_text(item: &Value) -> Option<String> {
+    if let Some(text) = item.get("text").and_then(Value::as_str)
+        && !text.trim().is_empty()
+    {
+        return Some(text.to_owned());
+    }
+    let parts = item.get("content")?.as_array()?;
+    let text = parts
+        .iter()
+        .filter(|part| {
+            matches!(
+                part.get("type").and_then(Value::as_str),
+                Some("text" | "input_text" | "output_text" | "Text")
+            )
+        })
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.trim().is_empty()).then_some(text)
+}
+
+fn codex_reasoning_text(value: &Value) -> String {
+    for key in ["summary_text", "summary", "content", "raw_content"] {
+        let Some(parts) = value.get(key).and_then(Value::as_array) else {
+            continue;
+        };
+        let text = parts
+            .iter()
+            .filter_map(|part| {
+                part.as_str()
+                    .or_else(|| part.get("text").and_then(Value::as_str))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !text.trim().is_empty() {
+            return text;
+        }
+    }
+    String::new()
+}
+
+fn codex_command(item: &Value) -> String {
+    if let Some(parsed) = item.get("parsed_cmd").and_then(Value::as_array) {
+        for entry in parsed {
+            if let Some(command) = entry.get("cmd").and_then(Value::as_str)
+                && !command.trim().is_empty()
+            {
+                return command.trim().to_owned();
+            }
+        }
+    }
+    let parts: Vec<&str> = item
+        .get("command")
+        .and_then(Value::as_array)
+        .map(|parts| parts.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    if let Some(position) = parts
+        .iter()
+        .position(|part| matches!(*part, "-Command" | "-c" | "-lc" | "/c" | "/C"))
+    {
+        return parts[position + 1..].join(" ").trim().to_owned();
+    }
+    parts.join(" ").trim().to_owned()
+}
+
+/// Injected project context occasionally lands in the structured user item
+/// stream; keep the check narrow so real prompts remain visible.
+fn codex_injected_event_text(text: &str) -> bool {
+    text.trim_start().starts_with("# AGENTS.md instructions")
+        || text.contains("<environment_context>")
+        || text.contains("<turn_aborted>")
+}
+
+fn relative_workspace_path(path: &str, workspace: &Path) -> String {
+    let normalized = path.replace('/', "\\");
+    let base = workspace.to_string_lossy().replace('/', "\\");
+    if normalized.to_lowercase().starts_with(&base.to_lowercase()) {
+        let relative = normalized[base.len()..].trim_start_matches('\\');
+        if !relative.is_empty() {
+            return relative.replace('\\', "/");
+        }
+    }
+    path.to_owned()
 }
 
 fn codex_injected_user_message(envelope: &Value, payload: &Value, text: &str) -> bool {
@@ -717,6 +1137,149 @@ mod tests {
     }
 
     #[test]
+    fn codex_events_keep_commands_edits_searches_and_reasoning() {
+        let workspace = tmpdir("codex-events").canonicalize().unwrap();
+        let meta = serde_json::json!({
+            "type":"session_meta",
+            "payload":{"id":"evt-1","timestamp":"2026-10-26T02:07:00Z","cwd":workspace.to_string_lossy()}
+        });
+        let turn = serde_json::json!({
+            "type":"turn_context",
+            "payload":{"model":"gpt-6.1-sol"}
+        });
+        let response_user = serde_json::json!({
+            "type":"response_item",
+            "payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"修复日志"}]}
+        });
+        let event_user = serde_json::json!({
+            "type":"event_msg",
+            "payload":{"type":"item_completed","item":{"type":"UserMessage","id":"u1","content":[{"type":"text","text":"修复日志"}]}}
+        });
+        let event_assistant = serde_json::json!({
+            "type":"event_msg",
+            "payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"a1","content":[{"type":"Text","text":"我先定位问题"}]}}
+        });
+        let command = serde_json::json!({
+            "type":"event_msg",
+            "payload":{"type":"item_completed","item":{
+                "type":"CommandExecution","id":"c1",
+                "command":["pwsh.exe","-Command","cargo test"],
+                "cwd":workspace.to_string_lossy(),"status":"failed","exit_code":1,
+                "aggregated_output":"boom"
+            }}
+        });
+        let mut changes = serde_json::Map::new();
+        changes.insert(
+            workspace
+                .join("src")
+                .join("main.rs")
+                .to_string_lossy()
+                .to_string(),
+            serde_json::json!({"type":"update","unified_diff":"@@ -1 +1 @@\n-old\n+new"}),
+        );
+        let file_change = serde_json::json!({
+            "type":"event_msg",
+            "payload":{"type":"item_completed","item":{"type":"FileChange","id":"f1","changes":changes}}
+        });
+        let web = serde_json::json!({
+            "type":"event_msg",
+            "payload":{"type":"item_completed","item":{"type":"WebSearch","id":"w1","query":"gpui 列表"}}
+        });
+        let reasoning = serde_json::json!({
+            "type":"event_msg",
+            "payload":{"type":"item_completed","item":{"type":"Reasoning","id":"r1","summary_text":["先定位问题"]}}
+        });
+        let jsonl = [
+            meta,
+            turn,
+            response_user,
+            event_user,
+            event_assistant,
+            command,
+            file_change,
+            web,
+            reasoning,
+        ]
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+        let session = parse_codex(&jsonl, &workspace).expect("cwd matches");
+        assert_eq!(session.title, "修复日志");
+        assert_eq!(session.model.as_deref(), Some("gpt-6.1-sol"));
+        let kinds: Vec<_> = session.messages.iter().map(|m| m.kind.clone()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                ItemKind::User,
+                ItemKind::Assistant,
+                ItemKind::Tool,
+                ItemKind::Tool,
+                ItemKind::Tool,
+                ItemKind::Reasoning,
+            ]
+        );
+        assert_eq!(session.messages[1].model.as_deref(), Some("gpt-6.1-sol"));
+        let command = &session.messages[2];
+        assert_eq!(command.text, "cargo test");
+        assert_eq!(command.status, "运行失败");
+        assert!(command.input.contains("cargo test"));
+        let edit = &session.messages[3];
+        assert_eq!(edit.text, "修改文件");
+        let changes: Value = serde_json::from_str(&edit.input).unwrap();
+        assert_eq!(changes[0]["path"], "src/main.rs");
+        assert_eq!(changes[0]["diff"], "@@ -1 +1 @@\n-old\n+new");
+        assert_eq!(session.messages[4].text, "WebSearch");
+        assert!(session.messages[4].input.contains("gpui 列表"));
+        assert_eq!(session.messages[5].text, "先定位问题");
+    }
+
+    #[test]
+    fn codex_response_items_fill_gaps_when_events_are_partial() {
+        let workspace = tmpdir("codex-partial").canonicalize().unwrap();
+        let meta = serde_json::json!({
+            "type":"session_meta",
+            "payload":{"id":"partial-1","timestamp":"2026-10-23T14:29:05.122Z","cwd":workspace.to_string_lossy()}
+        });
+        let event_user = serde_json::json!({
+            "type":"event_msg",
+            "payload":{"type":"item_completed","item":{"type":"UserMessage","id":"u1","content":[{"type":"text","text":"继续"}]}}
+        });
+        let response_user = serde_json::json!({
+            "type":"response_item",
+            "payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"继续"}]}
+        });
+        let assistant = serde_json::json!({
+            "type":"response_item",
+            "payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"完成"}]}
+        });
+        let call = serde_json::json!({
+            "type":"response_item",
+            "payload":{"type":"function_call","name":"shell","arguments":"{\"cmd\":\"dir\"}"}
+        });
+        let jsonl = [meta, event_user, response_user, assistant, call]
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let session = parse_codex(&jsonl, &workspace).expect("cwd matches");
+        let texts: Vec<_> = session
+            .messages
+            .iter()
+            .map(|message| (message.kind.clone(), message.text.as_str()))
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                (ItemKind::User, "继续"),
+                (ItemKind::Assistant, "完成"),
+                (ItemKind::Tool, "shell"),
+            ]
+        );
+    }
+
+    #[test]
     fn codex_foreign_workspace_is_rejected() {
         let workspace = tmpdir("codex-other").canonicalize().unwrap();
         let meta = serde_json::json!({
@@ -790,6 +1353,7 @@ mod tests {
                 detail: String::new(),
                 status: String::new(),
                 approval: None,
+                model: None,
             }],
             interrupted: false,
         });
@@ -811,6 +1375,7 @@ mod tests {
                     detail: String::new(),
                     status: String::new(),
                     approval: None,
+                    model: None,
                 }],
             },
             ImportedSession {
@@ -828,6 +1393,7 @@ mod tests {
                     detail: String::new(),
                     status: String::new(),
                     approval: None,
+                    model: None,
                 }],
             },
         ];

@@ -43,7 +43,7 @@ use gpui_kit::{
     *,
 };
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -72,6 +72,148 @@ impl From<&SessionRecord> for SessionSummary {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum PlanStatus {
+    #[default]
+    Pending,
+    InProgress,
+    Completed,
+}
+
+impl PlanStatus {
+    fn from_wire(status: &str) -> Self {
+        match status {
+            "completed" => Self::Completed,
+            "in_progress" | "inProgress" => Self::InProgress,
+            _ => Self::Pending,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PlanStep {
+    text: String,
+    status: PlanStatus,
+}
+
+/// File churn of the latest turn, shown in the floating stats pill above the
+/// composer. Paths stay sorted so repeated edits merge into one row.
+#[derive(Clone, Debug, Default)]
+struct TurnFileStats {
+    files: BTreeMap<String, FileStat>,
+    added: usize,
+    removed: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct FileStat {
+    added: usize,
+    removed: usize,
+}
+
+/// Most recent plan emitted inside the latest user turn. Live Codex turns keep
+/// it in `ConduitApp::plans`; imported history falls back to the tool input.
+fn plan_from_messages(session: &SessionRecord) -> Vec<PlanStep> {
+    let start = session
+        .messages
+        .iter()
+        .rposition(|item| item.kind == ItemKind::User)
+        .unwrap_or(0);
+    session.messages[start..]
+        .iter()
+        .rev()
+        .filter(|item| item.kind == ItemKind::Tool)
+        .find_map(|item| plan_steps_from_input(&item.input))
+        .unwrap_or_default()
+}
+
+fn plan_steps_from_input(input: &str) -> Option<Vec<PlanStep>> {
+    let value = serde_json::from_str::<serde_json::Value>(input).ok()?;
+    let entries = value
+        .get("plan")
+        .or_else(|| value.get("todos"))?
+        .as_array()?;
+    let steps = entries
+        .iter()
+        .filter_map(|entry| {
+            let text = entry
+                .get("step")
+                .or_else(|| entry.get("content"))
+                .or_else(|| entry.get("activeForm"))
+                .and_then(serde_json::Value::as_str)?;
+            if text.trim().is_empty() {
+                return None;
+            }
+            Some(PlanStep {
+                text: text.to_string(),
+                status: PlanStatus::from_wire(
+                    entry
+                        .get("status")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("pending"),
+                ),
+            })
+        })
+        .collect::<Vec<_>>();
+    (!steps.is_empty()).then_some(steps)
+}
+
+/// Editor diffs carry absolute paths; the stats panel shows paths relative to
+/// the workspace so long drive prefixes do not crowd out the counts.
+fn workspace_relative_path(path: &str, workspace: Option<&str>) -> String {
+    // Workspaces opened through the Windows picker keep the `\\?\` verbatim
+    // prefix, while editor tools report plain drive paths.
+    let normalize = |value: &str| {
+        let value = value.replace('\\', "/");
+        match value.strip_prefix("//?/") {
+            Some(stripped) => stripped.to_string(),
+            None => value,
+        }
+    };
+    let normalized = normalize(path);
+    let Some(workspace) = workspace else {
+        return normalized;
+    };
+    let root = normalize(workspace);
+    let root = root.trim_end_matches('/');
+    if !root.is_empty()
+        && normalized
+            .get(..root.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(root))
+    {
+        let rest = normalized[root.len()..].trim_start_matches('/');
+        if !rest.is_empty() {
+            return rest.to_string();
+        }
+    }
+    normalized
+}
+
+fn turn_file_stats(session: &SessionRecord) -> TurnFileStats {
+    let start = session
+        .messages
+        .iter()
+        .rposition(|item| item.kind == ItemKind::User)
+        .unwrap_or(0);
+    let mut stats = TurnFileStats::default();
+    for item in &session.messages[start..] {
+        if item.kind != ItemKind::Tool {
+            continue;
+        }
+        let Some(diffs) = edit_tool_diffs(item) else {
+            continue;
+        };
+        for diff in diffs {
+            let file = stats.files.entry(diff.path).or_default();
+            file.added += diff.added;
+            file.removed += diff.removed;
+            stats.added += diff.added;
+            stats.removed += diff.removed;
+        }
+    }
+    stats
+}
+
 struct ActiveRun {
     runtime: ChatRuntime,
     /// Git worktree shared by this turn's files and index.
@@ -83,6 +225,8 @@ struct ActiveRun {
     /// What the engine is doing right now, shown in the chat viewport while
     /// the turn is still running (the tab keeps the shorter `status`).
     activity: String,
+    /// Model selected for this turn; `None` means the CLI default.
+    model: Option<String>,
     message_index: MessageIndex,
     /// Usage reported by the running turn, plus turn-local token accounting
     /// used to derive the streaming tokens/s figure.
@@ -93,7 +237,13 @@ struct ActiveRun {
 }
 
 impl ActiveRun {
-    fn new(runtime: ChatRuntime, worktree: PathBuf, prefix: String, usage: Usage) -> Self {
+    fn new(
+        runtime: ChatRuntime,
+        worktree: PathBuf,
+        prefix: String,
+        usage: Usage,
+        model: Option<String>,
+    ) -> Self {
         let now = Instant::now();
         Self {
             runtime,
@@ -103,6 +253,7 @@ impl ActiveRun {
             prefix,
             status: "正在连接 CLI…".into(),
             activity: "正在启动 CLI…".into(),
+            model,
             message_index: MessageIndex::default(),
             usage,
             turn_tokens_at_start: usage.total_tokens,
@@ -244,6 +395,8 @@ struct Palette {
     highlight_bg: u32,
     diff_add_text: u32,
     diff_remove_text: u32,
+    diff_add_bg: u32,
+    diff_remove_bg: u32,
     git_added_text: u32,
     git_modified_text: u32,
     git_deleted_text: u32,
@@ -281,6 +434,8 @@ static DARK_PALETTE: Palette = Palette {
     highlight_bg: 0x3a3220,
     diff_add_text: 0x9fdcab,
     diff_remove_text: 0xe6a1a1,
+    diff_add_bg: 0x18261c,
+    diff_remove_bg: 0x2b1b1a,
     git_added_text: 0x8fb8e6,
     git_modified_text: 0x9fdcab,
     git_deleted_text: 0xe6a1a1,
@@ -318,6 +473,8 @@ static LIGHT_PALETTE: Palette = Palette {
     highlight_bg: 0xfff0bf,
     diff_add_text: 0x1e6631,
     diff_remove_text: 0xa43636,
+    diff_add_bg: 0xeaf6ec,
+    diff_remove_bg: 0xfbeceb,
     git_added_text: 0x2c5f9e,
     git_modified_text: 0x1e6631,
     git_deleted_text: 0xa43636,
@@ -931,6 +1088,21 @@ fn naming_mode_label(mode: NamingMode) -> &'static str {
     }
 }
 
+/// Fit a naming failure into the toolbar's single line: first non-empty line,
+/// capped at a readable length.
+fn naming_failure_text(error: &str) -> String {
+    let line = error
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("未知错误");
+    if line.chars().count() > 120 {
+        format!("{}…", line.chars().take(120).collect::<String>())
+    } else {
+        line.to_string()
+    }
+}
+
 /// Whether a session matches the sidebar search query (title or message text).
 fn session_matches(session: &SessionRecord, query: &str) -> bool {
     if query.is_empty() {
@@ -943,35 +1115,173 @@ fn session_matches(session: &SessionRecord, query: &str) -> bool {
             .any(|message| message.text.to_lowercase().contains(query))
 }
 
+/// Tool activity collapses into one quiet "执行工具" group. File edits and
+/// approval prompts stay outside so their diff/approval UI keeps its place.
 fn contiguous_tool_group(session: &SessionRecord, index: usize) -> Option<(usize, usize)> {
-    let item = session.messages.get(index)?;
-    if item.kind != ItemKind::Tool {
+    if !is_groupable_activity(session.messages.get(index)?) {
         return None;
     }
     let mut start = index;
-    while start > 0 {
-        let previous = &session.messages[start - 1];
-        if previous.kind != ItemKind::Tool || previous.text != item.text {
-            break;
-        }
+    while start > 0 && is_groupable_activity(&session.messages[start - 1]) {
         start -= 1;
     }
     let mut end = index + 1;
-    while end < session.messages.len() {
-        let next = &session.messages[end];
-        if next.kind != ItemKind::Tool || next.text != item.text {
-            break;
-        }
+    while end < session.messages.len() && is_groupable_activity(&session.messages[end]) {
         end += 1;
     }
-    if end - start < 2
-        || session.messages[start..end].iter().any(|item| {
-            item.approval.is_some() || matches!(item.status.as_str(), "运行中" | "输出中")
-        })
-    {
+    if end - start < 2 {
         return None;
     }
     Some((start, end))
+}
+
+fn is_groupable_activity(item: &ChatItem) -> bool {
+    match item.kind {
+        ItemKind::Tool => item.approval.is_none() && !is_tool_edit(item),
+        ItemKind::Reasoning => !item.text.trim().is_empty(),
+        _ => false,
+    }
+}
+
+fn is_tool_edit(item: &ChatItem) -> bool {
+    matches!(
+        item.text.trim(),
+        "修改文件" | "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "apply_patch"
+    )
+}
+
+fn is_tool_command(item: &ChatItem) -> bool {
+    if matches!(
+        item.text.trim(),
+        "Bash" | "BashOutput" | "exec_command" | "shell" | "shell_command" | "命令输出"
+    ) {
+        return true;
+    }
+    serde_json::from_str::<serde_json::Value>(&item.input)
+        .ok()
+        .is_some_and(|value| {
+            value.get("command").is_some()
+                && value.get("server").is_none()
+                && value.get("tool").is_none()
+        })
+}
+
+fn tool_running(item: &ChatItem) -> bool {
+    let status = item.status.trim();
+    matches!(status, "运行中" | "输出中")
+        || status.eq_ignore_ascii_case("pending")
+        || status.eq_ignore_ascii_case("in_progress")
+}
+
+fn tool_failed(item: &ChatItem) -> bool {
+    if item
+        .approval
+        .as_ref()
+        .is_some_and(|approval| matches!(approval.status.as_str(), "已拒绝" | "已中断"))
+    {
+        return true;
+    }
+    let status = item.status.trim();
+    status.contains("失败")
+        || status.contains("错误")
+        || matches!(status, "已中断" | "已拒绝")
+        || status.eq_ignore_ascii_case("failed")
+        || status.eq_ignore_ascii_case("error")
+        || status.eq_ignore_ascii_case("aborted")
+        || serde_json::from_str::<serde_json::Value>(&item.detail)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("exitCode")
+                    .or_else(|| value.get("exit_code"))
+                    .and_then(serde_json::Value::as_i64)
+            })
+            .is_some_and(|code| code != 0)
+}
+
+/// Human category shown before the one-line summary, mirroring Codex's
+/// activity rows (terminal command, workspace search, reasoning, ...).
+fn tool_category(item: &ChatItem) -> String {
+    if item.kind == ItemKind::Reasoning {
+        return "已思考".into();
+    }
+    let title = item.text.trim();
+    if is_tool_edit(item) {
+        return "修改代码".into();
+    }
+    if is_tool_command(item) {
+        return "终端命令".into();
+    }
+    let lowered = title.to_lowercase();
+    match lowered.as_str() {
+        "websearch" | "web_search" | "web search" | "search" => "网络搜索".into(),
+        "read" | "read_file" | "readfile" | "view" => "读取文件".into(),
+        "grep" | "glob" | "ls" | "list" => "检索工作区".into(),
+        "task" | "agent" => "子任务".into(),
+        "todowrite" | "todo_write" => "规划任务".into(),
+        "" => "工具调用".into(),
+        _ if lowered.contains("search") || lowered.contains("grep") => "检索工作区".into(),
+        _ if lowered.contains("read") => "读取文件".into(),
+        _ => title.to_string(),
+    }
+}
+
+fn first_line(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn tool_summary(item: &ChatItem) -> String {
+    if item.kind == ItemKind::Reasoning {
+        return first_line(&item.text);
+    }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&item.input) {
+        for key in [
+            "command",
+            "query",
+            "pattern",
+            "path",
+            "file_path",
+            "prompt",
+            "description",
+            "cmd",
+        ] {
+            let Some(argument) = value.get(key) else {
+                continue;
+            };
+            let text = match argument {
+                serde_json::Value::String(text) => first_line(text),
+                serde_json::Value::Array(parts) => parts
+                    .iter()
+                    .rev()
+                    .find_map(serde_json::Value::as_str)
+                    .map(first_line)
+                    .unwrap_or_default(),
+                _ => String::new(),
+            };
+            if !text.is_empty() {
+                return text;
+            }
+        }
+        if let Some(arguments) = value.get("arguments") {
+            for key in ["query", "code", "path", "pattern"] {
+                if let Some(text) = arguments.get(key).and_then(serde_json::Value::as_str) {
+                    let text = first_line(text);
+                    if !text.is_empty() {
+                        return text;
+                    }
+                }
+            }
+        }
+    }
+    let title = first_line(&item.text);
+    if !title.is_empty() && !is_tool_edit(item) {
+        return title;
+    }
+    first_line(&item.detail)
 }
 
 struct MessageOutlineEntry {
@@ -1104,6 +1414,380 @@ fn format_tool_text(text: &str) -> String {
     plain
 }
 
+/// Chat tools that rewrite files carry either a unified patch (Codex) or an
+/// old/new pair (Claude). Parse both into a small, bounded line model so the
+/// expanded card can show a red/green diff instead of raw JSON.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditLineKind {
+    Add,
+    Remove,
+    Context,
+    Hunk,
+}
+
+#[derive(Clone)]
+struct EditLine {
+    kind: EditLineKind,
+    text: String,
+}
+
+#[derive(Clone)]
+struct EditFileDiff {
+    path: String,
+    note: String,
+    lines: Vec<EditLine>,
+    added: usize,
+    removed: usize,
+    truncated: bool,
+}
+
+const MAX_EDIT_DIFF_LINES: usize = 400;
+
+impl EditFileDiff {
+    fn new(path: String, note: String, mut lines: Vec<EditLine>) -> Self {
+        let truncated = lines.len() > MAX_EDIT_DIFF_LINES;
+        lines.truncate(MAX_EDIT_DIFF_LINES);
+        let added = lines
+            .iter()
+            .filter(|line| line.kind == EditLineKind::Add)
+            .count();
+        let removed = lines
+            .iter()
+            .filter(|line| line.kind == EditLineKind::Remove)
+            .count();
+        Self {
+            path,
+            note,
+            lines,
+            added,
+            removed,
+            truncated,
+        }
+    }
+}
+
+fn json_path(value: &serde_json::Value) -> Option<String> {
+    ["file_path", "filePath", "path", "notebook_path"]
+        .iter()
+        .find_map(|key| value.get(*key).and_then(|value| value.as_str()))
+        .map(str::to_string)
+}
+
+fn edit_line(kind: EditLineKind, text: &str) -> EditLine {
+    EditLine {
+        kind,
+        text: text.to_string(),
+    }
+}
+
+fn parse_unified_patch(patch: &str) -> Vec<EditLine> {
+    let mut lines = Vec::new();
+    for raw in patch.lines() {
+        if raw.starts_with("diff --git")
+            || raw.starts_with("index ")
+            || raw.starts_with("new file mode")
+            || raw.starts_with("deleted file mode")
+            || raw.starts_with("similarity index")
+            || raw.starts_with("rename ")
+            || raw.starts_with("--- ")
+            || raw.starts_with("+++ ")
+        {
+            continue;
+        }
+        let line = if raw.starts_with("@@") {
+            edit_line(EditLineKind::Hunk, raw)
+        } else if let Some(text) = raw.strip_prefix('+') {
+            edit_line(EditLineKind::Add, text)
+        } else if let Some(text) = raw.strip_prefix('-') {
+            edit_line(EditLineKind::Remove, text)
+        } else if raw.starts_with('\\') {
+            continue;
+        } else {
+            edit_line(EditLineKind::Context, raw.strip_prefix(' ').unwrap_or(raw))
+        };
+        lines.push(line);
+        if lines.len() > MAX_EDIT_DIFF_LINES {
+            break;
+        }
+    }
+    lines
+}
+
+fn codex_change_note(kind: &serde_json::Value) -> String {
+    let name = kind.as_str().map(str::to_string).or_else(|| {
+        kind.get("type")
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+    });
+    match name.as_deref() {
+        Some("add") | Some("added") | Some("create") => "新增".into(),
+        Some("delete") | Some("deleted") | Some("remove") => "删除".into(),
+        Some("update") | Some("modified") | Some("edit") => "更新".into(),
+        _ => String::new(),
+    }
+}
+
+fn codex_edit_diffs(input: &str, detail: &str) -> Option<Vec<EditFileDiff>> {
+    // `item/started` can carry an empty changes array before the patch is
+    // applied; prefer whichever payload actually has changes.
+    let changes = |text: &str| {
+        serde_json::from_str::<serde_json::Value>(text)
+            .ok()
+            .and_then(|value| value.as_array().cloned())
+            .filter(|changes| !changes.is_empty())
+    };
+    let changes = changes(input).or_else(|| changes(detail))?;
+    let mut files = Vec::new();
+    for change in changes.iter().take(8) {
+        let path = json_path(change).unwrap_or_else(|| "未知文件".into());
+        let note = codex_change_note(&change["kind"]);
+        let mut lines = parse_unified_patch(
+            change
+                .get("diff")
+                .and_then(|value| value.as_str())
+                .unwrap_or(""),
+        );
+        if lines.is_empty()
+            && let Some(content) = change.get("content").and_then(|value| value.as_str())
+        {
+            lines.extend(
+                content
+                    .lines()
+                    .map(|line| edit_line(EditLineKind::Add, line)),
+            );
+        }
+        if lines.is_empty() {
+            continue;
+        }
+        files.push(EditFileDiff::new(path, note, lines));
+    }
+    (!files.is_empty()).then_some(files)
+}
+
+fn claude_edit_diffs(title: &str, input: &str) -> Option<Vec<EditFileDiff>> {
+    let value: serde_json::Value = serde_json::from_str(input).ok()?;
+    let path = json_path(&value).unwrap_or_else(|| "未知文件".into());
+    let mut lines = Vec::new();
+    let mut note = String::new();
+    match title {
+        "Write" => {
+            let content = value.get("content").and_then(|value| value.as_str())?;
+            lines.extend(
+                content
+                    .lines()
+                    .map(|line| edit_line(EditLineKind::Add, line)),
+            );
+            note = "写入".into();
+        }
+        "MultiEdit" => {
+            let edits = value.get("edits").and_then(|value| value.as_array())?;
+            for (index, edit) in edits.iter().enumerate().take(20) {
+                lines.push(edit_line(
+                    EditLineKind::Hunk,
+                    &format!("@@ 修改 {} @@", index + 1),
+                ));
+                for line in edit
+                    .get("old_string")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .lines()
+                {
+                    lines.push(edit_line(EditLineKind::Remove, line));
+                }
+                for line in edit
+                    .get("new_string")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .lines()
+                {
+                    lines.push(edit_line(EditLineKind::Add, line));
+                }
+            }
+            note = format!("{} 处修改", edits.len());
+        }
+        _ => {
+            let old = value.get("old_string").and_then(|value| value.as_str())?;
+            let new = value
+                .get("new_string")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            if value
+                .get("replace_all")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+            {
+                note = "全部替换".into();
+            }
+            lines.push(edit_line(EditLineKind::Hunk, "@@ 修改 @@"));
+            lines.extend(
+                old.lines()
+                    .map(|line| edit_line(EditLineKind::Remove, line)),
+            );
+            lines.extend(new.lines().map(|line| edit_line(EditLineKind::Add, line)));
+        }
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    Some(vec![EditFileDiff::new(path, note, lines)])
+}
+
+fn edit_tool_diffs(item: &ChatItem) -> Option<Vec<EditFileDiff>> {
+    match item.text.trim() {
+        "修改文件" => codex_edit_diffs(&item.input, &item.detail),
+        "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => {
+            claude_edit_diffs(item.text.trim(), &item.input)
+        }
+        _ => None,
+    }
+}
+
+fn edit_diff_line(line: &EditLine, typography: &ChatTypography) -> AnyElement {
+    let (background, color, marker) = match line.kind {
+        EditLineKind::Add => (Some(palette().diff_add_bg), palette().diff_add_text, "+"),
+        EditLineKind::Remove => (
+            Some(palette().diff_remove_bg),
+            palette().diff_remove_text,
+            "-",
+        ),
+        EditLineKind::Hunk => (None, palette().warning_text, ""),
+        EditLineKind::Context => (None, palette().muted, ""),
+    };
+    h_flex()
+        .w_full()
+        .min_w_0()
+        .when(line.kind == EditLineKind::Hunk, |row| {
+            row.bg(rgb(palette().surface_strong)).py(px(1.))
+        })
+        .when_some(background, |row, background| row.bg(rgb(background)))
+        .font_family(typography.code_font.clone())
+        .text_size(px(typography.code_size))
+        .line_height(relative(1.45))
+        .child(
+            div()
+                .w(px(22.))
+                .flex_shrink_0()
+                .pr_1()
+                .text_right()
+                .text_color(rgb(palette().faint))
+                .child(marker),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_color(rgb(color))
+                .child(line.text.clone()),
+        )
+        .into_any_element()
+}
+
+fn edit_diff_content(
+    tool_id: &str,
+    item: &ChatItem,
+    scroll: &ScrollHandle,
+    typography: &ChatTypography,
+) -> (AnyElement, String) {
+    let input = format_tool_text(&item.input);
+    let output = format_tool_text(&item.detail);
+    let copy_text = format!("输入\n{input}\n\n输出 / 结果\n{output}");
+    let Some(files) = edit_tool_diffs(item) else {
+        return tool_content(tool_id, item, scroll, typography);
+    };
+    let mut content = v_flex().w_full().min_w_0().flex_shrink_0().p_3().gap_3();
+    for file in files {
+        let mut rows = v_flex().w_full().min_w_0();
+        for line in &file.lines {
+            rows = rows.child(edit_diff_line(line, typography));
+        }
+        let mut header = h_flex()
+            .w_full()
+            .min_w_0()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .bg(rgb(palette().surface_strong))
+            .child(
+                Icon::new(FullIconName::File)
+                    .size(px(13.))
+                    .text_color(rgb(palette().faint)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(typography.code_font.clone())
+                    .text_size(px(11.))
+                    .text_color(rgb(palette().text))
+                    .child(file.path.clone()),
+            );
+        if !file.note.is_empty() {
+            header = header.child(
+                div()
+                    .flex_shrink_0()
+                    .px_1()
+                    .rounded(px(4.))
+                    .bg(rgb(palette().surface))
+                    .text_size(px(9.))
+                    .text_color(rgb(palette().faint))
+                    .child(file.note.clone()),
+            );
+        }
+        if file.truncated {
+            header = header.child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(9.))
+                    .text_color(rgb(palette().warning_text))
+                    .child("已截断"),
+            );
+        }
+        header = header
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(10.))
+                    .text_color(rgb(palette().diff_add_text))
+                    .child(format!("+{}", file.added)),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(10.))
+                    .text_color(rgb(palette().diff_remove_text))
+                    .child(format!("-{}", file.removed)),
+            );
+        content = content.child(
+            v_flex()
+                .w_full()
+                .min_w_0()
+                .overflow_hidden()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(rgb(palette().border))
+                .child(header)
+                .child(rows),
+        );
+    }
+    let viewport = div()
+        .id(SharedString::from(format!("{tool_id}-diff-content")))
+        .max_h(px(320.))
+        .min_h_0()
+        .flex_shrink_0()
+        .w_full()
+        .min_w_0()
+        .overflow_y_scroll()
+        .track_scroll(scroll)
+        .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+        .relative()
+        .child(content)
+        .vertical_scrollbar(scroll)
+        .into_any_element();
+    (viewport, copy_text)
+}
+
 /// Use a block viewport around natural-height flex content. Constraining the
 /// flex column itself lets its text children shrink and erases scroll overflow.
 fn tool_content(
@@ -1175,6 +1859,89 @@ fn tool_content(
         .vertical_scrollbar(scroll)
         .into_any_element();
     (viewport, copy_text)
+}
+
+/// Shared expanded body for tool cards and compact activity rows.
+fn tool_detail_panel(
+    tool_id: &str,
+    item: &ChatItem,
+    scroll: &ScrollHandle,
+    typography: &ChatTypography,
+    cx: &mut Context<ConduitApp>,
+) -> AnyElement {
+    let dock_key = item.key.clone();
+    let edit = is_tool_edit(item);
+    let (content, copy_text) = if edit {
+        edit_diff_content(tool_id, item, scroll, typography)
+    } else {
+        tool_content(tool_id, item, scroll, typography)
+    };
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .overflow_hidden()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(rgb(palette().border))
+        .bg(rgb(palette().surface))
+        .child(
+            h_flex()
+                .px_3()
+                .pt_1()
+                .items_center()
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(10.))
+                        .text_color(rgb(palette().faint))
+                        .child(if edit {
+                            "代码变更"
+                        } else {
+                            "工具调用内容"
+                        }),
+                )
+                .child(
+                    Button::new(SharedString::from(format!("{tool_id}-dock")))
+                        .ghost()
+                        .small()
+                        .compact()
+                        .icon(gpui_kit::assets::IconName::PanelRight)
+                        .tooltip("在右侧查看工具详情")
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.details = true;
+                            this.detail_view = DetailView::Tool;
+                            this.detail_text = Some(dock_key.clone());
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new(SharedString::from(format!("{tool_id}-copy")))
+                        .ghost()
+                        .small()
+                        .compact()
+                        .icon(gpui_kit::assets::IconName::Copy)
+                        .tooltip("复制输入与输出")
+                        .cursor_pointer()
+                        .on_click(move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()))
+                        }),
+                ),
+        )
+        .child(content)
+        .into_any_element()
+}
+
+fn activity_container(content: AnyElement, grouped: bool) -> AnyElement {
+    let mut wrapper = v_flex().w_full().min_w_0().pb(px(2.));
+    if grouped {
+        wrapper = wrapper
+            .ml(px(8.))
+            .pl(px(10.))
+            .border_l_1()
+            .border_color(rgb(palette().border));
+    }
+    wrapper.child(content).into_any_element()
 }
 
 struct SearchHit {
@@ -1996,6 +2763,9 @@ pub struct ConduitApp {
     commit_generation: Option<CommitGeneration>,
     /// In-flight session naming requests, keyed by session id.
     session_namings: HashMap<u64, SessionNaming>,
+    /// Last automatic naming failure per session; cleared on the next attempt
+    /// and shown in the conversation toolbar until then.
+    naming_errors: HashMap<u64, String>,
     git_operation: Option<GitOperation>,
     git_feedback: HashMap<PathBuf, GitFeedback>,
     /// Git sidebar groups the user collapsed; empty means all expanded.
@@ -2032,6 +2802,12 @@ pub struct ConduitApp {
     /// Consecutive tool groups are collapsed by default to keep long runs scannable.
     expanded_tool_groups: HashSet<(u64, String)>,
     expanded_reasoning: HashSet<(u64, String)>,
+    /// Live plan reported by the current turn, keyed by session.
+    plans: HashMap<u64, Vec<PlanStep>>,
+    /// Whether the floating turn summary expands into its step/file details.
+    stats_details: bool,
+    /// Last per-second repaint while a turn is active, for elapsed labels.
+    last_live_tick: Instant,
     tool_scrolls: HashMap<(u64, String), ScrollHandle>,
     message_focus: Option<(u64, String, Instant)>,
     pending_message_jump: bool,
@@ -2350,6 +3126,7 @@ impl ConduitApp {
             commit_drafts: HashMap::new(),
             commit_generation: None,
             session_namings: HashMap::new(),
+            naming_errors: HashMap::new(),
             git_operation: None,
             git_feedback: HashMap::new(),
             collapsed_git_groups: HashSet::new(),
@@ -2382,6 +3159,9 @@ impl ConduitApp {
             expanded_tools: HashSet::new(),
             expanded_tool_groups: HashSet::new(),
             expanded_reasoning: HashSet::new(),
+            plans: HashMap::new(),
+            stats_details: false,
+            last_live_tick: Instant::now(),
             tool_scrolls: HashMap::new(),
             message_focus: None,
             pending_message_jump: false,
@@ -2552,6 +3332,7 @@ impl ConduitApp {
         if let Some(naming) = self.session_namings.remove(&id) {
             naming.runtime.cancel();
         }
+        self.naming_errors.remove(&id);
         if let Some(session) = self.session_mut(id) {
             session.title = title.chars().take(80).collect();
         }
@@ -4486,6 +5267,7 @@ impl ConduitApp {
                 detail: String::new(),
                 status: String::new(),
                 approval: None,
+                model: None,
             });
         }
         session.interrupted = true;
@@ -4508,14 +5290,21 @@ impl ConduitApp {
         let naming_snippet = (self.store.ui.naming_mode == NamingMode::FirstMessage && first_turn)
             .then(|| prompt.clone());
         let runtime = ChatRuntime::start(
-            provider, executable, cwd, prompt, native_id, model, permission,
+            provider,
+            executable,
+            cwd,
+            prompt,
+            native_id,
+            model.clone(),
+            permission,
         );
         let usage = self
             .session(id)
             .map(|session| session.usage)
             .unwrap_or_default();
+        self.plans.remove(&id);
         self.runs
-            .insert(id, ActiveRun::new(runtime, worktree, prefix, usage));
+            .insert(id, ActiveRun::new(runtime, worktree, prefix, usage, model));
         if append_user {
             self.input
                 .update(cx, |input, cx| input.set_value("", window, cx));
@@ -4524,7 +5313,7 @@ impl ConduitApp {
         self.input.read(cx).focus_handle(cx).focus(window, cx);
         self.message = None;
         if let Some(snippet) = naming_snippet {
-            self.start_session_naming(id, &snippet);
+            self.start_session_naming(id, &snippet, cx);
         }
         self.scroll_to_end();
         cx.notify();
@@ -4621,10 +5410,11 @@ impl ConduitApp {
     }
     /// Ask the naming engine (settings → 会话) for a short title in the
     /// background; failures are silent and simply keep the current title.
-    fn start_session_naming(&mut self, id: u64, content: &str) {
+    fn start_session_naming(&mut self, id: u64, content: &str, cx: &mut Context<Self>) {
         if self.session_namings.contains_key(&id) {
             return;
         }
+        self.naming_errors.remove(&id);
         let provider = self
             .store
             .ui
@@ -4639,7 +5429,12 @@ impl ConduitApp {
             .or_else(|| self.session(id).and_then(|session| session.model.clone()));
         let executable = match cli::resolve(provider, &self.store.cli) {
             Ok(cli) => cli.path,
-            Err(_) => return,
+            Err(error) => {
+                self.naming_errors
+                    .insert(id, format!("无法启动命名引擎：{error:#}"));
+                cx.notify();
+                return;
+            }
         };
         let snippet: String = content.chars().take(1200).collect();
         let naming_prompt = format!(
@@ -4667,7 +5462,7 @@ impl ConduitApp {
         if let Some(naming) = self.session_namings.remove(&id) {
             naming.runtime.cancel();
         }
-        self.start_session_naming(id, &excerpt);
+        self.start_session_naming(id, &excerpt, cx);
         cx.notify();
     }
     /// Daily session counts across every workspace for the last `weeks * 7`
@@ -4819,64 +5614,318 @@ impl ConduitApp {
         .detach();
     }
 
-    fn render_collapsed_tool_group(
+    /// Floating summary above the composer: plan progress and the file churn
+    /// of the latest turn. Clicking it reveals the step and file details.
+    fn turn_stats_pill(&self, session_id: u64, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let session = self.session(session_id)?;
+        let plan = self
+            .plans
+            .get(&session_id)
+            .cloned()
+            .filter(|steps| !steps.is_empty())
+            .unwrap_or_else(|| plan_from_messages(session));
+        let stats = turn_file_stats(session);
+        if plan.is_empty() && stats.files.is_empty() {
+            return None;
+        }
+        let completed = plan
+            .iter()
+            .filter(|step| step.status == PlanStatus::Completed)
+            .count();
+        let total = plan.len();
+        let files = stats.files.len();
+        let open = self.stats_details;
+        let mut pill = h_flex()
+            .id("turn-stats")
+            .h(px(30.))
+            .px_3()
+            .gap_2()
+            .items_center()
+            .rounded_full()
+            .border_1()
+            .border_color(rgb(palette().border))
+            .bg(rgb(palette().surface))
+            .shadow_sm()
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(palette().surface_hover)))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.stats_details = !this.stats_details;
+                cx.notify();
+            }))
+            .child(
+                Icon::new(if open {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronLeft
+                })
+                .size(px(13.))
+                .text_color(rgb(palette().faint)),
+            );
+        if total > 0 {
+            pill = pill.child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(palette().muted))
+                    .child(format!("步骤 {completed} / {total}")),
+            );
+        }
+        if total > 0 && files > 0 {
+            pill = pill.child(
+                div()
+                    .text_size(px(10.))
+                    .text_color(rgb(palette().faint))
+                    .child("·"),
+            );
+        }
+        if files > 0 {
+            pill = pill
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(palette().muted))
+                        .child(format!("{files} 个文件已修改")),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(palette().diff_add_text))
+                        .child(format!("+{}", stats.added)),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(palette().diff_remove_text))
+                        .child(format!("-{}", stats.removed)),
+                );
+        }
+        let root = self
+            .store
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.sessions.iter().any(|item| item.id == session_id))
+            .map(|workspace| workspace.path.to_string_lossy().into_owned());
+        let live = self.runs.contains_key(&session_id);
+        let mut column = v_flex().w_full().items_center().pb(px(8.));
+        if open {
+            column = column
+                .child(self.turn_stats_details(&plan, &stats, root.as_deref(), live))
+                .child(div().h(px(8.)));
+        }
+        Some(column.child(pill).into_any_element())
+    }
+
+    fn turn_stats_details(
+        &self,
+        plan: &[PlanStep],
+        stats: &TurnFileStats,
+        root: Option<&str>,
+        live: bool,
+    ) -> AnyElement {
+        let mut rows = v_flex()
+            .id("turn-stats-details")
+            .w_full()
+            .min_w_0()
+            .when(!self.store.ui.full_width_content, |rows| {
+                rows.max_w(px(840.)).mx_auto()
+            })
+            .max_h(px(240.))
+            .overflow_y_scroll()
+            .p_3()
+            .gap_1()
+            .rounded(px(12.))
+            .border_1()
+            .border_color(rgb(palette().border))
+            .bg(rgb(palette().surface))
+            .shadow_sm();
+        for step in plan {
+            let icon = match step.status {
+                PlanStatus::Completed => Icon::new(IconName::CircleCheck)
+                    .size(px(13.))
+                    .text_color(rgb(palette().diff_add_text))
+                    .into_any_element(),
+                PlanStatus::InProgress if live => Spinner::new()
+                    .small()
+                    .color(rgb(palette().muted).into())
+                    .into_any_element(),
+                PlanStatus::InProgress => Icon::new(FullIconName::CircleDot)
+                    .size(px(13.))
+                    .text_color(rgb(palette().warning_text))
+                    .into_any_element(),
+                PlanStatus::Pending => Icon::new(FullIconName::CircleDashed)
+                    .size(px(13.))
+                    .text_color(rgb(palette().faint))
+                    .into_any_element(),
+            };
+            rows = rows.child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .items_center()
+                    .gap_2()
+                    .child(icon)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(12.))
+                            .text_color(rgb(match step.status {
+                                PlanStatus::Completed => palette().faint,
+                                PlanStatus::InProgress => palette().text,
+                                PlanStatus::Pending => palette().muted,
+                            }))
+                            .child(step.text.clone()),
+                    ),
+            );
+        }
+        if !plan.is_empty() && !stats.files.is_empty() {
+            rows = rows.child(div().w_full().h(px(1.)).my_1().bg(rgb(palette().border)));
+        }
+        for (path, stat) in &stats.files {
+            rows = rows.child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Icon::new(IconName::File)
+                            .size(px(12.))
+                            .text_color(rgb(palette().faint)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette().muted))
+                            .child(workspace_relative_path(path, root)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette().diff_add_text))
+                            .child(format!("+{}", stat.added)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette().diff_remove_text))
+                            .child(format!("-{}", stat.removed)),
+                    ),
+            );
+        }
+        rows.into_any_element()
+    }
+
+    fn tool_group_header(
         &self,
         session_id: u64,
         start: usize,
         end: usize,
         group_key: String,
-        title: &str,
-        status: &str,
+        expanded: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let count = end - start;
+        let (failures, running) = self
+            .session(session_id)
+            .map(|session| {
+                let items = &session.messages[start..end.min(session.messages.len())];
+                (
+                    items.iter().filter(|item| tool_failed(item)).count(),
+                    items.iter().any(tool_running),
+                )
+            })
+            .unwrap_or((0, false));
+        let elapsed = self
+            .runs
+            .get(&session_id)
+            .map(|run| run.turn_started.elapsed().as_secs())
+            .unwrap_or(0);
+        let label = if running {
+            format!("正在执行中 · {elapsed}s")
+        } else if failures > 0 {
+            format!("执行工具 {count} 次，其中 {failures} 次失败")
+        } else {
+            format!("执行工具 {count} 次")
+        };
         let toggle_key = group_key.clone();
-        let toggle = Button::new(SharedString::from(format!(
+        Button::new(SharedString::from(format!(
             "tool-group-{session_id}-{start}"
         )))
         .ghost()
         .w_full()
-        .h(px(36.))
-        .px_3()
-        .cursor_pointer()
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.expanded_tool_groups
-                .insert((session_id, toggle_key.clone()));
-            this.scroll.remeasure_items(start..end);
-            cx.notify();
-        }))
+        .h(px(30.))
+        .px(px(0.))
+        .rounded(px(6.))
+        .when(!running, |button| button.cursor_pointer())
+        .accessibility_label(format!(
+            "{}：{label}",
+            if expanded { "收起" } else { "展开" }
+        ))
+        .when(!running, |button| {
+            button.on_click(cx.listener(move |this, _, _, cx| {
+                let key = (session_id, toggle_key.clone());
+                if !this.expanded_tool_groups.remove(&key) {
+                    this.expanded_tool_groups.insert(key);
+                }
+                this.scroll.remeasure_items(start..end);
+                cx.notify();
+            }))
+        })
         .child(
             h_flex()
                 .w_full()
                 .items_center()
                 .gap_2()
                 .child(
+                    h_flex()
+                        .w(px(18.))
+                        .h(px(18.))
+                        .flex_shrink_0()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(5.))
+                        .border_1()
+                        .border_color(rgb(palette().border))
+                        .child(
+                            Icon::new(if expanded || running {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .small()
+                            .text_color(rgb(palette().faint)),
+                        ),
+                )
+                .child(
                     div()
                         .flex_1()
                         .min_w_0()
                         .text_left()
-                        .text_size(px(13.))
+                        .text_size(px(12.))
+                        .text_color(rgb(palette().muted))
                         .truncate()
-                        .child(format!("执行了 {title} × {count}")),
-                )
-                .when(!status.is_empty(), |row| {
-                    row.child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(rgb(palette().faint))
-                            .child(status.to_string()),
-                    )
-                })
-                .child(
-                    Icon::new(IconName::ChevronRight)
-                        .small()
-                        .text_color(rgb(palette().faint)),
+                        .child(label),
                 ),
-        );
+        )
+        .into_any_element()
+    }
+
+    fn render_collapsed_tool_group(
+        &self,
+        session_id: u64,
+        start: usize,
+        end: usize,
+        group_key: String,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         div()
             .w_full()
             .px_6()
-            .pb_5()
+            .pb_2()
             .child(
                 div()
                     .id(SharedString::from(format!(
@@ -4884,16 +5933,143 @@ impl ConduitApp {
                     )))
                     .w_full()
                     .min_w_0()
-                    .when(!self.store.ui.full_width_content, |card| {
-                        card.max_w(px(840.)).mx_auto()
+                    .when(!self.store.ui.full_width_content, |row| {
+                        row.max_w(px(840.)).mx_auto()
                     })
-                    .rounded(px(10.))
-                    .border_1()
-                    .border_color(rgb(palette().border))
-                    .bg(rgb(palette().surface))
-                    .child(toggle),
+                    .child(self.tool_group_header(session_id, start, end, group_key, false, cx)),
             )
             .into_any_element()
+    }
+
+    /// One-line activity row used for tool calls and reasoning, matching the
+    /// compact rows inside "执行工具" groups.
+    fn activity_row(
+        &self,
+        session_id: u64,
+        index: usize,
+        item: &ChatItem,
+        indented: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let reasoning = item.kind == ItemKind::Reasoning;
+        let detail_key = (session_id, item.key.clone());
+        let expanded = if reasoning {
+            self.expanded_reasoning.contains(&detail_key)
+        } else {
+            self.expanded_tools.contains(&detail_key)
+        };
+        let running = tool_running(item);
+        let failed = !running && tool_failed(item);
+        let category = if running && reasoning {
+            "思考中".to_string()
+        } else {
+            tool_category(item)
+        };
+        let summary = tool_summary(item);
+        let toggle_key = detail_key.clone();
+        Button::new(SharedString::from(format!(
+            "activity-{session_id}-{}",
+            item.key
+        )))
+        .ghost()
+        .w_full()
+        .h(px(28.))
+        .px(if indented { px(8.) } else { px(0.) })
+        .rounded(px(6.))
+        .cursor_pointer()
+        .accessibility_label(format!(
+            "{}{}",
+            if expanded { "收起" } else { "展开" },
+            category
+        ))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.scroll.remeasure_items(index..index + 1);
+            if reasoning {
+                if !this.expanded_reasoning.remove(&toggle_key) {
+                    this.expanded_reasoning.insert(toggle_key.clone());
+                }
+            } else if !this.expanded_tools.remove(&toggle_key) {
+                this.expanded_tools.insert(toggle_key.clone());
+            }
+            cx.notify();
+        }))
+        .child(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .gap_2()
+                .child(if running {
+                    Spinner::new()
+                        .small()
+                        .color(rgb(palette().muted).into())
+                        .into_any_element()
+                } else if failed {
+                    Icon::new(IconName::CircleX)
+                        .size(px(13.))
+                        .text_color(rgb(palette().danger_text))
+                        .into_any_element()
+                } else {
+                    Icon::new(IconName::CircleCheck)
+                        .size(px(13.))
+                        .text_color(rgb(palette().diff_add_text))
+                        .into_any_element()
+                })
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_size(px(12.))
+                        .text_color(rgb(palette().text))
+                        .child(category),
+                )
+                .when(running && !reasoning, |row| {
+                    row.child(
+                        h_flex()
+                            .flex_shrink_0()
+                            .items_center()
+                            .gap(px(3.))
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(palette().faint))
+                                    .child("已运行"),
+                            )
+                            .child(
+                                Icon::new(FullIconName::Clock3)
+                                    .size(px(11.))
+                                    .text_color(rgb(palette().faint)),
+                            ),
+                    )
+                })
+                .when(failed, |row| {
+                    row.child(
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette().danger_text))
+                            .child("运行失败"),
+                    )
+                })
+                .when(!summary.is_empty(), |row| {
+                    row.child(
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette().faint))
+                            .child("·"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette().muted))
+                            .child(summary),
+                    )
+                }),
+        )
+        .into_any_element()
     }
 
     fn render_message(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -4917,26 +6093,22 @@ impl ConduitApp {
             self.expanded_tool_groups
                 .contains(&(session_id, session.messages[start].key.clone()))
         });
+        // A live group stays open so its running rows are visible; once the
+        // turn ends it collapses back unless the user pinned it.
+        let tool_group_running = tool_group
+            .is_some_and(|(start, end)| session.messages[start..end].iter().any(tool_running));
         if let Some((start, end)) = tool_group
             && !tool_group_expanded
+            && !tool_group_running
         {
             if index != start {
                 return div().h(px(0.)).into_any_element();
             }
-            let title = session.messages[start].text.clone();
-            let status = session.messages[start..end]
-                .iter()
-                .rev()
-                .find(|item| !item.status.is_empty())
-                .map(|item| item.status.clone())
-                .unwrap_or_default();
             return self.render_collapsed_tool_group(
                 session_id,
                 start,
                 end,
                 session.messages[start].key.clone(),
-                &title,
-                &status,
                 cx,
             );
         }
@@ -5112,6 +6284,19 @@ impl ConduitApp {
             }
             ItemKind::Assistant => {
                 let copy_text = item.text.clone();
+                let catalog = self.catalogs.get(&provider);
+                let model_id = item
+                    .model
+                    .as_deref()
+                    .or(session.model.as_deref())
+                    .or_else(|| catalog.and_then(|catalog| catalog.current.as_deref()));
+                let model_label = model_id
+                    .map(|id| {
+                        catalog
+                            .map(|catalog| catalog.label(id))
+                            .unwrap_or_else(|| id.into())
+                    })
+                    .unwrap_or_else(|| "CLI 默认模型".into());
                 let copy_id = SharedString::from(format!("reply-copy-{}-{}", session_id, item.key));
                 let copied = self.copied_action.as_ref() == Some(&copy_id);
                 let copy_icon = if copied {
@@ -5182,6 +6367,28 @@ impl ConduitApp {
                                             .text_size(px(11.))
                                             .text_color(rgb(palette().muted))
                                             .child(provider.label()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(10.))
+                                            .text_color(rgb(palette().faint))
+                                            .child("·"),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .child(
+                                                model_mark(provider, model_id)
+                                                    .size(px(11.))
+                                                    .text_color(rgb(palette().faint)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(10.))
+                                                    .text_color(rgb(palette().faint))
+                                                    .child(model_label),
+                                            ),
                                     ),
                             )
                             .child(chat_markdown_view(
@@ -5198,64 +6405,77 @@ impl ConduitApp {
             ItemKind::Reasoning => {
                 let detail_key = (session_id, item.key.clone());
                 let expanded = self.expanded_reasoning.contains(&detail_key);
-                let toggle_key = detail_key.clone();
-                let mut summary = v_flex().w_full().gap_1().child(
-                    Button::new(SharedString::from(format!(
-                        "reasoning-{}-{}",
-                        session_id, item.key
-                    )))
-                    .ghost()
-                    .small()
-                    .compact()
-                    .w_full()
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                Icon::new(if expanded {
-                                    IconName::ChevronDown
-                                } else {
-                                    IconName::ChevronRight
-                                })
-                                .small()
-                                .text_color(rgb(palette().faint)),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(palette().muted))
-                                    .child("思考摘要"),
-                            ),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.scroll.remeasure_items(index..index + 1);
-                        if !this.expanded_reasoning.remove(&toggle_key) {
-                            this.expanded_reasoning.insert(toggle_key.clone());
-                        }
-                        cx.notify();
-                    })),
-                );
+                let mut content = v_flex().w_full().min_w_0().gap_1().child(self.activity_row(
+                    session_id,
+                    index,
+                    item,
+                    tool_group.is_some(),
+                    cx,
+                ));
                 if expanded {
-                    summary = summary.child(
-                        div()
-                            .ml_3()
-                            .pl_3()
-                            .py_1()
-                            .border_l_1()
+                    content = content.child(
+                        v_flex()
+                            .w_full()
+                            .min_w_0()
+                            .p_3()
+                            .rounded(px(8.))
+                            .border_1()
                             .border_color(rgb(palette().border))
+                            .bg(rgb(palette().surface))
                             .text_size(px(typography.body_size))
                             .line_height(relative(typography.line_height))
                             .text_color(rgb(palette().muted))
                             .child(item.text.clone()),
                     );
                 }
-                summary.into_any_element()
+                activity_container(content.into_any_element(), tool_group.is_some())
+            }
+            ItemKind::Tool if item.approval.is_none() && !is_tool_edit(item) => {
+                let detail_key = (session_id, item.key.clone());
+                let expanded = self.expanded_tools.contains(&detail_key);
+                let tool_id = format!("tool-{}-{}", session_id, item.key);
+                let mut content = v_flex().w_full().min_w_0().gap_1().child(self.activity_row(
+                    session_id,
+                    index,
+                    item,
+                    tool_group.is_some(),
+                    cx,
+                ));
+                if expanded {
+                    let tool_scroll = self
+                        .tool_scrolls
+                        .entry((session_id, item.key.clone()))
+                        .or_default()
+                        .clone();
+                    content = content.child(tool_detail_panel(
+                        &tool_id,
+                        item,
+                        &tool_scroll,
+                        &typography,
+                        cx,
+                    ));
+                }
+                activity_container(content.into_any_element(), tool_group.is_some())
             }
             ItemKind::Tool => {
                 let detail_key = (session_id, item.key.clone());
                 let expanded = self.expanded_tools.contains(&detail_key);
                 let tool_id = format!("tool-{}-{}", session_id, item.key);
+                let edit = is_tool_edit(item);
+                let edit_paths = if edit {
+                    edit_tool_diffs(item)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|diff| diff.path)
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
+                let title = if edit {
+                    "编辑文件".to_string()
+                } else {
+                    item.text.clone()
+                };
                 let header = Button::new(SharedString::from(format!("{tool_id}-toggle")))
                     .ghost()
                     .w_full()
@@ -5291,13 +6511,45 @@ impl ConduitApp {
                                 )
                             })
                             .child(
-                                div()
+                                h_flex()
                                     .flex_1()
                                     .min_w_0()
-                                    .text_left()
-                                    .text_size(px(13.))
-                                    .truncate()
-                                    .child(item.text.clone()),
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .text_left()
+                                            .text_size(px(13.))
+                                            .truncate()
+                                            .child(title),
+                                    )
+                                    .children(edit_paths.iter().take(2).map(|path| {
+                                        let name = Path::new(path)
+                                            .file_name()
+                                            .map(|name| name.to_string_lossy().into_owned())
+                                            .unwrap_or_else(|| path.clone());
+                                        div()
+                                            .flex_shrink_0()
+                                            .max_w(px(180.))
+                                            .truncate()
+                                            .px_1p5()
+                                            .py(px(1.))
+                                            .rounded(px(4.))
+                                            .bg(rgb(palette().surface_strong))
+                                            .text_size(px(10.))
+                                            .text_color(rgb(palette().muted))
+                                            .child(name)
+                                    }))
+                                    .when(edit_paths.len() > 2, |row| {
+                                        row.child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .text_size(px(10.))
+                                                .text_color(rgb(palette().faint))
+                                                .child(format!("+{}", edit_paths.len() - 2)),
+                                        )
+                                    }),
                             )
                             .child(
                                 div()
@@ -5337,59 +6589,13 @@ impl ConduitApp {
                         .entry((session_id, item.key.clone()))
                         .or_default()
                         .clone();
-                    let dock_key = item.key.clone();
-                    let (content, copy_text) =
-                        tool_content(&tool_id, item, &tool_scroll, &typography);
-                    card = card.child(
-                        v_flex()
-                            .w_full()
-                            .min_w_0()
-                            .border_t_1()
-                            .border_color(rgb(palette().border))
-                            .child(
-                                h_flex()
-                                    .px_3()
-                                    .pt_1()
-                                    .items_center()
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .text_size(px(10.))
-                                            .text_color(rgb(palette().faint))
-                                            .child("工具调用内容"),
-                                    )
-                                    .child(
-                                        Button::new(SharedString::from(format!("{tool_id}-dock")))
-                                            .ghost()
-                                            .small()
-                                            .compact()
-                                            .icon(gpui_kit::assets::IconName::PanelRight)
-                                            .tooltip("在右侧查看工具详情")
-                                            .cursor_pointer()
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.details = true;
-                                                this.detail_view = DetailView::Tool;
-                                                this.detail_text = Some(dock_key.clone());
-                                                cx.notify();
-                                            })),
-                                    )
-                                    .child(
-                                        Button::new(SharedString::from(format!("{tool_id}-copy")))
-                                            .ghost()
-                                            .small()
-                                            .compact()
-                                            .icon(gpui_kit::assets::IconName::Copy)
-                                            .tooltip("复制输入与输出")
-                                            .cursor_pointer()
-                                            .on_click(move |_, _, cx| {
-                                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                                    copy_text.clone(),
-                                                ))
-                                            }),
-                                    ),
-                            )
-                            .child(content),
-                    );
+                    card = card.child(tool_detail_panel(
+                        &tool_id,
+                        item,
+                        &tool_scroll,
+                        &typography,
+                        cx,
+                    ));
                 }
                 card.into_any_element()
             }
@@ -5457,50 +6663,15 @@ impl ConduitApp {
             }
         };
         if let Some((start, end)) = tool_group
-            && tool_group_expanded
+            && (tool_group_expanded || tool_group_running)
             && index == start
         {
             let group_key = session.messages[start].key.clone();
-            let toggle_key = group_key.clone();
-            let title = session.messages[start].text.clone();
-            let count = end - start;
-            let collapse = Button::new(SharedString::from(format!(
-                "tool-group-collapse-{session_id}-{start}"
-            )))
-            .ghost()
-            .w_full()
-            .h(px(28.))
-            .px_2()
-            .cursor_pointer()
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.expanded_tool_groups
-                    .remove(&(session_id, toggle_key.clone()));
-                this.scroll.remeasure_items(start..end);
-                cx.notify();
-            }))
-            .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_left()
-                            .text_size(px(11.))
-                            .text_color(rgb(palette().faint))
-                            .child(format!("收起 {title} × {count}")),
-                    )
-                    .child(
-                        Icon::new(IconName::ChevronDown)
-                            .small()
-                            .text_color(rgb(palette().faint)),
-                    ),
-            );
+            let header = self.tool_group_header(session_id, start, end, group_key, true, cx);
             element = v_flex()
                 .w_full()
                 .gap_1()
-                .child(collapse)
+                .child(header)
                 .child(element)
                 .into_any_element();
         }
@@ -5508,27 +6679,43 @@ impl ConduitApp {
             .message_focus
             .as_ref()
             .is_some_and(|(id, key, _)| *id == session_id && key == &item.key);
-        let row = div().w_full().px_6().pb_5().child(
-            div()
-                .id(SharedString::from(format!(
-                    "message-{}-{}",
-                    session_id, item.key
-                )))
-                .w_full()
-                .min_w_0()
-                .when(!self.store.ui.full_width_content, |card| {
-                    card.max_w(px(840.)).mx_auto()
-                })
-                .rounded(px(12.))
-                .border_1()
-                .border_color(if highlighted {
-                    rgb(palette().focus).into()
-                } else {
-                    transparent_black()
-                })
-                .when(highlighted, |row| row.bg(rgb(palette().surface_hover)))
-                .child(element),
-        );
+        let is_tool = item.kind == ItemKind::Tool;
+        let compact_activity = item.kind == ItemKind::Reasoning
+            || (is_tool && item.approval.is_none() && !is_tool_edit(item));
+        let follows_activity = index > 0
+            && matches!(
+                session.messages[index - 1].kind,
+                ItemKind::Tool | ItemKind::Reasoning
+            );
+        let row = div()
+            .w_full()
+            .px_6()
+            .when(compact_activity, |row| row.pb(px(0.)))
+            .when(!compact_activity && is_tool, |row| row.pb_2())
+            .when(!compact_activity && !is_tool, |row| {
+                row.pb_5().when(follows_activity, |row| row.pt_3())
+            })
+            .child(
+                div()
+                    .id(SharedString::from(format!(
+                        "message-{}-{}",
+                        session_id, item.key
+                    )))
+                    .w_full()
+                    .min_w_0()
+                    .when(!self.store.ui.full_width_content, |card| {
+                        card.max_w(px(840.)).mx_auto()
+                    })
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(if highlighted {
+                        rgb(palette().focus).into()
+                    } else {
+                        transparent_black()
+                    })
+                    .when(highlighted, |row| row.bg(rgb(palette().surface_hover)))
+                    .child(element),
+            );
         if self.store.ui.performance_monitor {
             self.performance.update(cx, |monitor, _| {
                 monitor.record_message_render(index, started.elapsed());
@@ -5914,7 +7101,7 @@ impl ConduitApp {
         let mut finished = vec![];
         for (id, naming) in &mut self.session_namings {
             if naming.started.elapsed() > Duration::from_secs(60) && naming.error.is_none() {
-                naming.error = Some("timeout".into());
+                naming.error = Some("命名超时（60 秒）".into());
                 naming.runtime.cancel();
             }
             loop {
@@ -5927,20 +7114,31 @@ impl ConduitApp {
                     }
                     Ok(Event::Approval(approval)) => {
                         naming.runtime.decide(approval.id, false);
-                        naming.error = Some("approval".into());
+                        naming.error = Some("命名模型请求权限确认，已取消".into());
                         naming.runtime.cancel();
                     }
                     Ok(Event::Tool { .. }) | Ok(Event::ToolInput { .. }) => {
-                        naming.error = Some("tool".into());
+                        naming.error = Some("命名模型尝试调用工具，已取消".into());
                         naming.runtime.cancel();
                     }
-                    Ok(Event::Finished { .. }) => {
+                    Ok(Event::Finished { error, cancelled }) => {
+                        if naming.error.is_none() {
+                            naming.error = Some(match error {
+                                Some(error) => naming_failure_text(&error),
+                                None if cancelled => "命名已取消".into(),
+                                // Empty marks a clean finish so a title can be applied.
+                                None => String::new(),
+                            });
+                        }
                         finished.push(*id);
                         break;
                     }
                     Ok(_) => {}
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        if naming.error.is_none() {
+                            naming.error = Some("命名进程意外退出".into());
+                        }
                         finished.push(*id);
                         break;
                     }
@@ -5951,11 +7149,15 @@ impl ConduitApp {
             let Some(naming) = self.session_namings.remove(&id) else {
                 continue;
             };
-            if naming.error.is_some() {
+            let SessionNaming { error, parts, .. } = naming;
+            if let Some(reason) = error {
+                if !reason.is_empty() {
+                    self.naming_errors.insert(id, reason);
+                    cx.notify();
+                }
                 continue;
             }
-            let title = naming
-                .parts
+            let title = parts
                 .into_iter()
                 .map(|(_, text)| text)
                 .collect::<Vec<_>>()
@@ -5979,6 +7181,8 @@ impl ConduitApp {
                 .take(30)
                 .collect::<String>();
             if title.is_empty() {
+                self.naming_errors.insert(id, "模型未返回有效标题".into());
+                cx.notify();
                 continue;
             }
             if let Some(session) = self.session_mut(id)
@@ -6996,6 +8200,12 @@ impl ConduitApp {
         body.into_any_element()
     }
     fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Elapsed labels in the running group header and the stats pill only
+        // change once a second; avoid repainting every 33 ms poll otherwise.
+        if !self.runs.is_empty() && self.last_live_tick.elapsed() >= Duration::from_secs(1) {
+            self.last_live_tick = Instant::now();
+            cx.notify();
+        }
         if self.store.ui.performance_monitor && self.performance.read(cx).sample_due() {
             // Notify only the diagnostics view; idle chats need no extra rebuild.
             self.performance.update(cx, |monitor, cx| {
@@ -7098,6 +8308,23 @@ impl ConduitApp {
                 structural_change = true;
             }
             match event {
+                Event::Plan { steps } => {
+                    let steps = steps
+                        .into_iter()
+                        .filter_map(|(text, status)| {
+                            let text = text.trim().to_string();
+                            (!text.is_empty()).then(|| PlanStep {
+                                text,
+                                status: PlanStatus::from_wire(&status),
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    if steps.is_empty() {
+                        self.plans.remove(&id);
+                    } else {
+                        self.plans.insert(id, steps);
+                    }
+                }
                 Event::Usage {
                     input_tokens,
                     cached_input_tokens,
@@ -7259,6 +8486,7 @@ impl ConduitApp {
                                 detail: String::new(),
                                 status: String::new(),
                                 approval: None,
+                                model: None,
                             });
                         }
                     }
@@ -7298,13 +8526,18 @@ impl ConduitApp {
                         .get_mut(&id)
                         .map(|run| std::mem::take(&mut run.message_index))
                         .unwrap_or_default();
+                    let turn_model = self.runs.get(&id).and_then(|run| run.model.clone());
                     let selected = Some(id) == self.selected_session;
                     if let Some(session) = self.session_mut(id)
                         && let Some(changed_index) =
                             apply_event_indexed(session, &prefix, other, &mut index)
-                        && selected
                     {
-                        dirty_messages.push(changed_index);
+                        if let Some(model) = &turn_model {
+                            attach_turn_model(session, &prefix, model);
+                        }
+                        if selected {
+                            dirty_messages.push(changed_index);
+                        }
                     }
                     if let Some(run) = self.runs.get_mut(&id) {
                         run.message_index = index;
@@ -7315,7 +8548,7 @@ impl ConduitApp {
         if self.store.ui.naming_mode == NamingMode::Latest {
             for id in completed_turns {
                 if let Some(excerpt) = self.session(id).and_then(latest_naming_excerpt) {
-                    self.start_session_naming(id, &excerpt);
+                    self.start_session_naming(id, &excerpt, cx);
                 }
             }
         }
@@ -10632,9 +11865,37 @@ fn message_timestamp(timestamp: u64) -> String {
         .unwrap_or_default()
 }
 
+/// Whole local-calendar days between a session's creation and today, shown as
+/// a quiet tag on the right of each sidebar row.
+fn session_age_label(created_at: u64) -> Option<String> {
+    if created_at == 0 {
+        return None;
+    }
+    let created = DateTime::from_timestamp(created_at as i64, 0)?;
+    let days = (Local::now().date_naive() - created.with_timezone(&Local).date_naive())
+        .num_days()
+        .max(0);
+    Some(match days {
+        0 => "今天".into(),
+        1 => "1 天".into(),
+        days if days < 30 => format!("{days} 天"),
+        days if days < 365 => format!("{} 个月", days / 30),
+        days => format!("{} 年", days / 365),
+    })
+}
+
 #[cfg(test)]
 pub fn apply_event(session: &mut SessionRecord, prefix: &str, event: Event) {
     apply_event_indexed(session, prefix, event, &mut MessageIndex::default());
+}
+
+fn attach_turn_model(session: &mut SessionRecord, prefix: &str, model: &str) {
+    let turn = format!("{prefix}-");
+    for item in &mut session.messages {
+        if item.kind == ItemKind::Assistant && item.key.starts_with(&turn) && item.model.is_none() {
+            item.model = Some(model.to_string());
+        }
+    }
 }
 
 fn apply_event_indexed(
@@ -10675,6 +11936,7 @@ fn apply_event_indexed(
             detail: summary_index.to_string(),
             status: String::new(),
             approval: None,
+            model: None,
         });
         return Some(session.messages.len() - 1);
     }
@@ -10693,6 +11955,7 @@ fn apply_event_indexed(
                 detail: String::new(),
                 status: "运行中".into(),
                 approval: None,
+                model: None,
             });
         }
         return Some(session.messages.len() - 1);
@@ -10785,6 +12048,7 @@ fn apply_event_indexed(
                 detail,
                 status,
                 approval: None,
+                model: None,
             });
             Some(session.messages.len() - 1)
         } else {
@@ -10869,6 +12133,7 @@ impl Render for ConduitApp {
             .child(
                 h_flex()
                     .h(px(34.))
+                    .flex_shrink_0()
                     .px_1()
                     .gap_1()
                     .items_center()
@@ -10913,6 +12178,7 @@ impl Render for ConduitApp {
         let query = self.search_query.trim().to_lowercase();
         list = list.child(
             h_flex()
+                .flex_shrink_0()
                 .px_2()
                 .pb_1()
                 .items_center()
@@ -11006,6 +12272,7 @@ impl Render for ConduitApp {
                     h_flex()
                         .id(("workspace", index))
                         .h(px(30.))
+                        .flex_shrink_0()
                         .px_2()
                         .gap_2()
                         .items_center()
@@ -11063,6 +12330,7 @@ impl Render for ConduitApp {
                 list = list.child(
                     h_flex()
                         .h(px(30.))
+                        .flex_shrink_0()
                         .pl(px(24.))
                         .pr(px(8.))
                         .gap_2()
@@ -11088,6 +12356,7 @@ impl Render for ConduitApp {
                         h_flex()
                             .id(("session", id))
                             .h(px(30.))
+                            .flex_shrink_0()
                             .pl(px(24.))
                             .pr(px(8.))
                             .gap_2()
@@ -11193,6 +12462,19 @@ impl Render for ConduitApp {
                                         .text_color(rgb(palette().faint))
                                         .child(status),
                                 )
+                            })
+                            .when_some(session_age_label(session.created_at), |row, age| {
+                                row.child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .px(px(5.))
+                                        .py(px(1.))
+                                        .rounded(px(4.))
+                                        .bg(rgb(palette().surface_strong))
+                                        .text_size(px(9.))
+                                        .text_color(rgb(palette().faint))
+                                        .child(age),
+                                )
                             }),
                     );
             }
@@ -11207,6 +12489,7 @@ impl Render for ConduitApp {
                     h_flex()
                         .id(("workspace-more", index))
                         .h(px(24.))
+                        .flex_shrink_0()
                         .pl(px(24.))
                         .pr(px(4.))
                         .items_center()
@@ -11233,6 +12516,7 @@ impl Render for ConduitApp {
         if self.store.workspaces.is_empty() {
             list = list.child(
                 v_flex()
+                    .flex_shrink_0()
                     .mt_2()
                     .px_2()
                     .py_3()
@@ -11462,19 +12746,20 @@ impl Render for ConduitApp {
                         .when(!self.store.ui.full_width_content, |row| {
                             row.max_w(px(840.)).mx_auto()
                         })
-                        .child(Spinner::new().small().color(rgb(palette().muted).into()))
                         .when_some(
                             selected.as_ref().map(|session| session.provider),
                             |row, provider| row.child(provider_icon(provider)),
                         )
                         .child(
                             div()
+                                .flex_1()
                                 .min_w_0()
                                 .truncate()
                                 .text_size(px(12.))
                                 .text_color(rgb(palette().muted))
                                 .child(activity),
-                        ),
+                        )
+                        .child(Spinner::new().small().color(rgb(palette().muted).into())),
                 ),
             );
         }
@@ -11872,47 +13157,56 @@ impl Render for ConduitApp {
         // The "jump to latest" arrow floats at the lower-right of the message
         // area, just above the composer's top-right corner, and only exists
         // while the list is scrolled away from its end.
+        let turn_stats = self
+            .selected_session
+            .and_then(|id| self.turn_stats_pill(id, cx));
         conversation = conversation.child(
             div().px_2().pt_1().pb(px(5.)).child(
-                div()
-                    .relative()
+                v_flex()
                     .w_full()
-                    .when(!self.store.ui.full_width_content, |card| {
-                        card.max_w(px(840.)).mx_auto()
-                    })
-                    .child(composer)
-                    .when(show_latest_button, |area| {
-                        area.child(
-                            Button::new("scroll-to-latest")
-                                .ghost()
-                                .tooltip("转到最新消息")
-                                .accessibility_label("转到最新消息")
-                                .absolute()
-                                .top(px(-40.))
-                                .right(px(14.))
-                                .w(px(30.))
-                                .h(px(30.))
-                                .items_center()
-                                .justify_center()
-                                .rounded_full()
-                                .border_1()
-                                .border_color(rgb(palette().border))
-                                .bg(rgb(palette().surface_strong))
-                                .cursor_pointer()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.scroll_to_end();
-                                    this.at_bottom = true;
-                                    this.message_focus = None;
-                                    this.pending_message_jump = false;
-                                    cx.notify();
-                                }))
-                                .child(
-                                    Icon::new(gpui_kit::assets::IconName::ArrowDown)
-                                        .small()
-                                        .text_color(rgb(palette().muted)),
-                                ),
-                        )
-                    }),
+                    .items_center()
+                    .when_some(turn_stats, |column, stats| column.child(stats))
+                    .child(
+                        div()
+                            .relative()
+                            .w_full()
+                            .when(!self.store.ui.full_width_content, |card| {
+                                card.max_w(px(840.)).mx_auto()
+                            })
+                            .child(composer)
+                            .when(show_latest_button, |area| {
+                                area.child(
+                                    Button::new("scroll-to-latest")
+                                        .ghost()
+                                        .tooltip("转到最新消息")
+                                        .accessibility_label("转到最新消息")
+                                        .absolute()
+                                        .top(px(-40.))
+                                        .right(px(14.))
+                                        .w(px(30.))
+                                        .h(px(30.))
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded_full()
+                                        .border_1()
+                                        .border_color(rgb(palette().border))
+                                        .bg(rgb(palette().surface_strong))
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.scroll_to_end();
+                                            this.at_bottom = true;
+                                            this.message_focus = None;
+                                            this.pending_message_jump = false;
+                                            cx.notify();
+                                        }))
+                                        .child(
+                                            Icon::new(gpui_kit::assets::IconName::ArrowDown)
+                                                .small()
+                                                .text_color(rgb(palette().muted)),
+                                        ),
+                                )
+                            }),
+                    ),
             ),
         );
         // The toolbar belongs to the conversation; workspace navigation and
@@ -11924,6 +13218,15 @@ impl Render for ConduitApp {
         } else {
             "本地 CLI · 文件保留在你的机器上".into()
         };
+        let naming_status: Option<Result<(), String>> = self.selected_session.and_then(|id| {
+            if let Some(error) = self.naming_errors.get(&id) {
+                Some(Err(error.clone()))
+            } else if !self.closing && self.session_namings.contains_key(&id) {
+                Some(Ok(()))
+            } else {
+                None
+            }
+        });
         let toolbar = h_flex()
             .h(px(34.))
             .flex_shrink_0()
@@ -11943,22 +13246,43 @@ impl Render for ConduitApp {
                     .text_color(rgb(palette().faint))
                     .child(toolbar_hint),
             )
-            .when(!self.closing && !self.session_namings.is_empty(), |bar| {
+            .child(div().flex_1())
+            .when_some(naming_status, |bar, status| {
+                let failed = status.is_err();
+                let text = match &status {
+                    Ok(()) => "自动命名中…".to_string(),
+                    Err(reason) => format!("自动命名失败：{reason}"),
+                };
                 bar.child(
                     h_flex()
                         .flex_shrink_0()
+                        .max_w(px(360.))
                         .items_center()
                         .gap_1()
-                        .child(Spinner::new().small().color(rgb(palette().muted).into()))
+                        .when(failed, |row| {
+                            row.child(
+                                Icon::new(IconName::TriangleAlert)
+                                    .small()
+                                    .text_color(rgb(palette().danger_text)),
+                            )
+                        })
                         .child(
                             div()
+                                .min_w_0()
+                                .truncate()
                                 .text_size(px(11.))
-                                .text_color(rgb(palette().muted))
-                                .child("自动命名中…"),
-                        ),
+                                .text_color(rgb(if failed {
+                                    palette().danger_text
+                                } else {
+                                    palette().muted
+                                }))
+                                .child(text),
+                        )
+                        .when(!failed, |row| {
+                            row.child(Spinner::new().small().color(rgb(palette().muted).into()))
+                        }),
                 )
             })
-            .child(div().flex_1())
             .child(
                 Button::new("toggle-git")
                     .ghost()
@@ -12408,6 +13732,7 @@ mod tests {
                 detail: String::new(),
                 status: String::new(),
                 approval: None,
+                model: None,
             });
         }
         let entries = super::message_outline_entries(&s, 0);
@@ -12439,6 +13764,7 @@ mod tests {
             detail: String::new(),
             status: String::new(),
             approval: None,
+            model: None,
         };
         session.messages.push(item("user-1", ItemKind::User));
         cache.refresh(Some(&session));
@@ -12621,29 +13947,249 @@ mod tests {
         }
     }
     #[test]
-    fn contiguous_tool_groups_only_include_adjacent_completed_same_titles() {
-        let tool = |key: &str, title: &str, status: &str| ChatItem {
+    fn contiguous_tool_groups_include_adjacent_completed_activity() {
+        let activity = |key: &str, kind: ItemKind, title: &str, status: &str| ChatItem {
             key: key.into(),
             created_at: 0,
-            kind: ItemKind::Tool,
+            kind,
             text: title.into(),
             input: String::new(),
             detail: String::new(),
             status: status.into(),
             approval: None,
+            model: None,
         };
         let mut s = session();
         s.messages = vec![
-            tool("a", "exec_command", "completed"),
-            tool("b", "exec_command", "completed"),
-            tool("c", "exec_command", "completed"),
-            tool("d", "other", "completed"),
+            activity("a", ItemKind::Tool, "exec_command", "completed"),
+            activity("b", ItemKind::Tool, "WebSearch", "completed"),
+            activity("c", ItemKind::Reasoning, "thinking", ""),
+            activity("d", ItemKind::Tool, "other", "completed"),
         ];
-        assert_eq!(super::contiguous_tool_group(&s, 1), Some((0, 3)));
-        assert_eq!(super::contiguous_tool_group(&s, 3), None);
+        assert_eq!(super::contiguous_tool_group(&s, 1), Some((0, 4)));
+        assert_eq!(super::contiguous_tool_group(&s, 2), Some((0, 4)));
 
         s.messages[1].status = "运行中".into();
-        assert_eq!(super::contiguous_tool_group(&s, 0), None);
+        assert_eq!(super::contiguous_tool_group(&s, 0), Some((0, 4)));
+    }
+    #[test]
+    fn tool_groups_skip_file_edits() {
+        let tool = |key: &str, title: &str, input: &str| ChatItem {
+            key: key.into(),
+            created_at: 0,
+            kind: ItemKind::Tool,
+            text: title.into(),
+            input: input.into(),
+            detail: String::new(),
+            status: "completed".into(),
+            approval: None,
+            model: None,
+        };
+        let mut s = session();
+        s.messages = vec![
+            tool("a", "cargo build", r#"{"command":"cargo build"}"#),
+            tool("b", "cargo test", r#"{"command":"cargo test"}"#),
+            tool("c", "WebSearch", r#"{"query":"gpui"}"#),
+            tool("d", "WebSearch", r#"{"query":"gpui list"}"#),
+            tool(
+                "e",
+                "Edit",
+                r#"{"file_path":"a.rs","old_string":"x","new_string":"y"}"#,
+            ),
+            tool(
+                "f",
+                "Edit",
+                r#"{"file_path":"a.rs","old_string":"y","new_string":"z"}"#,
+            ),
+        ];
+        assert_eq!(super::contiguous_tool_group(&s, 0), Some((0, 4)));
+        assert_eq!(super::contiguous_tool_group(&s, 3), Some((0, 4)));
+        assert_eq!(super::contiguous_tool_group(&s, 4), None);
+    }
+    #[test]
+    fn activity_rows_classify_failures_and_summaries() {
+        let item =
+            |kind: ItemKind, title: &str, input: &str, status: &str, detail: &str| ChatItem {
+                key: "activity".into(),
+                created_at: 0,
+                kind,
+                text: title.into(),
+                input: input.into(),
+                detail: detail.into(),
+                status: status.into(),
+                approval: None,
+                model: None,
+            };
+        let command = item(
+            ItemKind::Tool,
+            "pwsh",
+            r#"{"command":"cargo test"}"#,
+            "运行失败",
+            r#"{"exitCode":1}"#,
+        );
+        assert_eq!(super::tool_category(&command), "终端命令");
+        assert_eq!(super::tool_summary(&command), "cargo test");
+        assert!(super::tool_failed(&command));
+
+        let search = item(
+            ItemKind::Tool,
+            "WebSearch",
+            r#"{"query":"gpui"}"#,
+            "completed",
+            "",
+        );
+        assert_eq!(super::tool_category(&search), "网络搜索");
+        assert_eq!(super::tool_summary(&search), "gpui");
+        assert!(!super::tool_failed(&search));
+
+        let reasoning = item(ItemKind::Reasoning, "Let me look\nmore", "", "", "");
+        assert_eq!(super::tool_category(&reasoning), "已思考");
+        assert_eq!(super::tool_summary(&reasoning), "Let me look");
+    }
+    #[test]
+    fn edit_diffs_parse_old_new_pairs_and_codex_patches() {
+        let item = |title: &str, input: &str| ChatItem {
+            key: "edit".into(),
+            created_at: 0,
+            kind: ItemKind::Tool,
+            text: title.into(),
+            input: input.into(),
+            detail: String::new(),
+            status: "completed".into(),
+            approval: None,
+            model: None,
+        };
+        let claude = super::edit_tool_diffs(&item(
+            "Edit",
+            r#"{"file_path":"src/main.rs","old_string":"let a = 1;","new_string":"let a = 2;\nlet b = 3;"}"#,
+        ))
+        .unwrap();
+        assert_eq!(claude[0].path, "src/main.rs");
+        assert_eq!((claude[0].added, claude[0].removed), (2, 1));
+
+        let codex = super::edit_tool_diffs(&item(
+            "修改文件",
+            r#"[{"path":"notes.txt","kind":{"type":"update"},"diff":"@@ -1 +1 @@\n-old\n+new"}]"#,
+        ))
+        .unwrap();
+        assert_eq!(codex[0].path, "notes.txt");
+        assert_eq!(codex[0].note, "更新");
+        assert_eq!((codex[0].added, codex[0].removed), (1, 1));
+    }
+    #[test]
+    fn turn_file_stats_merge_repeated_edits_of_the_latest_turn() {
+        let item = |kind: ItemKind, title: &str, input: &str| ChatItem {
+            key: format!("{title}-{}", input.len()),
+            created_at: 0,
+            kind,
+            text: title.into(),
+            input: input.into(),
+            detail: String::new(),
+            status: "completed".into(),
+            approval: None,
+            model: None,
+        };
+        let mut s = session();
+        s.messages = vec![
+            item(
+                ItemKind::Tool,
+                "Write",
+                r#"{"file_path":"src/old.rs","content":"stale"}"#,
+            ),
+            item(ItemKind::User, "prompt", ""),
+            item(
+                ItemKind::Tool,
+                "Edit",
+                r#"{"file_path":"src/a.rs","old_string":"x","new_string":"y\nz"}"#,
+            ),
+            item(
+                ItemKind::Tool,
+                "Edit",
+                r#"{"file_path":"src/a.rs","old_string":"x\ny","new_string":"z"}"#,
+            ),
+            item(
+                ItemKind::Tool,
+                "Write",
+                r#"{"file_path":"src/b.rs","content":"one\ntwo"}"#,
+            ),
+            item(ItemKind::Tool, "pwsh", r#"{"command":"cargo test"}"#),
+        ];
+        let stats = super::turn_file_stats(&s);
+        assert_eq!(stats.files.len(), 2);
+        assert!(!stats.files.contains_key("src/old.rs"));
+        assert_eq!((stats.added, stats.removed), (5, 3));
+        let a = stats.files["src/a.rs"];
+        assert_eq!((a.added, a.removed), (3, 3));
+    }
+    #[test]
+    fn plan_steps_follow_either_provider_shape_in_the_latest_turn() {
+        let todo = super::plan_steps_from_input(
+            r#"{"todos":[{"content":"Read code","status":"completed"},{"content":"Edit code","status":"in_progress"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(todo.len(), 2);
+        assert_eq!(todo[0].status, super::PlanStatus::Completed);
+        assert_eq!(todo[1].status, super::PlanStatus::InProgress);
+
+        let item = |title: &str, input: &str| ChatItem {
+            key: title.into(),
+            created_at: 0,
+            kind: ItemKind::Tool,
+            text: title.into(),
+            input: input.into(),
+            detail: String::new(),
+            status: "completed".into(),
+            approval: None,
+            model: None,
+        };
+        let mut s = session();
+        s.messages = vec![
+            item(
+                "update_plan",
+                r#"{"plan":[{"step":"old step","status":"completed"}]}"#,
+            ),
+            ChatItem {
+                key: "prompt".into(),
+                created_at: 0,
+                kind: ItemKind::User,
+                text: "new turn".into(),
+                input: String::new(),
+                detail: String::new(),
+                status: String::new(),
+                approval: None,
+                model: None,
+            },
+            item(
+                "update_plan",
+                r#"{"plan":[{"step":"new step","status":"pending"}]}"#,
+            ),
+        ];
+        let plan = super::plan_from_messages(&s);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].text, "new step");
+        assert_eq!(plan[0].status, super::PlanStatus::Pending);
+    }
+    #[test]
+    fn stats_paths_strip_the_workspace_prefix() {
+        assert_eq!(
+            super::workspace_relative_path("D:\\m\\conduit\\src\\app.rs", Some("D:\\m\\conduit")),
+            "src/app.rs"
+        );
+        assert_eq!(
+            super::workspace_relative_path("d:/m/conduit/README.md", Some("D:\\m\\conduit\\")),
+            "README.md"
+        );
+        assert_eq!(
+            super::workspace_relative_path("C:\\other\\file.rs", Some("D:\\m\\conduit")),
+            "C:/other/file.rs"
+        );
+        assert_eq!(
+            super::workspace_relative_path(
+                "D:\\m\\conduit\\src\\app.rs",
+                Some("\\\\?\\D:\\m\\conduit")
+            ),
+            "src/app.rs"
+        );
     }
     #[test]
     fn final_snapshot_replaces_stream_and_turns_keep_distinct_identity() {
@@ -12781,6 +14327,7 @@ mod tests {
                 detail: String::new(),
                 status: String::new(),
                 approval: None,
+                model: None,
             });
         }
         assert_eq!(
@@ -12796,6 +14343,7 @@ mod tests {
             detail: String::new(),
             status: String::new(),
             approval: None,
+            model: None,
         });
         assert_eq!(latest_naming_excerpt(&s).unwrap().chars().count(), 800);
     }
@@ -12820,6 +14368,7 @@ mod tests {
             detail: String::new(),
             status: String::new(),
             approval: None,
+            model: None,
         });
         assert!(session_matches(&s, ""));
         assert!(session_matches(&s, "rust"));
@@ -12943,6 +14492,7 @@ mod ui_tests {
                             path.clone(),
                             "turn-0".into(),
                             Default::default(),
+                            None,
                         ),
                     );
                     senders.insert(id, sender);
@@ -13126,6 +14676,7 @@ mod ui_tests {
                         detail: String::new(),
                         status: String::new(),
                         approval: None,
+                        model: None,
                     })
                     .collect();
                 app.store = Store {
@@ -13342,6 +14893,7 @@ mod ui_tests {
                     detail: String::new(),
                     status: String::new(),
                     approval: None,
+                    model: None,
                 };
                 app.store = Store {
                     workspaces: vec![Workspace {
@@ -13973,6 +15525,7 @@ mod ui_tests {
                                 detail: String::new(),
                                 status: String::new(),
                                 approval: None,
+                                model: None,
                             }],
                             interrupted: false,
                             permission: Default::default(),

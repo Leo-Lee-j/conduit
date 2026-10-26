@@ -269,6 +269,7 @@ impl Store {
                         detail: String::new(),
                         status: String::new(),
                         approval: None,
+                        model: None,
                     });
                 }
                 if session.interrupted {
@@ -293,6 +294,7 @@ impl Store {
                         detail: String::new(),
                         status: String::new(),
                         approval: None,
+                        model: None,
                     });
                     session.interrupted = false;
                 }
