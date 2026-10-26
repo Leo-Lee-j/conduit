@@ -21,7 +21,14 @@ GPUI Kit 锁定 revision `2963d6d880b9dffe59b48b0533bdc83c03201209`（0.7.3 / gp
 | 文件 | 职责 |
 | --- | --- |
 | main.rs | 应用启动、主题、窗口、按数据目录限制单实例 |
-| app.rs | Chat 视图、会话选择、草稿、会话并发与仓库写操作互斥、事件合并、持久化触发 |
+| app.rs | 应用状态、初始化、订阅与持久化入口；功能实现在私有 `app/` 子模块 |
+| app/shell.rs、sidebar.rs、toolbar.rs、dock.rs | 窗口布局、工作区侧栏、底部状态栏和工具 / Git 详情面板 |
+| app/chat.rs、tools.rs、typography.rs、outline.rs | 消息渲染、工具分组与文件修改预览、Markdown 排版、消息导航 |
+| app/composer.rs、sessions.rs、search.rs、naming.rs | 输入区与附件、会话与工作区生命周期、历史导入、搜索和自动命名 |
+| app/runtime.rs、events.rs、state.rs | 发送与轮询、审批与取消、事件合并、运行时共享状态 |
+| app/git_ui.rs、git_diff.rs | 分支状态、Git 侧栏、提交与推送交互、只读差异窗口 |
+| app/settings.rs、settings/、model_picker.rs | 设置弹窗与各设置页面、引擎 / 权限 / 模型选择 |
+| app/theme.rs、components.rs、performance_view.rs | 应用色板、通用图标与按钮、性能监控浮层 |
 | protocol.rs | Provider 特定的请求与事件、原生 ID 校验、审批响应 |
 | chat_runtime.rs | 一轮任务的后台线程、NDJSON、输入队列、取消和清理屏障 |
 | child.rs | Windows 句柄、CreateProcessW、管道与 Job 生命周期 |
@@ -43,6 +50,8 @@ Git 面板不引入第二套 Git 实现：`git.rs` 的状态探测调用 `rev-pa
 Git 侧栏下方是固定提交区，草稿按工作区路径保留为独立 TextareaState。`OperationProbe` 后台执行显式 `git commit -m`（仅 index，不自动 add）和向配置 upstream 的 `git push --porcelain -- <remote> HEAD:<merge-ref>`，各限时 120 秒。提交前核对预览的分支/HEAD/暂存对象指纹；成功提交、失败推送用独立结果状态表达，清空已提交草稿并刷新 ahead badge，不自动重试。Git 写操作与聊天任务互斥。分支探测新增 upstream 和 ahead（有 upstream 时 rev-list upstream..HEAD；无 upstream 时 HEAD --not --remotes）。AI 生成复用 `ChatRuntime::start_text` 的独立临时会话，使用当前引擎/模型、只输入暂存 diff；结果按来源路径回填草稿，取消/超时/错误不覆盖。详见 [Git 界面设计](git-ui-design.md)。
 
 仍是单二进制项目，不提前拆多个 crate、插件宿主、守护服务或 RPC。旧终端代码放在 `src/legacy/`，没有 mod 声明且不参与构建；活跃依赖不再包含 alacritty_terminal。
+
+`app/` 内的视图和流程通过 `impl ConduitApp` 扩展同一应用状态，方法仅在应用模块内共享；单元测试与 UI 测试分别位于 `app/tests.rs`、`app/ui_tests.rs`。供应商发出的空助手文本块保留原始 key 和消息索引以接收后续流式更新，但不渲染正文、操作按钮或间距，也不打断工具分组。空块变为可见文本或新增工具改变分组时，列表重新测量受影响的布局，避免沿用折叠前的行高。
 
 架构图源文件为 [chat-architecture.mmd](diagrams/chat-architecture.mmd)，可在支持 Mermaid 的工具中查看。
 

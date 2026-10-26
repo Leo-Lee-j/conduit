@@ -1,0 +1,891 @@
+use super::{
+    apply_event, finish_tool_cards, highlight_ranges, latest_naming_excerpt, same_failure,
+    search_snippet, session_matches, single_line_title,
+};
+use crate::{
+    domain::{ChatItem, ItemKind, PermissionLevel, Provider, SessionRecord, Usage},
+    protocol::Event,
+};
+#[test]
+fn indexed_events_keep_order_inputs_and_stream_snapshots_across_batches() {
+    let mut s = session();
+    let mut index = super::MessageIndex::default();
+    for ordinal in 0..500 {
+        super::apply_event_indexed(
+            &mut s,
+            "turn-1",
+            Event::ToolInput {
+                key: ordinal.to_string(),
+                input: format!("input-{ordinal}"),
+            },
+            &mut index,
+        );
+    }
+    for ordinal in 0..500 {
+        super::apply_event_indexed(
+            &mut s,
+            "turn-1",
+            Event::Tool {
+                key: ordinal.to_string(),
+                title: "Bash".into(),
+                detail: "result".into(),
+                status: "完成".into(),
+            },
+            &mut index,
+        );
+    }
+    assert_eq!(s.messages.len(), 500);
+    for (ordinal, item) in s.messages.iter().enumerate() {
+        assert_eq!(item.key, format!("turn-1-{ordinal}"));
+        assert_eq!(item.input, format!("input-{ordinal}"));
+        assert_eq!(item.detail, "result");
+    }
+    // Approval handling appends messages outside the event index.
+    s.record_tool_approval(
+        "turn-1",
+        "ticket",
+        "请求使用 Write",
+        r#"{"tool_use_id":"write"}"#,
+        "等待中",
+    );
+    super::apply_event_indexed(
+        &mut s,
+        "turn-1",
+        Event::ToolInput {
+            key: "write".into(),
+            input: "payload".into(),
+        },
+        &mut index,
+    );
+    assert_eq!(s.messages.len(), 501);
+    assert!(s.messages[500].approval.is_some());
+    for text in ["first", " second"] {
+        super::apply_event_indexed(
+            &mut s,
+            "turn-1",
+            Event::Delta {
+                key: "reply".into(),
+                text: text.into(),
+            },
+            &mut index,
+        );
+    }
+    super::apply_event_indexed(
+        &mut s,
+        "turn-1",
+        Event::Text {
+            key: "reply".into(),
+            text: "complete snapshot".into(),
+        },
+        &mut index,
+    );
+    assert_eq!(s.messages.last().unwrap().text, "complete snapshot");
+}
+#[test]
+fn message_outline_keeps_real_indices_and_keys_amid_tools_and_replies() {
+    let mut s = session();
+    for (key, kind, text) in [
+        ("user-1", ItemKind::User, "第一轮\n  修复\tbug"),
+        ("tool-1", ItemKind::Tool, "cargo check"),
+        ("assistant-1", ItemKind::Assistant, "完成"),
+        ("user-2", ItemKind::User, "第一轮\n  修复\tbug"),
+        ("notice", ItemKind::Notice, "notice"),
+        ("user-3", ItemKind::User, ""),
+    ] {
+        s.messages.push(ChatItem {
+            key: key.into(),
+            created_at: 0,
+            kind,
+            text: text.into(),
+            input: String::new(),
+            detail: String::new(),
+            status: String::new(),
+            approval: None,
+            model: None,
+        });
+    }
+    let entries = super::message_outline_entries(&s, 0);
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| (entry.index, entry.key.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(0, "user-1"), (3, "user-2"), (5, "user-3")]
+    );
+    assert_eq!(entries[0].label, "第一轮 修复 bug");
+    assert_eq!(entries[2].label, "（空消息）");
+    s.messages[0].text = "中🙂".repeat(90);
+    let entries = super::message_outline_entries(&s, 0);
+    assert_eq!(entries[0].label.chars().count(), 101);
+    assert!(entries[0].label.ends_with('…'));
+}
+
+#[test]
+fn message_outline_cache_only_indexes_appends_and_resets_with_session() {
+    let mut session = session();
+    let mut cache = super::MessageOutlineCache::default();
+    let item = |key: &str, kind| ChatItem {
+        key: key.into(),
+        created_at: 0,
+        kind,
+        text: "用户消息".into(),
+        input: String::new(),
+        detail: String::new(),
+        status: String::new(),
+        approval: None,
+        model: None,
+    };
+    session.messages.push(item("user-1", ItemKind::User));
+    cache.refresh(Some(&session));
+    let label = cache.entries[0].label.as_ptr();
+    cache.refresh(Some(&session));
+    assert_eq!(cache.entries.len(), 1);
+    assert_eq!(cache.entries[0].label.as_ptr(), label);
+    session.messages.push(item("reply", ItemKind::Assistant));
+    session.messages.push(item("user-2", ItemKind::User));
+    cache.refresh(Some(&session));
+    assert_eq!(cache.entries.len(), 2);
+    assert_eq!(cache.entries[1].index, 2);
+    session.messages.truncate(1);
+    cache.refresh(Some(&session));
+    assert_eq!(cache.entries.len(), 1);
+    session.id += 1;
+    cache.refresh(Some(&session));
+    assert_eq!(cache.session, Some(session.id));
+    cache.refresh(None);
+    assert!(cache.entries.is_empty());
+}
+
+#[test]
+fn tool_text_preserves_literal_logs_code_and_removes_terminal_escapes() {
+    let text = "\u{1b}[31m错误\u{1b}[0m\r\n\tcode();\rretry\n\u{1b}]8;;https://example.test\u{1b}\\label\u{1b}]8;;\u{7}\n<b>literal</b> **text**";
+    assert_eq!(
+        super::format_tool_text(text),
+        "错误\n    code();\nretry\nlabel\n<b>literal</b> **text**"
+    );
+    let json = "{\"command\":\"echo 中文\",\"args\":[1,2]}";
+    let formatted = super::format_tool_text(json);
+    assert!(formatted.contains('\n'));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&formatted).unwrap(),
+        serde_json::from_str::<serde_json::Value>(json).unwrap()
+    );
+    // A partial streaming JSON result remains useful text, never discarded.
+    assert_eq!(
+        super::format_tool_text("{\"output\":\"partial"),
+        "{\"output\":\"partial"
+    );
+}
+#[test]
+fn tool_approval_matches_provider_id_and_survives_execution_updates() {
+    let mut s = session();
+    for key in ["first", "second"] {
+        apply_event(
+            &mut s,
+            "turn-1",
+            Event::Tool {
+                key: key.into(),
+                title: "same command".into(),
+                detail: String::new(),
+                status: "运行中".into(),
+            },
+        );
+    }
+    let detail = r#"{"itemId":"first"}"#;
+    s.record_tool_approval("turn-1", "ticket", "请求执行命令", detail, "等待中");
+    s.record_tool_approval("turn-1", "ticket", "请求执行命令", detail, "已允许");
+    apply_event(
+        &mut s,
+        "turn-1",
+        Event::Tool {
+            key: "first".into(),
+            title: "same command".into(),
+            detail: "done".into(),
+            status: "completed".into(),
+        },
+    );
+    assert_eq!(s.messages.len(), 2);
+    assert_eq!(s.messages[0].approval.as_ref().unwrap().status, "已允许");
+    assert_eq!(s.messages[0].status, "completed");
+    assert!(s.messages[1].approval.is_none());
+    assert!(s.messages.iter().all(|item| item.kind == ItemKind::Tool));
+}
+#[test]
+fn permission_before_tool_start_merges_and_pending_cancellation_is_scoped() {
+    let mut s = session();
+    for prefix in ["turn-0", "turn-1"] {
+        s.record_tool_approval(
+            prefix,
+            "ticket",
+            "请求使用 WebSearch",
+            r#"{"tool_use_id":"search"}"#,
+            "等待中",
+        );
+        apply_event(
+            &mut s,
+            prefix,
+            Event::Tool {
+                key: "search".into(),
+                title: "WebSearch".into(),
+                detail: String::new(),
+                status: "运行中".into(),
+            },
+        );
+    }
+    finish_tool_cards(&mut s, "turn-1", "已取消");
+    assert_eq!(s.messages.len(), 2);
+    assert_eq!(s.messages[0].approval.as_ref().unwrap().status, "等待中");
+    assert_eq!(s.messages[1].approval.as_ref().unwrap().status, "已取消");
+    s.record_tool_approval(
+        "turn-1",
+        "ticket",
+        "请求使用 WebSearch",
+        r#"{"tool_use_id":"search"}"#,
+        "已拒绝",
+    );
+    assert_eq!(s.messages[1].approval.as_ref().unwrap().status, "已拒绝");
+}
+#[test]
+fn claude_approval_without_id_matches_input_and_never_another_turn() {
+    let mut s = session();
+    for (prefix, key, query) in [
+        ("old", "a", "one"),
+        ("now", "b", "one"),
+        ("now", "c", "two"),
+    ] {
+        apply_event(
+            &mut s,
+            prefix,
+            Event::Tool {
+                key: key.into(),
+                title: "WebSearch".into(),
+                detail: String::new(),
+                status: "运行中".into(),
+            },
+        );
+        apply_event(
+            &mut s,
+            prefix,
+            Event::ToolInput {
+                key: key.into(),
+                input: format!(r#"{{"query":"{query}"}}"#),
+            },
+        );
+    }
+    s.record_tool_approval(
+        "now",
+        "request",
+        "请求使用 WebSearch",
+        r#"{"input":{"query":"one"}}"#,
+        "已允许",
+    );
+    assert_eq!(s.messages.len(), 3);
+    assert!(s.messages[0].approval.is_none());
+    assert_eq!(s.messages[1].approval.as_ref().unwrap().status, "已允许");
+    assert!(s.messages[2].approval.is_none());
+}
+#[test]
+fn commit_generation_snapshot_replaces_stream_without_duplicate_text() {
+    let mut parts = vec![];
+    super::update_commit_text(&mut parts, "msg".into(), "feat: ".into(), false);
+    super::update_commit_text(&mut parts, "msg".into(), "说明".into(), false);
+    super::update_commit_text(&mut parts, "msg".into(), "feat: 说明".into(), true);
+    super::update_commit_text(&mut parts, "body".into(), "原因".into(), true);
+    assert_eq!(
+        parts,
+        vec![
+            ("msg".into(), "feat: 说明".into()),
+            ("body".into(), "原因".into())
+        ]
+    );
+}
+pub(super) fn session() -> SessionRecord {
+    SessionRecord {
+        id: 1,
+        provider: Provider::Claude,
+        created_at: 0,
+        exit_code: None,
+        title: String::new(),
+        archived: false,
+        native_id: None,
+        model: None,
+        messages: vec![],
+        interrupted: false,
+        permission: PermissionLevel::default(),
+        usage: Usage::default(),
+    }
+}
+#[test]
+fn contiguous_tool_groups_include_adjacent_completed_activity() {
+    let activity = |key: &str, kind: ItemKind, title: &str, status: &str| ChatItem {
+        key: key.into(),
+        created_at: 0,
+        kind,
+        text: title.into(),
+        input: String::new(),
+        detail: String::new(),
+        status: status.into(),
+        approval: None,
+        model: None,
+    };
+    let mut s = session();
+    s.messages = vec![
+        activity("a", ItemKind::Tool, "exec_command", "completed"),
+        activity("b", ItemKind::Tool, "WebSearch", "completed"),
+        activity("c", ItemKind::Reasoning, "thinking", ""),
+        activity("d", ItemKind::Tool, "other", "completed"),
+    ];
+    assert_eq!(super::contiguous_tool_group(&s, 1), Some((0, 4)));
+    assert_eq!(super::contiguous_tool_group(&s, 2), Some((0, 4)));
+
+    s.messages[1].status = "运行中".into();
+    assert_eq!(super::contiguous_tool_group(&s, 0), Some((0, 4)));
+}
+#[test]
+fn empty_stream_blocks_do_not_split_tools_or_count_as_replies() {
+    let mut s = session();
+    apply_event(
+        &mut s,
+        "turn",
+        Event::Text {
+            key: "before".into(),
+            text: " \n".into(),
+        },
+    );
+    for (key, title) in [("a", "Read"), ("b", "exec_command")] {
+        apply_event(
+            &mut s,
+            "turn",
+            Event::Tool {
+                key: key.into(),
+                title: title.into(),
+                detail: String::new(),
+                status: "completed".into(),
+            },
+        );
+        apply_event(
+            &mut s,
+            "turn",
+            Event::Text {
+                key: format!("after-{key}"),
+                text: String::new(),
+            },
+        );
+    }
+    assert_eq!(super::contiguous_tool_group(&s, 1), Some((1, 4)));
+    assert_eq!(super::contiguous_tool_group(&s, 3), Some((1, 4)));
+    assert!(!super::tool_group_has_reply(&s, 4));
+    assert!(super::is_empty_chat_placeholder(&s.messages[0]));
+    assert!(super::is_empty_chat_placeholder(&s.messages[2]));
+
+    // A real streamed reply keeps its original key/index and becomes a real
+    // group boundary as soon as it contains text.
+    apply_event(
+        &mut s,
+        "turn",
+        Event::Delta {
+            key: "after-a".into(),
+            text: "读取完成".into(),
+        },
+    );
+    assert_eq!(s.messages.len(), 5);
+    assert_eq!(s.messages[2].text, "读取完成");
+    assert!(!super::is_empty_chat_placeholder(&s.messages[2]));
+    assert_eq!(super::contiguous_tool_group(&s, 1), None);
+    assert_eq!(super::contiguous_tool_group(&s, 3), None);
+
+    s.messages[2].text.clear();
+    s.messages[2].kind = ItemKind::User;
+    assert_eq!(super::contiguous_tool_group(&s, 1), None);
+    s.messages[2].kind = ItemKind::Tool;
+    s.messages[2].text = "Edit".into();
+    assert_eq!(super::contiguous_tool_group(&s, 1), None);
+    s.messages[2].text = "Read".into();
+    s.messages[2].approval = Some(crate::domain::ToolApproval {
+        request: "approval".into(),
+        status: "等待中".into(),
+    });
+    assert_eq!(super::contiguous_tool_group(&s, 1), None);
+}
+
+#[test]
+fn tool_group_waits_through_completed_tools_until_nonempty_reply_in_same_turn() {
+    let mut s = session();
+    for (key, status) in [
+        ("a", "运行中"),
+        ("a", "completed"),
+        ("b", "运行中"),
+        ("b", "completed"),
+    ] {
+        apply_event(
+            &mut s,
+            "turn",
+            Event::Tool {
+                key: key.into(),
+                title: "Read".into(),
+                detail: String::new(),
+                status: status.into(),
+            },
+        );
+        assert!(!super::tool_group_has_reply(&s, s.messages.len()));
+    }
+    let end = s.messages.len();
+    apply_event(
+        &mut s,
+        "turn",
+        Event::Text {
+            key: "reply".into(),
+            text: String::new(),
+        },
+    );
+    assert!(!super::tool_group_has_reply(&s, end));
+    apply_event(
+        &mut s,
+        "turn",
+        Event::Delta {
+            key: "reply".into(),
+            text: "检查完成".into(),
+        },
+    );
+    assert!(super::tool_group_has_reply(&s, end));
+
+    // A stopped/failed turn without a reply remains inspectable even when
+    // the next turn eventually produces an answer.
+    s.messages[end].kind = ItemKind::User;
+    apply_event(
+        &mut s,
+        "next",
+        Event::Text {
+            key: "reply".into(),
+            text: "下一轮回复".into(),
+        },
+    );
+    assert!(!super::tool_group_has_reply(&s, end));
+}
+
+#[test]
+fn tool_groups_skip_file_edits() {
+    let tool = |key: &str, title: &str, input: &str| ChatItem {
+        key: key.into(),
+        created_at: 0,
+        kind: ItemKind::Tool,
+        text: title.into(),
+        input: input.into(),
+        detail: String::new(),
+        status: "completed".into(),
+        approval: None,
+        model: None,
+    };
+    let mut s = session();
+    s.messages = vec![
+        tool("a", "cargo build", r#"{"command":"cargo build"}"#),
+        tool("b", "cargo test", r#"{"command":"cargo test"}"#),
+        tool("c", "WebSearch", r#"{"query":"gpui"}"#),
+        tool("d", "WebSearch", r#"{"query":"gpui list"}"#),
+        tool(
+            "e",
+            "Edit",
+            r#"{"file_path":"a.rs","old_string":"x","new_string":"y"}"#,
+        ),
+        tool(
+            "f",
+            "Edit",
+            r#"{"file_path":"a.rs","old_string":"y","new_string":"z"}"#,
+        ),
+    ];
+    assert_eq!(super::contiguous_tool_group(&s, 0), Some((0, 4)));
+    assert_eq!(super::contiguous_tool_group(&s, 3), Some((0, 4)));
+    assert_eq!(super::contiguous_tool_group(&s, 4), None);
+}
+#[test]
+fn activity_rows_classify_failures_and_summaries() {
+    let item = |kind: ItemKind, title: &str, input: &str, status: &str, detail: &str| ChatItem {
+        key: "activity".into(),
+        created_at: 0,
+        kind,
+        text: title.into(),
+        input: input.into(),
+        detail: detail.into(),
+        status: status.into(),
+        approval: None,
+        model: None,
+    };
+    let command = item(
+        ItemKind::Tool,
+        "pwsh",
+        r#"{"command":"cargo test"}"#,
+        "运行失败",
+        r#"{"exitCode":1}"#,
+    );
+    assert_eq!(super::tool_category(&command), "终端命令");
+    assert_eq!(super::tool_summary(&command), "cargo test");
+    assert!(super::tool_failed(&command));
+
+    let search = item(
+        ItemKind::Tool,
+        "WebSearch",
+        r#"{"query":"gpui"}"#,
+        "completed",
+        "",
+    );
+    assert_eq!(super::tool_category(&search), "网络搜索");
+    assert_eq!(super::tool_summary(&search), "gpui");
+    assert!(!super::tool_failed(&search));
+
+    let reasoning = item(ItemKind::Reasoning, "Let me look\nmore", "", "", "");
+    assert_eq!(super::tool_category(&reasoning), "已思考");
+    assert_eq!(super::tool_summary(&reasoning), "Let me look");
+}
+#[test]
+fn edit_diffs_parse_old_new_pairs_and_codex_patches() {
+    let item = |title: &str, input: &str| ChatItem {
+        key: "edit".into(),
+        created_at: 0,
+        kind: ItemKind::Tool,
+        text: title.into(),
+        input: input.into(),
+        detail: String::new(),
+        status: "completed".into(),
+        approval: None,
+        model: None,
+    };
+    let claude = super::edit_tool_diffs(&item(
+        "Edit",
+        r#"{"file_path":"src/main.rs","old_string":"let a = 1;","new_string":"let a = 2;\nlet b = 3;"}"#,
+    ))
+    .unwrap();
+    assert_eq!(claude[0].path, "src/main.rs");
+    assert_eq!((claude[0].added, claude[0].removed), (2, 1));
+
+    let codex = super::edit_tool_diffs(&item(
+        "修改文件",
+        r#"[{"path":"notes.txt","kind":{"type":"update"},"diff":"@@ -1 +1 @@\n-old\n+new"}]"#,
+    ))
+    .unwrap();
+    assert_eq!(codex[0].path, "notes.txt");
+    assert_eq!(codex[0].note, "更新");
+    assert_eq!((codex[0].added, codex[0].removed), (1, 1));
+}
+#[test]
+fn turn_file_stats_merge_repeated_edits_of_the_latest_turn() {
+    let item = |kind: ItemKind, title: &str, input: &str| ChatItem {
+        key: format!("{title}-{}", input.len()),
+        created_at: 0,
+        kind,
+        text: title.into(),
+        input: input.into(),
+        detail: String::new(),
+        status: "completed".into(),
+        approval: None,
+        model: None,
+    };
+    let mut s = session();
+    s.messages = vec![
+        item(
+            ItemKind::Tool,
+            "Write",
+            r#"{"file_path":"src/old.rs","content":"stale"}"#,
+        ),
+        item(ItemKind::User, "prompt", ""),
+        item(
+            ItemKind::Tool,
+            "Edit",
+            r#"{"file_path":"src/a.rs","old_string":"x","new_string":"y\nz"}"#,
+        ),
+        item(
+            ItemKind::Tool,
+            "Edit",
+            r#"{"file_path":"src/a.rs","old_string":"x\ny","new_string":"z"}"#,
+        ),
+        item(
+            ItemKind::Tool,
+            "Write",
+            r#"{"file_path":"src/b.rs","content":"one\ntwo"}"#,
+        ),
+        item(ItemKind::Tool, "pwsh", r#"{"command":"cargo test"}"#),
+    ];
+    let stats = super::turn_file_stats(&s);
+    assert_eq!(stats.files.len(), 2);
+    assert!(!stats.files.contains_key("src/old.rs"));
+    assert_eq!((stats.added, stats.removed), (5, 3));
+    let a = stats.files["src/a.rs"];
+    assert_eq!((a.added, a.removed), (3, 3));
+}
+#[test]
+fn plan_steps_follow_either_provider_shape_in_the_latest_turn() {
+    let todo = super::plan_steps_from_input(
+        r#"{"todos":[{"content":"Read code","status":"completed"},{"content":"Edit code","status":"in_progress"}]}"#,
+    )
+    .unwrap();
+    assert_eq!(todo.len(), 2);
+    assert_eq!(todo[0].status, super::PlanStatus::Completed);
+    assert_eq!(todo[1].status, super::PlanStatus::InProgress);
+
+    let item = |title: &str, input: &str| ChatItem {
+        key: title.into(),
+        created_at: 0,
+        kind: ItemKind::Tool,
+        text: title.into(),
+        input: input.into(),
+        detail: String::new(),
+        status: "completed".into(),
+        approval: None,
+        model: None,
+    };
+    let mut s = session();
+    s.messages = vec![
+        item(
+            "update_plan",
+            r#"{"plan":[{"step":"old step","status":"completed"}]}"#,
+        ),
+        ChatItem {
+            key: "prompt".into(),
+            created_at: 0,
+            kind: ItemKind::User,
+            text: "new turn".into(),
+            input: String::new(),
+            detail: String::new(),
+            status: String::new(),
+            approval: None,
+            model: None,
+        },
+        item(
+            "update_plan",
+            r#"{"plan":[{"step":"new step","status":"pending"}]}"#,
+        ),
+    ];
+    let plan = super::plan_from_messages(&s);
+    assert_eq!(plan.len(), 1);
+    assert_eq!(plan[0].text, "new step");
+    assert_eq!(plan[0].status, super::PlanStatus::Pending);
+}
+#[test]
+fn stats_paths_strip_the_workspace_prefix() {
+    assert_eq!(
+        super::workspace_relative_path("D:\\m\\conduit\\src\\app.rs", Some("D:\\m\\conduit")),
+        "src/app.rs"
+    );
+    assert_eq!(
+        super::workspace_relative_path("d:/m/conduit/README.md", Some("D:\\m\\conduit\\")),
+        "README.md"
+    );
+    assert_eq!(
+        super::workspace_relative_path("C:\\other\\file.rs", Some("D:\\m\\conduit")),
+        "C:/other/file.rs"
+    );
+    assert_eq!(
+        super::workspace_relative_path(
+            "D:\\m\\conduit\\src\\app.rs",
+            Some("\\\\?\\D:\\m\\conduit")
+        ),
+        "src/app.rs"
+    );
+}
+#[test]
+fn final_snapshot_replaces_stream_and_turns_keep_distinct_identity() {
+    let mut s = session();
+    for part in ["Hello", " world"] {
+        apply_event(
+            &mut s,
+            "turn-0",
+            Event::Delta {
+                key: "m1".into(),
+                text: part.into(),
+            },
+        );
+    }
+    apply_event(
+        &mut s,
+        "turn-0",
+        Event::Text {
+            key: "m1".into(),
+            text: "Hello world".into(),
+        },
+    );
+    assert_eq!(s.messages.len(), 1);
+    assert_eq!(s.messages[0].text, "Hello world");
+    apply_event(
+        &mut s,
+        "turn-1",
+        Event::Text {
+            key: "m1".into(),
+            text: "Second turn".into(),
+        },
+    );
+    assert_eq!(s.messages.len(), 2);
+    assert_eq!(s.messages[0].text, "Hello world");
+}
+#[test]
+fn command_output_updates_one_card_and_completion_replaces_partial_output() {
+    let mut s = session();
+    for (title, detail, status) in [
+        ("cargo check", "", "运行中"),
+        ("命令输出", "part", "输出中"),
+        ("命令输出", "ial", "输出中"),
+        ("cargo check", "partial\ndone", "completed"),
+    ] {
+        apply_event(
+            &mut s,
+            "turn-0",
+            Event::Tool {
+                key: "cmd1".into(),
+                title: title.into(),
+                detail: detail.into(),
+                status: status.into(),
+            },
+        );
+    }
+    assert_eq!(s.messages.len(), 1);
+    assert_eq!(s.messages[0].text, "cargo check");
+    assert_eq!(s.messages[0].detail, "partial\ndone");
+    assert_eq!(s.messages[0].status, "completed");
+}
+#[test]
+fn cancellation_only_marks_unfinished_tools_from_its_turn() {
+    let mut s = session();
+    for (prefix, key, status) in [
+        ("turn-0", "old", "运行中"),
+        ("turn-1", "done", "completed"),
+        ("turn-1", "active", "输出中"),
+    ] {
+        apply_event(
+            &mut s,
+            prefix,
+            Event::Tool {
+                key: key.into(),
+                title: "tool".into(),
+                detail: "partial result".into(),
+                status: status.into(),
+            },
+        );
+    }
+    finish_tool_cards(&mut s, "turn-1", "已取消");
+    assert!(s.messages.iter().all(|m| m.kind == ItemKind::Tool));
+    assert_eq!(s.messages[0].status, "运行中");
+    assert_eq!(s.messages[1].status, "completed");
+    assert_eq!(s.messages[2].status, "已取消");
+    assert_eq!(s.messages[2].detail, "partial result");
+}
+#[test]
+fn adjacent_duplicate_completed_blocks_are_collapsed() {
+    let mut s = session();
+    for (key, text) in [("a", "duplicate"), ("b", "duplicate"), ("c", "next")] {
+        apply_event(
+            &mut s,
+            "turn-0",
+            Event::Text {
+                key: key.into(),
+                text: text.into(),
+            },
+        );
+    }
+    assert_eq!(s.messages.len(), 2);
+    assert_eq!(s.messages[0].text, "duplicate");
+    assert_eq!(s.messages[1].text, "next");
+}
+#[test]
+fn failure_echoed_as_assistant_text_is_detected() {
+    assert!(same_failure("执行失败：boom", "boom"));
+    assert!(same_failure("boom", "执行失败：boom"));
+    assert!(same_failure(
+        "Failed to authenticate. API Error: 403\nmore detail",
+        "Failed to authenticate. API Error: 403\nmore detail"
+    ));
+    assert!(!same_failure("ok", "boom"));
+    assert!(!same_failure("", "boom"));
+}
+#[test]
+fn latest_naming_excerpt_prefers_recent_turns() {
+    let mut s = session();
+    assert_eq!(latest_naming_excerpt(&s), None);
+    for (index, (kind, text)) in [
+        (ItemKind::User, "旧问题"),
+        (ItemKind::Assistant, "旧回答"),
+        (ItemKind::Tool, "工具输出应忽略"),
+        (ItemKind::User, "新问题"),
+        (ItemKind::Assistant, "新回答"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        s.messages.push(ChatItem {
+            key: format!("m{index}"),
+            created_at: 0,
+            kind,
+            text: text.into(),
+            input: String::new(),
+            detail: String::new(),
+            status: String::new(),
+            approval: None,
+            model: None,
+        });
+    }
+    assert_eq!(
+        latest_naming_excerpt(&s).as_deref(),
+        Some("旧问题\n\n旧回答\n\n新问题\n\n新回答")
+    );
+    s.messages.push(ChatItem {
+        key: "long".into(),
+        created_at: 0,
+        kind: ItemKind::Assistant,
+        text: "长".repeat(1_000),
+        input: String::new(),
+        detail: String::new(),
+        status: String::new(),
+        approval: None,
+        model: None,
+    });
+    assert_eq!(latest_naming_excerpt(&s).unwrap().chars().count(), 800);
+}
+#[test]
+fn single_line_title_collapses_line_breaks() {
+    assert_eq!(
+        single_line_title("# AGENTS.md\n<INSTRUCTIONS>"),
+        "# AGENTS.md <INSTRUCTIONS>"
+    );
+    assert_eq!(single_line_title("第一行\r第二行"), "第一行 第二行");
+}
+#[test]
+fn session_search_matches_title_and_message_text() {
+    let mut s = session();
+    s.title = "Rust 重构计划".into();
+    s.messages.push(ChatItem {
+        key: "m1".into(),
+        created_at: 0,
+        kind: ItemKind::Assistant,
+        text: "let me check the ALPHA dependency".into(),
+        input: String::new(),
+        detail: String::new(),
+        status: String::new(),
+        approval: None,
+        model: None,
+    });
+    assert!(session_matches(&s, ""));
+    assert!(session_matches(&s, "rust"));
+    assert!(session_matches(&s, "alpha"));
+    assert!(!session_matches(&s, "beta"));
+    assert!(!session_matches(&s, "已归档"));
+}
+#[test]
+fn highlight_ranges_handle_unicode_and_case() {
+    assert_eq!(
+        highlight_ranges("Hello hello HELLO", "hello"),
+        vec![(0, 5), (6, 11), (12, 17)]
+    );
+    // "中文" is 6 bytes, so Markdown starts at byte 6 and ends at 14.
+    assert_eq!(
+        highlight_ranges("中文Markdown测试", "markdown"),
+        vec![(6, 14)]
+    );
+    assert_eq!(highlight_ranges("多字节中文测试", "中文"), vec![(9, 15)]);
+    assert!(highlight_ranges("", "x").is_empty());
+    assert!(highlight_ranges("abc", "").is_empty());
+    assert!(highlight_ranges("İstanbul", "i").iter().all(|(a, b)| a < b));
+}
+#[test]
+fn search_snippet_keeps_match_visible_for_multibyte_text() {
+    let text = "这是很多中文内容，然后出现 Markdown 关键词，后面继续一些内容。";
+    let snippet = search_snippet(text, "markdown");
+    assert!(snippet.to_lowercase().contains("markdown"));
+    assert!(snippet.chars().count() <= 162);
+}

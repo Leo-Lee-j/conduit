@@ -1,0 +1,1584 @@
+use super::{ChatItem, ChatTypography, file_ref, tool_content};
+use gpui_kit::{
+    Context, InteractiveElement, IntoElement, ParentElement, Render, ScrollDelta, ScrollHandle,
+    ScrollWheelEvent, StatefulInteractiveElement, Styled, TestAppContext, Window,
+    component::{WindowExt, v_flex},
+    div, point, px,
+};
+
+#[gpui_kit::test]
+fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut TestAppContext) {
+    use crate::{domain::Workspace, protocol::Event, store::Store};
+    use gpui_kit::AppContext as _;
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (runtime, sender) = crate::chat_runtime::ChatRuntime::test_channel();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut session = super::tests::session();
+            session.title = "状态布局回归".into();
+            let item = |key: &str, kind, text: &str, status: &str| ChatItem {
+                key: key.into(),
+                created_at: 0,
+                kind,
+                text: text.into(),
+                input: String::new(),
+                detail: String::new(),
+                status: status.into(),
+                approval: None,
+                model: None,
+            };
+            session.messages = vec![
+                item("user", super::ItemKind::User, "检查代码", ""),
+                item("turn-a", super::ItemKind::Tool, "Read", "completed"),
+                item("turn-b", super::ItemKind::Tool, "Read", "completed"),
+            ];
+            let path = std::env::temp_dir().join("conduit-status-ui");
+            let store = Store {
+                workspaces: vec![Workspace {
+                    path: path.clone(),
+                    sessions: vec![session],
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.writable = false;
+            app.runs.insert(
+                1,
+                super::ActiveRun::new(runtime, path, "turn".into(), Default::default(), None),
+            );
+            app.plans.insert(
+                1,
+                vec![super::PlanStep {
+                    text: "检查代码".into(),
+                    status: super::PlanStatus::InProgress,
+                }],
+            );
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let activity = cx.debug_bounds("engine-activity").unwrap();
+    let stats = cx.debug_bounds("turn-stats").unwrap();
+    let text = cx.debug_bounds("engine-activity-text").unwrap();
+    let spinner = cx.debug_bounds("engine-activity-spinner").unwrap();
+    assert!((activity.center().y - stats.center().y).abs() < px(1.));
+    assert!(spinner.left() >= text.right());
+    assert!(spinner.left() - text.right() <= px(10.));
+    assert!(cx.debug_bounds("activity-1-1").is_some());
+    assert!(cx.debug_bounds("activity-1-2").is_some());
+
+    sender
+        .send(Event::Delta {
+            key: "reply".into(),
+            text: "检查完成".into(),
+        })
+        .unwrap();
+    cx.update(|window, cx| app.update(cx, |this, cx| this.poll(window, cx)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("tool-group-header-1-1").is_some());
+    assert!(cx.debug_bounds("activity-1-1").is_none());
+    assert!(cx.debug_bounds("activity-1-2").is_none());
+    assert!(
+        cx.update(|_, cx| app.read(cx).runs.contains_key(&1)),
+        "collapse happens while the reply is streaming"
+    );
+}
+
+#[gpui_kit::test]
+fn empty_chat_blocks_have_no_chrome_and_streaming_replies_reflow_tool_groups(
+    cx: &mut TestAppContext,
+) {
+    use crate::{domain::Workspace, protocol::Event, store::Store};
+    use gpui_kit::AppContext as _;
+
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (runtime, sender) = crate::chat_runtime::ChatRuntime::test_channel();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut session = super::tests::session();
+            let item = |key: &str, kind, text: &str| ChatItem {
+                key: key.into(),
+                created_at: 0,
+                kind,
+                text: text.into(),
+                input: String::new(),
+                detail: String::new(),
+                status: "completed".into(),
+                approval: None,
+                model: None,
+            };
+            session.messages = vec![
+                item("user", super::ItemKind::User, "检查聊天排版"),
+                item("turn-before", super::ItemKind::Assistant, " \n"),
+                item("turn-a", super::ItemKind::Tool, "Read"),
+                item("turn-between", super::ItemKind::Assistant, ""),
+                item("turn-b", super::ItemKind::Tool, "exec_command"),
+                item("turn-reply", super::ItemKind::Assistant, ""),
+            ];
+            let path = std::env::temp_dir().join("conduit-empty-chat-ui");
+            let store = Store {
+                workspaces: vec![Workspace {
+                    path: path.clone(),
+                    sessions: vec![session],
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.writable = false;
+            app.runs.insert(
+                1,
+                super::ActiveRun::new(runtime, path, "turn".into(), Default::default(), None),
+            );
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    for (index, message, actions) in [
+        (1, "assistant-message-1", "reply-actions-1"),
+        (3, "assistant-message-3", "reply-actions-3"),
+        (5, "assistant-message-5", "reply-actions-5"),
+    ] {
+        assert!(cx.debug_bounds(message).is_none());
+        assert!(cx.debug_bounds(actions).is_none());
+        let height = cx.update(|_, cx| {
+            app.read(cx)
+                .scroll
+                .bounds_for_item(index)
+                .map_or(px(0.), |bounds| bounds.size.height)
+        });
+        assert_eq!(
+            height,
+            px(0.),
+            "empty stream blocks must not reserve row spacing"
+        );
+    }
+    let first = cx.debug_bounds("activity-1-2").unwrap();
+    let second = cx.debug_bounds("activity-1-4").unwrap();
+    assert!(second.top() - first.bottom() < px(10.));
+    assert!(cx.debug_bounds("tool-group-header-1-2").is_some());
+
+    sender
+        .send(Event::Delta {
+            key: "reply".into(),
+            text: "## 检查结果\n\n- 间距恢复正常\n- 工具记录保持紧凑".into(),
+        })
+        .unwrap();
+    cx.update(|window, cx| app.update(cx, |this, cx| this.poll(window, cx)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("assistant-message-5").is_some());
+    assert!(cx.debug_bounds("activity-1-2").is_none());
+    assert!(cx.debug_bounds("activity-1-4").is_none());
+    assert!(cx.debug_bounds("tool-group-header-1-2").is_some());
+
+    // A delayed text delta in the middle splits the collapsed group. Both
+    // tools must get their real heights back before this turn finishes.
+    sender
+        .send(Event::Delta {
+            key: "between".into(),
+            text: "读取文件完成。".into(),
+        })
+        .unwrap();
+    cx.update(|window, cx| app.update(cx, |this, cx| this.poll(window, cx)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("assistant-message-3").is_some());
+    assert!(cx.debug_bounds("tool-group-header-1-2").is_none());
+    assert!(cx.debug_bounds("activity-1-2").is_some());
+    assert!(cx.debug_bounds("activity-1-4").is_some());
+    assert!(cx.debug_bounds("message-row-4").unwrap().size.height > px(20.));
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert_eq!(app.session(1).unwrap().messages.len(), 6);
+    });
+}
+
+#[gpui_kit::test]
+fn session_naming_applies_success_and_reports_failure_without_starting_cli(
+    cx: &mut TestAppContext,
+) {
+    use crate::{domain::Workspace, protocol::Event, store::Store};
+    use gpui_kit::AppContext as _;
+
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut session = super::tests::session();
+            session.title = "原始标题".into();
+            session.messages.push(ChatItem {
+                key: "user".into(),
+                created_at: 0,
+                kind: super::ItemKind::User,
+                text: "优化聊天界面".into(),
+                input: String::new(),
+                detail: String::new(),
+                status: String::new(),
+                approval: None,
+                model: None,
+            });
+            let store = Store {
+                workspaces: vec![Workspace {
+                    path: std::env::temp_dir().join("conduit-naming-ui"),
+                    sessions: vec![session],
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.writable = false;
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.update(|_, cx| {
+        app.update(cx, |this, cx| {
+            for (reply, error, expected) in [
+                ("聊天界面优化", None, None),
+                ("", Some("模拟网络失败"), Some("模拟网络失败")),
+                ("", None, Some("模型未返回有效标题")),
+            ] {
+                let (runtime, sender) = crate::chat_runtime::ChatRuntime::test_channel();
+                this.naming_errors.remove(&1);
+                this.session_namings.insert(
+                    1,
+                    super::SessionNaming {
+                        runtime,
+                        started: std::time::Instant::now(),
+                        parts: vec![],
+                        error: None,
+                    },
+                );
+                this.poll_session_namings(cx);
+                assert!(this.session_namings.contains_key(&1));
+                sender
+                    .send(Event::Text {
+                        key: "title".into(),
+                        text: reply.into(),
+                    })
+                    .unwrap();
+                sender
+                    .send(Event::Finished {
+                        error: error.map(String::from),
+                        cancelled: false,
+                    })
+                    .unwrap();
+                this.poll_session_namings(cx);
+                assert!(!this.session_namings.contains_key(&1));
+                assert_eq!(this.naming_errors.get(&1).map(String::as_str), expected);
+                assert_eq!(this.session(1).unwrap().title, "聊天界面优化");
+            }
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mut TestAppContext) {
+    use crate::{
+        domain::{Provider, SessionRecord, Workspace},
+        protocol::{Approval, ApprovalKind, Event},
+        store::Store,
+    };
+    use gpui_kit::AppContext as _;
+
+    let session = |id, provider, native: &str| SessionRecord {
+        id,
+        provider,
+        native_id: Some(native.into()),
+        title: format!("Chat {id}"),
+        created_at: 0,
+        exit_code: None,
+        archived: false,
+        model: None,
+        messages: vec![],
+        interrupted: true,
+        permission: Default::default(),
+        usage: Default::default(),
+    };
+    let root = std::env::temp_dir().join("conduit-concurrent-ui");
+    let other = root.join("other");
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut app = super::ConduitApp::new(window, cx, false, false);
+            app.store = Store {
+                workspaces: vec![
+                    Workspace {
+                        path: root.clone(),
+                        sessions: vec![
+                            session(1, Provider::Claude, "first"),
+                            session(2, Provider::Codex, "second"),
+                            session(4, Provider::Claude, "first"),
+                        ],
+                    },
+                    Workspace {
+                        path: other.clone(),
+                        sessions: vec![session(3, Provider::Claude, "third")],
+                    },
+                ],
+                ..Default::default()
+            };
+            // Event routing is read-only in this test; no real state or CLI calls.
+            app.writable = false;
+            app.selected_workspace = Some(0);
+            app.selected_session = Some(1);
+            app.new_session_provider = Provider::Claude;
+            app.runs.clear();
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            let mut senders = std::collections::HashMap::new();
+            for (id, path) in [(1, &root), (2, &root), (3, &other)] {
+                this.selected_workspace = Some(if id == 3 { 1 } else { 0 });
+                this.selected_session = Some(id);
+                this.new_session_provider = this.session(id).unwrap().provider;
+                assert!(
+                    this.send_blocked(true).is_none(),
+                    "other sessions cannot block {id}"
+                );
+                let (runtime, sender) = crate::chat_runtime::ChatRuntime::test_channel();
+                this.runs.insert(
+                    id,
+                    super::ActiveRun::new(
+                        runtime,
+                        path.clone(),
+                        "turn-0".into(),
+                        Default::default(),
+                        None,
+                    ),
+                );
+                senders.insert(id, sender);
+            }
+            assert_eq!(this.runs.len(), 3);
+            assert!(this.worktree_has_runs(&root));
+            assert!(this.worktree_has_runs(&other));
+            assert!(!this.worktree_has_runs(&root.join("unrelated")));
+            assert!(
+                this.session_busy(4),
+                "aliases cannot resume the same native context twice"
+            );
+            this.selected_workspace = Some(0);
+            this.selected_session = Some(1);
+            this.new_session_provider = Provider::Claude;
+            this.writable = true;
+            assert!(!this.send_text("duplicate".into(), true, window, cx));
+            this.writable = false;
+            assert!(this.session(1).unwrap().messages.is_empty());
+            assert_eq!(
+                this.runs.len(),
+                3,
+                "duplicate sends must not replace a runtime"
+            );
+            this.delete_session(1, cx);
+            assert!(
+                this.session(1).is_some(),
+                "active sessions remain addressable until cleanup"
+            );
+            this.new_session_provider = Provider::Codex;
+            assert_eq!(this.send_target(true), None);
+            assert!(
+                this.send_blocked(true).is_none(),
+                "engine switch targets a new conversation"
+            );
+            assert!(
+                this.send_blocked(false).is_some(),
+                "regeneration keeps its current conversation"
+            );
+            this.new_session_provider = Provider::Claude;
+
+            for id in [1, 2, 3] {
+                senders[&id]
+                    .send(Event::Delta {
+                        key: "reply".into(),
+                        text: format!("reply-{id}"),
+                    })
+                    .unwrap();
+                senders[&id]
+                    .send(Event::Approval(Approval {
+                        id: "approval-1".into(),
+                        title: format!("request-{id}"),
+                        detail: "{}".into(),
+                        wire_id: serde_json::json!(1),
+                        input: serde_json::Value::Null,
+                        allow_once: true,
+                        kind: ApprovalKind::Command,
+                    }))
+                    .unwrap();
+            }
+            this.poll(window, cx);
+            for id in [1, 2, 3] {
+                assert_eq!(
+                    this.session(id).unwrap().messages[0].text,
+                    format!("reply-{id}")
+                );
+                assert_eq!(
+                    this.runs[&id].approvals.front().unwrap().title,
+                    format!("request-{id}")
+                );
+                this.toggle_approval_detail(id, "approval-1".into(), cx);
+            }
+            senders[&1]
+                .send(Event::ApprovalResolved {
+                    id: "approval-1".into(),
+                    allow: true,
+                })
+                .unwrap();
+            this.poll(window, cx);
+            assert!(this.runs[&1].expanded_approvals.is_empty());
+            for id in [2, 3] {
+                assert!(this.runs[&id].expanded_approvals.contains("approval-1"));
+                assert_eq!(this.runs[&id].approvals.len(), 1);
+            }
+            this.finish_history_import(
+                &root,
+                vec![crate::history::ImportedSession {
+                    provider: Provider::Claude,
+                    native_id: "first".into(),
+                    created_at: 0,
+                    title: "stale history".into(),
+                    model: None,
+                    messages: vec![],
+                }],
+                true,
+                window,
+                cx,
+            );
+            assert_eq!(this.session(1).unwrap().messages[0].text, "reply-1");
+            this.runs.get_mut(&1).unwrap().cancel();
+            assert!(this.runs[&1].runtime.is_cancelled());
+            for id in [2, 3] {
+                assert!(!this.runs[&id].runtime.is_cancelled());
+            }
+            senders[&1]
+                .send(Event::Finished {
+                    error: None,
+                    cancelled: true,
+                })
+                .unwrap();
+            senders[&2]
+                .send(Event::Delta {
+                    key: "reply".into(),
+                    text: "-continued".into(),
+                })
+                .unwrap();
+            this.poll(window, cx);
+            assert!(!this.runs.contains_key(&1));
+            assert_eq!(this.runs.len(), 2);
+            assert_eq!(
+                this.session(2).unwrap().messages[0].text,
+                "reply-2-continued"
+            );
+            assert!(!this.session(1).unwrap().interrupted);
+            assert!(this.session(2).unwrap().interrupted);
+            assert!(
+                this.send_blocked(true).is_none(),
+                "finished session can send while its neighbour runs"
+            );
+            assert!(
+                this.workspace_busy(0),
+                "workspace removal still waits for every task"
+            );
+            assert!(this.workspace_busy(1));
+            this.git_operation = Some(super::GitOperation {
+                probe: crate::git::OperationProbe::test_pending(root.clone()),
+                worktree: root.clone(),
+                draft: String::new(),
+            });
+            assert!(this.send_blocked(true).unwrap().contains("提交或推送"));
+            this.selected_workspace = Some(1);
+            this.selected_session = None;
+            assert!(
+                this.send_blocked(true).is_none(),
+                "Git writes cannot block another workspace"
+            );
+            this.runs.clear();
+            assert!(
+                !this.workspace_busy(1),
+                "unrelated Git writes cannot block workspace removal"
+            );
+            assert!(this.workspace_busy(0));
+            this.git_operation = None;
+        });
+    });
+}
+
+#[gpui_kit::test]
+fn long_chat_virtualizes_real_rows_and_keeps_history_jump_on_append(cx: &mut TestAppContext) {
+    use crate::{
+        domain::{ItemKind, PermissionLevel, Provider, SessionRecord, Usage, Workspace},
+        store::Store,
+    };
+    use gpui_kit::AppContext;
+    cx.update(gpui_kit::init);
+    let app_slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let slot = app_slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut app = super::ConduitApp::new(window, cx, false, false);
+            let messages = (0..10_000)
+                .map(|index| ChatItem {
+                    key: format!("message-{index}"),
+                    created_at: 0,
+                    kind: if index % 2 == 0 {
+                        ItemKind::User
+                    } else {
+                        ItemKind::Notice
+                    },
+                    text: format!("历史消息 {index}"),
+                    input: String::new(),
+                    detail: String::new(),
+                    status: String::new(),
+                    approval: None,
+                    model: None,
+                })
+                .collect();
+            app.store = Store {
+                workspaces: vec![Workspace {
+                    path: std::env::temp_dir(),
+                    sessions: vec![SessionRecord {
+                        id: 1,
+                        provider: Provider::Claude,
+                        title: "Long chat".into(),
+                        created_at: 0,
+                        exit_code: None,
+                        archived: false,
+                        native_id: None,
+                        model: None,
+                        messages,
+                        interrupted: false,
+                        permission: PermissionLevel::default(),
+                        usage: Usage::default(),
+                    }],
+                }],
+                ..Default::default()
+            };
+            app.selected_workspace = Some(0);
+            app.selected_session = Some(1);
+            app
+        });
+        *slot.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = app_slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        let monitor = app.performance.read(cx);
+        assert_eq!(monitor.message_count, 10_000);
+        assert_eq!(app.outline.entries.len(), 5_000);
+        assert!(app.outline.scroll.0.borrow().last_item_size.is_some());
+        assert!(monitor.mounted_messages() > 0);
+        assert!(
+            monitor.mounted_messages() < 100,
+            "offscreen rows must not be constructed"
+        );
+    });
+    cx.update(|_, cx| app.update(cx, |app, cx| app.jump_to_message(1, "message-5000", cx)));
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let before = cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert!(app.scroll.bounds_for_item(5000).is_some());
+        assert!(!app.at_bottom);
+        app.scroll.logical_scroll_top()
+    });
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            super::apply_event(
+                app.session_mut(1).unwrap(),
+                "turn-new",
+                crate::protocol::Event::Delta {
+                    key: "reply".into(),
+                    text: "new streaming content".into(),
+                },
+            );
+            cx.notify();
+        })
+    });
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        let after = app.scroll.logical_scroll_top();
+        assert_eq!(
+            (after.item_ix, after.offset_in_item),
+            (before.item_ix, before.offset_in_item),
+            "new tail content must not pull readers away from history"
+        );
+        assert!(app.performance.read(cx).mounted_messages() < 100);
+    });
+}
+
+struct ToolScrollFixture {
+    outer: ScrollHandle,
+    inner: ScrollHandle,
+    sibling: ScrollHandle,
+    item: ChatItem,
+    typography: ChatTypography,
+}
+
+impl Render for ToolScrollFixture {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        // Exercise the production tool body inside another scrolling list.
+        div().size_full().child(
+            div()
+                .id("outer")
+                .w(px(600.))
+                .h(px(320.))
+                .overflow_y_scroll()
+                .track_scroll(&self.outer)
+                .child(
+                    v_flex()
+                        .gap_4()
+                        .child(tool_content("first", &self.item, &self.inner, &self.typography).0)
+                        .child(
+                            tool_content("second", &self.item, &self.sibling, &self.typography).0,
+                        ),
+                ),
+        )
+    }
+}
+
+#[gpui_kit::test]
+fn expanded_tool_long_text_scrolls_inside_its_fixed_viewport(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let outer = ScrollHandle::new();
+    let inner = ScrollHandle::new();
+    let sibling = ScrollHandle::new();
+    let (_, cx) = cx.add_window_view(|_, _| ToolScrollFixture {
+        outer: outer.clone(),
+        inner: inner.clone(),
+        sibling: sibling.clone(),
+        typography: ChatTypography {
+            body_font: None,
+            body_size: 15.0,
+            line_height: 1.5,
+            code_font: "Consolas".into(),
+            code_size: 12.0,
+            code_copy: true,
+            syntax_highlight: true,
+        },
+        item: serde_json::from_value(serde_json::json!({
+            "key":"tool", "kind":"Tool", "text":"Bash", "input":"{\"command\":\"test\"}",
+            "detail": (0..200).map(|i| format!("line {i}: 中文 output\n")).collect::<String>(),
+            "status":"完成"
+        }))
+        .unwrap(),
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert_eq!(inner.bounds().size.height, px(240.));
+    assert!(
+        inner.max_offset().y > px(1000.),
+        "long output must retain its natural height"
+    );
+    let outer_before = outer.offset();
+    let sibling_before = sibling.offset();
+    cx.simulate_event(ScrollWheelEvent {
+        position: inner.bounds().center(),
+        delta: ScrollDelta::Pixels(point(px(0.), px(-120.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(inner.offset().y < px(0.), "wheel must scroll tool text");
+    assert_eq!(
+        outer.offset(),
+        outer_before,
+        "tool scrolling must leave chat in place"
+    );
+    assert_eq!(
+        sibling.offset(),
+        sibling_before,
+        "other tools have independent scroll state"
+    );
+    let inner_before = inner.offset();
+    cx.simulate_event(ScrollWheelEvent {
+        // The gap between cards belongs to the outer chat viewport.
+        position: point(px(30.), px(248.)),
+        delta: ScrollDelta::Pixels(point(px(0.), px(-80.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(outer.offset().y < outer_before.y);
+    assert_eq!(inner.offset(), inner_before);
+}
+
+/// Drives a real pointer drag across an assistant reply inside the
+/// production virtual list and reports what the selection state and the
+/// painted highlight do at each pointer position.
+#[gpui_kit::test]
+fn drag_across_assistant_reply_tracks_the_pointer(cx: &mut TestAppContext) {
+    use crate::{
+        domain::{ItemKind, PermissionLevel, Provider, SessionRecord, Usage, Workspace},
+        store::Store,
+    };
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton, base::TextSelection};
+
+    const USER_PROMPT: &str = "USER_PROMPT_TEXT enough words to make a wide selectable user bubble for checking repaint during dragging across the text.";
+    const REPLY: &str = "第一段回复内容用于验证拖拽选中是否跟随指针移动，这里需要足够长的中文来覆盖两行以上的文本区域。第二段内容继续保持长度以便跨行拖拽选中。";
+
+    cx.update(gpui_kit::init);
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut app = super::ConduitApp::new(window, cx, false, false);
+            let item = |key: &str, kind: ItemKind, text: &str| ChatItem {
+                key: key.into(),
+                created_at: 0,
+                kind,
+                text: text.into(),
+                input: String::new(),
+                detail: String::new(),
+                status: String::new(),
+                approval: None,
+                model: None,
+            };
+            app.store = Store {
+                workspaces: vec![Workspace {
+                    path: std::env::temp_dir(),
+                    sessions: vec![SessionRecord {
+                        id: 1,
+                        provider: Provider::Claude,
+                        title: "选中".into(),
+                        created_at: 0,
+                        exit_code: None,
+                        archived: false,
+                        native_id: None,
+                        model: None,
+                        messages: vec![
+                            item("user-1", ItemKind::User, USER_PROMPT),
+                            item("reply-1", ItemKind::Assistant, REPLY),
+                        ],
+                        interrupted: false,
+                        permission: PermissionLevel::default(),
+                        usage: Usage::default(),
+                    }],
+                }],
+                ..Default::default()
+            };
+            app.selected_workspace = Some(0);
+            app.selected_session = Some(1);
+            app
+        });
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    // The virtual list reports no item bounds until it has been scrolled,
+    // so find a painted text line by probing short drags instead.
+    let probe = |cx: &mut gpui_kit::VisualTestContext, x, y| {
+        cx.simulate_mouse_down(point(x, y), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(
+            point(x + px(30.), y),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            point(x + px(30.), y),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.update(TextSelection::selected_text).trim().to_string()
+    };
+    let mut line = None;
+    'probe: for y in (120..1000).step_by(12) {
+        for x in [360, 560, 760] {
+            let selected = probe(cx, px(x as f32), px(y as f32));
+            if selected.is_empty() {
+                continue;
+            }
+            if REPLY.contains(&selected) {
+                line = Some((px(x as f32), px(y as f32), selected));
+                break 'probe;
+            }
+        }
+    }
+    let (anchor_x, y, found) = line.expect("a selectable reply text line");
+    assert!(found.len() > 3, "probe must land inside a word: {found}");
+
+    let read = |cx: &mut gpui_kit::VisualTestContext| {
+        let selected = cx.update(TextSelection::selected_text).trim().to_string();
+        let painted = cx.update(|window, cx| {
+            let color: gpui_kit::Background = gpui_kit::base::Theme::global(cx)
+                .tokens
+                .colors
+                .selection
+                .into();
+            let scale = window.scale_factor();
+            let mut right = px(0.);
+            let mut count = 0usize;
+            for quad in window.painted_quads() {
+                if quad.background != color {
+                    continue;
+                }
+                let bounds = quad.bounds.map(|value| px(value.0 / scale));
+                count += 1;
+                right = right.max(bounds.right());
+            }
+            (count, right)
+        });
+        (selected, painted)
+    };
+
+    cx.simulate_mouse_down(
+        point(anchor_x + px(10.), y),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let move_to = |cx: &mut gpui_kit::VisualTestContext, x: gpui_kit::Pixels| {
+        cx.simulate_mouse_move(point(x, y), Some(MouseButton::Left), Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        read(cx)
+    };
+    let (at_mid, painted_mid) = move_to(cx, anchor_x + px(150.));
+    let (at_far, painted_far) = move_to(cx, anchor_x + px(330.));
+    cx.simulate_mouse_up(
+        point(anchor_x + px(330.), y),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.run_until_parked();
+
+    assert!(!at_mid.is_empty(), "drag must select reply text");
+    assert!(
+        REPLY.contains(&at_mid),
+        "selection must stay inside the reply: {at_mid}"
+    );
+    assert!(
+        at_far.chars().count() > at_mid.chars().count(),
+        "selection must grow with the pointer: {at_mid} -> {at_far}"
+    );
+    assert!(
+        painted_mid.0 > 0,
+        "the highlight must be painted while dragging"
+    );
+    assert!(
+        painted_far.1 > painted_mid.1,
+        "the painted highlight must follow the pointer: {:?} -> {:?}",
+        painted_mid.1,
+        painted_far.1
+    );
+
+    // Ctrl+C only reaches the window root's copy handler because the
+    // selection drag handed keyboard focus back to the conversation.
+    cx.update(|window, cx| {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("SENTINEL".into()));
+        window.dispatch_action(Box::new(gpui_kit::component::input::Copy), cx);
+    });
+    cx.run_until_parked();
+    let copied = cx.update(|_, cx| {
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .unwrap_or_default()
+    });
+    assert_eq!(copied, at_far, "Ctrl+C must copy the chat selection");
+
+    let mut user_line = None;
+    let bubble = cx
+        .debug_bounds("user-bubble-0")
+        .expect("a visible user bubble");
+    'probe_user: for user_y in
+        ((f32::from(bubble.top()) + 8.) as i32..f32::from(bubble.bottom()) as i32).step_by(8)
+    {
+        for user_x in
+            ((f32::from(bubble.left()) + 16.) as i32..f32::from(bubble.right()) as i32).step_by(40)
+        {
+            let selected = probe(cx, px(user_x as f32), px(user_y as f32));
+            if !selected.is_empty() && USER_PROMPT.contains(&selected) {
+                user_line = Some((px(user_x as f32), px(user_y as f32)));
+                break 'probe_user;
+            }
+        }
+    }
+    let (user_x, user_y) = user_line.expect("a selectable user text line");
+    cx.simulate_mouse_down(
+        point(user_x + px(10.), user_y),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.run_until_parked();
+    let drag_user = |cx: &mut gpui_kit::VisualTestContext, x: f32| {
+        cx.simulate_mouse_move(
+            point(user_x + px(x), user_y),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        read(cx)
+    };
+    let (user_mid, user_painted_mid) = drag_user(cx, 100.);
+    let (user_far, user_painted_far) = drag_user(cx, 220.);
+    assert!(
+        !user_mid.is_empty(),
+        "user selection should update during drag"
+    );
+    assert!(
+        USER_PROMPT.contains(&user_mid),
+        "unexpected user selection: {user_mid}"
+    );
+    assert!(user_far.chars().count() > user_mid.chars().count());
+    assert!(
+        user_painted_mid.0 > 0,
+        "user highlight should paint during drag"
+    );
+    assert!(user_painted_far.1 > user_painted_mid.1);
+    cx.simulate_mouse_up(
+        point(user_x + px(220.), user_y),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn sidebar_bottom_bar_matches_the_toolbar_and_opens_about(cx: &mut TestAppContext) {
+    use gpui_kit::AppContext;
+    cx.update(gpui_kit::init);
+    let app_slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let slot = app_slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| super::ConduitApp::new(window, cx, false, false));
+        *slot.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = app_slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        // Both bottom bars are 34px strips pinned to the window edge. The
+        // rail used to carry its own bottom padding, which lifted the left
+        // bar above the conversation toolbar.
+        let scale = window.scale_factor();
+        let height = f32::from(window.viewport_size().height);
+        let mut bars: Vec<(f32, f32, f32)> = Vec::new();
+        for quad in window.painted_quads() {
+            let bounds = quad.bounds.map(|value| px(value.0 / scale));
+            let top = f32::from(bounds.top());
+            let bar_height = f32::from(bounds.size.height);
+            if top < height - 60.
+                || (bar_height - 34.).abs() > 4.
+                || f32::from(bounds.size.width) < 60.
+            {
+                continue;
+            }
+            bars.push((top, f32::from(bounds.left()), bar_height));
+        }
+        let rail = bars
+            .iter()
+            .find(|(_, left, _)| *left < 100.)
+            .expect("the sidebar bottom bar must be painted");
+        let toolbar = bars
+            .iter()
+            .find(|(_, left, _)| *left > 200.)
+            .expect("the conversation toolbar must be painted");
+        assert!(
+            (rail.0 - toolbar.0).abs() < 1. && (rail.2 - toolbar.2).abs() < 1.,
+            "both bottom bars must be the same height on the same line: {bars:?}"
+        );
+        assert!(
+            (rail.0 + rail.2 - height).abs() < 1.,
+            "the bottom bars must reach the window edge: {bars:?} / {height}"
+        );
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| this.open_about_dialog(window, cx));
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(
+            window.has_active_dialog(cx),
+            "about icon must open a dialog"
+        );
+        let _ = window.draw(cx);
+    });
+    cx.update(|window, cx| {
+        window.close_dialog(cx);
+        assert!(!window.has_active_dialog(cx));
+        let _ = window.draw(cx);
+    });
+}
+
+/// 资源管理器把文件拖到窗口上时，gpui 会发出一个载荷为 `ExternalPaths` 的拖拽；
+/// 这里从平台事件一路打到输入框，验证 composer 的 drop 接线确实生效。
+#[gpui_kit::test]
+fn platform_file_drop_becomes_a_reference_in_the_composer(cx: &mut TestAppContext) {
+    use crate::{domain::Workspace, store::Store};
+    use gpui_kit::{AppContext as _, ExternalPaths, FileDropEvent};
+
+    let workspace = std::env::temp_dir();
+    let dropped = workspace.join(format!("conduit-drop-{}.rs", std::process::id()));
+    std::fs::write(&dropped, b"fn dropped() {}\n").unwrap();
+    let mention = dropped.file_name().unwrap().to_string_lossy().to_string();
+
+    cx.update(gpui_kit::init);
+    let app_slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let slot = app_slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut app = super::ConduitApp::new(window, cx, false, false);
+            app.store = Store {
+                workspaces: vec![Workspace {
+                    path: workspace.clone(),
+                    sessions: vec![],
+                }],
+                ..Default::default()
+            };
+            app.selected_workspace = Some(0);
+            app.writable = true;
+            app
+        });
+        *slot.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = app_slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    let mut paths = ExternalPaths::default();
+    paths.0.push(dropped.clone());
+    let pending_prompt = |cx: &mut gpui_kit::VisualTestContext| {
+        cx.update(|_, cx| {
+            let app = app.read(cx);
+            assert!(
+                app.input.read(cx).value().is_empty(),
+                "adding files must leave prose untouched"
+            );
+            file_ref::compose_prompt(
+                "",
+                app.current_files()
+                    .map(|files| files.references.as_slice())
+                    .unwrap_or_default(),
+            )
+        })
+    };
+    // 输入区贴在对话列底部，从下往上找它的命中区域，避免写死窗口坐标。
+    let height = cx.update(|window, _| f32::from(window.viewport_size().height));
+    let width = cx.update(|window, _| f32::from(window.viewport_size().width));
+    let mut added = false;
+    for offset in [30., 70., 110., 150.] {
+        let position = point(px(width / 2.), px(height - offset));
+        cx.simulate_event(FileDropEvent::Entered {
+            position,
+            paths: paths.clone(),
+        });
+        cx.simulate_event(FileDropEvent::Submit { position });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        if pending_prompt(cx).contains(&mention) {
+            added = true;
+            break;
+        }
+    }
+    assert!(
+        added,
+        "a drop inside the composer must add a file reference"
+    );
+    let text = pending_prompt(cx);
+    assert!(
+        text.contains("引用文件："),
+        "the reference block must be labelled: {text}"
+    );
+    assert!(
+        !text.contains(&workspace.display().to_string()),
+        "the mention must stay workspace-relative: {text}"
+    );
+    let _ = std::fs::remove_file(&dropped);
+}
+
+/// 工作区之外的文件也必须能引用：既已证明拖拽会走到 attach_paths，这里验证它的
+/// 引用形式——相对化无从谈起，就用绝对路径，两类路径可以同时挂进输入框。
+#[gpui_kit::test]
+fn attaching_a_file_outside_the_workspace_uses_an_absolute_mention(cx: &mut TestAppContext) {
+    use crate::{domain::Workspace, store::Store};
+    use gpui_kit::AppContext as _;
+
+    let workspace =
+        std::env::temp_dir().join(format!("conduit-drop-workspace-{}", std::process::id()));
+    std::fs::create_dir_all(&workspace).unwrap();
+    let outside =
+        std::env::temp_dir().join(format!("conduit-drop-outside-{}.rs", std::process::id()));
+    std::fs::write(&outside, b"fn outside() {}\n").unwrap();
+    let inside = workspace.join(format!("conduit-drop-inside-{}.rs", std::process::id()));
+    std::fs::write(&inside, b"fn inside() {}\n").unwrap();
+
+    cx.update(gpui_kit::init);
+    let app_slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let slot = app_slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut app = super::ConduitApp::new(window, cx, false, false);
+            app.store = Store {
+                workspaces: vec![Workspace {
+                    path: workspace.clone(),
+                    sessions: vec![],
+                }],
+                ..Default::default()
+            };
+            app.selected_workspace = Some(0);
+            app.writable = true;
+            app
+        });
+        *slot.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = app_slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            this.attach_paths(&[outside.clone(), inside.clone()], window, cx);
+        });
+    });
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert!(
+            app.message.is_none(),
+            "both paths are usable, so nothing may be skipped: {:?}",
+            app.message
+        );
+        assert!(app.input.read(cx).value().is_empty());
+        let files = app
+            .current_files()
+            .expect("files must be staged separately");
+        assert!(files.feedback.is_none());
+        let text = file_ref::compose_prompt("", &files.references);
+        let name = |path: &std::path::Path| path.file_name().unwrap().to_string_lossy().to_string();
+        let outside_mention = text
+            .lines()
+            .find(|line| line.contains(&name(&outside)))
+            .expect("the outside file must appear as a reference");
+        let outside_mention = outside_mention
+            .strip_prefix("- ")
+            .expect("references are listed one per line")
+            .to_string();
+        assert!(
+            std::path::Path::new(&outside_mention).is_absolute(),
+            "an outside reference has to stay resolvable: {outside_mention}"
+        );
+        assert!(
+            text.contains(&format!("- {}", name(&inside))),
+            "the inside reference stays relative: {text}"
+        );
+    });
+    let _ = std::fs::remove_file(&outside);
+    let _ = std::fs::remove_file(&inside);
+    let _ = std::fs::remove_dir(&workspace);
+}
+#[gpui_kit::test]
+fn composer_files_paste_drafts_removal_and_failed_send(cx: &mut TestAppContext) {
+    use crate::{
+        domain::{Provider, SessionRecord, Workspace},
+        store::Store,
+    };
+    use gpui_kit::{AppContext as _, ClipboardEntry, ClipboardItem, ExternalPaths, Focusable};
+
+    let root = std::env::temp_dir().join(format!("conduit-composer-files-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let first = root.join("first.rs");
+    let second = root.join("second.rs");
+    std::fs::write(&first, b"fn first() {}").unwrap();
+    std::fs::write(&second, b"fn second() {}").unwrap();
+    let session = |id| SessionRecord {
+        id,
+        provider: Provider::Claude,
+        created_at: 0,
+        exit_code: None,
+        title: format!("Chat {id}"),
+        archived: false,
+        native_id: None,
+        model: None,
+        messages: vec![],
+        interrupted: false,
+        permission: Default::default(),
+        usage: Default::default(),
+    };
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut app = super::ConduitApp::new(window, cx, false, false);
+            app.store = Store {
+                workspaces: vec![Workspace {
+                    path: root.clone(),
+                    sessions: vec![session(1), session(2)],
+                }],
+                ..Default::default()
+            };
+            app.store.ui.last_provider = Some(Provider::Claude);
+            app.selected_workspace = Some(0);
+            app.selected_session = None;
+            app.writable = true;
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            this.input
+                .update(cx, |input, cx| input.set_value("保留正文", window, cx));
+            this.attach_paths(&[first.clone(), root.join("missing.rs")], window, cx);
+            let files = this.current_files().unwrap();
+            assert_eq!(files.references.len(), 1);
+            assert!(files.feedback.as_ref().unwrap().contains("missing.rs"));
+            assert_eq!(this.input.read(cx).value().as_ref(), "保留正文");
+            cx.write_to_clipboard(ClipboardItem {
+                entries: vec![ClipboardEntry::ExternalPaths(ExternalPaths(
+                    [first.clone(), second.clone()].into_iter().collect(),
+                ))],
+            });
+        })
+    });
+    cx.simulate_keystrokes("ctrl-v");
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            assert_eq!(
+                this.current_files().unwrap().references.len(),
+                2,
+                "paste must merge files without duplicates"
+            );
+            assert_eq!(this.input.read(cx).value().as_ref(), "保留正文");
+            this.attach_paths(std::slice::from_ref(&first), window, cx);
+            assert!(
+                this.current_files()
+                    .unwrap()
+                    .feedback
+                    .as_ref()
+                    .unwrap()
+                    .contains("无需重复")
+            );
+            this.switch(0, Some(1), window, cx);
+            assert!(this.current_files().is_none());
+            this.attach_paths(std::slice::from_ref(&second), window, cx);
+            this.switch(0, Some(2), window, cx);
+            assert!(this.current_files().is_none());
+            this.switch(0, Some(1), window, cx);
+            let path = this.current_files().unwrap().references[0].path.clone();
+            this.remove_file(&path, window, cx);
+            assert!(this.current_files().unwrap().references.is_empty());
+            this.switch(0, None, window, cx);
+            assert_eq!(this.current_files().unwrap().references.len(), 2);
+            assert_eq!(this.input.read(cx).value().as_ref(), "保留正文");
+            std::fs::remove_file(&first).unwrap();
+            this.send_prompt(window, cx);
+            assert_eq!(this.selected_session, None);
+            assert!(this.runs.is_empty(), "invalid files must not start a CLI");
+            assert_eq!(
+                this.current_files().unwrap().references.len(),
+                2,
+                "failed send must preserve files"
+            );
+            assert!(
+                this.current_files()
+                    .unwrap()
+                    .feedback
+                    .as_ref()
+                    .unwrap()
+                    .contains("first.rs")
+            );
+            assert_eq!(this.input.read(cx).value().as_ref(), "保留正文");
+            // Read-only input must reject drops without changing its draft.
+            this.writable = false;
+            this.attach_paths(&[root.join("readonly.rs")], window, cx);
+            assert_eq!(this.current_files().unwrap().references.len(), 2);
+            this.writable = true;
+            this.input.read(cx).focus_handle(cx).focus(window, cx);
+            cx.write_to_clipboard(ClipboardItem::new_string("纯文本".into()));
+        })
+    });
+    cx.simulate_keystrokes("ctrl-v");
+    cx.update(|_, cx| {
+        assert!(
+            app.read(cx).input.read(cx).value().contains("纯文本"),
+            "ordinary text paste must keep working"
+        );
+    });
+    std::fs::remove_file(second).unwrap();
+    let _ = std::fs::remove_dir(root);
+}
+#[gpui_kit::test]
+fn attachment_tags_size_to_names_and_sent_files_start_at_the_right(cx: &mut TestAppContext) {
+    use crate::{
+        domain::{ItemKind, Provider, SessionRecord, Workspace},
+        file_ref::FileReference,
+        store::Store,
+    };
+    use gpui_kit::AppContext as _;
+
+    let workspace = std::env::temp_dir();
+    let references = [
+        "a.rs".to_string(),
+        "a_descriptive_filename.rs".to_string(),
+        format!("{}.rs", "long_name_".repeat(18)),
+    ]
+    .into_iter()
+    .map(|name| FileReference {
+        path: workspace.join(&name),
+        mention: name,
+    })
+    .collect::<Vec<_>>();
+    let prompt = file_ref::compose_prompt("这个文档里有什么内容", &references);
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut app = super::ConduitApp::new(window, cx, false, false);
+            app.store = Store {
+                workspaces: vec![Workspace {
+                    path: workspace.clone(),
+                    sessions: vec![SessionRecord {
+                        id: 1,
+                        provider: Provider::Claude,
+                        created_at: 0,
+                        exit_code: None,
+                        title: "Files".into(),
+                        archived: false,
+                        native_id: None,
+                        model: None,
+                        messages: vec![ChatItem {
+                            key: "user-files".into(),
+                            created_at: 0,
+                            kind: ItemKind::User,
+                            text: prompt.clone(),
+                            input: String::new(),
+                            detail: String::new(),
+                            status: String::new(),
+                            approval: None,
+                            model: None,
+                        }],
+                        interrupted: false,
+                        permission: Default::default(),
+                        usage: Default::default(),
+                    }],
+                }],
+                ..Default::default()
+            };
+            app.selected_workspace = Some(0);
+            app.selected_session = Some(1);
+            app.writable = true;
+            app.composer_files.insert(
+                app.composer_target().unwrap(),
+                super::ComposerFiles {
+                    references: references.clone(),
+                    feedback: None,
+                },
+            );
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let short = cx
+        .debug_bounds("composer-file-0")
+        .expect("short composer tag");
+    let medium = cx
+        .debug_bounds("composer-file-1")
+        .expect("medium composer tag");
+    let long = cx
+        .debug_bounds("composer-file-2")
+        .expect("long composer tag");
+    assert!(
+        short.size.width < medium.size.width,
+        "short names must shrink: {short:?} / {medium:?}"
+    );
+    assert!(medium.size.width <= long.size.width);
+    assert!(
+        long.size.width <= px(220.),
+        "long names must be bounded: {long:?}"
+    );
+    assert!(short.size.height <= px(26.));
+    let message = cx.debug_bounds("user-message-0").unwrap();
+    let row = cx.debug_bounds("user-attachments-0").unwrap();
+    let body = cx.debug_bounds("user-bubble-0").unwrap();
+    let first = cx.debug_bounds("user-file-0-0").unwrap();
+    let second = cx.debug_bounds("user-file-0-1").unwrap();
+    let last = cx.debug_bounds("user-file-0-2").unwrap();
+    assert!((row.right() - message.right()).abs() < px(1.));
+    assert!(
+        (first.right() - body.right()).abs() < px(1.),
+        "attachment tags must start at the message's right edge: {first:?} / {body:?}"
+    );
+    assert!(
+        row.top() >= body.bottom(),
+        "attachments belong below the message body"
+    );
+    assert!(
+        second.right() < first.left(),
+        "attachments must flow right to left"
+    );
+    assert!(first.size.width < second.size.width);
+    assert!(last.size.width <= px(200.));
+    assert!(first.size.height <= px(24.));
+    cx.update(|_, cx| {
+        assert_eq!(
+            app.read(cx).store.workspaces[0].sessions[0].messages[0].text,
+            prompt,
+            "display changes must preserve engine and retry context"
+        );
+    });
+    cx.update(|_, cx| {
+        app.update(cx, |this, cx| {
+            this.store.workspaces[0].sessions[0].messages[0].text =
+                file_ref::compose_prompt("", &references);
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(
+        cx.debug_bounds("user-bubble-0").is_none(),
+        "file-only messages must not show an empty bubble"
+    );
+    assert!(cx.debug_bounds("user-file-0-0").is_some());
+}
+#[gpui_kit::test]
+fn deleting_blank_session_skips_confirmation(cx: &mut TestAppContext) {
+    use crate::{
+        domain::{ItemKind, Provider, SessionRecord, Workspace},
+        store::Store,
+    };
+    use gpui_kit::AppContext as _;
+
+    let session = |id, messages| SessionRecord {
+        id,
+        provider: Provider::Claude,
+        created_at: 0,
+        exit_code: None,
+        title: "新会话".into(),
+        archived: false,
+        native_id: None,
+        model: None,
+        messages,
+        interrupted: false,
+        permission: Default::default(),
+        usage: Default::default(),
+    };
+    let used = session(
+        2,
+        vec![ChatItem {
+            key: "user".into(),
+            created_at: 0,
+            kind: ItemKind::User,
+            text: "hello".into(),
+            input: String::new(),
+            detail: String::new(),
+            status: String::new(),
+            approval: None,
+            model: None,
+        }],
+    );
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut app = super::ConduitApp::new(window, cx, false, false);
+            app.store = Store {
+                workspaces: vec![Workspace {
+                    path: std::env::temp_dir(),
+                    sessions: vec![session(1, vec![]), used],
+                }],
+                ..Default::default()
+            };
+            app.writable = false;
+            app.selected_workspace = Some(0);
+            app.selected_session = Some(1);
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            this.open_delete_dialog(1, window, cx);
+            assert!(
+                this.session(1).is_none(),
+                "a session with no messages must delete without confirmation"
+            );
+            assert_eq!(this.delete_target, None);
+
+            this.open_delete_dialog(2, window, cx);
+            assert!(
+                this.session(2).is_some(),
+                "a session with messages still asks for confirmation"
+            );
+            assert_eq!(this.delete_target, Some(2));
+        });
+    });
+}

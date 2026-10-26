@@ -1,0 +1,138 @@
+//! Application palette and appearance synchronization.
+
+/// Application colors that are not owned by the component theme. The dark
+/// values preserve the original palette; the light variant is derived from the
+/// same roles so both modes stay consistent.
+pub(super) struct Palette {
+    pub(super) canvas: u32,
+    pub(super) sidebar_bg: u32,
+    pub(super) surface: u32,
+    pub(super) surface_hover: u32,
+    pub(super) surface_strong: u32,
+    pub(super) border: u32,
+    pub(super) text: u32,
+    pub(super) muted: u32,
+    pub(super) faint: u32,
+    pub(super) loading: u32,
+    pub(super) focus: u32,
+    pub(super) on_text: u32,
+    pub(super) control_hover: u32,
+    pub(super) highlight_text: u32,
+    pub(super) highlight_bg: u32,
+    pub(super) diff_add_text: u32,
+    pub(super) diff_remove_text: u32,
+    pub(super) diff_add_bg: u32,
+    pub(super) diff_remove_bg: u32,
+    pub(super) git_added_text: u32,
+    pub(super) git_modified_text: u32,
+    pub(super) git_deleted_text: u32,
+    pub(super) danger_border: u32,
+    pub(super) danger_bg: u32,
+    pub(super) danger_text: u32,
+    pub(super) warning_border: u32,
+    pub(super) warning_bg: u32,
+    pub(super) warning_icon_bg: u32,
+    pub(super) warning_text: u32,
+    pub(super) warning_chip_bg: u32,
+    pub(super) warning_chip_text: u32,
+    pub(super) warning_muted: u32,
+    pub(super) warning_inner_border: u32,
+    pub(super) warning_code_bg: u32,
+    pub(super) warning_code_text: u32,
+    pub(super) warning_accent: u32,
+    pub(super) error_text: u32,
+}
+
+static DARK_PALETTE: Palette = Palette {
+    canvas: 0x0e0e10,
+    sidebar_bg: 0x131315,
+    surface: 0x19191c,
+    surface_hover: 0x232327,
+    surface_strong: 0x202024,
+    border: 0x29292e,
+    text: 0xf3f3f4,
+    muted: 0xa1a1a8,
+    faint: 0x717179,
+    loading: 0x8fb8e6,
+    focus: 0x4b4b54,
+    on_text: 0x111113,
+    control_hover: 0xffffff,
+    highlight_text: 0xf0d49b,
+    highlight_bg: 0x3a3220,
+    diff_add_text: 0x9fdcab,
+    diff_remove_text: 0xe6a1a1,
+    diff_add_bg: 0x18261c,
+    diff_remove_bg: 0x2b1b1a,
+    git_added_text: 0x8fb8e6,
+    git_modified_text: 0x9fdcab,
+    git_deleted_text: 0xe6a1a1,
+    danger_border: 0x5c332c,
+    danger_bg: 0x2a1d1a,
+    danger_text: 0xe6b4a8,
+    warning_border: 0x4a3b22,
+    warning_bg: 0x1d1a14,
+    warning_icon_bg: 0x2a2317,
+    warning_text: 0xe3b96b,
+    warning_chip_bg: 0x332b1b,
+    warning_chip_text: 0xd6b26b,
+    warning_muted: 0x9c9284,
+    warning_inner_border: 0x352c1b,
+    warning_code_bg: 0x15130e,
+    warning_code_text: 0xd9d3c7,
+    warning_accent: 0xd6a75a,
+    error_text: 0xe6a1a1,
+};
+
+static LIGHT_PALETTE: Palette = Palette {
+    canvas: 0xf7f7f8,
+    sidebar_bg: 0xf1f1f3,
+    surface: 0xffffff,
+    surface_hover: 0xe9e9ee,
+    surface_strong: 0xf7f7f9,
+    border: 0xe4e4e9,
+    text: 0x1c1c20,
+    muted: 0x5f5f68,
+    faint: 0x8e8e97,
+    loading: 0x60a5df,
+    focus: 0xb4b4bd,
+    on_text: 0xffffff,
+    control_hover: 0xe8e8ec,
+    highlight_text: 0x6b4a00,
+    highlight_bg: 0xfff0bf,
+    diff_add_text: 0x1e6631,
+    diff_remove_text: 0xa43636,
+    diff_add_bg: 0xeaf6ec,
+    diff_remove_bg: 0xfbeceb,
+    git_added_text: 0x2c5f9e,
+    git_modified_text: 0x1e6631,
+    git_deleted_text: 0xa43636,
+    danger_border: 0xe7b8b1,
+    danger_bg: 0xfdf1ef,
+    danger_text: 0x8f2f29,
+    warning_border: 0xe5cf9f,
+    warning_bg: 0xfff8e9,
+    warning_icon_bg: 0xf9eed2,
+    warning_text: 0x8a5b00,
+    warning_chip_bg: 0xf5e8c8,
+    warning_chip_text: 0x785200,
+    warning_muted: 0x8c7c5d,
+    warning_inner_border: 0xe8d8b2,
+    warning_code_bg: 0xf8f2e6,
+    warning_code_text: 0x4b4336,
+    warning_accent: 0x9a6a00,
+    error_text: 0xb03b3b,
+};
+
+static DARK_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub(super) fn palette() -> &'static Palette {
+    if DARK_MODE.load(std::sync::atomic::Ordering::Relaxed) {
+        &DARK_PALETTE
+    } else {
+        &LIGHT_PALETTE
+    }
+}
+
+pub(crate) fn set_palette(mode: gpui_kit::component::ThemeMode) {
+    DARK_MODE.store(mode.is_dark(), std::sync::atomic::Ordering::Relaxed);
+}

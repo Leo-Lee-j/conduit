@@ -501,8 +501,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                             // content kinds are distinct from real prompts;
                             // older rollouts without those kinds are covered
                             // by the narrow textual fallback below.
-                            if role == "user" && codex_injected_user_message(&value, payload, text)
-                            {
+                            if role == "user" && codex_injected_user_message(value, payload, text) {
                                 continue;
                             }
                             response_rows.push((
