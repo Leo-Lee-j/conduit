@@ -6324,23 +6324,17 @@ impl ConduitApp {
                 };
                 let message_group =
                     SharedString::from(format!("reply-message-{}-{}", session_id, item.key));
-                let mut controls = h_flex()
-                    .gap(px(2.))
-                    .opacity(0.)
-                    .group_hover(message_group.clone(), |this| this.opacity(1.))
-                    .child(
-                        message_action_button(
-                            copy_id.clone(),
-                            copy_icon,
-                            if copied { "已复制" } else { "复制消息" },
-                        )
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
-                                this.show_copied(copy_id.clone(), window, cx);
-                            },
-                        )),
-                    );
+                let mut controls = h_flex().gap(px(2.)).child(
+                    message_action_button(
+                        copy_id.clone(),
+                        copy_icon,
+                        if copied { "已复制" } else { "复制消息" },
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
+                        this.show_copied(copy_id.clone(), window, cx);
+                    })),
+                );
                 if regenerable {
                     controls = controls.child(
                         message_action_button(
@@ -6356,68 +6350,46 @@ impl ConduitApp {
                         )),
                     );
                 }
-                let actions = h_flex().items_center().gap(px(8.)).child(controls).child(
-                    div()
-                        .text_size(px(10.))
-                        .text_color(rgb(palette().faint))
-                        .opacity(0.)
-                        .group_hover(message_group.clone(), |this| this.opacity(1.))
-                        .child(timestamp.clone()),
-                );
-                div()
-                    .relative()
-                    .w_full()
-                    .group(message_group)
+                let model_meta = h_flex()
+                    .items_center()
+                    .gap_1()
+                    .opacity(0.)
+                    .group_hover(message_group.clone(), |this| this.opacity(1.))
                     .child(
-                        v_flex()
-                            .w_full()
-                            .gap_2()
-                            // Keep provider identity as quiet metadata. The reply
-                            // itself stays on the conversation canvas, like Codex,
-                            // instead of being boxed in a second card.
-                            .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(provider_icon(provider))
-                                    .child(
-                                        div()
-                                            .text_size(px(11.))
-                                            .text_color(rgb(palette().muted))
-                                            .child(provider.label()),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(10.))
-                                            .text_color(rgb(palette().faint))
-                                            .child("·"),
-                                    )
-                                    .child(
-                                        h_flex()
-                                            .items_center()
-                                            .gap_1()
-                                            .child(
-                                                model_mark(provider, model_id)
-                                                    .size(px(11.))
-                                                    .text_color(rgb(palette().faint)),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_size(px(10.))
-                                                    .text_color(rgb(palette().faint))
-                                                    .child(model_label),
-                                            ),
-                                    ),
-                            )
-                            .child(chat_markdown_view(
-                                SharedString::from(format!("reply-{}-{}", session_id, item.key)),
-                                item.text.clone(),
-                                &typography,
-                                &format!("code-copy-{}-{}", session_id, item.key),
-                                true,
-                            )),
+                        model_mark(provider, model_id)
+                            .size(px(11.))
+                            .text_color(rgb(palette().faint)),
                     )
-                    .child(actions.absolute().top_0().right_0())
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(rgb(palette().faint))
+                            .child(model_label),
+                    );
+                let timestamp_meta = div()
+                    .text_size(px(10.))
+                    .text_color(rgb(palette().faint))
+                    .opacity(0.)
+                    .group_hover(message_group.clone(), |this| this.opacity(1.))
+                    .child(timestamp.clone());
+                let actions = h_flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(controls)
+                    .child(model_meta)
+                    .child(timestamp_meta);
+                v_flex()
+                    .w_full()
+                    .gap_1()
+                    .group(message_group)
+                    .child(chat_markdown_view(
+                        SharedString::from(format!("reply-{}-{}", session_id, item.key)),
+                        item.text.clone(),
+                        &typography,
+                        &format!("code-copy-{}-{}", session_id, item.key),
+                        true,
+                    ))
+                    .child(actions)
                     .into_any_element()
             }
             ItemKind::Reasoning => {
