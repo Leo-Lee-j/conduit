@@ -35,19 +35,42 @@ pub fn scan_workspace(workspace: &Path) -> Vec<ImportedSession> {
     sessions
 }
 
-/// Merges CLI-discovered sessions into a workspace's session list. Sessions
-/// already known by `native_id` are refreshed in place (so the transcript
-/// catches up with what the terminal CLI appended); new ones are inserted as
-/// new records so they resume through the existing native-id path.
-///
-/// Returns the number of newly imported sessions.
-pub fn merge_into(workspace: &mut crate::domain::Workspace, next_id: &mut u64) -> usize {
-    let sessions = scan_workspace(&workspace.path);
-    merge_imported(workspace, next_id, sessions)
+/// Scans both CLI histories once for several workspaces at startup. Each
+/// session file is read once and assigned to every workspace whose cwd it
+/// matches, instead of rescanning the whole history per workspace.
+pub fn scan_workspaces(workspaces: &[PathBuf]) -> Vec<Vec<ImportedSession>> {
+    let mut out = vec![Vec::new(); workspaces.len()];
+    if workspaces.is_empty() {
+        return out;
+    }
+    scan_claude_files(|text| {
+        let Some((cwds, session)) = parse_claude_any(text) else {
+            return;
+        };
+        for (workspace, sessions) in workspaces.iter().zip(out.iter_mut()) {
+            if cwds.iter().any(|cwd| same_dir(cwd, workspace)) {
+                sessions.push(session.clone());
+            }
+        }
+    });
+    scan_codex_files(|text| {
+        let Some((cwd, session)) = parse_codex_any(text, None) else {
+            return;
+        };
+        for (workspace, sessions) in workspaces.iter().zip(out.iter_mut()) {
+            if same_dir(&cwd, workspace) {
+                sessions.push(session.clone());
+            }
+        }
+    });
+    for sessions in &mut out {
+        sessions.sort_by_key(|session| std::cmp::Reverse(session.created_at));
+    }
+    out
 }
 
-/// Applies an already-scanned batch to a workspace. Kept separate from
-/// [`merge_into`] so the UI can scan off the main thread and merge on it.
+/// Applies an already-scanned batch to a workspace. Kept separate from the
+/// scan so the UI can scan off the main thread and merge on it.
 pub fn merge_imported(
     workspace: &mut crate::domain::Workspace,
     next_id: &mut u64,
@@ -127,13 +150,23 @@ fn same_dir(a: &str, b: &Path) -> bool {
 // ---------------------------------------------------------------------------
 
 pub fn scan_claude(workspace: &Path) -> Vec<ImportedSession> {
+    let mut out = Vec::new();
+    scan_claude_files(|text| {
+        if let Some(session) = parse_claude(text, workspace) {
+            out.push(session);
+        }
+    });
+    out.sort_by_key(|session| std::cmp::Reverse(session.created_at));
+    out
+}
+
+fn scan_claude_files(mut visit: impl FnMut(&str)) {
     let Some(home) = home() else {
-        return vec![];
+        return;
     };
     let root = home.join(".claude").join("projects");
-    let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(&root) else {
-        return out;
+        return;
     };
     for entry in entries.flatten() {
         let dir = entry.path();
@@ -151,28 +184,35 @@ pub fn scan_claude(workspace: &Path) -> Vec<ImportedSession> {
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            if let Some(session) = parse_claude(&text, workspace) {
-                out.push(session);
-            }
+            visit(&text);
         }
     }
-    out.sort_by_key(|session| std::cmp::Reverse(session.created_at));
-    out
 }
 
 /// Parses one Claude Code session jsonl. Returns `None` when the session's
 /// `cwd` does not match `workspace` or no displayable content was found.
 fn parse_claude(text: &str, workspace: &Path) -> Option<ImportedSession> {
+    let (cwds, session) = parse_claude_any(text)?;
+    cwds.iter()
+        .any(|cwd| same_dir(cwd, workspace))
+        .then_some(session)
+}
+
+fn parse_claude_any(text: &str) -> Option<(Vec<String>, ImportedSession)> {
     let mut native_id: Option<String> = None;
     let mut created_at = 0u64;
     let mut model: Option<String> = None;
     let mut messages: Vec<ChatItem> = Vec::new();
     let mut title = String::new();
+    let mut cwds: Vec<String> = Vec::new();
 
     for (index, line) in text.lines().enumerate() {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue; // Tolerate malformed or partial trailing lines.
         };
+        if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
+            cwds.push(cwd.to_owned());
+        }
         if value.get("isSidechain").and_then(Value::as_bool) == Some(true) {
             continue;
         }
@@ -191,14 +231,6 @@ fn parse_claude(text: &str, workspace: &Path) -> Option<ImportedSession> {
             .and_then(Value::as_str)
             .and_then(rfc3339_to_unix_opt)
             .unwrap_or(created_at);
-        if same_dir(
-            value.get("cwd").and_then(Value::as_str).unwrap_or(""),
-            workspace,
-        ) && native_id.is_none()
-        {
-            // Trust the per-line cwd for grouping; a session file whose
-            // lines all carry a different cwd is filtered out below.
-        }
         match value.get("type").and_then(Value::as_str) {
             Some("user") => {
                 let is_user_prompt = value
@@ -285,33 +317,24 @@ fn parse_claude(text: &str, workspace: &Path) -> Option<ImportedSession> {
         }
     }
 
-    // The Claude project directory groups by cwd, but a single file can hold
-    // forked sessions; only import when at least one line confirms the cwd.
-    let cwd_matches = text.lines().any(|line| {
-        serde_json::from_str::<Value>(line)
-            .ok()
-            .and_then(|v| {
-                v.get("cwd")
-                    .and_then(Value::as_str)
-                    .map(|cwd| same_dir(cwd, workspace))
-            })
-            .unwrap_or(false)
-    });
-    if !cwd_matches || messages.is_empty() {
+    if messages.is_empty() {
         return None;
     }
     let native_id = native_id?;
     if title.is_empty() {
         title = format!("Claude 会话 {native_id}");
     }
-    Some(ImportedSession {
-        provider: Provider::Claude,
-        native_id,
-        created_at,
-        title,
-        model,
-        messages,
-    })
+    Some((
+        cwds,
+        ImportedSession {
+            provider: Provider::Claude,
+            native_id,
+            created_at,
+            title,
+            model,
+            messages,
+        },
+    ))
 }
 
 fn user_text(value: &Value) -> Option<String> {
@@ -344,11 +367,21 @@ fn content_parts(message: Option<&Value>) -> Vec<(&Value, usize)> {
 // ---------------------------------------------------------------------------
 
 pub fn scan_codex(workspace: &Path) -> Vec<ImportedSession> {
+    let mut out = Vec::new();
+    scan_codex_files(|text| {
+        if let Some(session) = parse_codex(text, workspace) {
+            out.push(session);
+        }
+    });
+    out.sort_by_key(|session| std::cmp::Reverse(session.created_at));
+    out
+}
+
+fn scan_codex_files(mut visit: impl FnMut(&str)) {
     let Some(home) = home() else {
-        return vec![];
+        return;
     };
     let root = home.join(".codex").join("sessions");
-    let mut out = Vec::new();
     let mut stack = vec![root];
     while let Some(dir) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -366,13 +399,9 @@ pub fn scan_codex(workspace: &Path) -> Vec<ImportedSession> {
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            if let Some(session) = parse_codex(&text, workspace) {
-                out.push(session);
-            }
+            visit(&text);
         }
     }
-    out.sort_by_key(|session| std::cmp::Reverse(session.created_at));
-    out
 }
 
 /// Parses one Codex rollout jsonl. Structured `event_msg/item_completed`
@@ -380,6 +409,14 @@ pub fn scan_codex(workspace: &Path) -> Vec<ImportedSession> {
 /// MCP calls, web searches and reasoning summaries; raw `response_item`
 /// messages remain as a fallback for older rollouts without those events.
 fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
+    let (cwd, session) = parse_codex_any(text, Some(workspace))?;
+    same_dir(&cwd, workspace).then_some(session)
+}
+
+/// Parses one Codex rollout, optionally relative to `workspace`. Without a
+/// workspace the session's own cwd is used as the base for tool file paths,
+/// which is what the multi-workspace startup scan needs.
+fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, ImportedSession)> {
     let values: Vec<Value> = text
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
@@ -398,10 +435,17 @@ fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
         .and_then(Value::as_str)
         .and_then(rfc3339_to_unix_opt)
         .unwrap_or(0);
-    let cwd = meta.get("cwd").and_then(Value::as_str).unwrap_or("");
-    if !same_dir(cwd, workspace) {
+    let cwd = meta
+        .get("cwd")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    if workspace.is_none() && cwd.is_empty() {
         return None;
     }
+    let base = workspace
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(&cwd));
 
     let mut model: Option<String> = None;
     let mut current_model: Option<String> = None;
@@ -664,7 +708,7 @@ fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
                             .iter()
                             .map(|(path, change)| {
                                 serde_json::json!({
-                                    "path": relative_workspace_path(path, workspace),
+                                    "path": relative_workspace_path(path, &base),
                                     "kind": change.get("type").cloned().unwrap_or(Value::Null),
                                     "diff": change.get("unified_diff").cloned().unwrap_or(Value::Null),
                                     "content": change.get("content").cloned().unwrap_or(Value::Null),
@@ -839,14 +883,17 @@ fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
         .find(|item| item.kind == ItemKind::User)
         .map(|item| truncate_title(&item.text))
         .unwrap_or_else(|| format!("Codex 会话 {native_id}"));
-    Some(ImportedSession {
-        provider: Provider::Codex,
-        native_id,
-        created_at,
-        title,
-        model,
-        messages,
-    })
+    Some((
+        cwd,
+        ImportedSession {
+            provider: Provider::Codex,
+            native_id,
+            created_at,
+            title,
+            model,
+            messages,
+        },
+    ))
 }
 
 fn codex_event_text(item: &Value) -> Option<String> {

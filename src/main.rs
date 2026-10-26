@@ -24,7 +24,6 @@ fn main() {
     if std::env::args_os().any(|arg| arg == "--history") {
         return print_history();
     }
-    let appearance = store::Store::load_ui_settings().appearance;
     let _instance = match single_instance() {
         Ok(instance) => instance,
         Err(error) => {
@@ -43,6 +42,13 @@ fn main() {
             return;
         }
     };
+    // Load once: the constructor would otherwise parse the same state file a
+    // second time after the window already exists.
+    let loaded = store::Store::load().map_err(|error| format!("{error:#}"));
+    let appearance = loaded
+        .as_ref()
+        .map(|store| store.ui.appearance)
+        .unwrap_or_default();
     gpui_kit::application()
         // The full icon catalog keeps the UI glyphs that the default component
         // bundle does not embed (e.g. the composer Pin and the settings CLI
@@ -64,13 +70,36 @@ fn main() {
                 window_min_size: Some(size(px(850.), px(500.))),
                 // Draw our own title bar (brand row + window controls) instead
                 // of the native Windows caption.
+                //
+                // Stay hidden until the first frame exists. GPUI's composition
+                // surface is empty before that, so showing at creation exposes
+                // a transparent window while startup work blocks the thread.
+                show: false,
                 ..TitleBar::window_options()
             };
-            gpui_kit::open_window(options, cx, move |window, cx| {
+            let (window, app) = gpui_kit::open_window(options, cx, move |window, cx| {
                 window.set_window_title("Conduit");
-                cx.new(|cx| ConduitApp::new(window, cx, start_in_settings, start_in_git))
+                cx.new(|cx| {
+                    ConduitApp::with_store(window, cx, loaded, start_in_settings, start_in_git)
+                })
             })
             .expect("failed to open Conduit window");
+            // Ask to activate only after launch; the request is dropped while
+            // the application is still starting. The first frame has already
+            // been drawn, so the window appears with content instead of a
+            // blank surface.
+            cx.spawn(async move |cx| {
+                cx.update(|cx| {
+                    cx.activate(true);
+                    let _ = window.update(cx, |_, window, cx| {
+                        app.update(cx, |app, cx| {
+                            app.start_initial_history_imports(window, cx);
+                        });
+                        window.activate_window();
+                    });
+                });
+            })
+            .detach();
         });
 }
 

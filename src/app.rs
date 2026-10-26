@@ -2820,9 +2820,22 @@ pub struct ConduitApp {
 }
 
 impl ConduitApp {
+    #[cfg(any(test, feature = "ui-tests"))]
+    #[allow(dead_code)] // exercised by the feature-gated UI tests; main loads the store once.
     pub fn new(
         window: &mut Window,
         cx: &mut Context<Self>,
+        start_in_settings: bool,
+        start_in_git: bool,
+    ) -> Self {
+        let loaded = Store::load().map_err(|error| format!("{error:#}"));
+        Self::with_store(window, cx, loaded, start_in_settings, start_in_git)
+    }
+
+    pub(crate) fn with_store(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        loaded: std::result::Result<Store, String>,
         start_in_settings: bool,
         start_in_git: bool,
     ) -> Self {
@@ -2842,9 +2855,9 @@ impl ConduitApp {
             KeyBinding::new("f7", NextDiff, Some("Diff")),
             KeyBinding::new("shift-f7", PreviousDiff, Some("Diff")),
         ]);
-        let (mut store, message, writable) = match Store::load() {
+        let (mut store, message, writable) = match loaded {
             Ok(store) => (store, None, true),
-            Err(error) => (Store::default(), Some(format!("{error:#}")), false),
+            Err(error) => (Store::default(), Some(error), false),
         };
         let initial_mode = match store.ui.appearance {
             AppearanceMode::System => gpui_kit::component::ThemeMode::from(window.appearance()),
@@ -2947,16 +2960,6 @@ impl ConduitApp {
             .max()
             .unwrap_or(0)
             .saturating_add(1);
-        // Import CLI-side (terminal) sessions for known workspaces so they
-        // appear in the sidebar and can be resumed natively. Sessions whose
-        // native id already exists are refreshed instead of duplicated.
-        let imported_total = {
-            let mut next_id = next_id;
-            for workspace in &mut store.workspaces {
-                crate::history::merge_into(workspace, &mut next_id);
-            }
-            next_id
-        };
         for workspace in &mut store.workspaces {
             workspace
                 .sessions
@@ -3104,7 +3107,7 @@ impl ConduitApp {
             chat_font_select,
             code_font_select,
             default_mono_font,
-            next_id: imported_total,
+            next_id,
             closing: false,
             details: start_in_git,
             detail_view: if start_in_git {
@@ -4959,7 +4962,42 @@ impl ConduitApp {
                 .spawn(async move { crate::history::scan_workspace(&scan_path) })
                 .await;
             let _ = this.update_in(cx, |this, window, cx| {
-                this.finish_history_import(&path, imported, window, cx);
+                this.finish_history_import(&path, imported, true, window, cx);
+            });
+        })
+        .detach();
+    }
+    /// Imports CLI history for every known workspace once after startup, off
+    /// the UI thread. Unlike a user-triggered import this refreshes the
+    /// in-memory transcripts only; the next ordinary save persists them.
+    pub(crate) fn start_initial_history_imports(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let paths: Vec<PathBuf> = self
+            .store
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.path.clone())
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
+        for path in &paths {
+            self.history_loading.insert(path.clone());
+        }
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let scan_paths = paths.clone();
+            let imported = cx
+                .background_executor()
+                .spawn(async move { crate::history::scan_workspaces(&scan_paths) })
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                for (path, sessions) in paths.into_iter().zip(imported) {
+                    this.finish_history_import(&path, sessions, false, window, cx);
+                }
             });
         })
         .detach();
@@ -4968,6 +5006,7 @@ impl ConduitApp {
         &mut self,
         path: &Path,
         imported: Vec<crate::history::ImportedSession>,
+        persist: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -5016,7 +5055,7 @@ impl ConduitApp {
         {
             self.switch(index, Some(session), window, cx);
         }
-        if discovered {
+        if discovered && persist {
             self.persist();
         }
         cx.notify();
@@ -14582,6 +14621,7 @@ mod ui_tests {
                         model: None,
                         messages: vec![],
                     }],
+                    true,
                     window,
                     cx,
                 );

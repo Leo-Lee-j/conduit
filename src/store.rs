@@ -217,15 +217,6 @@ impl Store {
         let path = Self::path();
         Self::load_from(&path)
     }
-    /// Reads just the persisted UI preferences, used before the first window
-    /// exists so the initial frame already uses the selected appearance.
-    pub fn load_ui_settings() -> UiSettings {
-        fs::read(Self::path())
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Self>(&bytes).ok())
-            .map(|store| store.ui)
-            .unwrap_or_default()
-    }
     fn load_from(path: &Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self {
