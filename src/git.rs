@@ -35,6 +35,16 @@ const FULL_FILE_CONTEXT_LINES: usize = 1_000_000;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
 const READ_CHUNK: usize = 64 * 1024;
 
+/// Resolve a worktree's local scope without starting Git on the UI thread.
+/// A `.git` file marks a linked worktree; directories inside one repository
+/// share its index, while separate linked worktrees have separate indexes.
+pub fn worktree_root(path: &Path) -> PathBuf {
+    path.ancestors()
+        .find(|ancestor| ancestor.join(".git").exists())
+        .unwrap_or(path)
+        .to_path_buf()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChangedFile {
     /// Porcelain v1 index status (`X`).
@@ -190,6 +200,15 @@ pub type BranchProbe = Probe<Repository>;
 pub type OperationProbe = Probe<OperationResult>;
 
 impl<T: Send + 'static> Probe<T> {
+    #[cfg(all(test, feature = "ui-tests"))]
+    pub(crate) fn test_pending(path: PathBuf) -> Self {
+        let (_, events) = mpsc::channel();
+        Self {
+            path,
+            events,
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
     fn start_with(path: PathBuf, load: fn(&Path, &AtomicBool) -> Result<T>) -> Self {
         Self::spawn(path, load)
     }
@@ -988,6 +1007,30 @@ fn run_git_bounded(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worktree_scope_groups_subdirectories_and_separates_linked_worktrees() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("conduit-worktree-scope-{unique}"));
+        let repo = root.join("repository");
+        let child = repo.join("src/nested");
+        let linked = repo.join("linked");
+        let separate = root.join("separate");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::create_dir_all(linked.join("src")).unwrap();
+        std::fs::write(linked.join(".git"), "gitdir: ../.git/worktrees/linked\n").unwrap();
+        std::fs::create_dir_all(&separate).unwrap();
+        assert_eq!(worktree_root(&repo), repo);
+        assert_eq!(worktree_root(&child), repo);
+        assert_eq!(worktree_root(&linked.join("src")), linked);
+        assert_eq!(worktree_root(&separate), separate);
+        assert_ne!(worktree_root(&linked), worktree_root(&child));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     struct TestRepository {
         path: PathBuf,

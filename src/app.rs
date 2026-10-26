@@ -74,7 +74,10 @@ impl From<&SessionRecord> for SessionSummary {
 
 struct ActiveRun {
     runtime: ChatRuntime,
+    /// Git worktree shared by this turn's files and index.
+    worktree: PathBuf,
     approvals: ApprovalQueue,
+    expanded_approvals: HashSet<String>,
     prefix: String,
     status: String,
     /// What the engine is doing right now, shown in the chat viewport while
@@ -87,6 +90,34 @@ struct ActiveRun {
     turn_tokens_at_start: u64,
     turn_started: Instant,
     last_usage_event: Instant,
+}
+
+impl ActiveRun {
+    fn new(runtime: ChatRuntime, worktree: PathBuf, prefix: String, usage: Usage) -> Self {
+        let now = Instant::now();
+        Self {
+            runtime,
+            worktree,
+            approvals: ApprovalQueue::default(),
+            expanded_approvals: HashSet::new(),
+            prefix,
+            status: "正在连接 CLI…".into(),
+            activity: "正在启动 CLI…".into(),
+            message_index: MessageIndex::default(),
+            usage,
+            turn_tokens_at_start: usage.total_tokens,
+            turn_started: now,
+            last_usage_event: now,
+        }
+    }
+
+    fn cancel(&mut self) {
+        self.runtime.cancel();
+        self.approvals.clear();
+        self.expanded_approvals.clear();
+        self.status = "正在停止…".into();
+        self.activity = "正在停止…".into();
+    }
 }
 
 /// Append-only message lookup, shared by every event in an active run.
@@ -126,6 +157,7 @@ struct CommitGeneration {
 
 struct GitOperation {
     probe: git::OperationProbe,
+    worktree: PathBuf,
     draft: String,
 }
 
@@ -1969,8 +2001,6 @@ pub struct ConduitApp {
     /// Git sidebar groups the user collapsed; empty means all expanded.
     collapsed_git_groups: HashSet<git::ChangeKind>,
     commit_and_push: bool,
-    /// Approval tickets whose raw request detail the user expanded.
-    approval_details: HashSet<String>,
     /// Workspaces whose session list was expanded past the configured limit.
     expanded_workspaces: HashSet<usize>,
     /// Workspace paths whose CLI history is being imported in the background.
@@ -2241,10 +2271,7 @@ impl ConduitApp {
                         naming.runtime.cancel();
                     }
                     for run in this.runs.values_mut() {
-                        run.runtime.cancel();
-                        run.approvals.clear();
-                        run.status = "正在停止…".into();
-                        run.activity = "正在停止…".into();
+                        run.cancel();
                     }
                     for probe in this.probes.values() {
                         probe.cancel();
@@ -2327,7 +2354,6 @@ impl ConduitApp {
             git_feedback: HashMap::new(),
             collapsed_git_groups: HashSet::new(),
             commit_and_push: false,
-            approval_details: HashSet::new(),
             expanded_workspaces: HashSet::new(),
             history_loading: HashSet::new(),
             search,
@@ -2606,6 +2632,12 @@ impl ConduitApp {
         });
     }
     fn delete_session(&mut self, id: u64, cx: &mut Context<Self>) {
+        if self.runs.contains_key(&id) {
+            self.message = Some("该会话仍有任务运行，请先取消后再删除。".into());
+            self.delete_target = None;
+            cx.notify();
+            return;
+        }
         for workspace in &mut self.store.workspaces {
             workspace.sessions.retain(|session| session.id != id);
         }
@@ -3805,11 +3837,59 @@ impl ConduitApp {
         cx.notify();
     }
     fn workspace_busy(&self, index: usize) -> bool {
-        self.git_operation.is_some()
-            || self.store.workspaces[index]
-                .sessions
-                .iter()
-                .any(|s| self.runs.contains_key(&s.id))
+        self.git_operation.as_ref().is_some_and(|operation| {
+            operation.worktree == git::worktree_root(&self.store.workspaces[index].path)
+        }) || self.store.workspaces[index]
+            .sessions
+            .iter()
+            .any(|s| self.runs.contains_key(&s.id))
+    }
+    /// One turn per conversation, including aliases of the same native context.
+    /// Other sessions may run even when they share the same working directory.
+    fn session_busy(&self, id: u64) -> bool {
+        self.runs.contains_key(&id)
+            || self.session(id).is_some_and(|target| {
+                self.runs.keys().any(|running| {
+                    self.session(*running).is_some_and(|session| {
+                        session.provider == target.provider
+                            && target.native_id.as_deref().is_some_and(|native| {
+                                !native.is_empty() && session.native_id.as_deref() == Some(native)
+                            })
+                    })
+                })
+            })
+    }
+    fn worktree_has_runs(&self, path: &Path) -> bool {
+        if self.runs.is_empty() {
+            return false;
+        }
+        let root = git::worktree_root(path);
+        self.runs.values().any(|run| run.worktree == root)
+    }
+    /// Resolve the destination before checking concurrency or changing drafts.
+    fn send_target(&self, append_user: bool) -> Option<u64> {
+        self.selected_session.filter(|id| {
+            !append_user
+                || self
+                    .session(*id)
+                    .is_some_and(|session| session.provider == self.new_session_provider)
+        })
+    }
+    /// Shared by keyboard sends and the composer button.
+    fn send_blocked(&self, append_user: bool) -> Option<&'static str> {
+        if self
+            .send_target(append_user)
+            .is_some_and(|id| self.session_busy(id))
+        {
+            return Some("该会话已有任务运行，请等待完成或取消后发送。");
+        }
+        if self.git_operation.as_ref().is_some_and(|operation| {
+            self.selected_workspace_path()
+                .is_some_and(|path| operation.worktree == git::worktree_root(&path))
+        }) {
+            return Some("该仓库正在提交或推送，请等待完成后发送。");
+        }
+        None
     }
     fn add_workspace(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
@@ -4102,6 +4182,18 @@ impl ConduitApp {
         else {
             return;
         };
+        // A scan can finish after a turn has started. Its older transcript must
+        // never replace messages or invalidate the active run's message index.
+        let imported = imported
+            .into_iter()
+            .filter(|imported| {
+                !self.store.workspaces[index].sessions.iter().any(|session| {
+                    session.provider == imported.provider
+                        && session.native_id.as_deref() == Some(imported.native_id.as_str())
+                        && self.runs.contains_key(&session.id)
+                })
+            })
+            .collect::<Vec<_>>();
         let discovered = !imported.is_empty();
         crate::history::merge_imported(
             &mut self.store.workspaces[index],
@@ -4288,11 +4380,12 @@ impl ConduitApp {
             cx.notify();
             return false;
         };
-        if self.workspace_busy(index) {
-            self.message = Some("该工作区已有任务运行，请等待完成或取消后发送。".into());
+        if let Some(reason) = self.send_blocked(append_user) {
+            self.message = Some(reason.into());
             cx.notify();
             return false;
         }
+        let worktree = git::worktree_root(&self.store.workspaces[index].path);
         if prompt.trim().is_empty() {
             return false;
         }
@@ -4421,22 +4514,8 @@ impl ConduitApp {
             .session(id)
             .map(|session| session.usage)
             .unwrap_or_default();
-        let now = Instant::now();
-        self.runs.insert(
-            id,
-            ActiveRun {
-                runtime,
-                approvals: ApprovalQueue::default(),
-                prefix,
-                status: "正在连接 CLI…".into(),
-                activity: "正在启动 CLI…".into(),
-                message_index: MessageIndex::default(),
-                usage,
-                turn_tokens_at_start: usage.total_tokens,
-                turn_started: now,
-                last_usage_event: now,
-            },
-        );
+        self.runs
+            .insert(id, ActiveRun::new(runtime, worktree, prefix, usage));
         if append_user {
             self.input
                 .update(cx, |input, cx| input.set_value("", window, cx));
@@ -5617,7 +5696,7 @@ impl ConduitApp {
         {
             return;
         }
-        if !self.runs.is_empty() {
+        if self.worktree_has_runs(&path) {
             self.git_feedback(
                 path,
                 "请等待 CLI 任务结束后提交，避免暂存区同时变化。",
@@ -5647,6 +5726,7 @@ impl ConduitApp {
             push: self.commit_and_push,
         };
         self.git_operation = Some(GitOperation {
+            worktree: git::worktree_root(&path),
             probe: git::OperationProbe::start(path.clone(), operation),
             draft: message,
         });
@@ -5672,7 +5752,7 @@ impl ConduitApp {
         {
             return;
         }
-        if !self.runs.is_empty() {
+        if self.worktree_has_runs(&path) {
             self.git_feedback(path, "请等待 CLI 任务结束后推送。", true, cx);
             return;
         }
@@ -5696,6 +5776,7 @@ impl ConduitApp {
             upstream,
         };
         self.git_operation = Some(GitOperation {
+            worktree: git::worktree_root(&path),
             probe: git::OperationProbe::start(path.clone(), operation),
             draft: String::new(),
         });
@@ -5711,7 +5792,9 @@ impl ConduitApp {
             || !self.writable
             || busy
             || self.commit_generation.is_some()
-            || !self.runs.is_empty();
+            || self
+                .selected_workspace_path()
+                .is_some_and(|path| self.worktree_has_runs(&path));
         let tooltip = match &repository.upstream {
             Some(upstream) => format!("推送 {} 个提交到 {}", repository.ahead, upstream),
             None => format!("{} 个本地未发布提交；尚未设置上游", repository.ahead),
@@ -6076,7 +6159,7 @@ impl ConduitApp {
         let disabled = self.closing
             || !self.writable
             || busy
-            || !self.runs.is_empty()
+            || self.worktree_has_runs(&path)
             || self.git_probe.is_some()
             || !staged;
         let can_commit = !disabled && !draft.input.read(cx).value().trim().is_empty();
@@ -6260,8 +6343,8 @@ impl ConduitApp {
                     .text_size(px(11.))
                     .line_height(relative(1.4))
                     .text_color(rgb(palette().faint))
-                    .child(if !self.runs.is_empty() {
-                        "CLI 任务运行中，结束后可提交"
+                    .child(if self.worktree_has_runs(&path) {
+                        "该仓库的 CLI 任务运行中，结束后可提交"
                     } else if self
                         .git_snapshot
                         .as_ref()
@@ -7075,9 +7158,9 @@ impl ConduitApp {
                     }
                 }
                 Event::ApprovalCancelled(request) => {
-                    self.approval_details.remove(&request);
                     let mut approval = None;
                     if let Some(run) = self.runs.get_mut(&id) {
+                        run.expanded_approvals.remove(&request);
                         approval = run.approvals.remove(&request);
                         if run.approvals.is_empty() && !run.runtime.is_cancelled() {
                             run.status = "正在执行…".into();
@@ -7095,8 +7178,8 @@ impl ConduitApp {
                     }
                 }
                 Event::ApprovalResolved { id: request, allow } => {
-                    self.approval_details.remove(&request);
                     let approval = self.runs.get_mut(&id).and_then(|run| {
+                        run.expanded_approvals.remove(&request);
                         let approval = run.approvals.remove(&request);
                         run.status = if run.approvals.is_empty() {
                             "正在执行…"
@@ -10426,9 +10509,11 @@ impl ConduitApp {
             .child(right)
             .into_any_element()
     }
-    fn toggle_approval_detail(&mut self, id: String, cx: &mut Context<Self>) {
-        if !self.approval_details.remove(&id) {
-            self.approval_details.insert(id);
+    fn toggle_approval_detail(&mut self, session: u64, id: String, cx: &mut Context<Self>) {
+        if let Some(run) = self.runs.get_mut(&session)
+            && !run.expanded_approvals.remove(&id)
+        {
+            run.expanded_approvals.insert(id);
         }
         cx.notify();
     }
@@ -10758,9 +10843,7 @@ impl Render for ConduitApp {
                 );
             });
         }
-        let busy = self
-            .selected_workspace
-            .is_some_and(|i| self.workspace_busy(i));
+        let busy = self.send_blocked(true).is_some();
         let active = self
             .selected_session
             .is_some_and(|id| self.runs.contains_key(&id));
@@ -11413,7 +11496,10 @@ impl Render for ConduitApp {
             let allow_id = approval.id.clone();
             let deny_id = approval.id;
             let toggle_id = deny_id.clone();
-            let expanded = self.approval_details.contains(&deny_id);
+            let expanded = self
+                .runs
+                .get(&id)
+                .is_some_and(|run| run.expanded_approvals.contains(&deny_id));
             let queue_label = if approval_count > 1 {
                 format!("第 {} / {} 项", index + 1, approval_count)
             } else {
@@ -11498,7 +11584,7 @@ impl Render for ConduitApp {
                                         .ghost()
                                         .cursor_pointer()
                                         .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.toggle_approval_detail(toggle_id.clone(), cx)
+                                            this.toggle_approval_detail(id, toggle_id.clone(), cx)
                                         })),
                                 ),
                         )
@@ -11587,6 +11673,9 @@ impl Render for ConduitApp {
                 .current_files()
                 .is_some_and(|files| !files.references.is_empty());
         let send_ready = can_edit && !busy && has_workspace && has_content;
+        let composer_active = self
+            .send_target(true)
+            .is_some_and(|id| self.runs.contains_key(&id));
         // The latest-message arrow appears
         // only when the user has scrolled away from the end of the message list.
         let show_latest_button = !self.at_bottom
@@ -11719,7 +11808,7 @@ impl Render for ConduitApp {
                             .on_click(cx.listener(Self::pick_files)),
                         )
                     })
-                    .child(if active {
+                    .child(if composer_active {
                         h_flex()
                             .id("stop")
                             .w(px(30.))
@@ -11734,10 +11823,7 @@ impl Render for ConduitApp {
                                 if let Some(run) =
                                     this.selected_session.and_then(|id| this.runs.get_mut(&id))
                                 {
-                                    run.runtime.cancel();
-                                    run.approvals.clear();
-                                    run.status = "正在停止…".into();
-                                    run.activity = "正在停止…".into();
+                                    run.cancel();
                                 }
                                 this.input.read(cx).focus_handle(cx).focus(window, cx);
                                 cx.notify();
@@ -12775,6 +12861,243 @@ mod ui_tests {
         component::{WindowExt, v_flex},
         div, point, px,
     };
+
+    #[gpui_kit::test]
+    fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::{
+            domain::{Provider, SessionRecord, Workspace},
+            protocol::{Approval, ApprovalKind, Event},
+            store::Store,
+        };
+        use gpui_kit::AppContext as _;
+
+        let session = |id, provider, native: &str| SessionRecord {
+            id,
+            provider,
+            native_id: Some(native.into()),
+            title: format!("Chat {id}"),
+            created_at: 0,
+            exit_code: None,
+            archived: false,
+            model: None,
+            messages: vec![],
+            interrupted: true,
+            permission: Default::default(),
+            usage: Default::default(),
+        };
+        let root = std::env::temp_dir().join("conduit-concurrent-ui");
+        let other = root.join("other");
+        cx.update(gpui_kit::init);
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let mut app = super::ConduitApp::new(window, cx, false, false);
+                app.store = Store {
+                    workspaces: vec![
+                        Workspace {
+                            path: root.clone(),
+                            sessions: vec![
+                                session(1, Provider::Claude, "first"),
+                                session(2, Provider::Codex, "second"),
+                                session(4, Provider::Claude, "first"),
+                            ],
+                        },
+                        Workspace {
+                            path: other.clone(),
+                            sessions: vec![session(3, Provider::Claude, "third")],
+                        },
+                    ],
+                    ..Default::default()
+                };
+                // Event routing is read-only in this test; no real state or CLI calls.
+                app.writable = false;
+                app.selected_workspace = Some(0);
+                app.selected_session = Some(1);
+                app.new_session_provider = Provider::Claude;
+                app.runs.clear();
+                app
+            });
+            *output.borrow_mut() = Some(app.clone());
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        let app = slot.borrow().as_ref().unwrap().clone();
+        cx.update(|window, cx| {
+            app.update(cx, |this, cx| {
+                let mut senders = std::collections::HashMap::new();
+                for (id, path) in [(1, &root), (2, &root), (3, &other)] {
+                    this.selected_workspace = Some(if id == 3 { 1 } else { 0 });
+                    this.selected_session = Some(id);
+                    this.new_session_provider = this.session(id).unwrap().provider;
+                    assert!(
+                        this.send_blocked(true).is_none(),
+                        "other sessions cannot block {id}"
+                    );
+                    let (runtime, sender) = crate::chat_runtime::ChatRuntime::test_channel();
+                    this.runs.insert(
+                        id,
+                        super::ActiveRun::new(
+                            runtime,
+                            path.clone(),
+                            "turn-0".into(),
+                            Default::default(),
+                        ),
+                    );
+                    senders.insert(id, sender);
+                }
+                assert_eq!(this.runs.len(), 3);
+                assert!(this.worktree_has_runs(&root));
+                assert!(this.worktree_has_runs(&other));
+                assert!(!this.worktree_has_runs(&root.join("unrelated")));
+                assert!(
+                    this.session_busy(4),
+                    "aliases cannot resume the same native context twice"
+                );
+                this.selected_workspace = Some(0);
+                this.selected_session = Some(1);
+                this.new_session_provider = Provider::Claude;
+                this.writable = true;
+                assert!(!this.send_text("duplicate".into(), true, window, cx));
+                this.writable = false;
+                assert!(this.session(1).unwrap().messages.is_empty());
+                assert_eq!(
+                    this.runs.len(),
+                    3,
+                    "duplicate sends must not replace a runtime"
+                );
+                this.delete_session(1, cx);
+                assert!(
+                    this.session(1).is_some(),
+                    "active sessions remain addressable until cleanup"
+                );
+                this.new_session_provider = Provider::Codex;
+                assert_eq!(this.send_target(true), None);
+                assert!(
+                    this.send_blocked(true).is_none(),
+                    "engine switch targets a new conversation"
+                );
+                assert!(
+                    this.send_blocked(false).is_some(),
+                    "regeneration keeps its current conversation"
+                );
+                this.new_session_provider = Provider::Claude;
+
+                for id in [1, 2, 3] {
+                    senders[&id]
+                        .send(Event::Delta {
+                            key: "reply".into(),
+                            text: format!("reply-{id}"),
+                        })
+                        .unwrap();
+                    senders[&id]
+                        .send(Event::Approval(Approval {
+                            id: "approval-1".into(),
+                            title: format!("request-{id}"),
+                            detail: "{}".into(),
+                            wire_id: serde_json::json!(1),
+                            input: serde_json::Value::Null,
+                            allow_once: true,
+                            kind: ApprovalKind::Command,
+                        }))
+                        .unwrap();
+                }
+                this.poll(window, cx);
+                for id in [1, 2, 3] {
+                    assert_eq!(
+                        this.session(id).unwrap().messages[0].text,
+                        format!("reply-{id}")
+                    );
+                    assert_eq!(
+                        this.runs[&id].approvals.front().unwrap().title,
+                        format!("request-{id}")
+                    );
+                    this.toggle_approval_detail(id, "approval-1".into(), cx);
+                }
+                senders[&1]
+                    .send(Event::ApprovalResolved {
+                        id: "approval-1".into(),
+                        allow: true,
+                    })
+                    .unwrap();
+                this.poll(window, cx);
+                assert!(this.runs[&1].expanded_approvals.is_empty());
+                for id in [2, 3] {
+                    assert!(this.runs[&id].expanded_approvals.contains("approval-1"));
+                    assert_eq!(this.runs[&id].approvals.len(), 1);
+                }
+                this.finish_history_import(
+                    &root,
+                    vec![crate::history::ImportedSession {
+                        provider: Provider::Claude,
+                        native_id: "first".into(),
+                        created_at: 0,
+                        title: "stale history".into(),
+                        model: None,
+                        messages: vec![],
+                    }],
+                    window,
+                    cx,
+                );
+                assert_eq!(this.session(1).unwrap().messages[0].text, "reply-1");
+                this.runs.get_mut(&1).unwrap().cancel();
+                assert!(this.runs[&1].runtime.is_cancelled());
+                for id in [2, 3] {
+                    assert!(!this.runs[&id].runtime.is_cancelled());
+                }
+                senders[&1]
+                    .send(Event::Finished {
+                        error: None,
+                        cancelled: true,
+                    })
+                    .unwrap();
+                senders[&2]
+                    .send(Event::Delta {
+                        key: "reply".into(),
+                        text: "-continued".into(),
+                    })
+                    .unwrap();
+                this.poll(window, cx);
+                assert!(!this.runs.contains_key(&1));
+                assert_eq!(this.runs.len(), 2);
+                assert_eq!(
+                    this.session(2).unwrap().messages[0].text,
+                    "reply-2-continued"
+                );
+                assert!(!this.session(1).unwrap().interrupted);
+                assert!(this.session(2).unwrap().interrupted);
+                assert!(
+                    this.send_blocked(true).is_none(),
+                    "finished session can send while its neighbour runs"
+                );
+                assert!(
+                    this.workspace_busy(0),
+                    "workspace removal still waits for every task"
+                );
+                assert!(this.workspace_busy(1));
+                this.git_operation = Some(super::GitOperation {
+                    probe: crate::git::OperationProbe::test_pending(root.clone()),
+                    worktree: root.clone(),
+                    draft: String::new(),
+                });
+                assert!(this.send_blocked(true).unwrap().contains("提交或推送"));
+                this.selected_workspace = Some(1);
+                this.selected_session = None;
+                assert!(
+                    this.send_blocked(true).is_none(),
+                    "Git writes cannot block another workspace"
+                );
+                this.runs.clear();
+                assert!(
+                    !this.workspace_busy(1),
+                    "unrelated Git writes cannot block workspace removal"
+                );
+                assert!(this.workspace_busy(0));
+                this.git_operation = None;
+            });
+        });
+    }
 
     #[gpui_kit::test]
     fn long_chat_virtualizes_real_rows_and_keeps_history_jump_on_append(cx: &mut TestAppContext) {

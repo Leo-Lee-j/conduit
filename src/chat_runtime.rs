@@ -56,6 +56,20 @@ pub struct ChatRuntime {
     cancelled: Arc<AtomicBool>,
 }
 impl ChatRuntime {
+    /// Controllable event source for UI concurrency regressions; starts no CLI.
+    #[cfg(all(test, feature = "ui-tests"))]
+    pub(crate) fn test_channel() -> (Self, Sender<Event>) {
+        let (sender, events) = mpsc::channel();
+        let (controls, _) = mpsc::channel();
+        (
+            Self {
+                events,
+                controls,
+                cancelled: Arc::new(AtomicBool::new(false)),
+            },
+            sender,
+        )
+    }
     /// Isolated helper turn; never resumes or mutates the chat conversation.
     pub fn start_text(
         provider: Provider,
@@ -127,7 +141,7 @@ impl ChatRuntime {
                 Ok(Ok(())) => None,
                 Ok(Err(error)) => Some(format!("{error:#}")),
                 Err(_) => {
-                    let _ = sender.send(Event::Notice("CLI 工作线程异常，进程身份无法继续核实；工作区保持占用，请重启应用后检查。".into()));
+                    let _ = sender.send(Event::Notice("CLI 工作线程异常，进程身份无法继续核实；该会话保持占用，请重启应用后检查。".into()));
                     return;
                 }
             };
@@ -161,14 +175,12 @@ impl Drop for ChatRuntime {
 struct Lines {
     buffer: Vec<u8>,
     eof: bool,
-    received: usize,
 }
 impl Lines {
     fn new() -> Self {
         Self {
             buffer: vec![],
             eof: false,
-            received: 0,
         }
     }
     fn poll(&mut self, file: &mut File) -> Result<Vec<Value>> {
@@ -184,10 +196,8 @@ impl Lines {
         let count = (count as usize).min(chunk.len());
         if count > 0 {
             let count = file.read(&mut chunk[..count])?;
-            self.received += count;
-            if self.received > 32 * 1024 * 1024 {
-                bail!("本轮 CLI 输出超过 32 MiB 限制，已停止；请缩小任务后重试");
-            }
+            // Bound each pending message below, not the lifetime of the stream:
+            // long turns can emit many small messages without growing this buffer.
             self.buffer.extend_from_slice(&chunk[..count]);
         }
         let mut messages = vec![];
@@ -368,7 +378,7 @@ fn execute(
             && !termination_error_reported
         {
             let _ = events.send(Event::Notice(format!(
-                "进程树停止失败，工作区保持占用：{error}"
+                "进程树停止失败，该会话保持占用：{error}"
             )));
             termination_error_reported = true;
         }
@@ -384,6 +394,56 @@ fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lines_streams_more_than_32_mib_and_parses_final_message_at_eof() {
+        use std::os::windows::io::FromRawHandle;
+        use windows_sys::Win32::System::Pipes::CreatePipe;
+
+        let (mut read, mut write) = (std::ptr::null_mut(), std::ptr::null_mut());
+        assert_ne!(
+            unsafe { CreatePipe(&mut read, &mut write, std::ptr::null(), 65536) },
+            0
+        );
+        let mut read = unsafe { File::from_raw_handle(read) };
+        let mut write = unsafe { File::from_raw_handle(write) };
+        let payload = "x".repeat(8192);
+        let record = format!("{{\"payload\":\"{payload}\"}}\n");
+        let records = 4352;
+        assert!(record.len() * records > 32 * 1024 * 1024);
+        let record_size = record.len();
+        let writer = thread::spawn(move || {
+            for _ in 0..records {
+                write.write_all(record.as_bytes()).unwrap();
+            }
+            write.write_all(b"{\"done\":true}").unwrap();
+        });
+
+        let mut lines = Lines::new();
+        let mut parsed = 0;
+        let mut done = false;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !lines.eof {
+            assert!(Instant::now() < deadline, "stream did not reach EOF");
+            for value in lines.poll(&mut read).unwrap() {
+                if parsed < records {
+                    assert_eq!(value["payload"].as_str(), Some(payload.as_str()));
+                    parsed += 1;
+                } else {
+                    assert_eq!(value, serde_json::json!({"done": true}));
+                    assert!(!done);
+                    done = true;
+                }
+            }
+            assert!(lines.buffer.len() < record_size);
+            thread::yield_now();
+        }
+        writer.join().unwrap();
+        assert_eq!(parsed, records);
+        assert!(done);
+        assert!(lines.buffer.is_empty());
+    }
+
     fn approval(id: &str) -> Approval {
         Approval {
             id: id.into(),
