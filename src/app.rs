@@ -3340,15 +3340,20 @@ impl ConduitApp {
         cx.notify();
     }
     fn open_delete_dialog(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(title) = self.session(id).map(|session| {
-            if session.title.is_empty() {
-                "未命名会话".to_string()
-            } else {
-                session.title.clone()
-            }
-        }) else {
+        let Some(session) = self.session(id) else {
             return;
         };
+        let title = if session.title.is_empty() {
+            "未命名会话".to_string()
+        } else {
+            session.title.clone()
+        };
+        // A session that never received a message has no history to protect, so
+        // its delete acts immediately. Unsent composer text still asks first.
+        if session.messages.is_empty() && !self.session_has_unsent_content(id, cx) {
+            self.delete_session(id, cx);
+            return;
+        }
         self.delete_target = Some(id);
         let view = cx.entity();
         window.open_dialog(cx, move |dialog, _, _| {
@@ -3411,6 +3416,19 @@ impl ConduitApp {
                     )
                 })
         });
+    }
+    /// Composer content that would be lost with the session: unsent files, a
+    /// saved draft after switching away, or text still in the active composer.
+    fn session_has_unsent_content(&self, id: u64, cx: &Context<Self>) -> bool {
+        (self.selected_session == Some(id) && !self.input.read(cx).value().trim().is_empty())
+            || self
+                .drafts
+                .get(&id)
+                .is_some_and(|draft| !draft.trim().is_empty())
+            || self
+                .composer_files
+                .iter()
+                .any(|(target, files)| target.session == Some(id) && !files.references.is_empty())
     }
     fn delete_session(&mut self, id: u64, cx: &mut Context<Self>) {
         if self.runs.contains_key(&id) {
@@ -12404,6 +12422,15 @@ impl Render for ConduitApp {
                                                 }),
                                         )
                                         .item(
+                                            PopupMenuItem::new("复制会话 ID")
+                                                .icon(IconName::Copy)
+                                                .on_click(move |_, _, cx| {
+                                                    cx.write_to_clipboard(
+                                                        ClipboardItem::new_string(id.to_string()),
+                                                    );
+                                                }),
+                                        )
+                                        .item(
                                             PopupMenuItem::new(if archived {
                                                 "取消归档"
                                             } else {
@@ -15614,5 +15641,81 @@ mod ui_tests {
             "file-only messages must not show an empty bubble"
         );
         assert!(cx.debug_bounds("user-file-0-0").is_some());
+    }
+    #[gpui_kit::test]
+    fn deleting_blank_session_skips_confirmation(cx: &mut TestAppContext) {
+        use crate::{
+            domain::{ItemKind, Provider, SessionRecord, Workspace},
+            store::Store,
+        };
+        use gpui_kit::AppContext as _;
+
+        let session = |id, messages| SessionRecord {
+            id,
+            provider: Provider::Claude,
+            created_at: 0,
+            exit_code: None,
+            title: "新会话".into(),
+            archived: false,
+            native_id: None,
+            model: None,
+            messages,
+            interrupted: false,
+            permission: Default::default(),
+            usage: Default::default(),
+        };
+        let used = session(
+            2,
+            vec![ChatItem {
+                key: "user".into(),
+                created_at: 0,
+                kind: ItemKind::User,
+                text: "hello".into(),
+                input: String::new(),
+                detail: String::new(),
+                status: String::new(),
+                approval: None,
+                model: None,
+            }],
+        );
+        cx.update(gpui_kit::init);
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let mut app = super::ConduitApp::new(window, cx, false, false);
+                app.store = Store {
+                    workspaces: vec![Workspace {
+                        path: std::env::temp_dir(),
+                        sessions: vec![session(1, vec![]), used],
+                    }],
+                    ..Default::default()
+                };
+                app.writable = false;
+                app.selected_workspace = Some(0);
+                app.selected_session = Some(1);
+                app
+            });
+            *output.borrow_mut() = Some(app.clone());
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        let app = slot.borrow().as_ref().unwrap().clone();
+        cx.update(|window, cx| {
+            app.update(cx, |this, cx| {
+                this.open_delete_dialog(1, window, cx);
+                assert!(
+                    this.session(1).is_none(),
+                    "a session with no messages must delete without confirmation"
+                );
+                assert_eq!(this.delete_target, None);
+
+                this.open_delete_dialog(2, window, cx);
+                assert!(
+                    this.session(2).is_some(),
+                    "a session with messages still asks for confirmation"
+                );
+                assert_eq!(this.delete_target, Some(2));
+            });
+        });
     }
 }
