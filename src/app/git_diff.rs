@@ -13,6 +13,7 @@ pub(super) fn git_change_color(kind: git::ChangeKind) -> u32 {
 /// Read-only diff window for one Git change, modelled on JetBrains' diff
 /// viewer: a version bar, navigation and folding tools, and a split view.
 pub(super) struct GitDiffDialog {
+    pub(super) comparison: Option<git::ComparisonRequest>,
     pub(super) workspace: PathBuf,
     pub(super) file: git::ChangedFile,
     pub(super) state: Entity<DiffState>,
@@ -33,6 +34,16 @@ impl GitDiffDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::new_source(workspace, file, None, window, cx)
+    }
+
+    pub(super) fn new_source(
+        workspace: PathBuf,
+        file: git::ChangedFile,
+        comparison: Option<git::ComparisonRequest>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let state = cx.new(|cx| {
             DiffState::new(Vec::new(), cx)
                 .with_mode(DiffMode::Split)
@@ -40,6 +51,7 @@ impl GitDiffDialog {
         });
         let subscription = cx.observe(&state, |_, _, cx| cx.notify());
         let mut dialog = Self {
+            comparison,
             workspace,
             file,
             state,
@@ -68,10 +80,17 @@ impl GitDiffDialog {
         cx.notify();
         let workspace = self.workspace.clone();
         let file = self.file.clone();
+        let comparison = self.comparison.clone();
         self._load_task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { git::load_file_diff(&workspace, &file, &cancelled) })
+                .spawn(async move {
+                    if let Some(comparison) = comparison {
+                        git::load_comparison_diff(&workspace, &comparison, &file, &cancelled)
+                    } else {
+                        git::load_file_diff(&workspace, &file, &cancelled)
+                    }
+                })
                 .await;
             let _ = this.update_in(cx, |this, window, cx| {
                 if this.cancelled.load(Ordering::Relaxed) {
@@ -142,11 +161,40 @@ impl GitDiffDialog {
         cx.notify();
     }
 
-    pub(super) fn versions(&self) -> (&'static str, &'static str) {
+    pub(super) fn versions(&self) -> (String, String) {
+        if let Some(request) = &self.comparison {
+            let before = format!(
+                "{} · {}",
+                request.selected.name,
+                &request.selected.oid[..7.min(request.selected.oid.len())]
+            );
+            let after = if request.kind == git::ComparisonKind::WorkingTree {
+                "工作区（含暂存）".into()
+            } else {
+                format!(
+                    "{} · {}",
+                    request
+                        .expected
+                        .current_ref
+                        .as_deref()
+                        .unwrap_or("HEAD")
+                        .trim_start_matches("refs/heads/"),
+                    request
+                        .expected
+                        .head
+                        .as_deref()
+                        .unwrap_or("")
+                        .chars()
+                        .take(7)
+                        .collect::<String>()
+                )
+            };
+            return (before, after);
+        }
         match self.file.kind() {
-            git::ChangeKind::Added => ("空（新增前）", "工作区"),
-            git::ChangeKind::Modified => ("HEAD", "工作区（含暂存）"),
-            git::ChangeKind::Deleted => ("HEAD", "已删除"),
+            git::ChangeKind::Added => ("空（新增前）".into(), "工作区".into()),
+            git::ChangeKind::Modified => ("HEAD".into(), "工作区（含暂存）".into()),
+            git::ChangeKind::Deleted => ("HEAD".into(), "已删除".into()),
         }
     }
 
@@ -154,9 +202,11 @@ impl GitDiffDialog {
         let kind = self.file.kind();
         let color = git_change_color(kind);
         let (before, after) = self.versions();
-        let version_tag = |label: &'static str, emphasized: bool| {
+        let version_tag = |label: String, emphasized: bool| {
             div()
-                .flex_shrink_0()
+                .min_w_0()
+                .max_w(px(260.))
+                .truncate()
                 .px(px(6.))
                 .py(px(1.))
                 .rounded(px(4.))
@@ -417,7 +467,7 @@ impl GitDiffDialog {
             return div().into_any_element();
         }
         let (before, after) = self.versions();
-        let caption = |text: &'static str| {
+        let caption = |text: String| {
             div()
                 .flex_1()
                 .min_w_0()
@@ -588,6 +638,8 @@ impl GitDiffDialog {
                     .text_color(rgb(palette().faint))
                     .child(if binary {
                         "二进制文件无法显示逐行差异"
+                    } else if self.comparison.is_some() {
+                        "只读差异 · 比较两端版本"
                     } else {
                         "只读差异 · 与 HEAD 对比"
                     }),
@@ -613,6 +665,8 @@ impl Render for GitDiffDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .id("git-diff-dialog")
+            .debug_selector(|| "git-diff-dialog".into())
+            .key_context("GitDiffDialog")
             .size_full()
             .min_h_0()
             .bg(rgb(palette().surface))

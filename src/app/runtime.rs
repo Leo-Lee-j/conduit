@@ -5,7 +5,8 @@ use super::*;
 impl ConduitApp {
     pub(super) fn workspace_busy(&self, index: usize) -> bool {
         self.git_operation.as_ref().is_some_and(|operation| {
-            operation.worktree == git::worktree_root(&self.store.workspaces[index].path)
+            git::repository_scope(&operation.worktree)
+                == git::repository_scope(&self.store.workspaces[index].path)
         }) || self.store.workspaces[index]
             .sessions
             .iter()
@@ -28,12 +29,16 @@ impl ConduitApp {
             })
     }
 
+    /// Git refs are shared by linked worktrees, so Git writes coordinate with
+    /// every CLI turn using this repository. Chat-to-chat concurrency is unchanged.
     pub(super) fn worktree_has_runs(&self, path: &Path) -> bool {
         if self.runs.is_empty() {
             return false;
         }
-        let root = git::worktree_root(path);
-        self.runs.values().any(|run| run.worktree == root)
+        let root = git::repository_scope(path);
+        self.runs
+            .values()
+            .any(|run| git::repository_scope(&run.worktree) == root)
     }
 
     /// Resolve the destination before checking concurrency or changing drafts.
@@ -55,10 +60,11 @@ impl ConduitApp {
             return Some("该会话已有任务运行，请等待完成或取消后发送。");
         }
         if self.git_operation.as_ref().is_some_and(|operation| {
-            self.selected_workspace_path()
-                .is_some_and(|path| operation.worktree == git::worktree_root(&path))
+            self.selected_workspace_path().is_some_and(|path| {
+                git::repository_scope(&operation.worktree) == git::repository_scope(&path)
+            })
         }) {
-            return Some("该仓库正在提交或推送，请等待完成后发送。");
+            return Some("该仓库正在执行 Git 操作，请等待完成后发送。");
         }
         None
     }

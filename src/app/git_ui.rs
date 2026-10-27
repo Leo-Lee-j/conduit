@@ -130,7 +130,7 @@ impl ConduitApp {
             self.refresh_git(cx);
             self.git_feedback(
                 path,
-                "当前分支没有有效上游。请先在终端设置 upstream，再刷新并推送。",
+                "当前分支没有有效上游。请打开分支菜单，选择 Push… 设置远程目标，或在 Tracked Branch 中选择上游。",
                 true,
                 cx,
             );
@@ -157,6 +157,7 @@ impl ConduitApp {
         let disabled = self.closing
             || !self.writable
             || busy
+            || repository.integration.is_some()
             || self.commit_generation.is_some()
             || self
                 .selected_workspace_path()
@@ -306,6 +307,19 @@ impl ConduitApp {
             let path = operation.probe.path.clone();
             match result {
                 Ok(result) => {
+                    if let Some(created) = &result.worktree_created
+                        && !self
+                            .store
+                            .workspaces
+                            .iter()
+                            .any(|workspace| &workspace.path == created)
+                    {
+                        self.store.workspaces.push(Workspace {
+                            path: created.clone(),
+                            sessions: vec![],
+                        });
+                        self.persist();
+                    }
                     if result.error.is_some()
                         && self.selected_workspace_path().as_ref() == Some(&path)
                     {
@@ -463,6 +477,10 @@ impl ConduitApp {
             || busy
             || self.worktree_has_runs(&path)
             || self.git_probe.is_some()
+            || self
+                .git_repository
+                .as_ref()
+                .is_some_and(|repository| repository.integration.is_some())
             || !staged;
         let can_commit = !disabled && !draft.input.read(cx).value().trim().is_empty();
         let can_generate = !disabled;
@@ -751,12 +769,13 @@ impl ConduitApp {
             repository.current.clone()
         };
         let trigger = Button::new("git-branch-trigger")
+            .debug_selector(|| "git-branch-trigger".into())
             .ghost()
             .small()
             .h(px(26.))
             .px_2()
             .cursor_pointer()
-            .tooltip(format!("当前分支：{label} · 查看分支（只读）"))
+            .tooltip(format!("当前分支：{label} · 分支操作"))
             .child(
                 h_flex()
                     .gap_2()
@@ -784,12 +803,29 @@ impl ConduitApp {
         )))
         .anchor(Anchor::BottomLeft)
         .offset(px(6.))
+        // Nested menus handle their own outside clicks. Dismissing this parent
+        // on a child's mouse-down would destroy the item before mouse-up.
+        .overlay_closable(false)
         .trigger(trigger)
-        .content(move |_, _, cx| {
+        .content(move |_, window, cx| {
             let popover = cx.entity().downgrade();
             let app = view.clone();
+            let Some(repository) = app.read(cx).git_repository.clone() else {
+                return div().into_any_element();
+            };
+            let host = git_branches::BranchMenuHost {
+                workspace: app.read(cx).selected_workspace_path().unwrap_or_default(),
+                interaction: window.use_keyed_state("git-branch-menu-interaction", cx, |_, _| {
+                    git_branches::BranchMenuInteraction::default()
+                }),
+                popover: popover.clone(),
+            };
+            let outside_host = host.clone();
             let mut list = v_flex()
                 .id("git-branches")
+                .on_mouse_down_out(move |event, window, cx| {
+                    outside_host.dismiss_unless_menu_open(event.position, window, cx)
+                })
                 .w(px(280.))
                 .max_h(px(320.))
                 .overflow_y_scroll()
@@ -800,8 +836,11 @@ impl ConduitApp {
                         .py_1()
                         .text_size(px(10.))
                         .text_color(rgb(palette().faint))
-                        .child("工作区分支 · 只读"),
+                        .child("工作区分支"),
                 );
+            if let Some(banner) = app.read(cx).git_integration_banner(app.clone()) {
+                list = list.child(banner);
+            }
             if repository.detached {
                 list = list.child(
                     div()
@@ -840,32 +879,69 @@ impl ConduitApp {
                 {
                     let current =
                         !repository.detached && !remote && branch.name == repository.current;
-                    list = list.child(
-                        h_flex()
-                            .id(("git-branch-row", index))
-                            .px_2()
-                            .py_1()
-                            .gap_2()
-                            .rounded(px(4.))
-                            .when(current, |row| row.bg(rgb(palette().surface_hover)))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(palette().text))
-                                    .child(branch.name.clone()),
-                            )
-                            .when(current, |row| {
-                                row.child(
-                                    div()
-                                        .text_size(px(10.))
-                                        .text_color(rgb(palette().muted))
-                                        .child("当前"),
+                    let row = h_flex()
+                        .id(("git-branch-row", index))
+                        .debug_selector(move || format!("git-branch-row-{index}"))
+                        .px_2()
+                        .py_1()
+                        .gap(px(4.))
+                        .rounded(px(4.))
+                        .child(h_flex().min_w_0().child(git_branches::branch_tag(
+                            branch.name.clone(),
+                            218.,
+                            current,
+                        )));
+                    let info = repository
+                        .branch_info
+                        .iter()
+                        .find(|info| info.name == branch.name && info.remote == remote)
+                        .cloned();
+                    if let Some(info) = info {
+                        let menu_app = app.clone();
+                        let button_app = app.clone();
+                        let menu_info = info.clone();
+                        let menu_host = host.clone();
+                        let button_host = host.clone();
+                        let bounds_host = host.clone();
+                        let bounds_ref = info.full_ref.clone();
+                        list = list.child(
+                            row.on_prepaint(move |bounds, _, cx| {
+                                bounds_host.record_branch_bounds(bounds_ref.clone(), bounds, cx)
+                            })
+                            .context_menu(move |menu, window, cx| {
+                                git_branches::branch_menu(
+                                    menu,
+                                    menu_app.clone(),
+                                    menu_info.clone(),
+                                    menu_host.clone(),
+                                    window,
+                                    cx,
                                 )
-                            }),
-                    );
+                            })
+                            .child(
+                                Button::new(("git-branch-actions", index))
+                                    .debug_selector(move || format!("git-branch-actions-{index}"))
+                                    .ghost()
+                                    .small()
+                                    .compact()
+                                    .icon(FullIconName::Ellipsis)
+                                    .tooltip(format!("{} 的分支操作", info.name))
+                                    .accessibility_label(format!("{} 的分支操作", info.name))
+                                    .dropdown_menu(move |menu, window, cx| {
+                                        git_branches::branch_menu(
+                                            menu,
+                                            button_app.clone(),
+                                            info.clone(),
+                                            button_host.clone(),
+                                            window,
+                                            cx,
+                                        )
+                                    }),
+                            ),
+                        );
+                    } else {
+                        list = list.child(row);
+                    }
                 }
             }
             if repository.truncated {
@@ -877,25 +953,48 @@ impl ConduitApp {
                         .child("分支过多，列表已截断"),
                 );
             }
-            list.child(
-                h_flex()
-                    .pt_2()
-                    .border_t_1()
-                    .border_color(rgb(palette().border))
-                    .child(
-                        Button::new("git-branches-refresh")
-                            .label("刷新分支")
-                            .small()
-                            .ghost()
-                            .cursor_pointer()
-                            .on_click(move |_, window, cx| {
-                                app.update(cx, |this, _| this.refresh_branches());
-                                if let Some(popover) = popover.clone().upgrade() {
-                                    popover.update(cx, |state, cx| state.dismiss(window, cx));
-                                }
-                            }),
+            if let Some(feedback) = app.read(cx).git_feedback.get(&host.workspace) {
+                list = list.child(
+                    div()
+                        .id("git-branch-feedback")
+                        .max_h(px(64.))
+                        .overflow_y_scroll()
+                        .px_2()
+                        .text_size(px(11.))
+                        .text_color(rgb(if feedback.error {
+                            palette().danger_text
+                        } else {
+                            palette().muted
+                        }))
+                        .child(feedback.text.clone()),
+                );
+            }
+            let side_form = host.side_form(cx);
+            div()
+                .child(
+                    list.child(
+                        h_flex()
+                            .pt_2()
+                            .border_t_1()
+                            .border_color(rgb(palette().border))
+                            .child(
+                                Button::new("git-branches-refresh")
+                                    .label("刷新分支")
+                                    .small()
+                                    .ghost()
+                                    .cursor_pointer()
+                                    .on_click(move |_, window, cx| {
+                                        app.update(cx, |this, _| this.refresh_branches());
+                                        if let Some(popover) = popover.clone().upgrade() {
+                                            popover
+                                                .update(cx, |state, cx| state.dismiss(window, cx));
+                                        }
+                                    }),
+                            ),
                     ),
-            )
+                )
+                .children(side_form)
+                .into_any_element()
         })
         .into_any_element()
     }
@@ -920,6 +1019,7 @@ impl ConduitApp {
             let height = (f32::from(viewport.height) - 96.).clamp(420., 820.);
             let margin_top = ((f32::from(viewport.height) - height) * 0.5).max(24.);
             dialog
+                .entrance(gpui_kit::component::dialog::DialogEntrance::Fade)
                 .w(px(width))
                 .margin_top(px(margin_top))
                 .p_0()
@@ -1125,6 +1225,9 @@ impl ConduitApp {
                     )
                 }),
         );
+        if let Some(banner) = self.git_integration_banner(view.clone()) {
+            body = body.child(banner);
+        }
         if snapshot.is_clean() {
             body = body.child(
                 v_flex()

@@ -1,4 +1,4 @@
-//! Git snapshots and explicit staged-only commit / upstream push operations.
+//! Git snapshots, bounded comparisons, and explicit repository operations.
 //!
 //! Snapshot probes only execute non-mutating branch/ref queries, status and diff.
 //! `--no-optional-locks` keeps `status`/`diff` from taking the index lock, so
@@ -7,6 +7,14 @@
 //! process tree, mirroring the CLI version probe.
 use crate::child::{Child, available};
 use anyhow::{Context, Result, anyhow, bail};
+mod branches;
+mod compare;
+pub use branches::{
+    BranchAction, BranchContext, BranchInfo, BranchRequest, IntegrationState, repository_scope,
+};
+pub use compare::{
+    Comparison, ComparisonKind, ComparisonRequest, load_comparison, load_comparison_diff,
+};
 use std::{
     fs::{self, File},
     io::Read,
@@ -148,10 +156,16 @@ pub struct Repository {
     pub truncated: bool,
     pub upstream: Option<String>,
     pub ahead: usize,
+    pub context: BranchContext,
+    pub branch_info: Vec<BranchInfo>,
+    pub integration: Option<IntegrationState>,
+    pub conflicts: Vec<String>,
+    pub remotes: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
 pub enum Operation {
+    Branch(Box<BranchRequest>),
     Commit {
         message: String,
         target: CommitTarget,
@@ -168,6 +182,7 @@ pub struct OperationResult {
     pub committed: bool,
     pub message: String,
     pub error: Option<String>,
+    pub worktree_created: Option<PathBuf>,
 }
 
 impl Snapshot {
@@ -274,6 +289,7 @@ pub fn load_repository(workspace: &Path, cancel: &AtomicBool) -> Result<Reposito
     if inside.trim() != "true" {
         bail!("该工作区不是 Git 仓库");
     }
+    let expected_context = branches::context(&git, workspace, cancel)?;
     // symbolic-ref preserves the branch name even before the first commit.
     let symbolic = run_git(
         &git,
@@ -356,6 +372,11 @@ pub fn load_repository(workspace: &Path, cancel: &AtomicBool) -> Result<Reposito
     .ok()
     .and_then(|value| value.trim().parse().ok())
     .unwrap_or(0);
+    let (context, branch_info, integration, conflicts, remotes) =
+        branches::metadata(&git, workspace, cancel)?;
+    if context != expected_context {
+        bail!("读取期间分支或 HEAD 已变化，请刷新后重试");
+    }
     Ok(Repository {
         current,
         detached,
@@ -363,6 +384,11 @@ pub fn load_repository(workspace: &Path, cancel: &AtomicBool) -> Result<Reposito
         truncated,
         upstream,
         ahead,
+        context,
+        branch_info,
+        integration,
+        conflicts,
+        remotes,
     })
 }
 
@@ -696,10 +722,17 @@ fn commit_target(git: &Path, workspace: &Path, cancel: &AtomicBool) -> Result<Co
 }
 
 fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> OperationResult {
+    if let Operation::Branch(request) = operation {
+        return branches::operate_branch(workspace, *request, cancel);
+    }
     let mut committed = false;
     let result = (|| -> Result<String> {
         let git = resolve_git().ok_or_else(|| anyhow!("未找到 git.exe"))?;
+        if let Some(state) = branches::integration_state(&git, workspace, cancel)? {
+            bail!("仓库存在进行中的 {}，请先继续或中止", state.label());
+        }
         match operation {
+            Operation::Branch(_) => unreachable!(),
             Operation::Commit {
                 message,
                 target,
@@ -750,11 +783,13 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
     })();
     match result {
         Ok(message) => OperationResult {
+            worktree_created: None,
             committed,
             message,
             error: None,
         },
         Err(error) => OperationResult {
+            worktree_created: None,
             committed,
             message: if committed {
                 "提交已成功，推送失败".into()
@@ -949,7 +984,13 @@ fn run_git_bounded(
         bail!("Git 读取已取消");
     }
     let args: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
-    let (child, mut pipes) = Child::spawn(git, &args, workspace)
+    let environment = std::collections::BTreeMap::from([
+        ("GIT_EDITOR".into(), "true".into()),
+        ("GIT_SEQUENCE_EDITOR".into(), "true".into()),
+        ("GIT_TERMINAL_PROMPT".into(), "0".into()),
+        ("GCM_INTERACTIVE".into(), "Never".into()),
+    ]);
+    let (child, mut pipes) = Child::spawn_with_env(git, &args, workspace, &environment)
         .with_context(|| format!("启动 {} 失败", git.display()))?;
     drop(pipes.stdin);
     let result = (|| {
@@ -978,7 +1019,14 @@ fn run_git_bounded(
             if let Some(code) = child.exit_code()? {
                 while read_available(&mut pipes.stdout, &mut stdout, &mut truncated, limit)? > 0 {}
                 while read_available(&mut pipes.stderr, &mut stderr, &mut truncated, limit)? > 0 {}
-                if code != 0 {
+                // --no-index uses exit code 1 to report a successful comparison
+                // with differences, like diff(1).
+                if code != 0
+                    && !(code == 1
+                        && args
+                            .windows(2)
+                            .any(|pair| pair[0] == "diff" && pair[1] == "--no-index"))
+                {
                     let stderr = String::from_utf8_lossy(&stderr);
                     let stdout = String::from_utf8_lossy(&stdout);
                     bail!(
@@ -1006,6 +1054,7 @@ fn run_git_bounded(
 
 #[cfg(test)]
 mod tests {
+    include!("git/branch_tests.rs");
     use super::*;
 
     #[test]

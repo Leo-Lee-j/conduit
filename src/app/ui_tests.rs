@@ -7,6 +7,724 @@ use gpui_kit::{
 };
 
 #[gpui_kit::test]
+fn git_branch_menu_opens_create_form_and_remains_usable_after_repaint(cx: &mut TestAppContext) {
+    use crate::{domain::Workspace, git, store::Store};
+    use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let path = std::env::temp_dir().join("conduit-branch-menu-fixture");
+            let store = Store {
+                workspaces: vec![Workspace {
+                    path: path.clone(),
+                    sessions: vec![],
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.selected_workspace = Some(0);
+            app.git_workspace = Some(path);
+            app.branch_probe = None;
+            app.git_probe = None;
+            let info = git::BranchInfo {
+                name: "main".into(),
+                full_ref: "refs/heads/main".into(),
+                oid: "0123456789012345678901234567890123456789".into(),
+                remote: false,
+                upstream: None,
+                upstream_remote: None,
+                upstream_ref: None,
+                occupied: None,
+            };
+            app.git_repository = Some(git::Repository {
+                current: "main".into(),
+                detached: false,
+                branches: vec![git::Branch {
+                    name: "main".into(),
+                    remote: false,
+                }],
+                truncated: false,
+                upstream: None,
+                ahead: 0,
+                context: git::BranchContext {
+                    current_ref: Some(info.full_ref.clone()),
+                    head: Some(info.oid.clone()),
+                },
+                branch_info: vec![info],
+                integration: None,
+                conflicts: vec![],
+                remotes: vec![],
+            });
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let point = cx
+        .debug_bounds("git-branch-trigger")
+        .expect("branch trigger")
+        .center();
+    cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let point = cx
+        .debug_bounds("git-branch-actions-0")
+        .expect("visible action menu")
+        .center();
+    cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    for _ in 0..3 {
+        cx.update(|window, cx| {
+            slot.borrow()
+                .as_ref()
+                .unwrap()
+                .update(cx, |_, cx| cx.notify());
+            let _ = window.draw(cx);
+        });
+        cx.run_until_parked();
+    }
+    let item = cx.update(|window, _| {
+        window
+            .within("popup-menu")
+            .find_by_label("New Branch from 'main'…")
+            .bounds()
+            .center()
+    });
+    cx.simulate_mouse_move(item, None, Modifiers::default());
+    cx.simulate_mouse_down(item, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    cx.simulate_mouse_up(item, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(
+        cx.debug_bounds("branch-form").is_some(),
+        "New Branch opens a form from the nested popup"
+    );
+    assert!(
+        cx.debug_bounds("dialog-0").is_none(),
+        "simple branch input is non-modal"
+    );
+    cx.update(|window, _| {
+        assert_eq!(
+            window.find_by_label("分支名").focused(),
+            Some(true),
+            "inline input receives focus immediately"
+        )
+    });
+    let row_bounds = cx.debug_bounds("git-branch-row-0").unwrap();
+    let form_bounds = cx.debug_bounds("branch-form").unwrap();
+    assert!(
+        row_bounds.right() <= form_bounds.left() || form_bounds.right() <= row_bounds.left(),
+        "input opens beside the branch list"
+    );
+    for (width, height) in [(1200., 800.), (850., 500.)] {
+        cx.simulate_resize(gpui_kit::size(px(width), px(height)));
+        cx.run_until_parked();
+        for _ in 0..2 {
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        }
+        let bounds = cx.debug_bounds("branch-form").unwrap();
+        let row = cx.debug_bounds("git-branch-row-0").unwrap();
+        assert!(
+            bounds.left() >= px(0.)
+                && bounds.top() >= px(0.)
+                && bounds.right() <= px(width)
+                && bounds.bottom() <= px(height),
+            "side input stays in {width}×{height}: {bounds:?}"
+        );
+        assert!(
+            row.right() <= bounds.left() || bounds.right() <= row.left(),
+            "input flips beside the menu at {width}×{height}"
+        );
+    }
+    let submit = cx.debug_bounds("branch-form-submit").unwrap().center();
+    cx.simulate_mouse_down(submit, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(submit, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(
+        cx.debug_bounds("branch-form-error").is_some(),
+        "empty branch names show inline validation"
+    );
+    let cancel = cx.debug_bounds("branch-form-cancel").unwrap().center();
+    cx.simulate_mouse_down(cancel, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(cancel, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("branch-form").is_none());
+    assert!(
+        cx.debug_bounds("git-branch-actions-0").is_some(),
+        "cancelling inline input preserves the branch list"
+    );
+    cx.update(|_, cx| {
+        assert!(
+            slot.borrow()
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .git_operation
+                .is_none(),
+            "cancelling cannot start a Git mutation"
+        );
+    });
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    // Both right-click and the explicit button must preserve the menu until mouse-up.
+    for (label, dialog) in [
+        ("Rename…", "branch-form"),
+        ("Show Diff with Working Tree", "git-comparison-browser"),
+    ] {
+        let trigger = cx.debug_bounds("git-branch-trigger").unwrap().center();
+        cx.simulate_mouse_down(trigger, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(trigger, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let row = cx.debug_bounds("git-branch-row-0").unwrap().center();
+        cx.simulate_mouse_down(row, MouseButton::Right, Modifiers::default());
+        cx.simulate_mouse_up(row, MouseButton::Right, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let item = cx.update(|window, _| {
+            window
+                .within("popup-menu")
+                .find_by_label(label)
+                .bounds()
+                .center()
+        });
+        cx.simulate_mouse_move(item, None, Modifiers::default());
+        cx.simulate_mouse_down(item, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.simulate_mouse_up(item, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(
+            cx.debug_bounds(dialog).is_some(),
+            "mouse selection opens {label}"
+        );
+        if label == "Rename…" {
+            assert!(cx.debug_bounds("git-branch-actions-0").is_some());
+            assert!(cx.debug_bounds("dialog-0").is_none());
+        } else {
+            assert!(cx.debug_bounds("git-branch-actions-0").is_none());
+            for (width, height) in [(1200., 800.), (850., 500.)] {
+                cx.simulate_resize(gpui_kit::size(px(width), px(height)));
+                cx.run_until_parked();
+                cx.update(|window, cx| {
+                    let _ = window.draw(cx);
+                });
+                let bounds = cx.debug_bounds("git-comparison-browser").unwrap();
+                assert!(
+                    (bounds.center().y - px(height * 0.5)).abs() <= px(4.),
+                    "Diff dialog must be vertically centered: {bounds:?}"
+                );
+                assert!(
+                    (bounds.center().x - px(width * 0.5)).abs() <= px(4.),
+                    "Diff dialog must be horizontally centered: {bounds:?}"
+                );
+            }
+        }
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(cx.debug_bounds(dialog).is_none());
+        if label == "Rename…" {
+            assert!(
+                cx.debug_bounds("git-branch-actions-0").is_some(),
+                "Escape closes only the input"
+            );
+            cx.simulate_keystrokes("escape");
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        }
+    }
+    // Outside clicks still dismiss an ordinary branch list.
+    let trigger = cx.debug_bounds("git-branch-trigger").unwrap().center();
+    cx.simulate_mouse_down(trigger, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(trigger, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let outside = gpui_kit::point(px(5.), px(5.));
+    cx.simulate_mouse_down(outside, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("git-branch-actions-0").is_none());
+    // A long upstream submenu must scroll independently of the branch picker.
+    cx.update(|_, cx| {
+        slot.borrow().as_ref().unwrap().update(cx, |app, cx| {
+            let repository = app.git_repository.as_mut().unwrap();
+            let template = repository.branch_info[0].clone();
+            for index in 0..80 {
+                let name = format!("origin/remote-{index:03}");
+                repository.branch_info.push(git::BranchInfo {
+                    name: name.clone(),
+                    full_ref: format!("refs/remotes/{name}"),
+                    remote: true,
+                    ..template.clone()
+                });
+            }
+            cx.notify();
+        })
+    });
+    let trigger = cx.debug_bounds("git-branch-trigger").unwrap().center();
+    cx.simulate_mouse_down(trigger, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(trigger, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let actions = cx.debug_bounds("git-branch-actions-0").unwrap().center();
+    cx.simulate_mouse_down(actions, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(actions, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let tracking = cx.update(|window, _| {
+        window
+            .within("popup-menu")
+            .find_by_label("Tracked Branch")
+            .bounds()
+            .center()
+    });
+    cx.simulate_mouse_move(tracking, None, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let submenu = cx.update(|window, _| window.find("submenu").bounds());
+    assert!(
+        submenu.size.height <= px(360.),
+        "upstream submenu has a bounded viewport: {submenu:?}"
+    );
+    let first = cx.update(|window, _| {
+        window
+            .within("submenu")
+            .find_by_label("origin/remote-000")
+            .bounds()
+    });
+    let branch_before = cx.debug_bounds("git-branch-row-0").unwrap();
+    cx.simulate_event(ScrollWheelEvent {
+        position: submenu.center(),
+        delta: ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-3000.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    cx.update(|window, _| {
+        let last = window.within("submenu").find_by_label("origin/remote-079");
+        assert!(
+            last.visible(),
+            "wheel reaches the final upstream branch: {last:?}"
+        );
+        assert!(
+            window
+                .within("submenu")
+                .find_by_label("origin/remote-000")
+                .bounds()
+                .top()
+                < first.top()
+        );
+    });
+    assert_eq!(
+        cx.debug_bounds("git-branch-row-0").unwrap(),
+        branch_before,
+        "scrolling the submenu leaves the branch list in place"
+    );
+    cx.simulate_event(ScrollWheelEvent {
+        position: submenu.center(),
+        delta: ScrollDelta::Pixels(gpui_kit::point(px(0.), px(3000.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    cx.update(|window, _| {
+        assert!(
+            window
+                .within("submenu")
+                .find_by_label("origin/remote-000")
+                .visible()
+        )
+    });
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        slot.borrow().as_ref().unwrap().update(cx, |app, cx| {
+            let repository = app.git_repository.as_mut().unwrap();
+            repository.integration = Some(git::IntegrationState::Merge);
+            repository.conflicts = vec!["src/conflicted.rs".into()];
+            cx.notify();
+        });
+        let _ = window.draw(cx);
+    });
+    let point = cx.debug_bounds("git-branch-trigger").unwrap().center();
+    cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let point = cx
+        .debug_bounds("git-recovery-abort")
+        .expect("persistent conflict recovery in the branch popup")
+        .center();
+    cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(
+        cx.debug_bounds("branch-form").is_some(),
+        "abort opens a reviewable confirmation"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("branch-form").is_none());
+}
+
+#[gpui_kit::test]
+fn git_branch_mouse_actions_checkout_create_and_track_real_repository(cx: &mut TestAppContext) {
+    use crate::{domain::Workspace, git, store::Store};
+    use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton, VisualTestContext};
+    use std::{
+        path::PathBuf,
+        sync::atomic::AtomicBool,
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    };
+
+    // Only this newly-created repository is mutated by the UI actions below.
+    struct Repository(PathBuf);
+    impl Drop for Repository {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let repository = Repository(std::env::temp_dir().join(format!(
+        "conduit-branch-click-{}-{nonce}",
+        std::process::id()
+    )));
+    std::fs::create_dir_all(repository.0.join("empty-hooks")).unwrap();
+    let git_executable = git::resolve_git().expect("Git required for branch UI integration test");
+    let run = |args: &[&str]| {
+        let output = std::process::Command::new(&git_executable)
+            .current_dir(&repository.0)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    };
+    run(&["init", "-q", "--initial-branch=main"]);
+    run(&["config", "user.name", "Conduit UI Test"]);
+    run(&["config", "user.email", "conduit-ui@example.invalid"]);
+    run(&["config", "commit.gpgSign", "false"]);
+    run(&[
+        "config",
+        "core.hooksPath",
+        repository.0.join("empty-hooks").to_str().unwrap(),
+    ]);
+    std::fs::write(repository.0.join("tracked.txt"), "seed\n").unwrap();
+    run(&["add", "tracked.txt"]);
+    run(&["commit", "-qm", "seed"]);
+    run(&["branch", "feature"]);
+    run(&["remote", "add", "origin", "."]);
+    run(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    let metadata = git::load_repository(&repository.0, &AtomicBool::new(false)).unwrap();
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let store = Store {
+                workspaces: vec![Workspace {
+                    path: repository.0.clone(),
+                    sessions: vec![],
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.selected_workspace = Some(0);
+            app.git_workspace = Some(repository.0.clone());
+            app.branch_probe = None;
+            app.git_probe = None;
+            app.git_repository = Some(metadata);
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+
+    fn draw(cx: &mut VisualTestContext) {
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+    }
+    fn pointer_click(
+        cx: &mut VisualTestContext,
+        point: gpui_kit::Point<gpui_kit::Pixels>,
+        button: MouseButton,
+    ) {
+        cx.simulate_mouse_move(point, None, Modifiers::default());
+        cx.simulate_mouse_down(point, button, Modifiers::default());
+        // A real display may repaint between the press and release.
+        draw(cx);
+        cx.simulate_mouse_up(point, button, Modifiers::default());
+        draw(cx);
+    }
+    fn wait_operation(cx: &mut VisualTestContext, app: &gpui_kit::Entity<super::ConduitApp>) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let done = cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    app.poll_git_actions(window, cx);
+                    app.git_operation.is_none()
+                })
+            });
+            if done {
+                break;
+            }
+            assert!(Instant::now() < deadline, "Git UI operation timed out");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        cx.update(|_, cx| {
+            let app = app.read(cx);
+            assert!(
+                app.git_feedback.values().all(|feedback| !feedback.error),
+                "{}",
+                app.git_feedback
+                    .values()
+                    .map(|feedback| feedback.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+        });
+    }
+    draw(cx);
+    let trigger = cx.debug_bounds("git-branch-trigger").unwrap().center();
+    pointer_click(cx, trigger, MouseButton::Left);
+    let actions = cx
+        .debug_bounds("git-branch-actions-1")
+        .expect("feature action button")
+        .center();
+    pointer_click(cx, actions, MouseButton::Left);
+    let checkout = cx.update(|window, _| {
+        window
+            .within("popup-menu")
+            .find_by_label("Checkout")
+            .bounds()
+            .center()
+    });
+    pointer_click(cx, checkout, MouseButton::Left);
+    cx.update(|_, cx| {
+        assert!(
+            app.read(cx).git_operation.is_some(),
+            "Checkout click starts a Git operation"
+        )
+    });
+    wait_operation(cx, &app);
+    assert_eq!(run(&["branch", "--show-current"]), "feature");
+
+    let metadata = git::load_repository(&repository.0, &AtomicBool::new(false)).unwrap();
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.branch_probe = None;
+            app.git_repository = Some(metadata);
+            cx.notify();
+        })
+    });
+    draw(cx);
+    let trigger = cx.debug_bounds("git-branch-trigger").unwrap().center();
+    pointer_click(cx, trigger, MouseButton::Left);
+    let row = cx.debug_bounds("git-branch-row-0").unwrap().center();
+    pointer_click(cx, row, MouseButton::Right);
+    let create = cx.update(|window, _| {
+        window
+            .within("popup-menu")
+            .find_by_label("New Branch from 'feature'…")
+            .bounds()
+            .center()
+    });
+    pointer_click(cx, create, MouseButton::Left);
+    assert!(cx.debug_bounds("branch-form").is_some());
+    assert!(cx.debug_bounds("git-branch-actions-0").is_some());
+    assert!(cx.debug_bounds("dialog-0").is_none());
+    let input = cx.update(|window, _| window.find_by_label("分支名").bounds().center());
+    pointer_click(cx, input, MouseButton::Left);
+    cx.update(|window, cx| window.input("ui-created", cx));
+    draw(cx);
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    cx.update(|_, cx| {
+        assert!(
+            app.read(cx).git_operation.is_some(),
+            "form confirmation starts creation"
+        )
+    });
+    wait_operation(cx, &app);
+    assert!(cx.debug_bounds("branch-form").is_none());
+    assert!(
+        cx.debug_bounds("git-branch-actions-0").is_some(),
+        "creation preserves the Git popup"
+    );
+    assert_eq!(run(&["branch", "--show-current"]), "ui-created");
+    assert_eq!(
+        run(&["rev-parse", "ui-created"]),
+        run(&["rev-parse", "feature"])
+    );
+
+    let metadata = git::load_repository(&repository.0, &AtomicBool::new(false)).unwrap();
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.branch_probe = None;
+            app.git_repository = Some(metadata);
+            cx.notify();
+        })
+    });
+    draw(cx);
+    let actions = cx.debug_bounds("git-branch-actions-0").unwrap().center();
+    pointer_click(cx, actions, MouseButton::Left);
+    let tracking = cx.update(|window, _| {
+        window
+            .within("popup-menu")
+            .find_by_label("Tracked Branch")
+            .bounds()
+            .center()
+    });
+    cx.simulate_mouse_move(tracking, None, Modifiers::default());
+    draw(cx);
+    let upstream = cx.update(|window, _| {
+        window
+            .within("submenu")
+            .find_by_label("origin/main")
+            .bounds()
+            .center()
+    });
+    pointer_click(cx, upstream, MouseButton::Left);
+    cx.update(|_, cx| {
+        assert!(
+            app.read(cx).git_operation.is_some(),
+            "submenu mouse selection starts tracking update"
+        )
+    });
+    wait_operation(cx, &app);
+    assert_eq!(run(&["config", "branch.ui-created.remote"]), "origin");
+    assert_eq!(
+        run(&["config", "branch.ui-created.merge"]),
+        "refs/heads/main"
+    );
+    let metadata = git::load_repository(&repository.0, &AtomicBool::new(false)).unwrap();
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.branch_probe = None;
+            app.git_repository = Some(metadata);
+            cx.notify();
+        })
+    });
+    draw(cx);
+    let trigger = cx.debug_bounds("git-branch-trigger").unwrap().center();
+    pointer_click(cx, trigger, MouseButton::Left);
+    let row = cx.debug_bounds("git-branch-row-0").unwrap().center();
+    pointer_click(cx, row, MouseButton::Right);
+    let rename = cx.update(|window, _| {
+        window
+            .within("popup-menu")
+            .find_by_label("Rename…")
+            .bounds()
+            .center()
+    });
+    pointer_click(cx, rename, MouseButton::Left);
+    assert!(cx.debug_bounds("dialog-0").is_none());
+    let input = cx.update(|window, _| window.find_by_label("分支名").bounds().center());
+    pointer_click(cx, input, MouseButton::Left);
+    cx.simulate_keystrokes("ctrl-a");
+    cx.update(|window, cx| window.input("ui-renamed", cx));
+    draw(cx);
+    let save = cx.debug_bounds("branch-form-submit").unwrap().center();
+    pointer_click(cx, save, MouseButton::Left);
+    wait_operation(cx, &app);
+    assert_eq!(run(&["branch", "--show-current"]), "ui-renamed");
+    assert_eq!(run(&["config", "branch.ui-renamed.remote"]), "origin");
+    assert!(
+        cx.debug_bounds("git-branch-actions-0").is_some(),
+        "renaming keeps the Git popup open"
+    );
+    cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            app.branch_probe = None;
+            app.git_probe = None;
+        })
+    });
+}
+
+#[gpui_kit::test]
 fn model_picker_renders_search_provider_and_effort_without_overlapping(cx: &mut TestAppContext) {
     use crate::{
         domain::Workspace,
@@ -778,7 +1496,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
                 worktree: root.clone(),
                 draft: String::new(),
             });
-            assert!(this.send_blocked(true).unwrap().contains("提交或推送"));
+            assert!(this.send_blocked(true).unwrap().contains("Git 操作"));
             this.selected_workspace = Some(1);
             this.selected_session = None;
             assert!(

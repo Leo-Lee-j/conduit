@@ -32,7 +32,7 @@ use gpui_kit::{
         },
         highlighter::HighlightTheme,
         input::{Input, InputEvent, InputState, Textarea, TextareaState},
-        menu::{ContextMenuExt, PopupMenuItem},
+        menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
         popover::Popover,
         scroll::ScrollableElement,
         searchable_list::{SearchableListItem, SearchableVec},
@@ -61,6 +61,8 @@ mod components;
 mod composer;
 mod dock;
 mod events;
+mod git_branches;
+mod git_compare;
 mod git_diff;
 mod git_ui;
 mod model_picker;
@@ -94,7 +96,17 @@ use theme::*;
 use tools::*;
 use typography::*;
 
-actions!(conduit, [SendPrompt, Newline, NextDiff, PreviousDiff]);
+actions!(
+    conduit,
+    [
+        SendPrompt,
+        Newline,
+        NextDiff,
+        PreviousDiff,
+        SubmitBranchForm,
+        CancelBranchForm
+    ]
+);
 
 pub struct ConduitApp {
     store: Store,
@@ -228,6 +240,10 @@ impl ConduitApp {
         start_in_git: bool,
     ) -> Self {
         cx.bind_keys([
+            KeyBinding::new("enter", SubmitBranchForm, Some("GitBranchForm > Input")),
+            KeyBinding::new("enter", SubmitBranchForm, Some("GitBranchForm")),
+            KeyBinding::new("escape", CancelBranchForm, Some("GitBranchForm > Input")),
+            KeyBinding::new("escape", CancelBranchForm, Some("GitBranchForm")),
             // Enter sends from the composer; Ctrl/Shift+Enter insert a newline.
             // Bind at the input depth (wins over the textarea's own Enter
             // handling) and at composer depth for when focus is nearby.
