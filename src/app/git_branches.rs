@@ -2,13 +2,28 @@
 use super::*;
 use gpui_kit::component::menu::PopupMenu;
 
-#[derive(Default)]
 pub(super) struct BranchMenuInteraction {
     menu: Option<WeakEntity<PopupMenu>>,
     form: Option<Entity<BranchForm>>,
     form_ref: Option<String>,
     form_bounds: Option<Bounds<Pixels>>,
     branch_bounds: HashMap<String, Bounds<Pixels>>,
+    pub(super) local_expanded: bool,
+    pub(super) remote_expanded: bool,
+}
+
+impl Default for BranchMenuInteraction {
+    fn default() -> Self {
+        Self {
+            menu: None,
+            form: None,
+            form_ref: None,
+            form_bounds: None,
+            branch_bounds: HashMap::new(),
+            local_expanded: true,
+            remote_expanded: false,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -158,11 +173,33 @@ pub(super) fn branch_name_tag(name: String, max_width: f32) -> AnyElement {
 }
 
 pub(super) fn branch_tag(name: String, max_width: f32, current: bool) -> AnyElement {
+    branch_tag_element(name, Some(px(max_width)), current, None)
+}
+
+/// Branch tag that stretches across its list row, revealing `action` while the
+/// row carrying `group` is hovered.
+pub(super) fn branch_row_tag(
+    name: String,
+    current: bool,
+    group: SharedString,
+    action: Option<AnyElement>,
+) -> AnyElement {
+    branch_tag_element(name, None, current, Some((group, action)))
+}
+
+fn branch_tag_element(
+    name: String,
+    max_width: Option<Pixels>,
+    current: bool,
+    hover_action: Option<(SharedString, Option<AnyElement>)>,
+) -> AnyElement {
     let tooltip = name.clone();
-    h_flex()
+    let fill = max_width.is_none();
+    let mut tag = h_flex()
         .id(SharedString::from(format!("git-branch-tag-{name}")))
         .min_w_0()
-        .max_w(px(max_width))
+        .when_some(max_width, |tag, width| tag.max_w(width))
+        .when(fill, |tag| tag.w_full())
         .items_center()
         .gap(px(4.))
         .px(px(7.))
@@ -190,8 +227,25 @@ pub(super) fn branch_tag(name: String, max_width: f32, current: bool) -> AnyElem
                 .flex_shrink_0()
                 .text_color(rgb(if current { 0x467397 } else { palette().muted })),
         )
-        .child(div().min_w_0().truncate().child(name))
-        .into_any_element()
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .when(fill, |name| name.flex_1())
+                .child(name),
+        );
+    if let Some((group, action)) = hover_action
+        && let Some(action) = action
+    {
+        tag = tag.child(
+            div()
+                .flex_shrink_0()
+                .opacity(0.)
+                .group_hover(group, |style| style.opacity(1.))
+                .child(action),
+        );
+    }
+    tag.into_any_element()
 }
 
 /// Keep the full accessible action name while rendering branch references as tags.
@@ -261,18 +315,7 @@ pub(super) fn branch_menu(
         .max_h(px(
             (f32::from(window.viewport_size().height) - 48.).max(180.)
         ))
-        .scrollable(true)
-        .item({
-            let name = selected.name.clone();
-            PopupMenuItem::element(move |window, _| {
-                branch_tag(
-                    name.clone(),
-                    (f32::from(window.viewport_size().width) - 96.).clamp(160., 360.),
-                    current,
-                )
-            })
-            .disabled(true)
-        });
+        .scrollable(true);
     let mut entries = Vec::new();
     if !current {
         entries.push((
@@ -282,20 +325,20 @@ pub(super) fn branch_menu(
         ));
     }
     entries.push((
-        format!("New Branch from '{}'…", selected.name),
+        format!("New Branch from '{}'", selected.name),
         MenuAction::Form(FormKind::Create),
         false,
     ));
     if can_integrate && !occupied_elsewhere {
         entries.push((
-            format!("Checkout and Rebase onto '{}'…", repository.current),
+            format!("Checkout and Rebase onto '{}'", repository.current),
             MenuAction::Form(FormKind::Confirm(git::BranchAction::CheckoutRebase)),
             false,
         ));
     }
     if !current && !occupied_elsewhere {
         entries.push((
-            "Checkout and Update…".into(),
+            "Checkout and Update".into(),
             MenuAction::Form(FormKind::Update(true)),
             false,
         ));
@@ -314,29 +357,29 @@ pub(super) fn branch_menu(
     }
     if can_integrate {
         entries.push((
-            format!("Rebase '{}' onto '{}'…", repository.current, selected.name),
+            format!("Rebase '{}' onto '{}'", repository.current, selected.name),
             MenuAction::Form(FormKind::Confirm(git::BranchAction::Rebase)),
             false,
         ));
         entries.push((
-            format!("Merge '{}' into '{}'…", selected.name, repository.current),
+            format!("Merge '{}' into '{}'", selected.name, repository.current),
             MenuAction::Form(FormKind::Confirm(git::BranchAction::Merge)),
             false,
         ));
     }
     entries.push((
-        format!("New Worktree from '{}'…", selected.name),
+        format!("New Worktree from '{}'", selected.name),
         MenuAction::Form(FormKind::Worktree),
         false,
     ));
     if local {
         entries.push((
-            "Update…".into(),
+            "Update".into(),
             MenuAction::Form(FormKind::Update(false)),
             selected.upstream.is_none() || occupied_elsewhere,
         ));
         entries.push((
-            "Push…".into(),
+            "Push".into(),
             MenuAction::Form(FormKind::Push),
             repository.remotes.is_empty() && selected.upstream_remote.as_deref() != Some("."),
         ));
@@ -466,9 +509,9 @@ pub(super) fn branch_menu(
                 .disabled(blocked || in_progress || occupied_elsewhere),
         );
         for (label, kind, disabled) in [
-            ("Rename…", FormKind::Rename, occupied_elsewhere),
+            ("Rename", FormKind::Rename, occupied_elsewhere),
             (
-                "Delete…",
+                "Delete",
                 FormKind::Confirm(git::BranchAction::Delete),
                 current || selected.occupied.is_some(),
             ),

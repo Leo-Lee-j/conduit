@@ -50,22 +50,24 @@ impl ConduitApp {
             .and_then(|target| self.composer_files.get(&target))
     }
 
-    /// All three entry points share validation, deduplication and inline feedback.
+    /// All entry points share validation, deduplication and inline feedback.
+    /// Returns whether any path is valid, including an already attached file.
     pub(super) fn attach_paths(
         &mut self,
         paths: &[PathBuf],
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         if self.closing || !self.writable || paths.is_empty() {
-            return;
+            return false;
         }
         let Some(target) = self.composer_target() else {
             self.message = Some("请先在左上角选择工作区。".into());
             cx.notify();
-            return;
+            return false;
         };
         let (references, rejected) = file_ref::resolve(paths, &target.workspace);
+        let accepted = !references.is_empty();
         let draft = self.composer_files.entry(target).or_default();
         let added = file_ref::merge_references(&mut draft.references, references);
         draft.feedback = if !rejected.is_empty() {
@@ -80,6 +82,7 @@ impl ConduitApp {
         };
         self.input.read(cx).focus_handle(cx).focus(window, cx);
         cx.notify();
+        accepted
     }
 
     pub(super) fn remove_file(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
@@ -272,6 +275,7 @@ impl ConduitApp {
         let has_workspace = self.selected_workspace.is_some();
         let can_edit = self.writable && !self.closing;
         let input_focused = self.input.read(cx).focus_handle(cx).is_focused(window);
+        let mentions_open = self.file_mentions_open(window, cx);
         let provider = selected.as_ref().map(|session| session.provider);
         let has_content = !self.input.read(cx).value().trim().is_empty()
             || self
@@ -311,10 +315,39 @@ impl ConduitApp {
         let usage_parts = self.usage_status_parts();
         let mut composer = v_flex()
             .id("composer")
-            .key_context("ConduitComposer")
+            .key_context(if mentions_open {
+                "ConduitComposer FileMention"
+            } else {
+                "ConduitComposer"
+            })
             .on_action(cx.listener(|this, _: &SendPrompt, window, cx| {
                 cx.stop_propagation();
-                this.send_prompt(window, cx)
+                if this.composer_is_composing(window, cx) {
+                    return;
+                }
+                if this.file_mentions_open(window, cx) {
+                    this.accept_file_mention(window, cx);
+                } else {
+                    this.send_prompt(window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PreviousFileMention, window, cx| {
+                cx.stop_propagation();
+                this.move_file_mention(-1, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NextFileMention, window, cx| {
+                cx.stop_propagation();
+                this.move_file_mention(1, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &AcceptFileMention, window, cx| {
+                cx.stop_propagation();
+                this.accept_file_mention(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &DismissFileMention, window, cx| {
+                cx.stop_propagation();
+                if !this.composer_is_composing(window, cx) {
+                    this.dismiss_file_mentions(cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &Newline, window, cx| {
                 cx.stop_propagation();
@@ -408,7 +441,7 @@ impl ConduitApp {
                             message_action_button(
                                 "attach-file".into(),
                                 Icon::new(FullIconName::Paperclip),
-                                "添加文件（支持拖入或粘贴文件）",
+                                "添加文件（也可输入 @、拖入或粘贴文件）",
                             )
                             .on_click(cx.listener(Self::pick_files)),
                         )
@@ -493,6 +526,9 @@ impl ConduitApp {
                             card.max_w(px(840.)).mx_auto()
                         })
                         .child(composer)
+                        .when(mentions_open, |area| {
+                            area.child(self.render_file_mentions(window, cx))
+                        })
                         .when(show_latest_button, |area| {
                             area.child(
                                 Button::new("scroll-to-latest")

@@ -100,7 +100,7 @@ fn git_branch_menu_opens_create_form_and_remains_usable_after_repaint(cx: &mut T
     let item = cx.update(|window, _| {
         window
             .within("popup-menu")
-            .find_by_label("New Branch from 'main'…")
+            .find_by_label("New Branch from 'main'")
             .bounds()
             .center()
     });
@@ -199,7 +199,7 @@ fn git_branch_menu_opens_create_form_and_remains_usable_after_repaint(cx: &mut T
     });
     // Both right-click and the explicit button must preserve the menu until mouse-up.
     for (label, dialog) in [
-        ("Rename…", "branch-form"),
+        ("Rename", "branch-form"),
         ("Show Diff with Working Tree", "git-comparison-browser"),
     ] {
         let trigger = cx.debug_bounds("git-branch-trigger").unwrap().center();
@@ -238,7 +238,7 @@ fn git_branch_menu_opens_create_form_and_remains_usable_after_repaint(cx: &mut T
             cx.debug_bounds(dialog).is_some(),
             "mouse selection opens {label}"
         );
-        if label == "Rename…" {
+        if label == "Rename" {
             assert!(cx.debug_bounds("git-branch-actions-0").is_some());
             assert!(cx.debug_bounds("dialog-0").is_none());
         } else {
@@ -266,7 +266,7 @@ fn git_branch_menu_opens_create_form_and_remains_usable_after_repaint(cx: &mut T
             let _ = window.draw(cx);
         });
         assert!(cx.debug_bounds(dialog).is_none());
-        if label == "Rename…" {
+        if label == "Rename" {
             assert!(
                 cx.debug_bounds("git-branch-actions-0").is_some(),
                 "Escape closes only the input"
@@ -608,7 +608,7 @@ fn git_branch_mouse_actions_checkout_create_and_track_real_repository(cx: &mut T
     let create = cx.update(|window, _| {
         window
             .within("popup-menu")
-            .find_by_label("New Branch from 'feature'…")
+            .find_by_label("New Branch from 'feature'")
             .bounds()
             .center()
     });
@@ -696,7 +696,7 @@ fn git_branch_mouse_actions_checkout_create_and_track_real_repository(cx: &mut T
     let rename = cx.update(|window, _| {
         window
             .within("popup-menu")
-            .find_by_label("Rename…")
+            .find_by_label("Rename")
             .bounds()
             .center()
     });

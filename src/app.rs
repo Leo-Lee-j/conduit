@@ -65,6 +65,7 @@ mod git_branches;
 mod git_compare;
 mod git_diff;
 mod git_ui;
+mod mentions;
 mod model_picker;
 mod naming;
 mod outline;
@@ -104,7 +105,11 @@ actions!(
         NextDiff,
         PreviousDiff,
         SubmitBranchForm,
-        CancelBranchForm
+        CancelBranchForm,
+        PreviousFileMention,
+        NextFileMention,
+        AcceptFileMention,
+        DismissFileMention
     ]
 );
 
@@ -120,6 +125,7 @@ pub struct ConduitApp {
     drafts: HashMap<u64, String>,
     workspace_drafts: HashMap<PathBuf, String>,
     composer_files: HashMap<ComposerTarget, ComposerFiles>,
+    file_mentions: mentions::FileMentions,
     runs: HashMap<u64, ActiveRun>,
     /// Successful background replies waiting for the user to open the session.
     unread_completed: HashSet<u64>,
@@ -253,6 +259,10 @@ impl ConduitApp {
             KeyBinding::new("ctrl-enter", Newline, Some("ConduitComposer")),
             KeyBinding::new("shift-enter", Newline, Some("ConduitComposer > Input")),
             KeyBinding::new("shift-enter", Newline, Some("ConduitComposer")),
+            KeyBinding::new("up", PreviousFileMention, Some("FileMention > Input")),
+            KeyBinding::new("down", NextFileMention, Some("FileMention > Input")),
+            KeyBinding::new("tab", AcceptFileMention, Some("FileMention > Input")),
+            KeyBinding::new("escape", DismissFileMention, Some("FileMention > Input")),
             // JetBrains' diff navigation shortcuts, scoped to the diff window.
             KeyBinding::new("f7", NextDiff, Some("GitDiffDialog")),
             KeyBinding::new("shift-f7", PreviousDiff, Some("GitDiffDialog")),
@@ -391,13 +401,18 @@ impl ConduitApp {
             .unwrap_or(Provider::Claude);
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder("描述任务，或继续提问…")
+                .placeholder("描述任务，输入 @ 引用文件…")
                 .auto_grow(3, 8)
         });
         let input_subscription = cx.subscribe(&input, |_, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 cx.notify();
             }
+        });
+        // Selection changes also matter: a query belongs to the caret, not to
+        // the last @ somewhere in the draft. Ignore unchanged blink notifications.
+        let mention_subscription = cx.observe(&input, |this, _, cx| {
+            this.refresh_file_mentions(cx);
         });
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索会话"));
         let search_subscription = cx.subscribe(&search, |this, search, event: &InputEvent, cx| {
@@ -499,6 +514,7 @@ impl ConduitApp {
             drafts: HashMap::new(),
             workspace_drafts: HashMap::new(),
             composer_files: HashMap::new(),
+            file_mentions: mentions::FileMentions::default(),
             runs: HashMap::new(),
             unread_completed: HashSet::new(),
             probes: HashMap::new(),
@@ -553,6 +569,7 @@ impl ConduitApp {
             remove_workspace_target: None,
             _subscriptions: vec![
                 input_subscription,
+                mention_subscription,
                 search_subscription,
                 git_prompt_subscription,
                 appearance_subscription,

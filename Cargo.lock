@@ -994,6 +994,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "gpui-kit",
+ "ignore",
  "raw-window-handle",
  "rusqlite",
  "serde",

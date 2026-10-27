@@ -7,6 +7,7 @@ mod child;
 mod cli;
 mod domain;
 mod file_ref;
+mod file_search;
 mod git;
 mod history;
 mod models;

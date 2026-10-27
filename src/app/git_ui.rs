@@ -130,7 +130,7 @@ impl ConduitApp {
             self.refresh_git(cx);
             self.git_feedback(
                 path,
-                "当前分支没有有效上游。请打开分支菜单，选择 Push… 设置远程目标，或在 Tracked Branch 中选择上游。",
+                "当前分支没有有效上游。请打开分支菜单，选择 Push 设置远程目标，或在 Tracked Branch 中选择上游。",
                 true,
                 cx,
             );
@@ -803,6 +803,7 @@ impl ConduitApp {
         )))
         .anchor(Anchor::BottomLeft)
         .offset(px(6.))
+        .p_1p5()
         // Nested menus handle their own outside clicks. Dismissing this parent
         // on a child's mouse-down would destroy the item before mouse-up.
         .overlay_closable(false)
@@ -821,6 +822,10 @@ impl ConduitApp {
                 popover: popover.clone(),
             };
             let outside_host = host.clone();
+            let (local_expanded, remote_expanded) = {
+                let interaction = host.interaction.read(cx);
+                (interaction.local_expanded, interaction.remote_expanded)
+            };
             let mut list = v_flex()
                 .id("git-branches")
                 .on_mouse_down_out(move |event, window, cx| {
@@ -829,15 +834,7 @@ impl ConduitApp {
                 .w(px(280.))
                 .max_h(px(320.))
                 .overflow_y_scroll()
-                .gap_1()
-                .child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .text_size(px(10.))
-                        .text_color(rgb(palette().faint))
-                        .child("工作区分支"),
-                );
+                .gap_0p5();
             if let Some(banner) = app.read(cx).git_integration_banner(app.clone()) {
                 list = list.child(banner);
             }
@@ -851,6 +848,56 @@ impl ConduitApp {
                         .child(format!("分离 HEAD · {}", repository.current)),
                 );
             }
+            let section_host = host.clone();
+            let section_app = app.clone();
+            let section_header =
+                move |label: &'static str, remote: bool, expanded: bool| -> AnyElement {
+                    let host = section_host.clone();
+                    let app = section_app.clone();
+                    h_flex()
+                        .id(if remote {
+                            "git-branches-remote-section"
+                        } else {
+                            "git-branches-local-section"
+                        })
+                        .debug_selector(move || {
+                            if remote {
+                                "git-branches-remote-section".to_string()
+                            } else {
+                                "git-branches-local-section".to_string()
+                            }
+                        })
+                        .w_full()
+                        .cursor_pointer()
+                        .items_center()
+                        .gap(px(2.))
+                        .px_2()
+                        .pt_2()
+                        .text_size(px(10.))
+                        .text_color(rgb(palette().faint))
+                        .hover(|style| style.text_color(rgb(palette().muted)))
+                        .child(
+                            Icon::new(if expanded {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .size(px(10.))
+                            .flex_shrink_0(),
+                        )
+                        .child(label)
+                        .on_click(move |_, _, cx| {
+                            host.interaction.update(cx, |state, _| {
+                                if remote {
+                                    state.remote_expanded = !state.remote_expanded;
+                                } else {
+                                    state.local_expanded = !state.local_expanded;
+                                }
+                            });
+                            app.update(cx, |_, cx| cx.notify());
+                        })
+                        .into_any_element()
+                };
             for remote in [false, true] {
                 if !repository
                     .branches
@@ -859,18 +906,23 @@ impl ConduitApp {
                 {
                     continue;
                 }
-                list = list.child(
-                    div()
-                        .px_2()
-                        .pt_2()
-                        .text_size(px(10.))
-                        .text_color(rgb(palette().faint))
-                        .child(if remote {
-                            "远程分支（本地记录）"
-                        } else {
-                            "本地分支"
-                        }),
-                );
+                let expanded = if remote {
+                    remote_expanded
+                } else {
+                    local_expanded
+                };
+                list = list.child(section_header(
+                    if remote {
+                        "远程分支（本地记录）"
+                    } else {
+                        "本地分支"
+                    },
+                    remote,
+                    expanded,
+                ));
+                if !expanded {
+                    continue;
+                }
                 for (index, branch) in repository
                     .branches
                     .iter()
@@ -879,68 +931,68 @@ impl ConduitApp {
                 {
                     let current =
                         !repository.detached && !remote && branch.name == repository.current;
+                    let group = SharedString::from(format!("git-branch-row-{index}"));
                     let row = h_flex()
                         .id(("git-branch-row", index))
                         .debug_selector(move || format!("git-branch-row-{index}"))
+                        .group(group.clone())
+                        .min_w_0()
                         .px_2()
-                        .py_1()
-                        .gap(px(4.))
-                        .rounded(px(4.))
-                        .child(h_flex().min_w_0().child(git_branches::branch_tag(
-                            branch.name.clone(),
-                            218.,
-                            current,
-                        )));
+                        .py_1();
                     let info = repository
                         .branch_info
                         .iter()
                         .find(|info| info.name == branch.name && info.remote == remote)
                         .cloned();
+                    let action = info.as_ref().map(|info| {
+                        let button_app = app.clone();
+                        let button_host = host.clone();
+                        let button_info = info.clone();
+                        let name = button_info.name.clone();
+                        Button::new(("git-branch-actions", index))
+                            .debug_selector(move || format!("git-branch-actions-{index}"))
+                            .ghost()
+                            .small()
+                            .compact()
+                            .icon(FullIconName::Ellipsis)
+                            .tooltip(format!("{name} 的分支操作"))
+                            .accessibility_label(format!("{name} 的分支操作"))
+                            .dropdown_menu(move |menu, window, cx| {
+                                git_branches::branch_menu(
+                                    menu,
+                                    button_app.clone(),
+                                    button_info.clone(),
+                                    button_host.clone(),
+                                    window,
+                                    cx,
+                                )
+                            })
+                            .into_any_element()
+                    });
+                    let tag =
+                        git_branches::branch_row_tag(branch.name.clone(), current, group, action);
                     if let Some(info) = info {
                         let menu_app = app.clone();
-                        let button_app = app.clone();
-                        let menu_info = info.clone();
                         let menu_host = host.clone();
-                        let button_host = host.clone();
                         let bounds_host = host.clone();
                         let bounds_ref = info.full_ref.clone();
-                        list = list.child(
-                            row.on_prepaint(move |bounds, _, cx| {
+                        let row = row
+                            .on_prepaint(move |bounds, _, cx| {
                                 bounds_host.record_branch_bounds(bounds_ref.clone(), bounds, cx)
                             })
                             .context_menu(move |menu, window, cx| {
                                 git_branches::branch_menu(
                                     menu,
                                     menu_app.clone(),
-                                    menu_info.clone(),
+                                    info.clone(),
                                     menu_host.clone(),
                                     window,
                                     cx,
                                 )
-                            })
-                            .child(
-                                Button::new(("git-branch-actions", index))
-                                    .debug_selector(move || format!("git-branch-actions-{index}"))
-                                    .ghost()
-                                    .small()
-                                    .compact()
-                                    .icon(FullIconName::Ellipsis)
-                                    .tooltip(format!("{} 的分支操作", info.name))
-                                    .accessibility_label(format!("{} 的分支操作", info.name))
-                                    .dropdown_menu(move |menu, window, cx| {
-                                        git_branches::branch_menu(
-                                            menu,
-                                            button_app.clone(),
-                                            info.clone(),
-                                            button_host.clone(),
-                                            window,
-                                            cx,
-                                        )
-                                    }),
-                            ),
-                        );
+                            });
+                        list = list.child(row.child(tag));
                     } else {
-                        list = list.child(row);
+                        list = list.child(row.child(tag));
                     }
                 }
             }
