@@ -303,6 +303,7 @@ impl Store {
                 if legacy {
                     session.title = format!("旧终端会话 #{}", session.id);
                     session.messages.push(crate::domain::ChatItem {
+                        elapsed_ms: None,
                         key: "legacy-migration".into(),
                         created_at: 0,
                         kind: crate::domain::ItemKind::Notice,
@@ -328,6 +329,7 @@ impl Store {
                         }
                     }
                     session.messages.push(crate::domain::ChatItem {
+                        elapsed_ms: None,
                         key: format!("restart-{}", session.messages.len()),
                         created_at: 0,
                         kind: crate::domain::ItemKind::Notice,

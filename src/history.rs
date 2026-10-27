@@ -12,7 +12,7 @@
 
 use crate::domain::{ChatItem, ItemKind, Provider};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// A CLI-side session discovered on disk, ready to become a `SessionRecord`.
@@ -106,7 +106,9 @@ fn merge_session(
         if existing.model.is_none() {
             existing.model = session.model;
         }
-        existing.messages = session.messages;
+        let mut messages = session.messages;
+        preserve_reply_timings(&existing.messages, &mut messages);
+        existing.messages = messages;
         return 0;
     }
     let id = *next_id;
@@ -128,6 +130,72 @@ fn merge_session(
         usage: crate::domain::Usage::default(),
     });
     1
+}
+
+/// Native imports rebuild keys and may segment assistant text differently.
+/// Match complete replies within their user turn, in order, rather than by key.
+fn preserve_reply_timings(previous: &[ChatItem], imported: &mut [ChatItem]) {
+    fn replies(messages: &[ChatItem]) -> Vec<(usize, String, String, Option<u64>)> {
+        let mut result = Vec::new();
+        let mut start = 0;
+        while start < messages.len() {
+            let user = if messages[start].kind == ItemKind::User {
+                messages[start].text.clone()
+            } else {
+                String::new()
+            };
+            let end = messages[start + 1..]
+                .iter()
+                .position(|item| item.kind == ItemKind::User)
+                .map_or(messages.len(), |offset| start + 1 + offset);
+            let text = messages[start..end]
+                .iter()
+                .filter(|item| item.kind == ItemKind::Assistant)
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>()
+                .join("");
+            let elapsed = messages[start..end]
+                .iter()
+                .filter(|item| item.kind == ItemKind::Assistant)
+                .find_map(|item| item.elapsed_ms);
+            result.push((end, user, text, elapsed));
+            start = end;
+        }
+        result
+    }
+    let previous = replies(previous);
+    let incoming = replies(imported);
+    let mut cursor = 0;
+    let mut start = 0;
+    for (end, user, text, _) in incoming {
+        if let Some(offset) = previous[cursor..]
+            .iter()
+            .position(|(_, old_user, old_text, _)| old_user == &user && old_text == &text)
+        {
+            cursor += offset;
+            if let Some(elapsed) = previous[cursor].3 {
+                for item in &mut imported[start..end] {
+                    if item.kind == ItemKind::Assistant {
+                        item.elapsed_ms = Some(elapsed);
+                    }
+                }
+            }
+            cursor += 1;
+        }
+        start = end;
+    }
+}
+
+fn record_last_reply_timing(messages: &mut [ChatItem], elapsed_ms: u64) {
+    let start = messages
+        .iter()
+        .rposition(|item| item.kind == ItemKind::User)
+        .map_or(0, |index| index + 1);
+    for item in &mut messages[start..] {
+        if item.kind == ItemKind::Assistant {
+            item.elapsed_ms = Some(elapsed_ms);
+        }
+    }
 }
 
 fn home() -> Option<PathBuf> {
@@ -234,6 +302,13 @@ fn parse_claude_any(text: &str) -> Option<(Vec<String>, ImportedSession)> {
             .and_then(rfc3339_to_unix_opt)
             .unwrap_or(created_at);
         match value.get("type").and_then(Value::as_str) {
+            Some("system")
+                if value.get("subtype").and_then(Value::as_str) == Some("turn_duration") =>
+            {
+                if let Some(elapsed) = value.get("durationMs").and_then(Value::as_u64) {
+                    record_last_reply_timing(&mut messages, elapsed);
+                }
+            }
             Some("user") => {
                 let is_user_prompt = value
                     .get("promptSource")
@@ -251,6 +326,7 @@ fn parse_claude_any(text: &str) -> Option<(Vec<String>, ImportedSession)> {
                         title = truncate_title(&text);
                     }
                     messages.push(ChatItem {
+                        elapsed_ms: None,
                         key: format!("import-{index}"),
                         created_at: event_created_at,
                         kind: ItemKind::User,
@@ -280,6 +356,7 @@ fn parse_claude_any(text: &str) -> Option<(Vec<String>, ImportedSession)> {
                                 continue;
                             }
                             messages.push(ChatItem {
+                                elapsed_ms: None,
                                 key: format!("import-{index}-{part_index}"),
                                 created_at: event_created_at,
                                 kind: ItemKind::Assistant,
@@ -294,6 +371,7 @@ fn parse_claude_any(text: &str) -> Option<(Vec<String>, ImportedSession)> {
                         Some("tool_use") => {
                             let name = part.get("name").and_then(Value::as_str).unwrap_or("tool");
                             messages.push(ChatItem {
+                                elapsed_ms: None,
                                 key: format!(
                                     "import-{index}-{part_index}-{}",
                                     part.get("id").and_then(Value::as_str).unwrap_or("call")
@@ -458,6 +536,9 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
     let mut event_users = 0usize;
     let mut event_assistants = 0usize;
     let mut event_tools = 0usize;
+    let mut turn_starts = HashMap::new();
+    let mut timings = Vec::new();
+    let mut previous_end = 0;
 
     for (index, value) in values.iter().enumerate() {
         let payload = value.get("payload").unwrap_or(value);
@@ -467,6 +548,40 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
             .and_then(Value::as_str)
             .and_then(rfc3339_to_unix_opt)
             .unwrap_or(created_at);
+        if value.get("type").and_then(Value::as_str) == Some("event_msg") {
+            let turn_id = payload.get("turn_id").and_then(Value::as_str).unwrap_or("");
+            let timestamp = value
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|value| value.timestamp_millis());
+            match payload.get("type").and_then(Value::as_str) {
+                Some("task_started") => {
+                    turn_starts.insert(turn_id.to_owned(), (index, timestamp));
+                }
+                Some("task_complete" | "turn_aborted") => {
+                    let start = turn_starts.remove(turn_id);
+                    let elapsed =
+                        payload
+                            .get("duration_ms")
+                            .and_then(Value::as_u64)
+                            .or_else(|| {
+                                let begin = start?.1?;
+                                let difference = timestamp?.checked_sub(begin)?;
+                                u64::try_from(difference).ok()
+                            });
+                    if let Some(elapsed) = elapsed {
+                        timings.push((
+                            start.map_or(previous_end, |(index, _)| index),
+                            index,
+                            elapsed,
+                        ));
+                    }
+                    previous_end = index + 1;
+                }
+                _ => {}
+            }
+        }
         match value.get("type").and_then(Value::as_str) {
             Some("turn_context") => {
                 if let Some(entry) = payload.get("model").and_then(Value::as_str) {
@@ -510,6 +625,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                                 index,
                                 part_index,
                                 ChatItem {
+                                    elapsed_ms: None,
                                     key: format!("import-{index}-{part_index}"),
                                     created_at: event_created_at,
                                     kind: if role == "user" {
@@ -544,6 +660,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                             index,
                             0,
                             ChatItem {
+                                elapsed_ms: None,
                                 key: format!("import-{index}-call"),
                                 created_at: event_created_at,
                                 kind: ItemKind::Tool,
@@ -569,6 +686,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                             index,
                             0,
                             ChatItem {
+                                elapsed_ms: None,
                                 key: format!("import-{index}-call"),
                                 created_at: event_created_at,
                                 kind: ItemKind::Tool,
@@ -624,6 +742,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                             index,
                             0,
                             ChatItem {
+                                elapsed_ms: None,
                                 key,
                                 created_at: event_created_at,
                                 kind: ItemKind::User,
@@ -645,6 +764,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                             index,
                             0,
                             ChatItem {
+                                elapsed_ms: None,
                                 key,
                                 created_at: event_created_at,
                                 kind: ItemKind::Assistant,
@@ -673,6 +793,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                             index,
                             0,
                             ChatItem {
+                                elapsed_ms: None,
                                 key,
                                 created_at: event_created_at,
                                 kind: ItemKind::Tool,
@@ -724,6 +845,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                             index,
                             0,
                             ChatItem {
+                                elapsed_ms: None,
                                 key,
                                 created_at: event_created_at,
                                 kind: ItemKind::Tool,
@@ -754,6 +876,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                             index,
                             0,
                             ChatItem {
+                                elapsed_ms: None,
                                 key,
                                 created_at: event_created_at,
                                 kind: ItemKind::Tool,
@@ -786,6 +909,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                             index,
                             0,
                             ChatItem {
+                                elapsed_ms: None,
                                 key,
                                 created_at: event_created_at,
                                 kind: ItemKind::Tool,
@@ -850,6 +974,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
             index,
             0,
             ChatItem {
+                elapsed_ms: None,
                 key: format!("import-{index}-{id}"),
                 created_at: values
                     .get(index)
@@ -872,6 +997,13 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
     }
 
     rows.sort_by_key(|(index, part, _)| (*index, *part));
+    for (start, end, elapsed) in timings {
+        for (index, _, item) in &mut rows {
+            if *index >= start && *index <= end && item.kind == ItemKind::Assistant {
+                item.elapsed_ms = Some(elapsed);
+            }
+        }
+    }
     let messages: Vec<ChatItem> = rows.into_iter().map(|(_, _, item)| item).collect();
     if messages.is_empty() {
         return None;
@@ -1395,6 +1527,7 @@ mod tests {
             permission: crate::domain::PermissionLevel::default(),
             usage: crate::domain::Usage::default(),
             messages: vec![ChatItem {
+                elapsed_ms: None,
                 key: "old".into(),
                 created_at: 0,
                 kind: ItemKind::User,
@@ -1417,6 +1550,7 @@ mod tests {
                 title: "新标题".into(),
                 model: Some("m1".into()),
                 messages: vec![ChatItem {
+                    elapsed_ms: None,
                     key: "a".into(),
                     created_at: 0,
                     kind: ItemKind::Assistant,
@@ -1435,6 +1569,7 @@ mod tests {
                 title: "终端会话".into(),
                 model: None,
                 messages: vec![ChatItem {
+                    elapsed_ms: None,
                     key: "b".into(),
                     created_at: 0,
                     kind: ItemKind::User,
@@ -1466,6 +1601,84 @@ mod tests {
         assert_eq!(next_id, 9);
         // Newest first ordering.
         assert!(workspace.sessions[0].created_at >= workspace.sessions[1].created_at);
+    }
+
+    #[test]
+    fn imported_turn_timings_are_scoped_and_survive_refresh() {
+        let lines = vec![
+            serde_json::json!({"type":"session_meta","payload":{"id":"timed","cwd":"D:/timed"}}),
+            serde_json::json!({"type":"event_msg","timestamp":"2026-10-27T10:00:00.100Z","payload":{"type":"task_started","turn_id":"first"}}),
+            serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"重复的问题"}]}}),
+            serde_json::json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"重复的回答"}]}}),
+            serde_json::json!({"type":"event_msg","timestamp":"2026-10-27T10:00:05.600Z","payload":{"type":"task_complete","turn_id":"first","duration_ms":5432}}),
+            serde_json::json!({"type":"event_msg","timestamp":"2026-10-27T11:00:00.100Z","payload":{"type":"task_started","turn_id":"second"}}),
+            serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"重复的问题"}]}}),
+            serde_json::json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"重复的回答"}]}}),
+            serde_json::json!({"type":"event_msg","timestamp":"2026-10-27T11:00:02.850Z","payload":{"type":"task_complete","turn_id":"second"}}),
+            serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"尚未结束"}]}}),
+            serde_json::json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"正在输出"}]}}),
+        ];
+        let jsonl = lines
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (_, mut imported) = parse_codex_any(&jsonl, None).unwrap();
+        let timings = |items: &[ChatItem]| {
+            items
+                .iter()
+                .filter(|item| item.kind == ItemKind::Assistant)
+                .map(|item| item.elapsed_ms)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            timings(&imported.messages),
+            vec![Some(5432), Some(2750), None]
+        );
+        let previous = imported.messages.clone();
+        // Keys change during native reimport; repeated prompts/replies must stay in order.
+        for item in &mut imported.messages {
+            item.elapsed_ms = None;
+            item.key.push_str("-refreshed");
+        }
+        preserve_reply_timings(&previous, &mut imported.messages);
+        assert_eq!(
+            timings(&imported.messages),
+            vec![Some(5432), Some(2750), None]
+        );
+        let mut workspace = crate::domain::Workspace {
+            path: PathBuf::from("D:/timed"),
+            sessions: vec![],
+        };
+        let mut next_id = 1;
+        merge_session(&mut workspace, &mut next_id, imported.clone());
+        for item in &mut imported.messages {
+            item.elapsed_ms = None;
+        }
+        merge_session(&mut workspace, &mut next_id, imported);
+        assert_eq!(
+            timings(&workspace.sessions[0].messages),
+            vec![Some(5432), Some(2750), None]
+        );
+    }
+
+    #[test]
+    fn claude_duration_marker_attaches_to_its_reply_only() {
+        let lines = [
+            serde_json::json!({"type":"user","promptSource":"typed","sessionId":"timed-claude","message":{"content":"第一问"}}),
+            serde_json::json!({"type":"assistant","message":{"content":[{"type":"text","text":"第一答"}]}}),
+            serde_json::json!({"type":"system","subtype":"turn_duration","durationMs":12400}),
+            serde_json::json!({"type":"user","promptSource":"sdk","message":{"content":"第二问"}}),
+            serde_json::json!({"type":"assistant","message":{"content":[{"type":"text","text":"第二答"}]}}),
+        ];
+        let jsonl = lines
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (_, imported) = parse_claude_any(&jsonl).unwrap();
+        assert_eq!(imported.messages[1].elapsed_ms, Some(12400));
+        assert_eq!(imported.messages[3].elapsed_ms, None);
     }
 
     #[test]

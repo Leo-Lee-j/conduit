@@ -172,6 +172,7 @@ pub(super) fn apply_event_indexed(
             return Some(position);
         }
         session.messages.push(ChatItem {
+            elapsed_ms: None,
             key,
             created_at: unix_now(),
             kind: ItemKind::Reasoning,
@@ -191,6 +192,7 @@ pub(super) fn apply_event_indexed(
             return Some(position);
         } else {
             session.messages.push(ChatItem {
+                elapsed_ms: None,
                 key,
                 created_at: 0,
                 kind: ItemKind::Tool,
@@ -284,6 +286,7 @@ pub(super) fn apply_event_indexed(
                 .is_some_and(|last| last.kind == ItemKind::Notice && last.text == text);
         if !duplicate_text && !duplicate_notice {
             session.messages.push(ChatItem {
+                elapsed_ms: None,
                 key,
                 created_at: unix_now(),
                 kind,

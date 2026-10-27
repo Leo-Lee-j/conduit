@@ -1,6 +1,7 @@
 //! Workspace navigation and session list.
 
 use super::*;
+use gpui_kit::component::status_bar::StatusBar;
 
 impl ConduitApp {
     pub(super) fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -276,6 +277,8 @@ impl ConduitApp {
                 list = list.child(
                     h_flex()
                         .id(("session", id))
+                        .debug_selector(move || format!("session-row-{id}"))
+                        .relative()
                         .h(px(30.))
                         .flex_shrink_0()
                         .pl(px(24.))
@@ -360,9 +363,9 @@ impl ConduitApp {
                                     )
                                     .item(
                                         PopupMenuItem::new("删除").icon(IconName::Delete).on_click(
-                                            move |_, window, cx| {
+                                            move |_, _, cx| {
                                                 delete_app.update(cx, |this, cx| {
-                                                    this.open_delete_dialog(id, window, cx)
+                                                    this.request_delete_session(id, cx)
                                                 });
                                             },
                                         ),
@@ -394,7 +397,16 @@ impl ConduitApp {
                             )
                         })
                         .when(running || unread, |row| {
-                            row.child(session_activity_dot(id, running))
+                            row.child(session_activity_dot("session-activity", id, running))
+                        })
+                        .when(self.delete_target == Some(id), |row| {
+                            row.child(
+                                div()
+                                    .absolute()
+                                    .right_0()
+                                    .top_0()
+                                    .child(self.delete_session_popover(id, cx)),
+                            )
                         })
                         .when_some(session_age_label(session.created_at), |row, age| {
                             row.child(
@@ -481,16 +493,18 @@ impl ConduitApp {
         // Mirrors the conversation toolbar height so the two bottom bars read
         // as one strip; icons are packed right-to-left like the right side.
         sidebar = sidebar.child(list).child(
-            h_flex()
+            StatusBar::new()
                 .h(px(34.))
+                .min_w_0()
                 .flex_shrink_0()
+                .py_0()
+                .bg(rgb(palette().sidebar_bg))
                 .px_2()
                 .gap_1()
                 .items_center()
                 .border_t_1()
                 .border_color(rgb(palette().border))
-                .child(div().flex_1())
-                .child(
+                .right(
                     Button::new("sidebar-about")
                         .ghost()
                         .small()
@@ -503,7 +517,7 @@ impl ConduitApp {
                             this.open_about_dialog(window, cx);
                         })),
                 )
-                .child(
+                .right(
                     Button::new("sidebar-settings")
                         .ghost()
                         .small()

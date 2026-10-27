@@ -177,12 +177,17 @@ pub(super) struct ActiveRun {
     pub(super) activity: String,
     /// Model selected for this turn; `None` means the CLI default.
     pub(super) model: Option<String>,
+    /// Snapshot of this turn's effort; picker changes apply only to the next turn.
+    pub(super) reasoning_effort: ReasoningEffort,
     pub(super) message_index: MessageIndex,
     /// Usage reported by the running turn, plus turn-local token accounting
     /// used to derive the streaming tokens/s figure.
     pub(super) usage: Usage,
     pub(super) turn_tokens_at_start: u64,
+    /// Wall time never resets when the provider compacts token usage.
     pub(super) turn_started: Instant,
+    /// Resettable baseline used only for the token speed estimate.
+    pub(super) usage_started: Instant,
     pub(super) last_usage_event: Instant,
 }
 
@@ -193,6 +198,7 @@ impl ActiveRun {
         prefix: String,
         usage: Usage,
         model: Option<String>,
+        reasoning_effort: ReasoningEffort,
     ) -> Self {
         let now = Instant::now();
         Self {
@@ -204,10 +210,12 @@ impl ActiveRun {
             status: "正在连接 CLI…".into(),
             activity: "正在启动 CLI…".into(),
             model,
+            reasoning_effort,
             message_index: MessageIndex::default(),
             usage,
             turn_tokens_at_start: usage.total_tokens,
             turn_started: now,
+            usage_started: now,
             last_usage_event: now,
         }
     }

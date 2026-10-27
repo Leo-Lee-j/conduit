@@ -1,6 +1,7 @@
 //! Conversation status, workspace label, and panel controls.
 
 use super::*;
+use gpui_kit::component::status_bar::StatusBar;
 
 impl ConduitApp {
     pub(super) fn render_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -45,16 +46,19 @@ impl ConduitApp {
                 None
             }
         });
-        let toolbar = h_flex()
+        let toolbar = StatusBar::new()
             .h(px(34.))
+            .min_w_0()
             .flex_shrink_0()
+            .py_0()
             .px_2()
             .gap_3()
             .items_center()
+            .bg(rgb(palette().canvas))
             .border_t_1()
             .border_color(rgb(palette().border))
             .when_some(workspace_label, |bar, label| {
-                bar.child(
+                bar.left(
                     h_flex()
                         .id("toolbar-workspace")
                         .debug_selector(|| "toolbar-workspace".to_string())
@@ -78,7 +82,7 @@ impl ConduitApp {
                 )
             })
             .when(self.git_repository.is_some(), |bar| {
-                bar.child(self.branch_picker(app_entity.clone()))
+                bar.left(self.branch_picker(app_entity.clone()))
             })
             .when_some(toolbar_hint, |bar, hint| {
                 bar.child(
@@ -90,7 +94,6 @@ impl ConduitApp {
                         .child(hint),
                 )
             })
-            .child(div().flex_1())
             .when_some(naming_status, |bar, status| {
                 let failed = status.is_err();
                 let text = match &status {
@@ -98,7 +101,7 @@ impl ConduitApp {
                     Err(reason) => format!("自动重命名失败：{reason}"),
                 };
                 let tooltip = SharedString::from(text.clone());
-                bar.child(
+                bar.right(
                     h_flex()
                         .id("session-naming-status")
                         .min_w_0()
@@ -133,7 +136,7 @@ impl ConduitApp {
                         }),
                 )
             })
-            .child(
+            .right(
                 Button::new("toggle-git")
                     .ghost()
                     .small()
@@ -163,10 +166,10 @@ impl ConduitApp {
                     })),
             )
             .when_some(self.push_button(app_entity.clone()), |bar, button| {
-                bar.child(button)
+                bar.right(button)
             })
             .when(self.store.ui.performance_monitor, |bar| {
-                bar.child({
+                bar.right({
                     let hover_monitor = self.performance.clone();
                     let pinned_monitor = self.performance.clone();
                     div()

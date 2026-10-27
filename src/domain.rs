@@ -134,6 +134,9 @@ pub enum ItemKind {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatItem {
+    /// Total wall time of the CLI turn, recorded when it finishes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
     pub key: String,
     /// Unix timestamp for when this visible item first appeared.
     #[serde(default)]
@@ -213,6 +216,7 @@ impl SessionRecord {
             })
             .unwrap_or_else(|| {
                 self.messages.push(ChatItem {
+                    elapsed_ms: None,
                     key: key.unwrap_or_else(|| format!("{turn}permission-{request}")),
                     created_at: 0,
                     kind: ItemKind::Tool,

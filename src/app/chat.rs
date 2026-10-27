@@ -28,6 +28,57 @@ pub(super) fn assistant_reply_text(session: &SessionRecord, index: usize) -> Str
         .join("\n\n")
 }
 
+/// Keep short counters in seconds and longer turns readable as minutes/seconds.
+fn format_elapsed(elapsed: Duration, precise: bool) -> String {
+    if elapsed > Duration::from_secs(60) {
+        let seconds = elapsed.as_secs();
+        format!("{}分{:02}秒", seconds / 60, seconds % 60)
+    } else if precise {
+        format!("{:.1} s", elapsed.as_secs_f64())
+    } else {
+        format!("{} s", elapsed.as_secs())
+    }
+}
+
+/// Old histories have only message timestamps, which measure time to the last
+/// visible reply rather than CLI completion. Keep that fallback visibly approximate.
+pub(super) fn reply_elapsed_label(
+    session: &SessionRecord,
+    index: usize,
+    live: bool,
+) -> Option<String> {
+    let range = assistant_reply_range(session, index);
+    if let Some(elapsed) = session.messages[range.clone()]
+        .iter()
+        .filter(|item| item.kind == ItemKind::Assistant)
+        .find_map(|item| item.elapsed_ms)
+    {
+        return Some(format!(
+            "耗时 {}",
+            format_elapsed(Duration::from_millis(elapsed), true)
+        ));
+    }
+    if live && range.end == session.messages.len() {
+        return None;
+    }
+    let start = range
+        .start
+        .checked_sub(1)
+        .and_then(|position| session.messages.get(position))?;
+    let end = session.messages[range]
+        .iter()
+        .rev()
+        .find(|item| item.kind == ItemKind::Assistant && !item.text.trim().is_empty())?;
+    if start.created_at == 0 || end.created_at == 0 {
+        return None;
+    }
+    let elapsed = end.created_at.checked_sub(start.created_at)?;
+    Some(format!(
+        "耗时约 {}",
+        format_elapsed(Duration::from_secs(elapsed), false)
+    ))
+}
+
 impl ConduitApp {
     /// Shows the copied check mark on `id` for a short moment. Each call gets a
     /// fresh generation so a previous timer cannot hide newer feedback.
@@ -71,7 +122,23 @@ impl ConduitApp {
             .unwrap_or_else(|| plan_from_messages(session));
         let stats = turn_file_stats(session);
         let live = self.runs.contains_key(&session_id);
-        let run_activity = self.runs.get(&session_id).map(|run| run.activity.clone());
+        let run_activity = self.runs.get(&session_id).map(|run| {
+            let model = run
+                .model
+                .as_deref()
+                .map(|model| {
+                    self.catalogs
+                        .get(&session.provider)
+                        .map_or_else(|| model.to_string(), |catalog| catalog.label(model))
+                })
+                .unwrap_or_else(|| "CLI 默认模型".into());
+            (
+                run.activity.clone(),
+                run.turn_started.elapsed(),
+                model,
+                run.reasoning_effort,
+            )
+        });
         if plan.is_empty() && stats.files.is_empty() && run_activity.is_none() {
             return None;
         }
@@ -163,12 +230,13 @@ impl ConduitApp {
             .items_center()
             .when(!live, |row| row.justify_center())
             .gap_2();
-        if let Some(activity) = run_activity {
+        if let Some((activity, elapsed, model, effort)) = run_activity {
             status_row = status_row.child(
                 h_flex()
                     .id("engine-activity")
                     .debug_selector(|| "engine-activity".into())
                     .min_w_0()
+                    .flex_wrap()
                     .items_center()
                     .gap_2()
                     .child(provider_icon(session.provider))
@@ -187,6 +255,32 @@ impl ConduitApp {
                             .id("engine-activity-spinner")
                             .debug_selector(|| "engine-activity-spinner".into())
                             .child(Spinner::new().small().color(rgb(palette().loading).into())),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "engine-elapsed".into())
+                            .flex_shrink_0()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette().faint))
+                            .child(format_elapsed(elapsed, false)),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "engine-model".into())
+                            .min_w_0()
+                            .max_w(px(240.))
+                            .truncate()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette().muted))
+                            .child(model),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "engine-reasoning-effort".into())
+                            .flex_shrink_0()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette().faint))
+                            .child(format!("思考强度：{}", effort.label())),
                     ),
             );
         }
@@ -336,10 +430,10 @@ impl ConduitApp {
         let elapsed = self
             .runs
             .get(&session_id)
-            .map(|run| run.turn_started.elapsed().as_secs())
-            .unwrap_or(0);
+            .map(|run| run.turn_started.elapsed())
+            .unwrap_or_default();
         let label = if running {
-            format!("正在执行中 · {elapsed}s")
+            format!("正在执行中 · {}", format_elapsed(elapsed, false))
         } else if failures > 0 {
             format!("执行工具 {count} 次，其中 {failures} 次失败")
         } else {
@@ -808,9 +902,14 @@ impl ConduitApp {
             }
             ItemKind::Assistant => {
                 let reply_range = assistant_reply_range(session, index);
-                let show_actions = !session.messages[index + 1..reply_range.end]
-                    .iter()
-                    .any(|item| item.kind == ItemKind::Assistant && !item.text.trim().is_empty());
+                let reply_in_progress = reply_range.end == session.messages.len()
+                    && (self.runs.contains_key(&session_id) || session.interrupted);
+                let show_actions = !reply_in_progress
+                    && !session.messages[index + 1..reply_range.end]
+                        .iter()
+                        .any(|item| {
+                            item.kind == ItemKind::Assistant && !item.text.trim().is_empty()
+                        });
                 let copy_text = if show_actions {
                     assistant_reply_text(session, index)
                 } else {
@@ -838,17 +937,29 @@ impl ConduitApp {
                 };
                 let message_group =
                     SharedString::from(format!("reply-message-{}-{}", session_id, item.key));
-                let mut controls = h_flex().gap(px(2.)).child(
-                    message_action_button(
-                        copy_id.clone(),
-                        copy_icon,
-                        if copied { "已复制" } else { "复制消息" },
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
-                        this.show_copied(copy_id.clone(), window, cx);
-                    })),
-                );
+                let mut controls = h_flex()
+                    .debug_selector(move || format!("reply-controls-{index}"))
+                    // Include both hit targets in layout even when metadata is long.
+                    .w(px(if regenerable { 45. } else { 19. }))
+                    .flex_shrink_0()
+                    .gap(px(2.))
+                    .child(
+                        message_action_button(
+                            copy_id.clone(),
+                            copy_icon,
+                            if copied { "已复制" } else { "复制消息" },
+                        )
+                        .debug_selector(move || format!("reply-copy-button-{index}"))
+                        // The 14px glyph sits centered in a 24px hit target.
+                        // Align the glyph with prose while keeping that hit target.
+                        .ml(px(-5.))
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
+                                this.show_copied(copy_id.clone(), window, cx);
+                            },
+                        )),
+                    );
                 if regenerable {
                     controls = controls.child(
                         message_action_button(
@@ -859,12 +970,17 @@ impl ConduitApp {
                             Icon::new(IconName::RefreshCw),
                             "重新生成",
                         )
+                        .debug_selector(move || format!("reply-retry-button-{index}"))
                         .on_click(cx.listener(
                             move |this, _, window, cx| this.regenerate(index, window, cx),
                         )),
                     );
                 }
                 let model_meta = h_flex()
+                    .debug_selector(move || format!("reply-model-{index}"))
+                    .min_w_0()
+                    .max_w(px(240.))
+                    .flex_shrink_0()
                     .items_center()
                     .gap_1()
                     .opacity(0.)
@@ -878,9 +994,13 @@ impl ConduitApp {
                         div()
                             .text_size(px(10.))
                             .text_color(rgb(palette().faint))
+                            .min_w_0()
+                            .truncate()
                             .child(model_label),
                     );
                 let timestamp_meta = div()
+                    .debug_selector(move || format!("reply-timestamp-{index}"))
+                    .flex_shrink_0()
                     .text_size(px(10.))
                     .text_color(rgb(palette().faint))
                     .opacity(0.)
@@ -888,13 +1008,30 @@ impl ConduitApp {
                     .child(timestamp.clone());
                 let actions = h_flex()
                     .debug_selector(move || format!("reply-actions-{index}"))
+                    .w_full()
+                    .min_w_0()
+                    .justify_start()
+                    .flex_wrap()
                     .items_center()
                     .gap(px(8.))
                     .opacity(0.)
                     .group_hover(message_group.clone(), |this| this.opacity(1.))
                     .child(controls)
                     .child(model_meta)
-                    .child(timestamp_meta);
+                    .child(timestamp_meta)
+                    .when_some(
+                        reply_elapsed_label(session, index, self.runs.contains_key(&session_id)),
+                        |row, label| {
+                            row.child(
+                                div()
+                                    .debug_selector(move || format!("reply-elapsed-{index}"))
+                                    .flex_shrink_0()
+                                    .text_size(px(10.))
+                                    .text_color(rgb(palette().faint))
+                                    .child(label),
+                            )
+                        },
+                    );
                 v_flex()
                     .debug_selector(move || format!("assistant-message-{index}"))
                     .w_full()

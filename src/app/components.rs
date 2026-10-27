@@ -2,35 +2,34 @@
 
 use super::*;
 
-/// A small, steady layout slot; only the running dot's opacity breathes.
-pub(super) fn session_activity_dot(id: u64, running: bool) -> AnyElement {
+/// Share the same status appearance between sidebar and tabs, with separate
+/// element/animation keys so both can be mounted for the same session.
+pub(super) fn session_activity_dot(scope: &'static str, id: u64, running: bool) -> AnyElement {
     let label = if running {
         "正在执行"
     } else {
         "回复完成，未读"
     };
-    let dot = div().size(px(7.)).rounded_full().bg(rgb(if running {
-        palette().activity_running
-    } else {
-        palette().activity_completed
-    }));
-    let dot = if running {
-        dot.with_animation(
-            ("session-pulse", id),
-            Animation::new(Duration::from_millis(1600)).repeat(),
+    let dot = div()
+        .size(px(7.))
+        .rounded_full()
+        .bg(rgb(if running {
+            palette().activity_running
+        } else {
+            palette().activity_completed
+        }))
+        .with_animation(
+            SharedString::from(format!("{scope}-pulse-{id}")),
+            Animation::new(Duration::from_millis(if running { 1600 } else { 2400 })).repeat(),
             |dot, delta| {
                 dot.opacity(0.4 + 0.6 * (0.5 + 0.5 * (delta * std::f32::consts::TAU).cos()))
             },
-        )
-        .into_any_element()
-    } else {
-        dot.into_any_element()
-    };
+        );
     h_flex()
-        .id(("session-activity", id))
+        .id((scope, id))
         .debug_selector(move || {
             format!(
-                "session-activity-{id}-{}",
+                "{scope}-{id}-{}",
                 if running { "running" } else { "unread" }
             )
         })

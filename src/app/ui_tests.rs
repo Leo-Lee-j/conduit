@@ -885,6 +885,7 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
             let mut session = super::tests::session();
             session.title = "状态布局回归".into();
             let item = |key: &str, kind, text: &str, status: &str| ChatItem {
+                elapsed_ms: None,
                 key: key.into(),
                 created_at: 0,
                 kind,
@@ -918,8 +919,19 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
             app.writable = false;
             app.runs.insert(
                 1,
-                super::ActiveRun::new(runtime, path, "turn".into(), Default::default(), None),
+                super::ActiveRun::new(
+                    runtime,
+                    path,
+                    "turn".into(),
+                    Default::default(),
+                    None,
+                    Default::default(),
+                ),
             );
+            app.runs.get_mut(&1).unwrap().model = Some("running-model".into());
+            app.runs.get_mut(&1).unwrap().reasoning_effort = super::ReasoningEffort::High;
+            app.session_mut(1).unwrap().model = Some("next-turn-model".into());
+            app.session_mut(1).unwrap().reasoning_effort = super::ReasoningEffort::Low;
             app.plans.insert(
                 1,
                 vec![super::PlanStep {
@@ -933,6 +945,33 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
         gpui_kit::component::Root::new(app, window, cx)
     });
     let app = slot.borrow().as_ref().unwrap().clone();
+    let turn_start = std::time::Instant::now() - std::time::Duration::from_secs(12);
+    cx.update(|_, cx| {
+        app.update(cx, |this, _| {
+            let run = this.runs.get_mut(&1).unwrap();
+            run.turn_started = turn_start;
+            run.usage_started = turn_start;
+            run.turn_tokens_at_start = 100;
+        })
+    });
+    sender
+        .send(Event::Usage {
+            input_tokens: 1,
+            cached_input_tokens: 0,
+            output_tokens: 1,
+            total_tokens: 2,
+            context_window: 0,
+        })
+        .unwrap();
+    cx.update(|window, cx| app.update(cx, |this, cx| this.poll(window, cx)));
+    cx.update(|_, cx| {
+        let run = app.read(cx).runs.get(&1).unwrap();
+        assert_eq!(
+            run.turn_started, turn_start,
+            "token reset must not reset wall time"
+        );
+        assert!(run.usage_started > turn_start);
+    });
     cx.run_until_parked();
     cx.update(|window, cx| {
         let _ = window.draw(cx);
@@ -941,12 +980,23 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
     let stats = cx.debug_bounds("turn-stats").unwrap();
     let text = cx.debug_bounds("engine-activity-text").unwrap();
     let spinner = cx.debug_bounds("engine-activity-spinner").unwrap();
+    let elapsed = cx.debug_bounds("engine-elapsed").unwrap();
+    assert!(elapsed.left() >= spinner.right());
+    let model = cx.debug_bounds("engine-model").unwrap();
+    let effort = cx.debug_bounds("engine-reasoning-effort").unwrap();
+    assert!(model.left() >= elapsed.right());
+    assert!(effort.left() >= model.right());
+    cx.update(|_, cx| {
+        let run = app.read(cx).runs.get(&1).unwrap();
+        assert_eq!(run.model.as_deref(), Some("running-model"));
+        assert_eq!(run.reasoning_effort, super::ReasoningEffort::High);
+    });
     assert!((activity.center().y - stats.center().y).abs() < px(1.));
     assert!(spinner.left() >= text.right());
     assert!(spinner.left() - text.right() <= px(10.));
     assert!(cx.debug_bounds("activity-1-2").is_some());
     assert!(cx.debug_bounds("activity-1-3").is_some());
-    assert!(cx.debug_bounds("reply-actions-1").is_some());
+    assert!(cx.debug_bounds("reply-actions-1").is_none());
     let before_height = cx.debug_bounds("message-row-1").unwrap().size.height;
 
     sender
@@ -965,15 +1015,18 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
     assert!(cx.debug_bounds("activity-1-3").is_none());
     assert!(cx.debug_bounds("assistant-message-1").is_some());
     assert!(cx.debug_bounds("reply-actions-1").is_none());
-    assert!(cx.debug_bounds("reply-actions-4").is_some());
-    assert!(cx.debug_bounds("message-row-1").unwrap().size.height < before_height);
+    assert!(cx.debug_bounds("reply-actions-4").is_none());
+    assert_eq!(
+        cx.debug_bounds("message-row-1").unwrap().size.height,
+        before_height
+    );
     assert!(
         cx.update(|_, cx| app.read(cx).runs.contains_key(&1)),
         "collapse happens while the reply is streaming"
     );
 
-    // A further segment can arrive without any intervening tool. Its footer
-    // replaces the previous one, including that row's cached list height.
+    // Further segments must keep every footer hidden throughout this run;
+    // only the final visible reply gains a footer when Finished arrives.
     let reply_height = cx.debug_bounds("message-row-4").unwrap().size.height;
     sender
         .send(Event::Delta {
@@ -987,8 +1040,11 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
         let _ = window.draw(cx);
     });
     assert!(cx.debug_bounds("reply-actions-4").is_none());
-    assert!(cx.debug_bounds("reply-actions-5").is_some());
-    assert!(cx.debug_bounds("message-row-4").unwrap().size.height < reply_height);
+    assert!(cx.debug_bounds("reply-actions-5").is_none());
+    assert_eq!(
+        cx.debug_bounds("message-row-4").unwrap().size.height,
+        reply_height
+    );
 
     sender
         .send(Event::Text {
@@ -1001,12 +1057,48 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
     cx.update(|window, cx| {
         let _ = window.draw(cx);
     });
-    assert!(cx.debug_bounds("reply-actions-4").is_some());
+    assert!(cx.debug_bounds("reply-actions-4").is_none());
     assert!(cx.debug_bounds("reply-actions-5").is_none());
     assert_eq!(
         cx.debug_bounds("message-row-4").unwrap().size.height,
         reply_height
     );
+
+    sender
+        .send(Event::Finished {
+            error: None,
+            cancelled: false,
+        })
+        .unwrap();
+    cx.update(|window, cx| app.update(cx, |this, cx| this.poll(window, cx)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("engine-activity").is_none());
+    assert!(cx.debug_bounds("reply-elapsed-4").is_some());
+    assert!(cx.debug_bounds("reply-actions-4").is_some());
+    assert!(cx.debug_bounds("reply-actions-1").is_none());
+    assert!(cx.debug_bounds("reply-actions-5").is_none());
+    cx.update(|_, cx| {
+        let session = app.read(cx).session(1).unwrap();
+        assert!(session.messages[4].elapsed_ms.unwrap() >= 12_000);
+        assert!(session.messages[0].elapsed_ms.is_none());
+        let json = serde_json::to_string(session).unwrap();
+        let restored: crate::domain::SessionRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            restored.messages[4].elapsed_ms,
+            session.messages[4].elapsed_ms
+        );
+        let mut legacy = serde_json::to_value(&session.messages[4]).unwrap();
+        legacy.as_object_mut().unwrap().remove("elapsed_ms");
+        assert!(
+            serde_json::from_value::<ChatItem>(legacy)
+                .unwrap()
+                .elapsed_ms
+                .is_none()
+        );
+    });
 }
 
 #[gpui_kit::test]
@@ -1024,6 +1116,7 @@ fn empty_chat_blocks_have_no_chrome_and_streaming_replies_reflow_tool_groups(
         let app = cx.new(|cx| {
             let mut session = super::tests::session();
             let item = |key: &str, kind, text: &str| ChatItem {
+                elapsed_ms: None,
                 key: key.into(),
                 created_at: 0,
                 kind,
@@ -1063,7 +1156,14 @@ fn empty_chat_blocks_have_no_chrome_and_streaming_replies_reflow_tool_groups(
             app.writable = false;
             app.runs.insert(
                 1,
-                super::ActiveRun::new(runtime, path, "turn".into(), Default::default(), None),
+                super::ActiveRun::new(
+                    runtime,
+                    path,
+                    "turn".into(),
+                    Default::default(),
+                    None,
+                    Default::default(),
+                ),
             );
             app
         });
@@ -1123,8 +1223,8 @@ fn empty_chat_blocks_have_no_chrome_and_streaming_replies_reflow_tool_groups(
     assert!(cx.debug_bounds("activity-1-4").is_none());
     assert!(cx.debug_bounds("tool-group-header-1-2").is_some());
 
-    // A delayed text delta in the middle splits the collapsed group. Both
-    // tools must get their real heights back before this turn finishes.
+    // A delayed text delta splits the group into two singleton groups, each
+    // still collapsed once its following reply is visible.
     sender
         .send(Event::Delta {
             key: "between".into(),
@@ -1137,19 +1237,32 @@ fn empty_chat_blocks_have_no_chrome_and_streaming_replies_reflow_tool_groups(
         let _ = window.draw(cx);
     });
     assert!(cx.debug_bounds("assistant-message-3").is_some());
-    assert!(cx.debug_bounds("tool-group-header-1-2").is_none());
-    assert!(cx.debug_bounds("activity-1-2").is_some());
-    assert!(cx.debug_bounds("activity-1-4").is_some());
-    assert!(cx.debug_bounds("activity-approval-1-2").is_some());
-    assert_eq!(
-        cx.debug_bounds("activity-category-1-2").unwrap().left(),
-        category_left
-    );
-    assert_eq!(
-        cx.debug_bounds("activity-category-1-4").unwrap().left(),
-        category_left
-    );
-    assert!(cx.debug_bounds("message-row-4").unwrap().size.height > px(20.));
+    assert!(cx.debug_bounds("tool-group-header-1-2").is_some());
+    assert!(cx.debug_bounds("activity-1-2").is_none());
+    assert!(cx.debug_bounds("activity-1-4").is_none());
+    assert!(cx.debug_bounds("tool-group-header-1-4").is_some());
+
+    let header = cx.debug_bounds("tool-group-header-1-4").unwrap();
+    assert!(header.size.height > px(20.));
+    // A single command must remain inspectable, and collapse again on demand.
+    for expanded in [true, false] {
+        let position = cx.debug_bounds("tool-group-header-1-4").unwrap().center();
+        cx.simulate_mouse_down(
+            position,
+            gpui_kit::MouseButton::Left,
+            gpui_kit::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            position,
+            gpui_kit::MouseButton::Left,
+            gpui_kit::Modifiers::default(),
+        );
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert_eq!(cx.debug_bounds("activity-1-4").is_some(), expanded);
+    }
     cx.update(|_, cx| {
         let app = app.read(cx);
         assert_eq!(app.session(1).unwrap().messages.len(), 6);
@@ -1171,6 +1284,7 @@ fn session_naming_applies_success_and_reports_failure_without_starting_cli(
             let mut session = super::tests::session();
             session.title = "原始标题".into();
             session.messages.push(ChatItem {
+                elapsed_ms: None,
                 key: "user".into(),
                 created_at: 0,
                 kind: super::ItemKind::User,
@@ -1320,6 +1434,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
                         "turn-0".into(),
                         Default::default(),
                         None,
+                        Default::default(),
                     ),
                 );
                 senders.insert(id, sender);
@@ -1529,6 +1644,7 @@ fn long_chat_virtualizes_real_rows_and_keeps_history_jump_on_append(cx: &mut Tes
             let mut app = super::ConduitApp::new(window, cx, false, false);
             let messages = (0..10_000)
                 .map(|index| ChatItem {
+                    elapsed_ms: None,
                     key: format!("message-{index}"),
                     created_at: 0,
                     kind: if index % 2 == 0 {
@@ -1749,6 +1865,7 @@ fn drag_across_assistant_reply_tracks_the_pointer(cx: &mut TestAppContext) {
         let app = cx.new(|cx| {
             let mut app = super::ConduitApp::new(window, cx, false, false);
             let item = |key: &str, kind: ItemKind, text: &str| ChatItem {
+                elapsed_ms: None,
                 key: key.into(),
                 created_at: 0,
                 kind,
@@ -2390,6 +2507,7 @@ fn attachment_tags_size_to_names_and_stay_inside_the_user_bubble(cx: &mut TestAp
                         native_id: None,
                         model: None,
                         messages: vec![ChatItem {
+                            elapsed_ms: None,
                             key: "user-files".into(),
                             created_at: 0,
                             kind: ItemKind::User,
@@ -2507,6 +2625,7 @@ fn cli_error_details_expand_copy_raw_diagnostics_and_collapse(cx: &mut TestAppCo
         let app = cx.new(|cx| {
             let mut session = super::tests::session();
             session.messages = vec![ChatItem {
+                elapsed_ms: None,
                 key: "error".into(),
                 created_at: 0,
                 kind: super::ItemKind::Error,
@@ -2578,6 +2697,7 @@ fn deleting_blank_session_skips_confirmation(cx: &mut TestAppContext) {
         store::Store,
     };
     use gpui_kit::AppContext as _;
+    use gpui_kit::test::TestWindowExt as _;
 
     let session = |id, messages| SessionRecord {
         id,
@@ -2598,6 +2718,7 @@ fn deleting_blank_session_skips_confirmation(cx: &mut TestAppContext) {
     let used = session(
         2,
         vec![ChatItem {
+            elapsed_ms: None,
             key: "user".into(),
             created_at: 0,
             kind: ItemKind::User,
@@ -2631,16 +2752,16 @@ fn deleting_blank_session_skips_confirmation(cx: &mut TestAppContext) {
         gpui_kit::component::Root::new(app, window, cx)
     });
     let app = slot.borrow().as_ref().unwrap().clone();
-    cx.update(|window, cx| {
+    cx.update(|_, cx| {
         app.update(cx, |this, cx| {
-            this.open_delete_dialog(1, window, cx);
+            this.request_delete_session(1, cx);
             assert!(
                 this.session(1).is_none(),
                 "a session with no messages must delete without confirmation"
             );
             assert_eq!(this.delete_target, None);
 
-            this.open_delete_dialog(2, window, cx);
+            this.request_delete_session(2, cx);
             assert!(
                 this.session(2).is_some(),
                 "a session with messages still asks for confirmation"
@@ -2648,4 +2769,304 @@ fn deleting_blank_session_skips_confirmation(cx: &mut TestAppContext) {
             assert_eq!(this.delete_target, Some(2));
         });
     });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("delete-session-confirmation").is_some());
+    assert!(cx.debug_bounds("dialog-0").is_none());
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("delete-session-confirmation").is_none());
+    assert_eq!(cx.update(|_, cx| app.read(cx).delete_target), None);
+    for confirm in [false, true] {
+        let row = cx.debug_bounds("session-row-2").unwrap().center();
+        cx.simulate_mouse_down(
+            row,
+            gpui_kit::MouseButton::Right,
+            gpui_kit::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            row,
+            gpui_kit::MouseButton::Right,
+            gpui_kit::Modifiers::default(),
+        );
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let delete = cx.update(|window, _| {
+            window
+                .within("popup-menu")
+                .find_by_label("删除")
+                .bounds()
+                .center()
+        });
+        cx.simulate_mouse_move(delete, None, gpui_kit::Modifiers::default());
+        cx.simulate_mouse_down(
+            delete,
+            gpui_kit::MouseButton::Left,
+            gpui_kit::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            delete,
+            gpui_kit::MouseButton::Left,
+            gpui_kit::Modifiers::default(),
+        );
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let selector = if confirm {
+            "delete-confirm"
+        } else {
+            "delete-cancel"
+        };
+        let position = cx.debug_bounds(selector).unwrap().center();
+        cx.simulate_mouse_down(
+            position,
+            gpui_kit::MouseButton::Left,
+            gpui_kit::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            position,
+            gpui_kit::MouseButton::Left,
+            gpui_kit::Modifiers::default(),
+        );
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(cx.debug_bounds("delete-session-confirmation").is_none());
+        assert_eq!(
+            cx.update(|_, cx| app.read(cx).session(2).is_none()),
+            confirm
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn historical_reply_elapsed_footer_is_available_on_hover(cx: &mut TestAppContext) {
+    use gpui_kit::{AppContext as _, Modifiers};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut session = super::tests::session();
+            let item = |kind, created_at, elapsed_ms, text: &str| ChatItem {
+                key: format!("history-{created_at}"),
+                created_at,
+                elapsed_ms,
+                kind,
+                text: text.into(),
+                input: String::new(),
+                detail: String::new(),
+                status: String::new(),
+                approval: None,
+                model: None,
+            };
+            session.model =
+                Some("provider-with-a-very-long-model-name-that-must-not-overlap-actions".into());
+            session.messages = vec![
+                item(super::ItemKind::User, 100, None, "旧版问题"),
+                item(super::ItemKind::Assistant, 112, None, "旧版回答"),
+                item(super::ItemKind::User, 200, None, "导入问题"),
+                item(super::ItemKind::Assistant, 207, Some(8250), "导入回答"),
+            ];
+            // Exercise a restored session without an ActiveRun.
+            let json = serde_json::to_string(&session).unwrap();
+            let restored = serde_json::from_str(&json).unwrap();
+            let store = crate::store::Store {
+                workspaces: vec![crate::domain::Workspace {
+                    path: std::env::temp_dir().join("conduit-history-footer"),
+                    sessions: vec![restored],
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.writable = false;
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    // Include the real two-button case; no send/save actions are invoked.
+    cx.update(|_, cx| {
+        app.update(cx, |this, cx| {
+            this.writable = true;
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    for width in [1200., 850., 700.] {
+        cx.simulate_resize(gpui_kit::size(px(width), px(900.)));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        for (message_selector, elapsed_selector) in [
+            ("assistant-message-1", "reply-elapsed-1"),
+            ("assistant-message-3", "reply-elapsed-3"),
+        ] {
+            let message = cx.debug_bounds(message_selector).unwrap();
+            cx.simulate_mouse_move(message.center(), None, Modifiers::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            let footer = cx.debug_bounds(elapsed_selector).unwrap();
+            let (actions, controls, model) = if message_selector == "assistant-message-1" {
+                ("reply-actions-1", "reply-controls-1", "reply-model-1")
+            } else {
+                ("reply-actions-3", "reply-controls-3", "reply-model-3")
+            };
+            let actions = cx.debug_bounds(actions).unwrap();
+            let controls = cx.debug_bounds(controls).unwrap();
+            let model = cx.debug_bounds(model).unwrap();
+            assert_eq!(actions.left(), message.left());
+            assert_eq!(
+                controls.left(),
+                message.left(),
+                "buttons start at the prose's left edge"
+            );
+            let copy_selector = if message_selector == "assistant-message-1" {
+                "reply-copy-button-1"
+            } else {
+                "reply-copy-button-3"
+            };
+            let copy_button = cx.debug_bounds(copy_selector).unwrap();
+            assert_eq!(
+                copy_button.size.width,
+                px(24.),
+                "keep the original hit target"
+            );
+            assert_eq!(
+                copy_button.center().x - px(7.),
+                message.left(),
+                "the centered 14px copy glyph aligns with prose"
+            );
+            assert!(
+                model.left() >= controls.right(),
+                "metadata follows the buttons"
+            );
+            assert!(footer.size.width > px(0.));
+            assert!(footer.size.height > px(0.));
+            assert!(footer.top() >= message.top());
+            assert!(footer.bottom() <= message.bottom());
+            let timestamp_selector = if message_selector == "assistant-message-1" {
+                "reply-timestamp-1"
+            } else {
+                "reply-timestamp-3"
+            };
+            let timestamp = cx.debug_bounds(timestamp_selector).unwrap();
+            let mut parts = vec![copy_button, model, timestamp, footer];
+            if message_selector == "assistant-message-3" {
+                let retry = cx
+                    .debug_bounds("reply-retry-button-3")
+                    .expect("latest reply offers retry");
+                assert!(retry.left() >= copy_button.right());
+                assert!(retry.right() <= controls.right());
+                parts.push(retry);
+            }
+            for (index, left) in parts.iter().enumerate() {
+                for right in &parts[index + 1..] {
+                    let overlaps = left.left() < right.right()
+                        && left.right() > right.left()
+                        && left.top() < right.bottom()
+                        && left.bottom() > right.top();
+                    assert!(
+                        !overlaps,
+                        "footer parts overlap at width {width}: {left:?} / {right:?}"
+                    );
+                }
+            }
+        }
+    }
+    cx.update(|_, cx| app.update(cx, |this, _| this.writable = false));
+}
+
+#[gpui_kit::test]
+fn tabs_share_running_and_unread_dots_and_clear_on_open(cx: &mut TestAppContext) {
+    use crate::protocol::Event;
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (runtime, sender) = crate::chat_runtime::ChatRuntime::test_channel();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let first = super::tests::session();
+            let mut second = first.clone();
+            second.id = 2;
+            second.title = "后台会话".into();
+            let path = std::env::temp_dir().join("conduit-tab-dots");
+            let store = crate::store::Store {
+                workspaces: vec![crate::domain::Workspace {
+                    path: path.clone(),
+                    sessions: vec![first, second],
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.writable = false;
+            app.selected_session = Some(1);
+            app.open_tabs = vec![1, 2];
+            app.runs.insert(
+                2,
+                super::ActiveRun::new(
+                    runtime,
+                    path,
+                    "turn".into(),
+                    Default::default(),
+                    None,
+                    Default::default(),
+                ),
+            );
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let dot = cx.debug_bounds("tab-activity-2-running").unwrap();
+    let close = cx.debug_bounds("session-tab-close-2").unwrap();
+    assert!(dot.right() <= close.left());
+    assert!(cx.debug_bounds("session-activity-2-running").is_some());
+    sender
+        .send(Event::Finished {
+            error: None,
+            cancelled: false,
+        })
+        .unwrap();
+    cx.update(|window, cx| app.update(cx, |this, cx| this.poll(window, cx)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("tab-activity-2-running").is_none());
+    assert!(cx.debug_bounds("tab-activity-2-unread").is_some());
+    assert!(cx.debug_bounds("session-activity-2-unread").is_some());
+    let tab = cx.debug_bounds("session-tab-2").unwrap();
+    let point = gpui_kit::point(tab.left() + px(15.), tab.center().y);
+    cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert_eq!(cx.update(|_, cx| app.read(cx).selected_session), Some(2));
+    assert!(cx.debug_bounds("tab-activity-2-unread").is_none());
+    assert!(cx.debug_bounds("session-activity-2-unread").is_none());
 }

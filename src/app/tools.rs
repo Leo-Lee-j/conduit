@@ -31,14 +31,6 @@ pub(super) fn contiguous_tool_group(
     while end > index + 1 && is_empty_chat_placeholder(&session.messages[end - 1]) {
         end -= 1;
     }
-    if session.messages[start..end]
-        .iter()
-        .filter(|item| is_groupable_activity(item))
-        .count()
-        < 2
-    {
-        return None;
-    }
     Some((start, end))
 }
 

@@ -22,6 +22,7 @@ fn assistant_reply_combines_text_across_tools_within_user_boundaries() {
         ("next", ItemKind::Assistant, "下一轮回复"),
     ] {
         s.messages.push(ChatItem {
+            elapsed_ms: None,
             key: key.into(),
             created_at: 0,
             kind,
@@ -131,6 +132,7 @@ fn message_outline_keeps_real_indices_and_keys_amid_tools_and_replies() {
         ("user-3", ItemKind::User, ""),
     ] {
         s.messages.push(ChatItem {
+            elapsed_ms: None,
             key: key.into(),
             created_at: 0,
             kind,
@@ -163,6 +165,7 @@ fn message_outline_cache_only_indexes_appends_and_resets_with_session() {
     let mut session = session();
     let mut cache = super::MessageOutlineCache::default();
     let item = |key: &str, kind| ChatItem {
+        elapsed_ms: None,
         key: key.into(),
         created_at: 0,
         kind,
@@ -358,6 +361,7 @@ pub(super) fn session() -> SessionRecord {
 #[test]
 fn contiguous_tool_groups_include_adjacent_completed_activity() {
     let activity = |key: &str, kind: ItemKind, title: &str, status: &str| ChatItem {
+        elapsed_ms: None,
         key: key.into(),
         created_at: 0,
         kind,
@@ -431,21 +435,21 @@ fn empty_stream_blocks_do_not_split_tools_or_count_as_replies() {
     assert_eq!(s.messages.len(), 5);
     assert_eq!(s.messages[2].text, "读取完成");
     assert!(!super::is_empty_chat_placeholder(&s.messages[2]));
-    assert_eq!(super::contiguous_tool_group(&s, 1), None);
-    assert_eq!(super::contiguous_tool_group(&s, 3), None);
+    assert_eq!(super::contiguous_tool_group(&s, 1), Some((1, 2)));
+    assert_eq!(super::contiguous_tool_group(&s, 3), Some((3, 4)));
 
     s.messages[2].text.clear();
     s.messages[2].kind = ItemKind::User;
-    assert_eq!(super::contiguous_tool_group(&s, 1), None);
+    assert_eq!(super::contiguous_tool_group(&s, 1), Some((1, 2)));
     s.messages[2].kind = ItemKind::Tool;
     s.messages[2].text = "Edit".into();
-    assert_eq!(super::contiguous_tool_group(&s, 1), None);
+    assert_eq!(super::contiguous_tool_group(&s, 1), Some((1, 2)));
     s.messages[2].text = "Read".into();
     s.messages[2].approval = Some(crate::domain::ToolApproval {
         request: "approval".into(),
         status: "等待中".into(),
     });
-    assert_eq!(super::contiguous_tool_group(&s, 1), None);
+    assert_eq!(super::contiguous_tool_group(&s, 1), Some((1, 2)));
 }
 
 #[test]
@@ -506,6 +510,7 @@ fn tool_group_waits_through_completed_tools_until_nonempty_reply_in_same_turn() 
 #[test]
 fn tool_groups_skip_file_edits() {
     let tool = |key: &str, title: &str, input: &str| ChatItem {
+        elapsed_ms: None,
         key: key.into(),
         created_at: 0,
         kind: ItemKind::Tool,
@@ -577,7 +582,7 @@ fn approved_tools_share_normal_activity_layout_without_hiding_unresolved_decisio
     for status in ["等待中", "已拒绝", "已取消", "已中断"] {
         s.messages[0].approval.as_mut().unwrap().status = status.into();
         assert!(!super::is_compact_tool(&s.messages[0]), "{status}");
-        assert_eq!(super::contiguous_tool_group(&s, 1), None);
+        assert_eq!(super::contiguous_tool_group(&s, 1), Some((1, 2)));
     }
     s.messages[0].approval.as_mut().unwrap().status = "已允许".into();
     s.messages[0].text = "Write".into();
@@ -586,6 +591,7 @@ fn approved_tools_share_normal_activity_layout_without_hiding_unresolved_decisio
 #[test]
 fn activity_rows_classify_failures_and_summaries() {
     let item = |kind: ItemKind, title: &str, input: &str, status: &str, detail: &str| ChatItem {
+        elapsed_ms: None,
         key: "activity".into(),
         created_at: 0,
         kind,
@@ -625,6 +631,7 @@ fn activity_rows_classify_failures_and_summaries() {
 #[test]
 fn edit_diffs_parse_old_new_pairs_and_codex_patches() {
     let item = |title: &str, input: &str| ChatItem {
+        elapsed_ms: None,
         key: "edit".into(),
         created_at: 0,
         kind: ItemKind::Tool,
@@ -655,6 +662,7 @@ fn edit_diffs_parse_old_new_pairs_and_codex_patches() {
 #[test]
 fn turn_file_stats_merge_repeated_edits_of_the_latest_turn() {
     let item = |kind: ItemKind, title: &str, input: &str| ChatItem {
+        elapsed_ms: None,
         key: format!("{title}-{}", input.len()),
         created_at: 0,
         kind,
@@ -708,6 +716,7 @@ fn plan_steps_follow_either_provider_shape_in_the_latest_turn() {
     assert_eq!(todo[1].status, super::PlanStatus::InProgress);
 
     let item = |title: &str, input: &str| ChatItem {
+        elapsed_ms: None,
         key: title.into(),
         created_at: 0,
         kind: ItemKind::Tool,
@@ -725,6 +734,7 @@ fn plan_steps_follow_either_provider_shape_in_the_latest_turn() {
             r#"{"plan":[{"step":"old step","status":"completed"}]}"#,
         ),
         ChatItem {
+            elapsed_ms: None,
             key: "prompt".into(),
             created_at: 0,
             kind: ItemKind::User,
@@ -895,6 +905,7 @@ fn latest_naming_excerpt_prefers_recent_turns() {
     .enumerate()
     {
         s.messages.push(ChatItem {
+            elapsed_ms: None,
             key: format!("m{index}"),
             created_at: 0,
             kind,
@@ -911,6 +922,7 @@ fn latest_naming_excerpt_prefers_recent_turns() {
         Some("旧问题\n\n旧回答\n\n新问题\n\n新回答")
     );
     s.messages.push(ChatItem {
+        elapsed_ms: None,
         key: "long".into(),
         created_at: 0,
         kind: ItemKind::Assistant,
@@ -953,6 +965,7 @@ fn session_search_matches_title_and_message_text() {
     let mut s = session();
     s.title = "Rust 重构计划".into();
     s.messages.push(ChatItem {
+        elapsed_ms: None,
         key: "m1".into(),
         created_at: 0,
         kind: ItemKind::Assistant,
@@ -991,4 +1004,74 @@ fn search_snippet_keeps_match_visible_for_multibyte_text() {
     let snippet = search_snippet(text, "markdown");
     assert!(snippet.to_lowercase().contains("markdown"));
     assert!(snippet.chars().count() <= 162);
+}
+
+#[test]
+fn historical_reply_timing_prefers_recorded_duration_and_bounds_estimates_to_a_turn() {
+    use super::chat::reply_elapsed_label;
+    let mut session = session();
+    for (index, (kind, created_at)) in [
+        (ItemKind::User, 100),
+        (ItemKind::Assistant, 105),
+        (ItemKind::Tool, 110),
+        (ItemKind::Assistant, 115),
+        (ItemKind::User, 1000),
+        (ItemKind::Assistant, 1007),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        session.messages.push(ChatItem {
+            elapsed_ms: None,
+            key: format!("timed-{index}"),
+            created_at,
+            kind,
+            text: "历史内容".into(),
+            input: String::new(),
+            detail: String::new(),
+            status: String::new(),
+            approval: None,
+            model: None,
+        });
+    }
+    assert_eq!(
+        reply_elapsed_label(&session, 3, false).as_deref(),
+        Some("耗时约 15 s")
+    );
+    assert_eq!(
+        reply_elapsed_label(&session, 5, false).as_deref(),
+        Some("耗时约 7 s")
+    );
+    assert_eq!(
+        reply_elapsed_label(&session, 3, true).as_deref(),
+        Some("耗时约 15 s")
+    );
+    assert_eq!(reply_elapsed_label(&session, 5, true), None);
+    session.messages[3].elapsed_ms = Some(16250);
+    assert_eq!(
+        reply_elapsed_label(&session, 3, false).as_deref(),
+        Some("耗时 16.2 s")
+    );
+    for (elapsed_ms, expected) in [
+        (60_000, "耗时 60.0 s"),
+        (60_001, "耗时 1分00秒"),
+        (65_000, "耗时 1分05秒"),
+        (120_000, "耗时 2分00秒"),
+    ] {
+        session.messages[3].elapsed_ms = Some(elapsed_ms);
+        assert_eq!(
+            reply_elapsed_label(&session, 3, false).as_deref(),
+            Some(expected)
+        );
+    }
+    session.messages[5].created_at = 1065;
+    assert_eq!(
+        reply_elapsed_label(&session, 5, false).as_deref(),
+        Some("耗时约 1分05秒")
+    );
+    session.messages[5].created_at = 1007;
+    session.messages[4].created_at = 0;
+    assert_eq!(reply_elapsed_label(&session, 5, false), None);
+    session.messages[4].created_at = 1008;
+    assert_eq!(reply_elapsed_label(&session, 5, false), None);
 }

@@ -251,6 +251,7 @@ impl ConduitApp {
                     .collect();
             }
             session.messages.push(ChatItem {
+                elapsed_ms: None,
                 key: format!("{prefix}-user"),
                 created_at: unix_now(),
                 kind: ItemKind::User,
@@ -300,8 +301,10 @@ impl ConduitApp {
             .unwrap_or_default();
         self.plans.remove(&id);
         self.unread_completed.remove(&id);
-        self.runs
-            .insert(id, ActiveRun::new(runtime, worktree, prefix, usage, model));
+        self.runs.insert(
+            id,
+            ActiveRun::new(runtime, worktree, prefix, usage, model, effort),
+        );
         if append_user {
             self.input
                 .update(cx, |input, cx| input.set_value("", window, cx));
@@ -554,7 +557,7 @@ impl ConduitApp {
                         // re-anchor the speed baseline.
                         if total_tokens < run.turn_tokens_at_start {
                             run.turn_tokens_at_start = total_tokens;
-                            run.turn_started = now;
+                            run.usage_started = now;
                         }
                         run.usage = Usage {
                             input_tokens,
@@ -647,7 +650,9 @@ impl ConduitApp {
                     }
                 }
                 Event::Finished { error, cancelled } => {
-                    self.runs.remove(&id);
+                    let elapsed_ms = self.runs.remove(&id).map(|run| {
+                        run.turn_started.elapsed().as_millis().min(u64::MAX as u128) as u64
+                    });
                     self.unread_completed.remove(&id);
                     terminal = true;
                     if error.is_none() && !cancelled {
@@ -658,6 +663,15 @@ impl ConduitApp {
                     }
                     if let Some(session) = self.session_mut(id) {
                         session.interrupted = false;
+                        // Scope timing to this run, including partial replies on failure/cancel.
+                        let item_prefix = format!("{prefix}-");
+                        for item in &mut session.messages {
+                            if item.kind == ItemKind::Assistant
+                                && item.key.starts_with(&item_prefix)
+                            {
+                                item.elapsed_ms = elapsed_ms;
+                            }
+                        }
                         finish_tool_cards(
                             session,
                             &prefix,
@@ -685,6 +699,7 @@ impl ConduitApp {
                         if cancelled || (error.is_some() && !already_shown) {
                             let failed = error.is_some();
                             session.messages.push(ChatItem {
+                                elapsed_ms: None,
                                 key: format!("{prefix}-finish"),
                                 created_at: unix_now(),
                                 kind: if failed {

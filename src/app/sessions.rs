@@ -322,88 +322,114 @@ impl ConduitApp {
         cx.notify();
     }
 
-    pub(super) fn open_delete_dialog(
-        &mut self,
-        id: u64,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn request_delete_session(&mut self, id: u64, cx: &mut Context<Self>) {
         let Some(session) = self.session(id) else {
             return;
         };
-        let title = if session.title.is_empty() {
-            "未命名会话".to_string()
-        } else {
-            session.title.clone()
-        };
-        // A session that never received a message has no history to protect, so
-        // its delete acts immediately. Unsent composer text still asks first.
+        // Empty sessions have no history to protect; keep drafts protected.
         if session.messages.is_empty() && !self.session_has_unsent_content(id, cx) {
             self.delete_session(id, cx);
-            return;
+        } else {
+            self.delete_target = Some(id);
+            cx.notify();
         }
-        self.delete_target = Some(id);
-        let view = cx.entity();
-        window.open_dialog(cx, move |dialog, _, _| {
-            let view = view.clone();
-            let title = title.clone();
-            dialog
-                .w(px(420.))
-                .margin_top(px(120.))
-                .title("删除会话")
-                .content(move |content, _, _| {
-                    let confirm = view.clone();
-                    let cancel = view.clone();
-                    content.child(
-                        v_flex()
-                            .gap_3()
+    }
+
+    /// Mounted beside the requested row so dismissal never opens a modal layer.
+    pub(super) fn delete_session_popover(&self, id: u64, cx: &mut Context<Self>) -> AnyElement {
+        let title = self
+            .session(id)
+            .map(|session| {
+                if session.title.is_empty() {
+                    "未命名会话".to_string()
+                } else {
+                    single_line_title(&session.title)
+                }
+            })
+            .unwrap_or_default();
+        let app = cx.entity();
+        Popover::new(("delete-session-popover", id))
+            .anchor(Anchor::TopLeft)
+            .offset(px(6.))
+            .open(true)
+            .on_open_change(cx.listener(move |this, open, _, cx| {
+                if !open && this.delete_target == Some(id) {
+                    this.delete_target = None;
+                    cx.notify();
+                }
+            }))
+            .trigger(
+                Button::new(("delete-session-anchor", id))
+                    .ghost()
+                    .w(px(0.))
+                    .h(px(26.))
+                    .p_0(),
+            )
+            .content(move |_, _, cx| {
+                let cancel = app.clone();
+                let confirm = app.clone();
+                let cancel_popover = cx.entity().downgrade();
+                let confirm_popover = cancel_popover.clone();
+                v_flex()
+                    .debug_selector(|| "delete-session-confirmation".into())
+                    .w(px(260.))
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("删除会话？"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(rgb(palette().muted))
+                            .child(format!("将永久删除「{title}」及其消息记录，无法恢复。")),
+                    )
+                    .child(
+                        h_flex()
+                            .justify_end()
+                            .gap_2()
                             .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .line_height(relative(1.5))
-                                    .text_color(rgb(palette().muted))
-                                    .child(format!(
-                                        "将永久删除「{title}」及其消息记录，无法恢复。"
-                                    )),
+                                Button::new("delete-cancel")
+                                    .debug_selector(|| "delete-cancel".into())
+                                    .label("取消")
+                                    .small()
+                                    .ghost()
+                                    .cursor_pointer()
+                                    .on_click(move |_, window, cx| {
+                                        if let Some(popover) = cancel_popover.upgrade() {
+                                            popover
+                                                .update(cx, |state, cx| state.dismiss(window, cx));
+                                        }
+                                        cancel.update(cx, |this, cx| {
+                                            this.delete_target = None;
+                                            cx.notify();
+                                        })
+                                    }),
                             )
                             .child(
-                                h_flex()
-                                    .justify_end()
-                                    .gap_2()
-                                    .child(
-                                        Button::new("delete-cancel")
-                                            .label("取消")
-                                            .small()
-                                            .ghost()
-                                            .cursor_pointer()
-                                            .on_click(move |_, window, cx| {
-                                                cancel.update(cx, |this, cx| {
-                                                    this.delete_target = None;
-                                                    cx.notify();
-                                                });
-                                                window.close_dialog(cx);
-                                            }),
-                                    )
-                                    .child(
-                                        Button::new("delete-confirm")
-                                            .label("删除")
-                                            .small()
-                                            .primary()
-                                            .cursor_pointer()
-                                            .on_click(move |_, window, cx| {
-                                                let target = confirm.read(cx).delete_target;
-                                                if let Some(id) = target {
-                                                    confirm.update(cx, |this, cx| {
-                                                        this.delete_session(id, cx)
-                                                    });
-                                                }
-                                                window.close_dialog(cx);
-                                            }),
-                                    ),
+                                Button::new("delete-confirm")
+                                    .debug_selector(|| "delete-confirm".into())
+                                    .label("删除")
+                                    .small()
+                                    .danger()
+                                    .cursor_pointer()
+                                    .on_click(move |_, window, cx| {
+                                        let requested = confirm.read(cx).delete_target == Some(id);
+                                        if let Some(popover) = confirm_popover.upgrade() {
+                                            popover
+                                                .update(cx, |state, cx| state.dismiss(window, cx));
+                                        }
+                                        if requested {
+                                            confirm
+                                                .update(cx, |this, cx| this.delete_session(id, cx));
+                                        }
+                                    }),
                             ),
                     )
-                })
-        });
+            })
+            .into_any_element()
     }
 
     /// Composer content that would be lost with the session: unsent files, a
@@ -488,7 +514,7 @@ impl ConduitApp {
                 (
                     run.usage,
                     true,
-                    run.turn_started.elapsed(),
+                    run.usage_started.elapsed(),
                     run.last_usage_event.elapsed(),
                 )
             }
@@ -982,6 +1008,7 @@ impl ConduitApp {
             };
             let selected = active == Some(id);
             let running = self.runs.contains_key(&id);
+            let unread = self.unread_completed.contains(&id);
             let title = if session.title.is_empty() {
                 "新会话".to_string()
             } else {
@@ -993,6 +1020,7 @@ impl ConduitApp {
             tabs = tabs.child(
                 h_flex()
                     .id(("session-tab", id))
+                    .debug_selector(move || format!("session-tab-{id}"))
                     .group(tab_group.clone())
                     .h(px(30.))
                     .my_auto()
@@ -1068,11 +1096,12 @@ impl ConduitApp {
                             .whitespace_nowrap()
                             .child(title),
                     )
-                    .when(running, |tab| {
-                        tab.child(Spinner::new().small().color(rgb(palette().loading).into()))
+                    .when(running || unread, |tab| {
+                        tab.child(session_activity_dot("tab-activity", id, running))
                     })
                     .child(
                         Button::new(("session-tab-close", id))
+                            .debug_selector(move || format!("session-tab-close-{id}"))
                             .ghost()
                             .small()
                             .compact()
