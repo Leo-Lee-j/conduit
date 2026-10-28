@@ -406,13 +406,11 @@ impl Protocol {
             return;
         }
         match update["sessionUpdate"].as_str() {
-            Some("agent_message_chunk") => {
-                if update["content"]["type"] == "text" {
-                    step.events.push(Event::Delta {
-                        key: update["messageId"].as_str().unwrap_or("acp-reply").into(),
-                        text: text(&update["content"], "text").into(),
-                    });
-                }
+            Some("agent_message_chunk") if update["content"]["type"] == "text" => {
+                step.events.push(Event::Delta {
+                    key: update["messageId"].as_str().unwrap_or("acp-reply").into(),
+                    text: text(&update["content"], "text").into(),
+                });
             }
             Some("tool_call" | "tool_call_update") => {
                 let Some(id) = update["toolCallId"].as_str() else {
