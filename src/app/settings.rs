@@ -232,7 +232,14 @@ impl ConduitApp {
             let modal_height = (viewport_height - 96.).clamp(360., 560.);
             let margin_top = ((viewport_height - modal_height) * 0.5).max(24.);
             dialog
-                .entrance(gpui_kit::component::dialog::DialogEntrance::Fade)
+                // The library paints its scrim at full opacity on the first
+                // frame and fades only the surface, so an entrance animation
+                // reads as the panel rising out from behind the scrim.
+                .entrance(gpui_kit::component::dialog::DialogEntrance::None)
+                // Dropping the scrim also drops the backdrop, and backdrop
+                // press is the only outside-click dismissal the library has;
+                // close is via the X, 完成, or Esc.
+                .overlay(false)
                 .w(px(840.))
                 .margin_top(px(margin_top))
                 .p_0()
@@ -241,7 +248,6 @@ impl ConduitApp {
                 .bg(rgb(palette().surface))
                 .border_color(rgb(palette().border))
                 .close_button(true)
-                .overlay_closable(true)
                 .content(move |content, window, cx| {
                     let body = view.read(cx).settings_modal_content(window, view.clone());
                     content.child(body)
