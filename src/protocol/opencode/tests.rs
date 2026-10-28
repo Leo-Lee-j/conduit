@@ -118,6 +118,48 @@ fn opencode_unsupported_effort_fails_without_prompt_or_silent_fallback() {
     assert!(step.writes.is_empty());
 }
 
+#[test]
+fn opencode_automatic_effort_uses_medium_only_when_advertised() {
+    let (mut protocol, _) = connected(None, true, None);
+    for (levels, explicit, expected) in [
+        (vec!["default", "medium", "high"], None, Some("medium")),
+        (vec!["default", "high"], None, Some("default")),
+        (vec![], None, None),
+        (vec!["default", "medium"], Some("default"), Some("default")),
+        (
+            vec!["default", "medium", "high"],
+            Some("high"),
+            Some("high"),
+        ),
+    ] {
+        protocol.acp.stage = Stage::Configure;
+        protocol.route.opencode_variant = explicit.map(str::to_owned);
+        let options: Vec<_> = levels
+            .into_iter()
+            .map(|value| json!({"value":value,"name":value}))
+            .collect();
+        protocol.acp.options.options = if options.is_empty() {
+            json!([])
+        } else {
+            json!([{"id":"effort","options":options}])
+        };
+        protocol
+            .acp
+            .config
+            .push_back(("effort".into(), explicit.unwrap_or("default").into()));
+        let mut step = Step::new();
+        protocol.acp_next(&mut step);
+        assert!(!step.done, "{:?}", step.error);
+        let request = &step.writes[0];
+        if let Some(expected) = expected {
+            assert_eq!(request["method"], "session/set_config_option");
+            assert_eq!(request["params"]["value"], expected);
+        } else {
+            assert_eq!(request["method"], "session/prompt");
+        }
+    }
+}
+
 fn permission(session: &str) -> Value {
     json!({"jsonrpc":"2.0","id":"permission-7","method":"session/request_permission","params":{
         "sessionId":session,"toolCall":{"toolCallId":"tool-1","title":"write file"},

@@ -249,11 +249,20 @@ impl Element for NumberedCode {
     ) -> (LayoutId, Self::RequestLayoutState) {
         let global_id = global_id.expect("NumberedCode must have a stable element id");
         let selection = self.selectable.then(|| {
-            window.with_element_state(global_id, |retained: Option<TextSelectionHandle>, _| {
-                let handle =
-                    retained.unwrap_or_else(|| TextSelectionHandle::new(self.code.clone(), cx));
-                (handle.clone(), handle)
-            })
+            window.with_element_state(
+                global_id,
+                |retained: Option<TextSelectionHandle>, window| {
+                    let handle = retained.unwrap_or_else(|| {
+                        let handle = TextSelectionHandle::new(self.code.clone(), cx);
+                        // This custom node paints its own selection, outside TextView's
+                        // selection adapter. Repaint when its snapshot changes, even
+                        // when no other chat state or hover target changes.
+                        handle.refresh_window_on_change(window, cx).detach();
+                        handle
+                    });
+                    (handle.clone(), handle)
+                },
+            )
         });
         let text_layout = self
             .text

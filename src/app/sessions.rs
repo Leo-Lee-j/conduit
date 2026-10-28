@@ -1449,7 +1449,7 @@ impl ConduitApp {
                 messages: vec![],
                 interrupted: false,
                 channel: Default::default(),
-                reasoning_effort: Default::default(),
+                reasoning_effort: ReasoningEffort::for_provider(provider),
                 opencode: Default::default(),
                 permission: self.pending_permission,
                 usage: Usage::default(),

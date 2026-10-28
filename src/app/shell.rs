@@ -2,6 +2,42 @@
 
 use super::*;
 
+/// Keep wheel-driven invalidation inside the transcript. The list notifies its
+/// owning view on every wheel event, even when no surrounding controls change.
+pub(super) struct ChatTimeline {
+    app: WeakEntity<ConduitApp>,
+    scroll: ListState,
+}
+
+impl ChatTimeline {
+    pub(super) fn new(app: WeakEntity<ConduitApp>, scroll: ListState) -> Self {
+        Self { app, scroll }
+    }
+}
+
+impl Render for ChatTimeline {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(app) = self.app.upgrade() {
+            let app = app.read(cx);
+            let monitor = app
+                .store
+                .ui
+                .performance_monitor
+                .then(|| app.performance.clone());
+            if let Some(monitor) = monitor {
+                monitor.update(cx, |monitor, _| monitor.begin_message_frame());
+            }
+        }
+        let app = self.app.clone();
+        gpui_kit::list(self.scroll.clone(), move |index, _, cx| {
+            app.update(cx, |app, cx| app.render_message(index, cx))
+                .unwrap_or_else(|_| div().into_any_element())
+        })
+        .size_full()
+        .pt(px(5.))
+    }
+}
+
 impl Render for ConduitApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let render_started = Instant::now();
@@ -38,9 +74,18 @@ impl Render for ConduitApp {
         }
         self.scroll
             .set_scroll_handler(cx.listener(|this, event: &ListScrollEvent, _, cx| {
-                this.at_bottom = !event.is_scrolled;
-                cx.notify();
+                let at_bottom = !event.is_scrolled;
+                let outline = this.outline.active_for_item(event.visible_range.start);
+                // The list redraws itself. Rebuild the surrounding UI only when
+                // the jump-to-latest control or active outline marker changes.
+                let changed = this.at_bottom != at_bottom || this.outline.active != outline;
+                this.at_bottom = at_bottom;
+                if changed {
+                    cx.notify();
+                }
             }));
+        // Parent changes include streaming content, settings and row expansion.
+        self.timeline.update(cx, |_, cx| cx.notify());
         if self.store.ui.performance_monitor {
             self.performance.update(cx, |monitor, _| {
                 monitor.begin_render(
@@ -55,14 +100,16 @@ impl Render for ConduitApp {
             .selected_workspace
             .map(|i| self.store.workspaces[i].name())
             .unwrap_or_else(|| "未选择工作区".into());
-        let sidebar = self.render_sidebar(cx);
+        let sidebar = self
+            .sidebar_view
+            .clone()
+            .cached(StyleRefinement::default().size_full());
         let mut messages = div()
             .v_flex()
             .id("messages")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
-            .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
             .min_w_0()
             .px_2()
             .py_1()
@@ -104,7 +151,6 @@ impl Render for ConduitApp {
                 );
             }
             if session.message_count > 0 {
-                let app = app_entity.clone();
                 messages = div()
                     .id("messages")
                     .flex_1()
@@ -122,13 +168,7 @@ impl Render for ConduitApp {
                             }
                         }
                     })
-                    .child(
-                        gpui_kit::list(self.scroll.clone(), move |index, _, cx| {
-                            app.update(cx, |this, cx| this.render_message(index, cx))
-                        })
-                        .size_full()
-                        .pt(px(5.)),
-                    );
+                    .child(self.timeline.clone());
             }
         } else if has_workspace {
             messages = messages.child(
@@ -399,19 +439,7 @@ impl Render for ConduitApp {
                 h_flex()
                     .items_center()
                     .gap_2()
-                    .child(
-                        h_flex()
-                            .w(px(20.))
-                            .h(px(20.))
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(6.))
-                            .bg(rgb(palette().text))
-                            .text_size(px(11.))
-                            .font_bold()
-                            .text_color(rgb(palette().on_text))
-                            .child("C"),
-                    )
+                    .child(app_icon(20.))
                     .child(
                         div()
                             .text_size(px(13.))

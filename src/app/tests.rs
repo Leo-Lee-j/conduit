@@ -378,6 +378,29 @@ pub(super) fn session() -> SessionRecord {
         usage: Usage::default(),
     }
 }
+
+#[test]
+fn composer_defaults_to_medium_and_preserves_explicit_effort_until_model_changes() {
+    for engine in [Provider::Claude, Provider::Codex] {
+        let mut selection = super::ComposerSelection::new(engine);
+        assert_eq!(selection.effort, super::ReasoningEffort::Medium);
+        selection.set_model(Some("model-a".into()));
+        selection.effort = super::ReasoningEffort::High;
+        selection.set_model(Some("model-a".into()));
+        assert_eq!(selection.effort, super::ReasoningEffort::High);
+        selection.set_model(Some("model-b".into()));
+        assert_eq!(selection.effort, super::ReasoningEffort::Medium);
+        selection.effort = super::ReasoningEffort::Default;
+        let mut session = session();
+        session.provider = engine;
+        selection.apply(&mut session);
+        assert_eq!(
+            super::ComposerSelection::from_session(&session).effort,
+            super::ReasoningEffort::Default,
+            "explicit CLI defaults survive restoration"
+        );
+    }
+}
 #[test]
 fn contiguous_tool_groups_include_adjacent_completed_activity() {
     let activity = |key: &str, kind: ItemKind, title: &str, status: &str| ChatItem {

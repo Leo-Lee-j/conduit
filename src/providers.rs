@@ -30,6 +30,14 @@ pub enum ReasoningEffort {
 }
 
 impl ReasoningEffort {
+    /// OpenCode negotiates its native effort catalog after selecting the model.
+    pub fn for_provider(provider: Provider) -> Self {
+        match provider {
+            Provider::Claude | Provider::Codex => Self::Medium,
+            Provider::OpenCode => Self::Default,
+        }
+    }
+
     pub const ALL: [Self; 5] = [
         Self::Default,
         Self::Low,

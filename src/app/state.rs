@@ -19,7 +19,7 @@ impl ComposerSelection {
             engine,
             channel: ModelChannel::Cli,
             model: None,
-            effort: ReasoningEffort::Default,
+            effort: ReasoningEffort::for_provider(engine),
             opencode: Default::default(),
         }
     }
@@ -44,7 +44,7 @@ impl ComposerSelection {
 
     pub(super) fn set_model(&mut self, model: Option<String>) {
         if self.model != model {
-            self.effort = ReasoningEffort::Default;
+            self.effort = ReasoningEffort::for_provider(self.engine);
             self.opencode.variant = None;
             if let Some(options) = self.opencode.options.as_array_mut() {
                 options.retain(|o| o["id"] != "effort");

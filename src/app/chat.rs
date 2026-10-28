@@ -814,7 +814,6 @@ impl ConduitApp {
                                     .child(name),
                             )
                     }));
-                let copy_text = item.text.clone();
                 let copy_id = SharedString::from(format!("user-copy-{}-{}", session_id, item.key));
                 let copied = self.copied_action.as_ref() == Some(&copy_id);
                 let copy_icon = if copied {
@@ -887,8 +886,15 @@ impl ConduitApp {
                                         )
                                         .on_click(
                                             cx.listener(move |this, _, window, cx| {
+                                                let Some(text) = this
+                                                    .session(session_id)
+                                                    .and_then(|session| session.messages.get(index))
+                                                    .map(|item| item.text.clone())
+                                                else {
+                                                    return;
+                                                };
                                                 cx.write_to_clipboard(ClipboardItem::new_string(
-                                                    copy_text.clone(),
+                                                    text,
                                                 ));
                                                 this.show_copied(copy_id.clone(), window, cx);
                                             }),
@@ -916,11 +922,6 @@ impl ConduitApp {
                         .any(|item| {
                             item.kind == ItemKind::Assistant && !item.text.trim().is_empty()
                         });
-                let copy_text = if show_actions {
-                    assistant_reply_text(session, index)
-                } else {
-                    String::new()
-                };
                 let catalog = self.catalogs.get(&provider);
                 let model_id = item
                     .model
@@ -961,7 +962,12 @@ impl ConduitApp {
                         .ml(px(-5.))
                         .on_click(cx.listener(
                             move |this, _, window, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
+                                let Some(session) = this.session(session_id) else {
+                                    return;
+                                };
+                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                    assistant_reply_text(session, index),
+                                ));
                                 this.show_copied(copy_id.clone(), window, cx);
                             },
                         )),

@@ -93,7 +93,7 @@ impl Render for SessionModelPicker {
             app.channel_models(engine, &channel)
         };
         let variants = selection.opencode.variants();
-        let variant = selection.opencode.variant.clone();
+        let variant = selection.opencode.effective_variant().map(str::to_owned);
         // Native OpenCode providers are encoded in provider/model IDs. Keep
         // the CLI route and filter within its actual catalog, never inventing
         // an API endpoint or copying credentials into a custom provider.
@@ -262,7 +262,7 @@ impl Render for SessionModelPicker {
                                             }
                                             s.channel = option.clone();
                                             s.set_model(native_model.clone());
-                                            s.effort = ReasoningEffort::Default;
+                                            s.effort = ReasoningEffort::for_provider(s.engine);
                                         });
                                     });
                                     this.search.update(cx, |s, cx| s.set_value("", window, cx));
@@ -462,9 +462,8 @@ impl Render for SessionModelPicker {
                                                                 this.session_id,
                                                                 cx,
                                                                 |s| {
-                                                                    s.opencode.variant = (value
-                                                                        != "default")
-                                                                        .then(|| value.clone());
+                                                                    s.opencode.variant =
+                                                                        Some(value.clone());
                                                                 },
                                                             );
                                                         });
@@ -970,8 +969,8 @@ impl ConduitApp {
         let effort = if provider == Provider::OpenCode {
             selection
                 .opencode
-                .variant
-                .clone()
+                .effective_variant()
+                .map(str::to_owned)
                 .unwrap_or_else(|| "默认".into())
         } else {
             selection.effort.label().to_owned()

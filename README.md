@@ -92,6 +92,8 @@ Conduit 的进程监管不是权限沙箱。Codex 请求 `workspace-write` + `on
 
 ## 验证
 
+Windows 安装包：运行 `./scripts/package-windows.ps1`（需要 Rust MSVC 工具链、Windows SDK 和 NSIS 3；可用 `-MakeNsis` 指定编译器路径）。输出为 `target/dist/Conduit-0.1.0-windows-x64-setup.exe`，并生成 SHA-256 校验文件。安装程序按当前用户安装到 `%LOCALAPPDATA%\Programs\Conduit`，创建开始菜单快捷方式，并支持从 Windows 设置卸载；卸载保留 `%LOCALAPPDATA%\Conduit` 中的聊天数据。脚本自动从 Visual Studio 查找并打包微软 x64 CRT 可再分发 DLL，也可用 `-RuntimeDir` 指定该目录。应用、窗口、标题栏、关于页和安装程序均使用 `assets/app-icons` 中的圆角图标。
+
 ```powershell
 cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings

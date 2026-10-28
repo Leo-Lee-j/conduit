@@ -236,10 +236,8 @@ impl ConduitApp {
                 // frame and fades only the surface, so an entrance animation
                 // reads as the panel rising out from behind the scrim.
                 .entrance(gpui_kit::component::dialog::DialogEntrance::None)
-                // Dropping the scrim also drops the backdrop, and backdrop
-                // press is the only outside-click dismissal the library has;
-                // close is via the X, 完成, or Esc.
-                .overlay(false)
+                .overlay(true)
+                .overlay_closable(true)
                 .w(px(840.))
                 .margin_top(px(margin_top))
                 .p_0()
@@ -270,20 +268,7 @@ impl ConduitApp {
                                 h_flex()
                                     .gap_3()
                                     .items_center()
-                                    .child(
-                                        h_flex()
-                                            .w(px(40.))
-                                            .h(px(40.))
-                                            .flex_shrink_0()
-                                            .items_center()
-                                            .justify_center()
-                                            .rounded(px(10.))
-                                            .bg(rgb(palette().text))
-                                            .text_size(px(20.))
-                                            .font_bold()
-                                            .text_color(rgb(palette().on_text))
-                                            .child("C"),
-                                    )
+                                    .child(app_icon(40.))
                                     .child(
                                         v_flex()
                                             .gap_1()

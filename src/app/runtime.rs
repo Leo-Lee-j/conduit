@@ -531,8 +531,14 @@ impl ConduitApp {
             }
             match event {
                 Event::OpenCodeConfig(options) => {
-                    if let Some(session) = self.session_mut(id) {
+                    let variant = if let Some(session) = self.session_mut(id) {
                         session.opencode.options = options;
+                        session.opencode.effective_variant().map(str::to_owned)
+                    } else {
+                        None
+                    };
+                    if let Some(run) = self.runs.get_mut(&id) {
+                        run.opencode_variant = variant;
                     }
                     self.dirty = true;
                     cx.emit(crate::providers::ProviderCatalogChanged);

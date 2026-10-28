@@ -15,6 +15,18 @@ pub struct OpenCodeSettings {
 }
 
 impl OpenCodeSettings {
+    /// Respect explicit choices, including the native "default" option.
+    /// Only choose medium automatically when the model advertises it.
+    pub fn effective_variant(&self) -> Option<&str> {
+        self.variant.as_deref().or_else(|| {
+            self.option("effort")["options"]
+                .as_array()?
+                .iter()
+                .any(|option| option["value"] == "medium")
+                .then_some("medium")
+        })
+    }
+
     pub fn models(&self) -> Vec<crate::models::ModelOption> {
         let mut models = vec![];
         if let Some(options) = self.option("model")["options"].as_array() {
@@ -372,6 +384,19 @@ impl Protocol {
 
     fn acp_next(&mut self, step: &mut Step) {
         while let Some((key, selection)) = self.acp.config.pop_front() {
+            let selection = if key == "effort"
+                && selection == "default"
+                && self.route.opencode_variant.is_none()
+                && self.reasoning_effort == crate::providers::ReasoningEffort::Default
+            {
+                self.acp
+                    .options
+                    .effective_variant()
+                    .unwrap_or("default")
+                    .to_owned()
+            } else {
+                selection
+            };
             let option = self.acp.options.option(&key);
             if key == "effort" && selection == "default" && option.is_null() {
                 continue;

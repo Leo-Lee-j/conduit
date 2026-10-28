@@ -3,6 +3,40 @@
 use super::*;
 use gpui_kit::component::status_bar::StatusBar;
 
+/// Cache session navigation independently of wheel-driven transcript frames.
+pub(super) struct SidebarView {
+    app: WeakEntity<ConduitApp>,
+    _subscription: Subscription,
+    #[cfg(test)]
+    pub(super) render_count: usize,
+}
+
+impl SidebarView {
+    pub(super) fn new(app: WeakEntity<ConduitApp>, cx: &mut Context<Self>) -> Self {
+        let subscription = cx.observe(&app.upgrade().expect("app is alive"), |_, _, cx| {
+            cx.notify()
+        });
+        Self {
+            app,
+            _subscription: subscription,
+            #[cfg(test)]
+            render_count: 0,
+        }
+    }
+}
+
+impl Render for SidebarView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        {
+            self.render_count += 1;
+        }
+        self.app
+            .update(cx, |app, cx| app.render_sidebar(cx))
+            .unwrap_or_else(|_| div().into_any_element())
+    }
+}
+
 impl ConduitApp {
     pub(super) fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let can_edit = self.writable && !self.closing;

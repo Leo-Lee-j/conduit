@@ -23,6 +23,9 @@ default = []
 gpui-fast = ["gpui-kit/gpui-fast"]
 ui-tests = ["gpui-kit/test-support"]
 
+[build-dependencies]
+embed-resource = "=3.0.12"
+
 [profile.dev]
 debug = "limited"
 # Keep app code with debug info but give it basic optimization; the GPUI

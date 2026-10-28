@@ -7,6 +7,50 @@ use gpui_kit::{
 };
 
 #[gpui_kit::test]
+fn settings_dismisses_on_outside_click_and_keeps_inside_clicks(cx: &mut TestAppContext) {
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            super::ConduitApp::with_store(
+                window,
+                cx,
+                Ok(crate::store::Store::default()),
+                false,
+                false,
+            )
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    for close_with_escape in [false, true] {
+        cx.update(|window, cx| app.update(cx, |app, cx| app.open_settings(window, cx)));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert!(window.has_active_dialog(cx));
+        });
+        let surface = cx.debug_bounds("dialog-0").unwrap();
+        let inside = point(surface.left() + px(12.), surface.center().y);
+        cx.simulate_mouse_down(inside, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(inside, MouseButton::Left, Modifiers::default());
+        cx.update(|window, cx| assert!(window.has_active_dialog(cx)));
+        if close_with_escape {
+            cx.simulate_keystrokes("escape");
+        } else {
+            let outside = point(px(10.), px(100.));
+            cx.simulate_mouse_down(outside, MouseButton::Left, Modifiers::default());
+            cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::default());
+        }
+        cx.run_until_parked();
+        cx.update(|window, cx| assert!(!window.has_active_dialog(cx)));
+    }
+}
+
+#[gpui_kit::test]
 fn opencode_new_session_keeps_permission_selected_before_sending(cx: &mut TestAppContext) {
     use crate::{
         domain::{PermissionLevel, Provider, Workspace},
@@ -128,7 +172,7 @@ fn model_picker_switches_engine_and_applies_the_full_route_to_a_new_session(
         assert_eq!(selection.engine, Provider::Codex);
         assert_eq!(selection.channel, ModelChannel::Cli);
         assert_eq!(selection.model, None);
-        assert_eq!(selection.effort, ReasoningEffort::Default);
+        assert_eq!(selection.effort, ReasoningEffort::Medium);
     });
     click!("session-channel-control");
     click!("session-provider-option-1");
@@ -1346,7 +1390,7 @@ fn model_picker_renders_search_provider_and_effort_without_overlapping(cx: &mut 
             selected.channel,
             ModelChannel::Provider("synced-fixture".into())
         );
-        assert_eq!(selected.reasoning_effort, ReasoningEffort::Default);
+        assert_eq!(selected.reasoning_effort, ReasoningEffort::Medium);
         let _ = window.draw(cx);
     });
     let effort = cx.debug_bounds("session-effort-control").unwrap();
@@ -2267,6 +2311,29 @@ fn long_chat_virtualizes_real_rows_and_keeps_history_jump_on_append(cx: &mut Tes
         );
         assert!(app.performance.read(cx).mounted_messages() < 100);
     });
+
+    // Scrolling inside the same outline section keeps session navigation cached.
+    let render_count = cx.update(|_, cx| app.read(cx).sidebar_view.read(cx).render_count);
+    let position = cx.debug_bounds("user-message-5000").unwrap().center();
+    cx.simulate_event(ScrollWheelEvent {
+        position,
+        delta: ScrollDelta::Pixels(point(px(0.), px(-8.))),
+        ..Default::default()
+    });
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert_eq!(app.sidebar_view.read(cx).render_count, render_count);
+        let after = app.scroll.logical_scroll_top();
+        assert_ne!(
+            (after.item_ix, after.offset_in_item),
+            (before.item_ix, before.offset_in_item),
+            "the transcript must still scroll while session navigation stays cached"
+        );
+        assert!(app.performance.read(cx).mounted_messages() < 100);
+    });
 }
 
 struct ToolScrollFixture {
@@ -2377,6 +2444,30 @@ fn expanded_tool_long_text_scrolls_inside_its_fixed_viewport(cx: &mut TestAppCon
 /// painted highlight do at each pointer position.
 #[gpui_kit::test]
 fn drag_across_assistant_reply_tracks_the_pointer(cx: &mut TestAppContext) {
+    const REPLY: &str = "第一段回复内容用于验证拖拽选中是否跟随指针移动，这里需要足够长的中文来覆盖两行以上的文本区域。第二段内容继续保持长度以便跨行拖拽选中。";
+    check_assistant_drag_selection(cx, REPLY, REPLY, false);
+}
+
+const SELECTION_CODE: &str = "let selected_text = \"CODE_SELECTION enough words to verify that dragging across a code block updates the painted selection immediately and keeps following the pointer while this deliberately long code line wraps across the block width for the regression test\";\nlet second_line = \"中文代码选区\";\nlet third_line = \"another long line keeps the selection endpoint visible when the pointer moves farther right\";";
+
+#[gpui_kit::test]
+fn drag_across_numbered_code_tracks_the_pointer(cx: &mut TestAppContext) {
+    let reply = format!("```rust\n{SELECTION_CODE}\n```");
+    check_assistant_drag_selection(cx, &reply, SELECTION_CODE, true);
+}
+
+#[gpui_kit::test]
+fn drag_across_stock_code_tracks_the_pointer(cx: &mut TestAppContext) {
+    let reply = format!("```rust\n{SELECTION_CODE}\n```");
+    check_assistant_drag_selection(cx, &reply, SELECTION_CODE, false);
+}
+
+fn check_assistant_drag_selection(
+    cx: &mut TestAppContext,
+    reply: &str,
+    selectable_text: &str,
+    code_line_numbers: bool,
+) {
     use crate::{
         domain::{ItemKind, PermissionLevel, Provider, SessionRecord, Usage, Workspace},
         store::Store,
@@ -2384,7 +2475,6 @@ fn drag_across_assistant_reply_tracks_the_pointer(cx: &mut TestAppContext) {
     use gpui_kit::{AppContext as _, Modifiers, MouseButton, base::TextSelection};
 
     const USER_PROMPT: &str = "USER_PROMPT_TEXT enough words to make a wide selectable user bubble for checking repaint during dragging across the text.";
-    const REPLY: &str = "第一段回复内容用于验证拖拽选中是否跟随指针移动，这里需要足够长的中文来覆盖两行以上的文本区域。第二段内容继续保持长度以便跨行拖拽选中。";
 
     cx.update(gpui_kit::init);
     let (_, cx) = cx.add_window_view(|window, cx| {
@@ -2416,7 +2506,7 @@ fn drag_across_assistant_reply_tracks_the_pointer(cx: &mut TestAppContext) {
                         model: None,
                         messages: vec![
                             item("user-1", ItemKind::User, USER_PROMPT),
-                            item("reply-1", ItemKind::Assistant, REPLY),
+                            item("reply-1", ItemKind::Assistant, reply),
                         ],
                         interrupted: false,
                         channel: Default::default(),
@@ -2428,6 +2518,7 @@ fn drag_across_assistant_reply_tracks_the_pointer(cx: &mut TestAppContext) {
                 }],
                 ..Default::default()
             };
+            app.store.ui.code_line_numbers = code_line_numbers;
             app.selected_workspace = Some(0);
             app.selected_session = Some(1);
             app
@@ -2466,7 +2557,7 @@ fn drag_across_assistant_reply_tracks_the_pointer(cx: &mut TestAppContext) {
             if selected.is_empty() {
                 continue;
             }
-            if REPLY.contains(&selected) {
+            if selectable_text.contains(&selected) {
                 line = Some((px(x as f32), px(y as f32), selected));
                 break 'probe;
             }
@@ -2509,11 +2600,10 @@ fn drag_across_assistant_reply_tracks_the_pointer(cx: &mut TestAppContext) {
         let _ = window.draw(cx);
     });
     let move_to = |cx: &mut gpui_kit::VisualTestContext, x: gpui_kit::Pixels| {
+        // Let selection changes schedule the frame. Forcing window.draw here
+        // would hide a participant that forgets to request a repaint.
         cx.simulate_mouse_move(point(x, y), Some(MouseButton::Left), Modifiers::default());
         cx.run_until_parked();
-        cx.update(|window, cx| {
-            let _ = window.draw(cx);
-        });
         read(cx)
     };
     let (at_mid, painted_mid) = move_to(cx, anchor_x + px(150.));
@@ -2527,7 +2617,7 @@ fn drag_across_assistant_reply_tracks_the_pointer(cx: &mut TestAppContext) {
 
     assert!(!at_mid.is_empty(), "drag must select reply text");
     assert!(
-        REPLY.contains(&at_mid),
+        selectable_text.contains(&at_mid),
         "selection must stay inside the reply: {at_mid}"
     );
     assert!(

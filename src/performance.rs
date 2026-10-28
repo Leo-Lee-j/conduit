@@ -149,10 +149,13 @@ impl PerformanceMonitor {
     }
 
     pub fn begin_render(&mut self, messages: usize, active_runs: usize, sessions: usize) {
-        self.rendered_indices.clear();
+        self.begin_message_frame();
         self.message_count = messages;
         self.active_runs = active_runs;
         self.session_count = sessions;
+    }
+    pub fn begin_message_frame(&mut self) {
+        self.rendered_indices.clear();
     }
     pub fn record_render(&mut self, elapsed: Duration) {
         self.pending_render.record(elapsed);

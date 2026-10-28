@@ -18,6 +18,14 @@ pub(super) struct MessageOutlineCache {
 }
 
 impl MessageOutlineCache {
+    pub(super) fn active_for_item(&self, index: usize) -> Option<usize> {
+        (!self.entries.is_empty()).then(|| {
+            self.entries
+                .partition_point(|entry| entry.index <= index)
+                .saturating_sub(1)
+        })
+    }
+
     pub(super) fn refresh(&mut self, session: Option<&SessionRecord>) {
         let id = session.map(|session| session.id);
         let count = session.map_or(0, |session| session.messages.len());
@@ -118,9 +126,7 @@ impl ConduitApp {
         let session_id = self.outline.session.unwrap_or_default();
         let entries = &self.outline.entries;
         let top = self.scroll.logical_scroll_top().item_ix;
-        let current = entries
-            .partition_point(|entry| entry.index <= top)
-            .saturating_sub(1);
+        let current = self.outline.active_for_item(top).unwrap_or(0);
         if self.outline.active != Some(current) {
             self.outline.active = Some(current);
             self.outline

@@ -199,6 +199,8 @@ pub struct ConduitApp {
     dirty: bool,
     last_save: Instant,
     scroll: gpui_kit::ListState,
+    timeline: Entity<shell::ChatTimeline>,
+    sidebar_view: Entity<sidebar::SidebarView>,
     /// Focus target for the conversation, so a finished selection drag leaves the
     /// composer and Ctrl+C reaches the window root's copy handler.
     chat_focus: FocusHandle,
@@ -513,6 +515,10 @@ impl ConduitApp {
         });
         let ccs = ccs::load();
         store.sync_ccs_providers(&ccs);
+        let scroll = gpui_kit::ListState::new(0, ListAlignment::Bottom, px(240.));
+        let app = cx.entity().downgrade();
+        let timeline = cx.new(|_| shell::ChatTimeline::new(app.clone(), scroll.clone()));
+        let sidebar_view = cx.new(|cx| sidebar::SidebarView::new(app, cx));
         Self {
             store,
             writable,
@@ -591,7 +597,9 @@ impl ConduitApp {
             ],
             dirty: false,
             last_save: Instant::now(),
-            scroll: gpui_kit::ListState::new(0, ListAlignment::Bottom, px(240.)),
+            scroll,
+            timeline,
+            sidebar_view,
             chat_focus: cx.focus_handle(),
             timeline_session: None,
             outline: MessageOutlineCache::default(),
