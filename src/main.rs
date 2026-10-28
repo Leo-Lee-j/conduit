@@ -82,7 +82,12 @@ fn main() {
             let (window, app) = gpui_kit::open_window(options, cx, move |window, cx| {
                 window.set_window_title("Conduit");
                 cx.new(|cx| {
-                    ConduitApp::with_store(window, cx, loaded, start_in_settings, start_in_git)
+                    let mut app =
+                        ConduitApp::with_store(window, cx, loaded, start_in_settings, start_in_git);
+                    // The loading page is the window's very first frame; the
+                    // initial history import below releases it once merged.
+                    app.begin_startup_loading();
+                    app
                 })
             })
             .expect("failed to open Conduit window");

@@ -99,6 +99,107 @@ impl ConduitApp {
         cx.notify();
     }
 
+    /// The prompts already sent in the selected conversation, newest first.
+    /// Recall browses the prose the user typed: the stored item keeps the
+    /// trailing file-reference block added at send time, and an
+    /// attachment-only message has no prose to browse.
+    pub(super) fn sent_prompts(&self) -> Vec<String> {
+        const LIMIT: usize = 100;
+        let Some(session) = self.selected_session.and_then(|id| self.session(id)) else {
+            return Vec::new();
+        };
+        session
+            .messages
+            .iter()
+            .rev()
+            .filter(|item| item.kind == ItemKind::User)
+            .filter_map(|item| {
+                let text = file_ref::split_prompt(&item.text).0;
+                (!text.trim().is_empty()).then(|| text.to_string())
+            })
+            .take(LIMIT)
+            .collect()
+    }
+
+    fn set_composer_text(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.update(cx, |input, cx| {
+            input.set_value(text.clone(), window, cx);
+            // set_value leaves a multi-line caret at the start; recalled
+            // prompts read and continue best with the caret at the end.
+            input.set_selected_range(text.len()..text.len(), cx);
+        });
+        cx.notify();
+    }
+
+    /// Up arrow: browse backward through the sent prompts. Only an empty
+    /// composer starts browsing, so a typed draft is never replaced; while
+    /// a file-mention menu is open the arrows keep moving its selection.
+    pub(super) fn previous_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing || !self.writable {
+            return;
+        }
+        if self.file_mentions_open(window, cx) {
+            self.move_file_mention(-1, window, cx);
+            return;
+        }
+        if self.composer_is_composing(window, cx) {
+            return;
+        }
+        let history = self.sent_prompts();
+        let next = match self.prompt_history {
+            Some(index) => index + 1,
+            None if history.is_empty() || !self.input.read(cx).value().is_empty() => {
+                // Nothing to recall yet, or the composer holds a draft: the
+                // arrow keeps moving the caret.
+                window.dispatch_action(Box::new(MoveUp), cx);
+                return;
+            }
+            None => 0,
+        };
+        // Browsing stops at the oldest prompt; `get` also absorbs a history
+        // refreshed by a background CLI import without panicking.
+        if let Some(text) = history.get(next).cloned() {
+            self.prompt_history = Some(next);
+            self.set_composer_text(text, window, cx);
+        }
+    }
+
+    /// Down arrow: move toward newer prompts, and past the newest back to
+    /// the empty composer that browsing started from.
+    pub(super) fn next_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing || !self.writable {
+            return;
+        }
+        if self.file_mentions_open(window, cx) {
+            self.move_file_mention(1, window, cx);
+            return;
+        }
+        if self.composer_is_composing(window, cx) {
+            return;
+        }
+        match self.prompt_history {
+            None => {
+                window.dispatch_action(Box::new(MoveDown), cx);
+            }
+            Some(0) => {
+                self.prompt_history = None;
+                self.set_composer_text(String::new(), window, cx);
+            }
+            Some(index) => match self.sent_prompts().get(index - 1).cloned() {
+                Some(text) => {
+                    self.prompt_history = Some(index - 1);
+                    self.set_composer_text(text, window, cx);
+                }
+                None => {
+                    // The history shrank underneath (background import);
+                    // end browsing rather than pointing at a stale rank.
+                    self.prompt_history = None;
+                    self.set_composer_text(String::new(), window, cx);
+                }
+            },
+        }
+    }
+
     pub(super) fn render_composer_files(
         &self,
         enabled: bool,
@@ -336,6 +437,14 @@ impl ConduitApp {
                 if !this.composer_is_composing(window, cx) {
                     this.dismiss_file_mentions(cx);
                 }
+            }))
+            .on_action(cx.listener(|this, _: &PreviousPrompt, window, cx| {
+                cx.stop_propagation();
+                this.previous_prompt(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NextPrompt, window, cx| {
+                cx.stop_propagation();
+                this.next_prompt(window, cx);
             }))
             .on_action(cx.listener(|this, _: &Newline, window, cx| {
                 cx.stop_propagation();

@@ -38,8 +38,66 @@ impl Render for ChatTimeline {
     }
 }
 
+impl ConduitApp {
+    /// The window's first frame: shown until the initial CLI history scan
+    /// merges, so the main layout never renders a half-imported workspace
+    /// list. The title bar stays live so the window can still be dragged,
+    /// moved, and closed while loading.
+    fn startup_page(&self) -> AnyElement {
+        let title_bar = TitleBar::new()
+            .bg(rgb(palette().canvas))
+            .border_color(rgb(palette().border))
+            .child(
+                h_flex().items_center().gap_2().child(app_icon(20.)).child(
+                    div()
+                        .text_size(px(13.))
+                        .font_semibold()
+                        .text_color(rgb(palette().text))
+                        .child("Conduit"),
+                ),
+            );
+        let workspaces = self.store.workspaces.len();
+        v_flex()
+            .id("startup-loading")
+            .debug_selector(|| "startup-loading".into())
+            .relative()
+            .size_full()
+            .bg(rgb(palette().canvas))
+            .text_color(rgb(palette().text))
+            .child(title_bar)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .items_center()
+                    .justify_center()
+                    .gap_3()
+                    .child(app_icon(64.))
+                    .child(div().text_size(px(20.)).font_semibold().child("Conduit"))
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(Spinner::new().small().color(rgb(palette().loading).into()))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .text_color(rgb(palette().muted))
+                                    .child(format!("正在加载 {workspaces} 个工作区的 CLI 历史…")),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+}
+
 impl Render for ConduitApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The startup page owns the window until the initial history scan
+        // merges, so the workspace sidebar never renders a half-imported
+        // list.
+        if self.startup.is_some() {
+            return self.startup_page();
+        }
         let render_started = Instant::now();
         let app_entity = cx.entity();
         let selected = self
@@ -561,6 +619,6 @@ impl Render for ConduitApp {
                 monitor.record_render(render_started.elapsed());
             });
         }
-        view
+        view.into_any_element()
     }
 }

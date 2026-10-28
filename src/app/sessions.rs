@@ -1172,6 +1172,8 @@ impl ConduitApp {
         .unwrap_or_default();
         self.input
             .update(cx, |input, cx| input.set_value(draft, window, cx));
+        // The recalled-prompt rank belongs to the conversation we just left.
+        self.prompt_history = None;
         if session.is_some() {
             self.input.read(cx).focus_handle(cx).focus(window, cx);
         }
@@ -1304,6 +1306,11 @@ impl ConduitApp {
             let _ = this.update_in(cx, |this, window, cx| {
                 for (path, sessions) in paths.into_iter().zip(imported) {
                     this.finish_history_import(&path, sessions, false, window, cx);
+                }
+                // The whole batch merged; the poll tick releases the startup
+                // page once its minimum display has passed.
+                if let Some(startup) = &mut this.startup {
+                    startup.imports_done = true;
                 }
             });
         })

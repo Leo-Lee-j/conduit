@@ -3696,3 +3696,258 @@ fn tabs_share_running_and_unread_dots_and_clear_on_open(cx: &mut TestAppContext)
     assert!(cx.debug_bounds("tab-activity-2-unread").is_none());
     assert!(cx.debug_bounds("session-activity-2-unread").is_none());
 }
+
+#[gpui_kit::test]
+fn composer_recalls_sent_prompts_with_arrow_keys(cx: &mut TestAppContext) {
+    use crate::{
+        domain::{ChatItem, ItemKind, Provider, SessionRecord, Workspace},
+        store::Store,
+    };
+    use gpui_kit::{AppContext as _, Focusable as _, VisualTestContext};
+
+    let item = |key: &str, text: &str| ChatItem {
+        elapsed_ms: None,
+        key: key.into(),
+        created_at: 0,
+        kind: ItemKind::User,
+        text: text.into(),
+        input: String::new(),
+        detail: String::new(),
+        status: String::new(),
+        approval: None,
+        model: None,
+    };
+    let root = std::env::temp_dir().join(format!("conduit-prompt-history-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let store = Store {
+                workspaces: vec![Workspace {
+                    path: root.clone(),
+                    sessions: vec![SessionRecord {
+                        id: 1,
+                        provider: Provider::Claude,
+                        native_id: Some("native-1".into()),
+                        title: "历史".into(),
+                        created_at: 0,
+                        exit_code: None,
+                        archived: false,
+                        model: None,
+                        messages: vec![
+                            item("turn-0-user", "第一条"),
+                            item("turn-1-user", "第二条"),
+                            item("turn-2-user", "第三条\n\n引用文件：\n- first.rs\n"),
+                        ],
+                        interrupted: true,
+                        channel: Default::default(),
+                        reasoning_effort: Default::default(),
+                        opencode: Default::default(),
+                        permission: Default::default(),
+                        usage: Default::default(),
+                    }],
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.selected_workspace = Some(0);
+            app.selected_session = Some(1);
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            this.input.read(cx).focus_handle(cx).focus(window, cx);
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let value = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| app.read(cx).input.read(cx).value().to_string())
+    };
+    let press = |cx: &mut VisualTestContext, keys: &str| {
+        cx.simulate_keystrokes(keys);
+        cx.run_until_parked();
+    };
+    press(cx, "up");
+    assert_eq!(
+        value(cx),
+        "第三条",
+        "Up recalls the newest prompt without its reference block"
+    );
+    press(cx, "up");
+    assert_eq!(value(cx), "第二条");
+    press(cx, "up");
+    assert_eq!(value(cx), "第一条");
+    press(cx, "up");
+    assert_eq!(value(cx), "第一条", "Up at the oldest prompt stays put");
+    press(cx, "down");
+    assert_eq!(value(cx), "第二条");
+    press(cx, "down");
+    assert_eq!(value(cx), "第三条");
+    press(cx, "down");
+    assert_eq!(
+        value(cx),
+        "",
+        "Down past the newest prompt restores the empty draft"
+    );
+    // A typed draft is never replaced: the arrows only move the caret.
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            this.input
+                .update(cx, |input, cx| input.set_value("我的草稿", window, cx));
+            this.input.read(cx).focus_handle(cx).focus(window, cx);
+        });
+    });
+    press(cx, "up");
+    assert_eq!(value(cx), "我的草稿", "a non-empty draft is never replaced");
+    press(cx, "down");
+    assert_eq!(value(cx), "我的草稿");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[gpui_kit::test]
+fn startup_page_gates_the_layout_until_history_imports_merge(cx: &mut TestAppContext) {
+    use crate::{domain::Workspace, store::Store};
+    use gpui_kit::AppContext as _;
+    use std::time::{Duration, Instant};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let root = std::env::temp_dir().join("conduit-startup-page-ui");
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let store = Store {
+                workspaces: vec![Workspace {
+                    path: root.clone(),
+                    sessions: vec![super::tests::session()],
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.writable = false;
+            app.begin_startup_loading();
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("startup-loading").is_some());
+    assert!(cx.debug_bounds("session-row-1").is_none());
+
+    // A fast import still holds the page for its minimum display, so the
+    // workspace layout cannot flash for a single frame.
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            let startup = this.startup.as_mut().unwrap();
+            startup.started = Instant::now();
+            startup.imports_done = true;
+            this.poll(window, cx);
+        });
+    });
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("startup-loading").is_some());
+
+    // Past the minimum display, the next poll tick enters the app.
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            this.startup.as_mut().unwrap().started = Instant::now() - Duration::from_secs(1);
+            this.poll(window, cx);
+        });
+    });
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("startup-loading").is_none());
+    assert!(cx.debug_bounds("session-row-1").is_some());
+}
+
+#[gpui_kit::test]
+fn startup_page_times_out_when_the_scan_stalls(cx: &mut TestAppContext) {
+    use crate::{domain::Workspace, store::Store};
+    use gpui_kit::AppContext as _;
+    use std::time::{Duration, Instant};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let root = std::env::temp_dir().join("conduit-startup-timeout-ui");
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let store = Store {
+                workspaces: vec![Workspace {
+                    path: root.clone(),
+                    sessions: vec![super::tests::session()],
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.writable = false;
+            app.begin_startup_loading();
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("startup-loading").is_some());
+
+    // A scan that never reports back still releases the page at the
+    // timeout; the sidebar then shows the per-workspace spinners.
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            this.startup.as_mut().unwrap().started = Instant::now() - Duration::from_secs(16);
+            this.poll(window, cx);
+        });
+    });
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("startup-loading").is_none());
+    assert!(cx.debug_bounds("session-row-1").is_some());
+}
+
+#[gpui_kit::test]
+fn startup_page_stays_away_without_workspaces(cx: &mut TestAppContext) {
+    use crate::store::Store;
+    use gpui_kit::AppContext as _;
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut app =
+                super::ConduitApp::with_store(window, cx, Ok(Store::default()), false, false);
+            app.writable = false;
+            app.begin_startup_loading();
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let _app = slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    // Nothing to import, so the app opens directly without a gate.
+    assert!(cx.debug_bounds("startup-loading").is_none());
+}

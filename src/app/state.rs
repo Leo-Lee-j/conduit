@@ -2,6 +2,23 @@
 
 use super::*;
 
+/// Minimum time the startup page stays up once armed, so a CLI history scan
+/// that finishes instantly cannot flash the page for a single frame.
+pub(super) const STARTUP_MIN_DISPLAY: Duration = Duration::from_millis(300);
+/// Upper bound on the startup page: a stalled scan must not lock the user
+/// out of the app, whose sidebar then shows per-workspace import spinners.
+pub(super) const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Startup page state: gates the main layout until the first CLI history
+/// scan merges, then releases it after [`STARTUP_MIN_DISPLAY`] (or
+/// [`STARTUP_TIMEOUT`] when the scan never reports back).
+pub(super) struct StartupState {
+    /// When the page was armed; bounds the minimum display and the timeout.
+    pub(super) started: Instant,
+    /// The initial history scan has merged its results into the store.
+    pub(super) imports_done: bool,
+}
+
 /// Composer routing while there is no session for the selected engine yet.
 /// Applied only when the first message creates that engine's conversation.
 #[derive(Clone)]

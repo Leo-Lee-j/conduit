@@ -31,7 +31,7 @@ use gpui_kit::{
             DiffState,
         },
         highlighter::HighlightTheme,
-        input::{Input, InputEvent, InputState, Textarea, TextareaState},
+        input::{Input, InputEvent, InputState, MoveDown, MoveUp, Textarea, TextareaState},
         menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
         popover::Popover,
         scroll::ScrollableElement,
@@ -105,6 +105,8 @@ actions!(
     [
         SendPrompt,
         Newline,
+        PreviousPrompt,
+        NextPrompt,
         NextDiff,
         PreviousDiff,
         SubmitBranchForm,
@@ -127,6 +129,10 @@ pub struct ConduitApp {
     input: Entity<TextareaState>,
     drafts: HashMap<u64, String>,
     workspace_drafts: HashMap<PathBuf, String>,
+    /// While the composer shows text recalled with Up/Down, its rank among
+    /// the selected conversation's sent prompts counting from the newest
+    /// (0). None means the composer holds typed text, not a recalled prompt.
+    prompt_history: Option<usize>,
     composer_files: HashMap<ComposerTarget, ComposerFiles>,
     file_mentions: mentions::FileMentions,
     runs: HashMap<u64, ActiveRun>,
@@ -183,6 +189,9 @@ pub struct ConduitApp {
     expanded_workspaces: HashSet<usize>,
     /// Workspace paths whose CLI history is being imported in the background.
     history_loading: HashSet<PathBuf>,
+    /// Startup page state; `Some` from before the first frame until the
+    /// initial history scan merges (or the poll timeout gives up on it).
+    startup: Option<StartupState>,
     /// Sidebar session search filter.
     search: Entity<InputState>,
     search_query: String,
@@ -266,6 +275,14 @@ impl ConduitApp {
             KeyBinding::new("ctrl-enter", Newline, Some("ConduitComposer")),
             KeyBinding::new("shift-enter", Newline, Some("ConduitComposer > Input")),
             KeyBinding::new("shift-enter", Newline, Some("ConduitComposer")),
+            // Up/Down recall sent prompts when the composer is empty, like a
+            // shell. The composer-depth binding wins over the textarea's own
+            // "Input" keys and forwards the caret movement whenever there is
+            // nothing to recall.
+            KeyBinding::new("up", PreviousPrompt, Some("ConduitComposer > Input")),
+            KeyBinding::new("down", NextPrompt, Some("ConduitComposer > Input")),
+            KeyBinding::new("up", PreviousPrompt, Some("ConduitComposer")),
+            KeyBinding::new("down", NextPrompt, Some("ConduitComposer")),
             KeyBinding::new("up", PreviousFileMention, Some("FileMention > Input")),
             KeyBinding::new("down", NextFileMention, Some("FileMention > Input")),
             KeyBinding::new("tab", AcceptFileMention, Some("FileMention > Input")),
@@ -528,6 +545,7 @@ impl ConduitApp {
             input,
             drafts: HashMap::new(),
             workspace_drafts: HashMap::new(),
+            prompt_history: None,
             composer_files: HashMap::new(),
             file_mentions: mentions::FileMentions::default(),
             runs: HashMap::new(),
@@ -576,6 +594,7 @@ impl ConduitApp {
             commit_and_push: false,
             expanded_workspaces: HashSet::new(),
             history_loading: HashSet::new(),
+            startup: None,
             search,
             search_query: String::new(),
             show_archived: false,
@@ -618,6 +637,20 @@ impl ConduitApp {
             copied_action: None,
             copied_action_seq: 0,
         }
+    }
+
+    /// Arms the startup page before the window's first frame. The initial
+    /// history scan releases it from `poll` once merged (or after its
+    /// timeout). No-op without workspaces: there is nothing to import, so
+    /// the app opens directly.
+    pub(crate) fn begin_startup_loading(&mut self) {
+        if self.store.workspaces.is_empty() {
+            return;
+        }
+        self.startup = Some(StartupState {
+            started: Instant::now(),
+            imports_done: false,
+        });
     }
 
     fn persist(&mut self) -> bool {

@@ -108,6 +108,9 @@ impl ConduitApp {
         }
         let prompt = file_ref::compose_prompt(&text, references);
         if self.send_text(prompt, true, window, cx) {
+            // The sent prompt is now the newest history entry; stop any
+            // browsing so the next Up recalls it from the top.
+            self.prompt_history = None;
             if let Some(target) = target {
                 self.composer_files.remove(&target);
                 if let Some(id) = target.session {
@@ -431,6 +434,17 @@ impl ConduitApp {
     }
 
     pub(super) fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Release the startup page once the initial history import merged
+        // and its minimum display passed -- or when the timeout gives up on
+        // a stalled scan -- so the first main-layout frame is complete.
+        let startup_released = self.startup.as_ref().is_some_and(|startup| {
+            let elapsed = startup.started.elapsed();
+            (startup.imports_done && elapsed >= STARTUP_MIN_DISPLAY) || elapsed >= STARTUP_TIMEOUT
+        });
+        if startup_released {
+            self.startup = None;
+            cx.notify();
+        }
         self.poll_opencode_models(cx);
         // Refresh session ages every minute while idle, and running elapsed
         // labels once a second; avoid repainting every 33 ms poll otherwise.
