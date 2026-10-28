@@ -59,7 +59,13 @@ impl ModelCatalog {
                 (note, "") => note.to_string(),
                 (note, source) => format!("{note} · {source}"),
             };
-            push_model(&mut catalog.models, &model.id, &model.label, &note);
+            push_model_with_context(
+                &mut catalog.models,
+                &model.id,
+                &model.label,
+                &note,
+                model.context_window,
+            );
         }
         catalog
     }
@@ -187,13 +193,20 @@ pub(crate) fn push_model(models: &mut Vec<ModelOption>, id: &str, label: &str, n
 
 /// Context window parsed from a `[1M]` / `[200K]`-style model ID suffix.
 fn context_from_suffix(id: &str) -> Option<u64> {
-    let suffix = id.rsplit_once('[')?.1;
-    let value = suffix.strip_suffix('K')?;
-    let multiplier = 1_000u64;
+    let suffix = id.strip_suffix(']')?.rsplit_once('[')?.1;
+    let (value, multiplier) = if let Some(value) = suffix.strip_suffix('K') {
+        (value, 1_000u64)
+    } else {
+        (suffix.strip_suffix('M')?, 1_000_000u64)
+    };
+    if value.is_empty() || !value.bytes().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
     value
         .parse::<u64>()
-        .ok()
-        .map(|tokens| tokens.saturating_mul(multiplier))
+        .ok()?
+        .checked_mul(multiplier)
+        .filter(|size| *size > 0)
 }
 
 pub(crate) fn push_model_with_context(
@@ -575,6 +588,52 @@ base_url = "https://example.invalid"
         assert!(merged.models[0].note.contains("CCS · anyrouter"));
         assert_eq!(merged.label("ccs-only"), "CCS Only");
         assert_eq!(merged.models[1].note, "CCS · anyrouter");
+    }
+
+    #[test]
+    fn context_suffix_supports_k_and_m_and_rejects_invalid_or_overflow() {
+        for (id, expected) in [
+            ("model[200K]", Some(200_000)),
+            ("model[1M]", Some(1_000_000)),
+            ("model[2M]", Some(2_000_000)),
+            ("model[200K", None),
+            ("model200K]", None),
+            ("model[200K]extra", None),
+            ("model[0K]", None),
+            ("model[+1M]", None),
+            ("model[-1M]", None),
+            ("model[1.5M]", None),
+            ("model[M]", None),
+            ("model[18446744073709551615M]", None),
+            ("model[18446744073709551616K]", None),
+        ] {
+            assert_eq!(ModelCatalog::default().context_window(id), expected, "{id}");
+        }
+    }
+
+    #[test]
+    fn synced_context_window_survives_merge_for_existing_and_new_models() {
+        let mut catalog = ModelCatalog::default();
+        push_model(&mut catalog.models, "shared", "Shared", "CLI");
+        let merged = catalog.with_synced(
+            "CCS",
+            &[
+                ModelOption {
+                    id: "shared".into(),
+                    label: "Shared".into(),
+                    note: String::new(),
+                    context_window: Some(200_000),
+                },
+                ModelOption {
+                    id: "synced-only".into(),
+                    label: "Synced".into(),
+                    note: String::new(),
+                    context_window: Some(1_000_000),
+                },
+            ],
+        );
+        assert_eq!(merged.context_window("shared"), Some(200_000));
+        assert_eq!(merged.context_window("synced-only"), Some(1_000_000));
     }
 
     #[test]

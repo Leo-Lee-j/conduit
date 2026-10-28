@@ -1,4 +1,4 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -77,8 +77,8 @@ impl PermissionLevel {
     }
 }
 
-/// Token usage snapshot for the running turn / session.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+/// Cumulative consumption and an independent latest-request context snapshot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
     pub input_tokens: u64,
     pub cached_input_tokens: u64,
@@ -86,6 +86,42 @@ pub struct Usage {
     pub total_tokens: u64,
     /// Model context window; 0 when the CLI has not reported it.
     pub context_window: u64,
+    /// Latest reported request size, never cumulative consumption. Missing on
+    /// legacy sessions or providers that do not report current context.
+    #[serde(default)]
+    pub context_tokens: Option<u64>,
+    /// Provider-reported output for this user turn, excluding resumed history.
+    #[serde(default)]
+    pub turn_output_tokens: Option<u64>,
+    #[serde(default)]
+    pub turn_elapsed_ms: Option<u64>,
+    #[serde(default)]
+    pub context_window_estimated: bool,
+}
+
+impl Usage {
+    /// Missing/reset cumulative baselines cannot produce a trustworthy speed.
+    pub fn sample_turn(mut self, output_baseline: Option<u64>, elapsed_ms: u64) -> Self {
+        self.turn_output_tokens = self.turn_output_tokens.or_else(|| {
+            output_baseline.and_then(|baseline| self.output_tokens.checked_sub(baseline))
+        });
+        self.turn_elapsed_ms = Some(elapsed_ms);
+        self
+    }
+
+    pub fn context_ratio(&self) -> Option<f64> {
+        self.context_tokens
+            .filter(|_| self.context_window > 0)
+            .map(|tokens| (tokens as f64 / self.context_window as f64).clamp(0.0, 1.0))
+    }
+
+    /// A sampled wall-clock turn average, NOT a live model generation rate.
+    pub fn average_output_speed(&self) -> Option<u64> {
+        let output = self.turn_output_tokens?;
+        let elapsed = self.turn_elapsed_ms?;
+        (output > 0 && elapsed > 0)
+            .then(|| (output as f64 * 1_000.0 / elapsed as f64).round() as u64)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -301,5 +337,85 @@ impl Workspace {
             .unwrap_or(self.path.as_os_str())
             .to_string_lossy()
             .into_owned()
+    }
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::Usage;
+
+    #[test]
+    fn speed_counts_only_output_not_input_cache_or_history() {
+        let usage = Usage {
+            input_tokens: 100_000,
+            cached_input_tokens: 95_000,
+            output_tokens: 10_000,
+            total_tokens: 110_000,
+            ..Default::default()
+        }
+        .sample_turn(Some(9_000), 10_000);
+        assert_eq!(usage.turn_output_tokens, Some(1_000));
+        assert_eq!(usage.average_output_speed(), Some(100));
+    }
+
+    #[test]
+    fn imported_history_or_reset_does_not_manufacture_a_speed() {
+        let usage = Usage {
+            output_tokens: 900_000,
+            ..Default::default()
+        };
+        assert_eq!(usage.sample_turn(None, 10_000).average_output_speed(), None);
+        assert_eq!(
+            usage
+                .sample_turn(Some(1_000_000), 10_000)
+                .average_output_speed(),
+            None
+        );
+        assert_eq!(usage.sample_turn(Some(0), 0).average_output_speed(), None);
+    }
+
+    #[test]
+    fn provider_turn_output_wins_over_cumulative_baseline() {
+        let usage = Usage {
+            output_tokens: 20_000,
+            turn_output_tokens: Some(500),
+            ..Default::default()
+        }
+        .sample_turn(Some(10_000), 10_000);
+        assert_eq!(usage.average_output_speed(), Some(50));
+        // An event sample stays fixed while tools or approvals are pending.
+        assert_eq!(usage.average_output_speed(), Some(50));
+    }
+
+    #[test]
+    fn context_uses_latest_request_and_can_shrink_independently_of_totals() {
+        let mut usage = Usage {
+            total_tokens: 300_000,
+            context_tokens: Some(40_000),
+            context_window: 200_000,
+            ..Default::default()
+        };
+        assert_eq!(usage.context_ratio(), Some(0.2));
+        usage.total_tokens = 400_000;
+        usage.context_tokens = Some(10_000);
+        assert_eq!(usage.context_ratio(), Some(0.05));
+        usage.context_tokens = Some(300_000);
+        assert_eq!(usage.context_ratio(), Some(1.0));
+    }
+
+    #[test]
+    fn legacy_usage_does_not_treat_total_as_context() {
+        let usage: Usage = serde_json::from_str(
+            r#"{
+            "input_tokens":200000,"cached_input_tokens":100000,
+            "output_tokens":100000,"total_tokens":300000,"context_window":200000
+        }"#,
+        )
+        .unwrap();
+        assert_eq!(usage.context_ratio(), None);
+        assert_eq!(usage.average_output_speed(), None);
+        let restored: Usage =
+            serde_json::from_str(&serde_json::to_string(&usage).unwrap()).unwrap();
+        assert_eq!(restored, usage);
     }
 }

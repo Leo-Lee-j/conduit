@@ -95,10 +95,10 @@ fn opencode_new_load_and_resume_apply_model_and_variant_before_prompt() {
         assert!(done.done && done.error.is_none());
         assert!(matches!(
             done.events[0],
-            Event::Usage {
+            Event::Usage(Usage {
                 total_tokens: 16,
                 ..
-            }
+            })
         ));
     }
 }
@@ -293,4 +293,30 @@ fn opencode_text_helpers_report_api_errors_without_waiting_for_acp_idle() {
     let failed = helper.accept(json!({"type":"error","error":{"name":"APIError","data":{"message":"Free usage limit reached"}}}));
     assert!(failed.done);
     assert!(failed.error.unwrap().contains("Free usage limit reached"));
+}
+
+#[test]
+fn opencode_context_uses_reported_used_not_prompt_total() {
+    let (mut protocol, writes) = connected(None, true, None);
+    protocol.accept(
+        json!({"method":"session/update","params":{"sessionId":"ses_test","update":{
+            "sessionUpdate":"usage_update","size":200000,"used":40000
+        }}}),
+    );
+    let done = protocol.accept(
+        json!({"id":writes.last().unwrap()["id"],"result":{"stopReason":"end_turn","usage":{
+            "inputTokens":290000,"outputTokens":10000,"totalTokens":300000
+        }}}),
+    );
+    let usage = done
+        .events
+        .iter()
+        .find_map(|event| match event {
+            Event::Usage(usage) => Some(usage),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(usage.context_tokens, Some(40_000));
+    assert_eq!(usage.context_ratio(), Some(0.2));
+    assert_eq!(usage.turn_output_tokens, Some(10_000));
 }

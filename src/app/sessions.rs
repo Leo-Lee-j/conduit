@@ -508,55 +508,49 @@ impl ConduitApp {
         cx.notify();
     }
 
-    /// Compact token/usage indicators (tokens/s while streaming, cumulative
-    /// usage, and a ring gauge for context window consumption) rendered on
-    /// the composer's engine row. Reads from the active run when streaming
-    /// and falls back to the session's last persisted snapshot when idle.
-    /// Returns `None` when there is nothing to show yet.
-    pub(super) fn usage_status_parts(&self) -> Option<Vec<AnyElement>> {
-        let session = self.selected_session.and_then(|id| self.session(id));
-        let (usage, streaming, elapsed, since_event) = match self.selected_session {
-            Some(id) if self.runs.contains_key(&id) => {
-                let run = &self.runs[&id];
-                (
-                    run.usage,
-                    true,
-                    run.usage_started.elapsed(),
-                    run.last_usage_event.elapsed(),
-                )
-            }
-            _ => (
-                session.map(|s| s.usage).unwrap_or_default(),
-                false,
-                Duration::ZERO,
-                Duration::ZERO,
-            ),
+    /// Resolve the fallback against the model/channel that generated usage,
+    /// once at turn start, rather than against the mutable next-turn picker.
+    pub(super) fn usage_context_window_fallback(
+        &self,
+        provider: Provider,
+        channel: &ModelChannel,
+        model: Option<&str>,
+    ) -> u64 {
+        let (_, models) = self.channel_models(provider, channel);
+        let default_model = match channel {
+            ModelChannel::Cli => self
+                .engine_catalog(provider)
+                .and_then(|c| c.current.as_deref()),
+            _ => models.first().map(|m| m.id.as_str()),
         };
-        if usage.total_tokens == 0 {
+        model
+            .or(default_model)
+            .and_then(|id| {
+                models
+                    .iter()
+                    .find(|m| m.id == id)
+                    .and_then(|m| m.context_window)
+                    .or_else(|| ModelCatalog::default().context_window(id))
+            })
+            .unwrap_or(0)
+    }
+
+    /// Sampled turn-average output speed, provider consumption, and latest
+    /// reported context. Unknown context never falls back to cumulative usage.
+    pub(super) fn usage_status_parts(&self) -> Option<Vec<AnyElement>> {
+        let usage = self
+            .selected_session
+            .and_then(|id| {
+                self.runs
+                    .get(&id)
+                    .map(|run| run.usage)
+                    .or_else(|| self.session(id).map(|session| session.usage))
+            })
+            .unwrap_or_default();
+        if usage.total_tokens == 0 && usage.context_tokens.is_none() {
             return None;
         }
-        // Tokens/s is derived from this turn's delta; pause the clock while no
-        // usage events arrive (approval wait, model idle) so the figure does
-        // not decay toward zero during stalls.
-        let run = self.selected_session.and_then(|id| self.runs.get(&id));
-        let tokens_per_second = if streaming {
-            let baseline = run
-                .map(|r| r.turn_tokens_at_start)
-                .unwrap_or(usage.total_tokens);
-            let active = if since_event < Duration::from_secs(10) {
-                elapsed
-            } else {
-                Duration::ZERO
-            };
-            let seconds = active.as_secs_f64();
-            if seconds >= 1.0 && usage.total_tokens > baseline {
-                Some(((usage.total_tokens - baseline) as f64 / seconds).round() as u64)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let tokens_per_second = usage.average_output_speed();
         let format_tokens = |tokens: u64| {
             if tokens >= 1_000_000 {
                 format!("{:.1}M", tokens as f64 / 1_000_000.0)
@@ -566,48 +560,10 @@ impl ConduitApp {
                 format!("{tokens}")
             }
         };
-        let context_ratio = {
-            // The CLI-reported window (Codex) wins; Claude stream-json carries
-            // no window size, so fall back to the model catalog (context_window
-            // field or the model ID's `[1M]` suffix). Estimated rings show a
-            // "≈" prefix since the real window is model-side policy.
-            let window = if usage.context_window > 0 {
-                Some(usage.context_window)
-            } else {
-                let provider = session
-                    .map(|s| s.provider)
-                    .unwrap_or(self.new_session_provider);
-                let channel = session.map(|s| s.channel.clone()).unwrap_or_default();
-                let (_, models) = self.channel_models(provider, &channel);
-                let default_model = match &channel {
-                    ModelChannel::Cli => {
-                        self.catalogs.get(&provider).and_then(|c| c.current.clone())
-                    }
-                    ModelChannel::Ccs(_) | ModelChannel::Provider(_) => {
-                        models.first().map(|m| m.id.clone())
-                    }
-                };
-                let model_id = session.and_then(|s| s.model.clone()).or(default_model);
-                model_id.and_then(|id| {
-                    models
-                        .iter()
-                        .find(|m| m.id == id)
-                        .and_then(|m| m.context_window)
-                        .or_else(|| ModelCatalog::default().context_window(&id))
-                })
-            };
-            match window {
-                Some(window) if window > 0 => Some((
-                    window,
-                    (usage.total_tokens as f64 / window as f64).clamp(0.0, 1.0),
-                )),
-                _ => None,
-            }
-        };
-        let (context_window_display, context_ratio, estimated) = match context_ratio {
-            Some((window, ratio)) => (window, ratio, usage.context_window == 0),
-            None => (0, f64::INFINITY, false),
-        };
+        let context_ratio = usage.context_ratio();
+        let context_window_display = usage.context_window;
+        let estimated = usage.context_window_estimated;
+        let context_ratio = context_ratio.unwrap_or(f64::INFINITY);
         let ring = if context_ratio.is_finite() {
             // 270° arc gauge drawn as an SVG stroke; gpui renders SVG paths
             // with a fixed viewBox, so the arc is recomputed per ratio.
@@ -656,26 +612,40 @@ impl ConduitApp {
             div().into_any_element()
         };
         let mut parts: Vec<AnyElement> = vec![];
-        if let Some(speed) = tokens_per_second {
-            parts.push(
-                h_flex()
-                    .id("usage-speed")
-                    .gap_1()
-                    .items_center()
-                    .child(
-                        Icon::new(gpui_kit::assets::IconName::Zap)
-                            .small()
-                            .text_color(rgb(palette().faint)),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .text_color(rgb(palette().muted))
-                            .child(format!("{speed} tok/s")),
-                    )
-                    .into_any_element(),
-            );
-        }
+        let speed_label = tokens_per_second
+            .map(|speed| format!("均速 {speed} tok/s"))
+            .unwrap_or_else(|| "均速 —".into());
+        let speed_tooltip = match (usage.turn_output_tokens, usage.turn_elapsed_ms) {
+            (Some(output), Some(elapsed)) => format!(
+                "本轮平均输出速度：{output} 输出 token / {:.2} 秒。包含启动、工具及审批等待；仅在 CLI 上报用量时更新，不是实时生成速度。",
+                elapsed as f64 / 1_000.0
+            ),
+            _ => {
+                "CLI 尚未提供可靠的本轮输出统计；不使用输入、缓存或历史累计 token 估算速度。".into()
+            }
+        };
+        parts.push(
+            h_flex()
+                .id("usage-speed")
+                .gap_1()
+                .items_center()
+                .tooltip(move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(speed_tooltip.clone())
+                        .build(window, cx)
+                })
+                .child(
+                    Icon::new(gpui_kit::assets::IconName::Zap)
+                        .small()
+                        .text_color(rgb(palette().faint)),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(rgb(palette().muted))
+                        .child(speed_label),
+                )
+                .into_any_element(),
+        );
         parts.push(
             h_flex()
                 .id("usage-total")
@@ -692,7 +662,7 @@ impl ConduitApp {
                         .text_color(rgb(palette().muted))
                         .child(format!(
                             "↑{} ↓{}",
-                            format_tokens(usage.input_tokens + usage.cached_input_tokens),
+                            format_tokens(usage.input_tokens),
                             format_tokens(usage.output_tokens)
                         )),
                 )
@@ -702,6 +672,14 @@ impl ConduitApp {
             parts.push(
                 h_flex()
                     .id("usage-context")
+                    .tooltip(move |window, cx| {
+                        let label = format!(
+                            "最近一次 CLI 报告的上下文：{} / {} token{}。不是会话累计消耗，也不预测下一次请求的新增内容。",
+                            usage.context_tokens.unwrap_or(0), usage.context_window,
+                            if estimated { "（窗口来自本轮模型目录估计）" } else { "" }
+                        );
+                        gpui_kit::component::tooltip::Tooltip::new(label).build(window, cx)
+                    })
                     .gap_1()
                     .items_center()
                     .child(ring)
@@ -712,7 +690,7 @@ impl ConduitApp {
                             .child(format!(
                                 "{}{} / {}",
                                 if estimated { "≈" } else { "" },
-                                format_tokens(usage.total_tokens),
+                                format_tokens(usage.context_tokens.unwrap_or(0)),
                                 format_tokens(context_window_display)
                             )),
                     )

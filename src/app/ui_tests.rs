@@ -1411,7 +1411,11 @@ fn model_picker_renders_search_provider_and_effort_without_overlapping(cx: &mut 
 
 #[gpui_kit::test]
 fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut TestAppContext) {
-    use crate::{domain::Workspace, protocol::Event, store::Store};
+    use crate::{
+        domain::{Usage, Workspace},
+        protocol::Event,
+        store::Store,
+    };
     use gpui_kit::AppContext as _;
     use gpui_kit::{Modifiers, MouseButton};
     cx.update(gpui_kit::init);
@@ -1488,18 +1492,18 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
         app.update(cx, |this, _| {
             let run = this.runs.get_mut(&1).unwrap();
             run.turn_started = turn_start;
-            run.usage_started = turn_start;
-            run.turn_tokens_at_start = 100;
+            run.output_tokens_at_start = Some(100);
         })
     });
     sender
-        .send(Event::Usage {
+        .send(Event::Usage(Usage {
             input_tokens: 1,
             cached_input_tokens: 0,
             output_tokens: 1,
             total_tokens: 2,
             context_window: 0,
-        })
+            ..Default::default()
+        }))
         .unwrap();
     cx.update(|window, cx| app.update(cx, |this, cx| this.poll(window, cx)));
     cx.update(|_, cx| {
@@ -1508,7 +1512,9 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
             run.turn_started, turn_start,
             "token reset must not reset wall time"
         );
-        assert!(run.usage_started > turn_start);
+        assert_eq!(run.output_tokens_at_start, None);
+        assert_eq!(run.usage.turn_output_tokens, None);
+        assert_eq!(run.usage.average_output_speed(), None);
     });
     cx.run_until_parked();
     cx.update(|window, cx| {

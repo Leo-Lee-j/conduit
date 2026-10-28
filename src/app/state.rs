@@ -231,15 +231,14 @@ pub(super) struct ActiveRun {
     pub(super) reasoning_effort: ReasoningEffort,
     pub(super) opencode_variant: Option<String>,
     pub(super) message_index: MessageIndex,
-    /// Usage reported by the running turn, plus turn-local token accounting
-    /// used to derive the streaming tokens/s figure.
     pub(super) usage: Usage,
-    pub(super) turn_tokens_at_start: u64,
+    /// None for imported/legacy usage without a trustworthy output baseline.
+    pub(super) output_tokens_at_start: Option<u64>,
+    /// The model/channel window captured when the turn starts. Picker changes
+    /// must not reinterpret the context of an already-running request.
+    pub(super) context_window_fallback: u64,
     /// Wall time never resets when the provider compacts token usage.
     pub(super) turn_started: Instant,
-    /// Resettable baseline used only for the token speed estimate.
-    pub(super) usage_started: Instant,
-    pub(super) last_usage_event: Instant,
 }
 
 impl ActiveRun {
@@ -252,6 +251,10 @@ impl ActiveRun {
         reasoning_effort: ReasoningEffort,
     ) -> Self {
         let now = Instant::now();
+        let output_tokens_at_start = usage.context_tokens.map(|_| usage.output_tokens);
+        let mut usage = usage;
+        usage.turn_output_tokens = None;
+        usage.turn_elapsed_ms = None;
         Self {
             runtime,
             worktree,
@@ -265,10 +268,9 @@ impl ActiveRun {
             opencode_variant: None,
             message_index: MessageIndex::default(),
             usage,
-            turn_tokens_at_start: usage.total_tokens,
+            output_tokens_at_start,
+            context_window_fallback: 0,
             turn_started: now,
-            usage_started: now,
-            last_usage_event: now,
         }
     }
 

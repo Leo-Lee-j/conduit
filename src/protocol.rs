@@ -1,5 +1,5 @@
 //! Provider-specific wire formats translated into presentation events.
-use crate::domain::{PermissionLevel, Provider};
+use crate::domain::{PermissionLevel, Provider, Usage};
 use serde_json::{Value, json};
 mod opencode;
 pub use opencode::OpenCodeSettings;
@@ -28,13 +28,7 @@ pub struct Approval {
 pub enum Event {
     OpenCodeConfig(Value),
     NativeId(String),
-    Usage {
-        input_tokens: u64,
-        cached_input_tokens: u64,
-        output_tokens: u64,
-        total_tokens: u64,
-        context_window: u64,
-    },
+    Usage(Usage),
     Delta {
         key: String,
         text: String,
@@ -96,6 +90,50 @@ impl Step {
     }
 }
 
+/// Claude cache read/write are disjoint input components. Merge partial stream
+/// snapshots by response ID; output snapshots are cumulative, not deltas.
+#[derive(Default)]
+struct ClaudeUsage {
+    input: u64,
+    input_reported: bool,
+    model: Option<String>,
+    cache_read: u64,
+    cache_write: u64,
+    output: u64,
+}
+impl ClaudeUsage {
+    fn merge(&mut self, value: &Value) {
+        self.input_reported |= value["input_tokens"].as_u64().is_some();
+        for (field, target) in [
+            ("input_tokens", &mut self.input),
+            ("cache_read_input_tokens", &mut self.cache_read),
+            ("cache_creation_input_tokens", &mut self.cache_write),
+        ] {
+            if let Some(number) = value[field].as_u64() {
+                *target = number;
+            }
+        }
+        if let Some(output) = value["output_tokens"].as_u64() {
+            // An assistant snapshot may still carry message_start's placeholder.
+            self.output = self.output.max(output);
+        }
+    }
+    fn snapshot(&self) -> Usage {
+        let input = self
+            .input
+            .saturating_add(self.cache_read)
+            .saturating_add(self.cache_write);
+        Usage {
+            input_tokens: input,
+            cached_input_tokens: self.cache_read,
+            output_tokens: self.output,
+            total_tokens: input.saturating_add(self.output),
+            turn_output_tokens: Some(self.output),
+            ..Default::default()
+        }
+    }
+}
+
 pub struct Protocol {
     provider: Provider,
     acp: opencode::State,
@@ -110,6 +148,9 @@ pub struct Protocol {
     thread_id: Option<String>,
     turn_id: Option<String>,
     claude_message: String,
+    claude_usage: std::collections::HashMap<String, ClaudeUsage>,
+    claude_latest_usage: Option<String>,
+    claude_usage_message: Option<String>,
     /// Stream block index → ordinal among text blocks of the current Claude
     /// message. Hidden blocks (for example extended thinking) shift the raw
     /// stream index, while the assistant snapshot only lists visible blocks.
@@ -222,6 +263,9 @@ impl Protocol {
             thread_id: None,
             turn_id: None,
             claude_message: String::new(),
+            claude_usage: Default::default(),
+            claude_latest_usage: None,
+            claude_usage_message: None,
             claude_text_blocks: Default::default(),
             tool_inputs: Default::default(),
             #[cfg(test)]
@@ -646,15 +690,15 @@ impl Protocol {
                 let usage = &p["tokenUsage"];
                 let number = |value: &Value| value.as_u64().unwrap_or(0);
                 let total = &usage["total"];
-                // `total` is cumulative across the thread; the live context
-                // size is its totalTokens (what the ring progress shows).
-                step.events.push(Event::Usage {
+                step.events.push(Event::Usage(Usage {
                     input_tokens: number(&total["inputTokens"]),
                     cached_input_tokens: number(&total["cachedInputTokens"]),
                     output_tokens: number(&total["outputTokens"]),
                     total_tokens: number(&total["totalTokens"]),
                     context_window: number(&usage["modelContextWindow"]),
-                });
+                    context_tokens: usage["last"]["totalTokens"].as_u64(),
+                    ..Default::default()
+                }));
             }
             "turn/completed" => {
                 step.done = true;
@@ -799,6 +843,12 @@ impl Protocol {
                 if event_type == "message_start" {
                     self.claude_message = text(&event["message"], "id").into();
                     self.claude_text_blocks.clear();
+                    if v["parent_tool_use_id"].is_null() {
+                        let id = self.claude_message.clone();
+                        self.claude_usage_message = Some(id.clone());
+                        self.update_claude_usage(&id, &event["message"]["usage"], &mut step);
+                        self.claude_usage_model(&id, &event["message"]);
+                    }
                 }
                 if event_type == "content_block_start"
                     && text(&event["content_block"], "type") == "text"
@@ -807,6 +857,11 @@ impl Protocol {
                     self.claude_text_blocks.insert(block_index, ordinal);
                 }
                 match event_type {
+                    "message_delta" if v["parent_tool_use_id"].is_null() => {
+                        if let Some(id) = self.claude_usage_message.clone() {
+                            self.update_claude_usage(&id, &event["usage"], &mut step);
+                        }
+                    }
                     "content_block_delta" if text(&event["delta"], "type") == "text_delta" => {
                         // Key by the ordinal among text blocks, not the raw
                         // stream index: hidden blocks (thinking) occupy earlier
@@ -840,24 +895,9 @@ impl Protocol {
             "assistant" => {
                 let message = &v["message"];
                 let id = text(message, "id");
-                // stream-json assistant messages carry a usage block per model
-                // response; input includes the whole live context on each turn.
-                let usage = &message["usage"];
-                if usage.is_object() {
-                    let number = |value: &Value| value.as_u64().unwrap_or(0);
-                    let input = number(&usage["input_tokens"]);
-                    let cached = number(&usage["cache_read_input_tokens"]);
-                    let cache_creation = number(&usage["cache_creation_input_tokens"]);
-                    let output = number(&usage["output_tokens"]);
-                    step.events.push(Event::Usage {
-                        input_tokens: input,
-                        cached_input_tokens: cached,
-                        output_tokens: output,
-                        total_tokens: input + output + cache_creation,
-                        // Claude stream-json has no context window field; the
-                        // UI falls back to a model-derived estimate when 0.
-                        context_window: 0,
-                    });
+                if v["parent_tool_use_id"].is_null() {
+                    self.update_claude_usage(id, &message["usage"], &mut step);
+                    self.claude_usage_model(id, message);
                 }
                 if let Some(blocks) = message["content"].as_array() {
                     let mut text_ordinal = 0usize;
@@ -945,6 +985,24 @@ impl Protocol {
                 .events
                 .push(Event::ApprovalCancelled(text(&v, "request_id").into())),
             "result" => {
+                // result.usage is the main agent's final turn total. modelUsage
+                // can include resumed history/subagents and must not be added.
+                if v["usage"].is_object() {
+                    let mut final_usage = ClaudeUsage::default();
+                    final_usage.merge(&v["usage"]);
+                    let mut usage = final_usage.snapshot();
+                    usage.context_tokens = self.claude_context_tokens();
+                    // Only the latest main-agent model's window is applicable.
+                    // Do not sum modelUsage (it may include history/subagents).
+                    usage.context_window = self
+                        .claude_latest_usage
+                        .as_ref()
+                        .and_then(|id| self.claude_usage.get(id))
+                        .and_then(|response| response.model.as_ref())
+                        .and_then(|model| v["modelUsage"][model]["contextWindow"].as_u64())
+                        .unwrap_or(0);
+                    step.events.push(Event::Usage(usage));
+                }
                 step.done = true;
                 if v["is_error"].as_bool().unwrap_or(false)
                     || text(&v, "subtype").starts_with("error")
@@ -960,6 +1018,45 @@ impl Protocol {
         }
         step
     }
+    fn claude_context_tokens(&self) -> Option<u64> {
+        self.claude_latest_usage
+            .as_ref()
+            .and_then(|id| self.claude_usage.get(id))
+            .filter(|usage| usage.input_reported)
+            .map(|usage| usage.snapshot().total_tokens)
+    }
+
+    fn claude_usage_model(&mut self, id: &str, message: &Value) {
+        if let Some(usage) = self.claude_usage.get_mut(id) {
+            if let Some(model) = message["model"].as_str() {
+                usage.model = Some(model.into());
+            }
+        }
+    }
+
+    fn update_claude_usage(&mut self, id: &str, value: &Value, step: &mut Step) {
+        if id.is_empty() || !value.is_object() {
+            return;
+        }
+        if !self.claude_usage.contains_key(id) {
+            self.claude_latest_usage = Some(id.into());
+        }
+        self.claude_usage.entry(id.into()).or_default().merge(value);
+        let mut total = Usage::default();
+        for response in self.claude_usage.values() {
+            let usage = response.snapshot();
+            total.input_tokens = total.input_tokens.saturating_add(usage.input_tokens);
+            total.cached_input_tokens = total
+                .cached_input_tokens
+                .saturating_add(usage.cached_input_tokens);
+            total.output_tokens = total.output_tokens.saturating_add(usage.output_tokens);
+        }
+        total.total_tokens = total.input_tokens.saturating_add(total.output_tokens);
+        total.turn_output_tokens = Some(total.output_tokens);
+        total.context_tokens = self.claude_context_tokens();
+        step.events.push(Event::Usage(total));
+    }
+
     pub fn approval_response(&self, approval: &Approval, allow: bool) -> Value {
         match self.provider {
             Provider::OpenCode => opencode::approval_response(approval, allow),
@@ -1442,13 +1539,15 @@ mod tests {
         }));
         assert!(matches!(
             &step.events[0],
-            Event::Usage {
+            Event::Usage(Usage {
                 input_tokens: 5389,
                 cached_input_tokens: 5120,
                 output_tokens: 96,
                 total_tokens: 5485,
-                context_window: 996147
-            }
+                context_window: 996147,
+                context_tokens: Some(5485),
+                ..
+            })
         ));
     }
     #[test]
@@ -1469,13 +1568,16 @@ mod tests {
         }));
         assert!(matches!(
             &step.events[0],
-            Event::Usage {
-                input_tokens: 34441,
+            Event::Usage(Usage {
+                input_tokens: 34697,
                 cached_input_tokens: 256,
                 output_tokens: 153,
-                total_tokens: 34594,
-                context_window: 0
-            }
+                total_tokens: 34850,
+                context_window: 0,
+                context_tokens: Some(34850),
+                turn_output_tokens: Some(153),
+                ..
+            })
         ));
         // Messages without a usage block emit no usage event.
         let step = protocol.accept(json!({
@@ -1486,9 +1588,137 @@ mod tests {
             !step
                 .events
                 .iter()
-                .any(|event| matches!(event, Event::Usage { .. }))
+                .any(|event| matches!(event, Event::Usage(_)))
         );
     }
+    fn reported_usage(step: &Step) -> Usage {
+        step.events
+            .iter()
+            .find_map(|event| match event {
+                Event::Usage(usage) => Some(*usage),
+                _ => None,
+            })
+            .expect("expected a usage event")
+    }
+
+    #[test]
+    fn codex_context_is_last_request_not_thread_total_and_can_compact() {
+        let mut protocol = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
+        let first = protocol.accept(json!({"method":"thread/tokenUsage/updated","params":{"tokenUsage":{
+            "total":{"inputTokens":290000,"cachedInputTokens":250000,"outputTokens":10000,"totalTokens":300000},
+            "last":{"inputTokens":39000,"outputTokens":1000,"totalTokens":40000},"modelContextWindow":200000
+        }}}));
+        let usage = reported_usage(&first);
+        assert_eq!(usage.input_tokens, 290_000);
+        assert_eq!(usage.context_tokens, Some(40_000));
+        assert_eq!(usage.context_ratio(), Some(0.2));
+        let compacted = protocol.accept(json!({"method":"thread/tokenUsage/updated","params":{"tokenUsage":{
+            "total":{"inputTokens":389000,"outputTokens":11000,"totalTokens":400000},
+            "last":{"inputTokens":9000,"outputTokens":1000,"totalTokens":10000},"modelContextWindow":200000
+        }}}));
+        let usage = reported_usage(&compacted);
+        assert_eq!(usage.total_tokens, 400_000);
+        assert_eq!(usage.context_ratio(), Some(0.05));
+    }
+
+    #[test]
+    fn codex_missing_last_does_not_substitute_cumulative_context() {
+        let mut protocol = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
+        let step = protocol.accept(json!({"method":"thread/tokenUsage/updated","params":{"tokenUsage":{
+            "total":{"inputTokens":290000,"outputTokens":10000,"totalTokens":300000},"modelContextWindow":200000
+        }}}));
+        assert_eq!(reported_usage(&step).context_ratio(), None);
+    }
+
+    #[test]
+    fn claude_stream_usage_merges_caches_and_deduplicates_response_snapshots() {
+        let mut protocol = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None);
+        let start = protocol.accept(json!({"type":"stream_event","event":{"type":"message_start","message":{
+            "id":"m1","usage":{"input_tokens":100,"cache_read_input_tokens":500,"cache_creation_input_tokens":200,"output_tokens":1}
+        }}}));
+        assert_eq!(reported_usage(&start).input_tokens, 800);
+        let delta = protocol.accept(json!({"type":"stream_event","event":{"type":"message_delta","usage":{"output_tokens":50}}}));
+        let usage = reported_usage(&delta);
+        assert_eq!(
+            (
+                usage.input_tokens,
+                usage.cached_input_tokens,
+                usage.output_tokens
+            ),
+            (800, 500, 50)
+        );
+        assert_eq!(usage.context_tokens, Some(850));
+        for _ in 0..2 {
+            let snapshot = protocol.accept(json!({"type":"assistant","message":{"id":"m1","content":[],
+                "usage":{"input_tokens":100,"cache_read_input_tokens":500,"cache_creation_input_tokens":200,"output_tokens":1}
+            }}));
+            assert_eq!(reported_usage(&snapshot).total_tokens, 850);
+            assert_eq!(reported_usage(&snapshot).turn_output_tokens, Some(50));
+        }
+    }
+
+    #[test]
+    fn claude_multiple_requests_accumulate_but_context_stays_latest_and_result_corrects_output() {
+        let mut protocol = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None);
+        protocol.accept(json!({"type":"assistant","message":{"id":"m1","model":"main-model","content":[],
+            "usage":{"input_tokens":100,"cache_read_input_tokens":500,"cache_creation_input_tokens":200,"output_tokens":50}
+        }}));
+        let second = protocol.accept(json!({"type":"assistant","message":{"id":"m2","model":"main-model","content":[],
+            "usage":{"input_tokens":200,"cache_read_input_tokens":700,"cache_creation_input_tokens":100,"output_tokens":70}
+        }}));
+        let usage = reported_usage(&second);
+        assert_eq!(
+            (usage.input_tokens, usage.output_tokens, usage.total_tokens),
+            (1800, 120, 1920)
+        );
+        assert_eq!(usage.context_tokens, Some(1070));
+        // A duplicate of the earlier response must not replace current context.
+        let old = protocol.accept(json!({"type":"assistant","message":{"id":"m1","content":[],"usage":{"output_tokens":50}}}));
+        assert_eq!(reported_usage(&old).context_tokens, Some(1070));
+        let result = protocol.accept(json!({"type":"result","subtype":"success","usage":{
+            "input_tokens":300,"cache_read_input_tokens":1200,"cache_creation_input_tokens":300,"output_tokens":150
+        },"modelUsage":{"main-model":{"outputTokens":999999,"contextWindow":200000},"subagent":{"contextWindow":1000000}}}));
+        let usage = reported_usage(&result);
+        assert!(result.done);
+        assert_eq!(usage.total_tokens, 1950);
+        assert_eq!(usage.turn_output_tokens, Some(150));
+        assert_eq!(usage.context_tokens, Some(1070));
+        assert_eq!(usage.context_window, 200_000);
+    }
+
+    #[test]
+    fn claude_subagent_usage_does_not_pollute_main_agent_context_or_speed() {
+        let mut protocol = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None);
+        protocol.accept(json!({"type":"stream_event","event":{"type":"message_start","message":{"id":"main","usage":{"input_tokens":100,"output_tokens":1}}}}));
+        let child = protocol.accept(json!({"type":"stream_event","parent_tool_use_id":"tool1","event":{"type":"message_start","message":{"id":"child","usage":{"input_tokens":10000,"output_tokens":500}}}}));
+        assert!(
+            !child
+                .events
+                .iter()
+                .any(|event| matches!(event, Event::Usage(_)))
+        );
+        let delta = protocol.accept(json!({"type":"stream_event","event":{"type":"message_delta","usage":{"output_tokens":20}}}));
+        assert_eq!(reported_usage(&delta).total_tokens, 120);
+        let child = protocol.accept(json!({"type":"assistant","parent_tool_use_id":"tool1","message":{"id":"child","content":[],"usage":{"input_tokens":10000,"output_tokens":500}}}));
+        assert!(
+            !child
+                .events
+                .iter()
+                .any(|event| matches!(event, Event::Usage(_)))
+        );
+    }
+
+    #[test]
+    fn claude_output_only_or_result_only_usage_does_not_invent_current_context() {
+        let mut protocol = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None);
+        let output = protocol.accept(json!({"type":"assistant","message":{"id":"m1","content":[],"usage":{"output_tokens":20}}}));
+        assert_eq!(reported_usage(&output).context_tokens, None);
+        let result = protocol
+            .accept(json!({"type":"result","usage":{"input_tokens":10000,"output_tokens":100}}));
+        assert_eq!(reported_usage(&result).context_tokens, None);
+        assert_eq!(reported_usage(&result).turn_output_tokens, Some(100));
+    }
+
     #[test]
     fn permission_level_reaches_both_wire_formats() {
         let protocol = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None)

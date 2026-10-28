@@ -87,6 +87,7 @@ pub(super) struct State {
     options: OpenCodeSettings,
     tools: HashMap<String, Value>,
     context_window: u64,
+    context_tokens: Option<u64>,
     helper_directory: Option<std::path::PathBuf>,
 }
 
@@ -514,6 +515,7 @@ impl Protocol {
             }
             Some("usage_update") => {
                 self.acp.context_window = update["size"].as_u64().unwrap_or(0);
+                self.acp.context_tokens = update["used"].as_u64();
                 // Full token counts arrive with the prompt response. Context
                 // updates are not a cumulative session token counter.
             }
@@ -522,13 +524,16 @@ impl Protocol {
     }
 
     fn acp_usage(&self, usage: &Value, step: &mut Step) {
-        step.events.push(Event::Usage {
+        step.events.push(Event::Usage(Usage {
             input_tokens: usage["inputTokens"].as_u64().unwrap_or(0),
             cached_input_tokens: usage["cachedReadTokens"].as_u64().unwrap_or(0),
             output_tokens: usage["outputTokens"].as_u64().unwrap_or(0),
             total_tokens: usage["totalTokens"].as_u64().unwrap_or(0),
             context_window: self.acp.context_window,
-        });
+            context_tokens: self.acp.context_tokens,
+            turn_output_tokens: usage["outputTokens"].as_u64(),
+            ..Default::default()
+        }));
     }
 }
 

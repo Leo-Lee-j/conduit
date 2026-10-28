@@ -285,6 +285,13 @@ impl ConduitApp {
             && first_turn)
             .then(|| prompt.clone());
         let opencode_variant = route.opencode_variant.clone();
+        let fresh_session = native_id.is_none();
+        let context_window_fallback = self
+            .session(id)
+            .map(|session| {
+                self.usage_context_window_fallback(provider, &session.channel, model.as_deref())
+            })
+            .unwrap_or(0);
         let runtime = ChatRuntime::start_with_options(
             provider,
             executable,
@@ -308,6 +315,10 @@ impl ConduitApp {
         );
         if let Some(run) = self.runs.get_mut(&id) {
             run.opencode_variant = opencode_variant;
+            run.context_window_fallback = context_window_fallback;
+            if fresh_session && provider == Provider::Codex {
+                run.output_tokens_at_start = Some(0);
+            }
         }
         if append_user {
             self.input
@@ -560,40 +571,26 @@ impl ConduitApp {
                         self.plans.insert(id, steps);
                     }
                 }
-                Event::Usage {
-                    input_tokens,
-                    cached_input_tokens,
-                    output_tokens,
-                    total_tokens,
-                    context_window,
-                } => {
-                    // Usage is display-only state: update both the running turn
-                    // and the session so the value survives run completion.
-                    let now = Instant::now();
+                Event::Usage(mut usage) => {
                     if let Some(run) = self.runs.get_mut(&id) {
-                        // A falling total means a new turn or compaction reset;
-                        // re-anchor the speed baseline.
-                        if total_tokens < run.turn_tokens_at_start {
-                            run.turn_tokens_at_start = total_tokens;
-                            run.usage_started = now;
+                        if (usage.output_tokens < run.output_tokens_at_start.unwrap_or(0)
+                            || usage.output_tokens < run.usage.output_tokens)
+                            && usage.turn_output_tokens.is_none()
+                        {
+                            // A counter reset is not a new speed measurement.
+                            run.output_tokens_at_start = None;
                         }
-                        run.usage = Usage {
-                            input_tokens,
-                            cached_input_tokens,
-                            output_tokens,
-                            total_tokens,
-                            context_window,
-                        };
-                        run.last_usage_event = now;
+                        let elapsed =
+                            run.turn_started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+                        usage = usage.sample_turn(run.output_tokens_at_start, elapsed);
+                        if usage.context_window == 0 && run.context_window_fallback > 0 {
+                            usage.context_window = run.context_window_fallback;
+                            usage.context_window_estimated = true;
+                        }
+                        run.usage = usage;
                     }
                     if let Some(session) = self.session_mut(id) {
-                        session.usage = Usage {
-                            input_tokens,
-                            cached_input_tokens,
-                            output_tokens,
-                            total_tokens,
-                            context_window,
-                        };
+                        session.usage = usage;
                     }
                 }
                 Event::Approval(approval) => {
@@ -668,9 +665,18 @@ impl ConduitApp {
                     }
                 }
                 Event::Finished { error, cancelled } => {
-                    let elapsed_ms = self.runs.remove(&id).map(|run| {
+                    let finished_run = self.runs.remove(&id);
+                    let elapsed_ms = finished_run.as_ref().map(|run| {
                         run.turn_started.elapsed().as_millis().min(u64::MAX as u128) as u64
                     });
+                    let finished_usage = finished_run
+                        .as_ref()
+                        .filter(|run| run.usage.turn_elapsed_ms.is_some())
+                        .map(|run| {
+                            let mut usage = run.usage;
+                            usage.turn_elapsed_ms = elapsed_ms;
+                            usage
+                        });
                     self.unread_completed.remove(&id);
                     terminal = true;
                     if error.is_none() && !cancelled {
@@ -681,6 +687,9 @@ impl ConduitApp {
                     }
                     if let Some(session) = self.session_mut(id) {
                         session.interrupted = false;
+                        if let Some(usage) = finished_usage {
+                            session.usage = usage;
+                        }
                         // Scope timing to this run, including partial replies on failure/cancel.
                         let item_prefix = format!("{prefix}-");
                         for item in &mut session.messages {
