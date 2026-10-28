@@ -10,7 +10,7 @@
 | --- | --- |
 | 平台 | Windows 11 x64，原生 exe |
 | Rust / Cargo | 1.99.1，MSVC |
-| GPUI Kit | 0.7.3，revision `2963d6d880b9dffe59b48b0533bdc83c03201209` |
+| GPUI Kit | 0.8.0，revision `11345ec002d9f182a266b5d5dd3a217090700a87` |
 | GPUI | gpui-pre 0.3.9 |
 | Windows API | windows-sys 0.61.2 |
 | Claude Code | 2.1.301 |

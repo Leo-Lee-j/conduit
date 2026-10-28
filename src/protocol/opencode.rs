@@ -157,6 +157,13 @@ impl Protocol {
             json!({"*":action,"read":"allow","glob":"allow","grep":"allow","list":"allow","external_directory":action,"question":"deny","plan_enter":"deny","plan_exit":"deny","task":"deny"})
         };
         agents.insert(self.acp.agent.clone(), json!({"mode":"primary","description":"Conduit managed permissions","permission":permission}));
+        if self.text_only {
+            // `run --format json` reports session.error immediately, whereas
+            // ACP 1.19 can wait indefinitely for an idle event after API errors.
+            object.insert("default_agent".into(), json!(self.acp.agent));
+            object.insert("tools".into(), json!({"*":false}));
+            object.get_mut("agent").unwrap()["title"] = json!({"disable":true});
+        }
         self.route
             .env
             .insert("OPENCODE_CONFIG_CONTENT".into(), config.to_string());
@@ -190,6 +197,34 @@ impl Protocol {
 
     pub(super) fn opencode(&mut self, value: Value) -> Step {
         let mut step = Step::new();
+        if self.text_only {
+            match value["type"].as_str() {
+                Some("text") => step.events.push(Event::Text {
+                    key: value["part"]["id"]
+                        .as_str()
+                        .unwrap_or("helper-reply")
+                        .into(),
+                    text: text(&value["part"], "text").into(),
+                }),
+                Some("error") => {
+                    step.done = true;
+                    step.error = Some(format!(
+                        "OpenCode：{}",
+                        value["error"]["data"]["message"]
+                            .as_str()
+                            .or_else(|| value["error"]["message"].as_str())
+                            .or_else(|| value["error"]["name"].as_str())
+                            .unwrap_or("模型请求失败")
+                    ));
+                }
+                Some("tool_use") => {
+                    step.done = true;
+                    step.error = Some("OpenCode 辅助任务尝试调用工具，已停止".into());
+                }
+                _ => {}
+            }
+            return step;
+        }
         if value["method"] == "session/request_permission" && value.get("id").is_some() {
             self.acp_permission(value, &mut step);
             return step;

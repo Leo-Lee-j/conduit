@@ -20,18 +20,21 @@ impl ConduitApp {
             return;
         }
         let cwd = self.opencode_model_workspace();
-        if !refresh
-            && (self.opencode_catalogs.contains_key(&cwd)
-                || self.opencode_model_probes.contains_key(&cwd))
+        if self.opencode_model_probes.contains_key(&cwd)
+            || (!refresh
+                && self.opencode_catalogs.get(&cwd).is_some_and(|catalog| {
+                    catalog.error.is_some()
+                        || catalog.fetched_at.is_some_and(|time| {
+                            time.elapsed()
+                                .is_ok_and(|age| age < models::OPENCODE_CACHE_TTL)
+                        })
+                }))
         {
             return;
         }
-        if refresh {
-            self.opencode_catalogs.remove(&cwd);
-        }
         self.opencode_model_probes.insert(
             cwd.clone(),
-            models::OpenCodeModelsProbe::start(self.store.cli.clone(), cwd),
+            models::OpenCodeModelsProbe::start(self.store.cli.clone(), cwd, refresh),
         );
         cx.emit(crate::providers::ProviderCatalogChanged);
         cx.notify();

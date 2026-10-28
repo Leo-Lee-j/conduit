@@ -232,3 +232,23 @@ fn opencode_managed_agents_override_inherited_rules_and_helpers_have_private_sto
     drop(helper);
     assert!(!path.exists());
 }
+
+#[test]
+fn opencode_text_helpers_report_api_errors_without_waiting_for_acp_idle() {
+    let mut helper = Protocol::new(Provider::OpenCode, "C:/work".into(), "title".into(), None)
+        .with_model(Some("test/model".into()))
+        .text_only();
+    helper.prepare().unwrap();
+    assert_eq!(&helper.args()[..4], ["run", "--pure", "--format", "json"]);
+    assert_eq!(helper.opencode_text_input().as_deref(), Some("title"));
+    assert!(helper.cancel_message().is_none());
+    let config: Value =
+        serde_json::from_str(&helper.environment()["OPENCODE_CONFIG_CONTENT"]).unwrap();
+    assert_eq!(config["tools"]["*"], false);
+    assert_eq!(config["agent"]["title"]["disable"], true);
+    let text = helper.accept(json!({"type":"text","part":{"id":"reply","text":"短标题"}}));
+    assert!(matches!(&text.events[0], Event::Text { text, .. } if text == "短标题"));
+    let failed = helper.accept(json!({"type":"error","error":{"name":"APIError","data":{"message":"Free usage limit reached"}}}));
+    assert!(failed.done);
+    assert!(failed.error.unwrap().contains("Free usage limit reached"));
+}

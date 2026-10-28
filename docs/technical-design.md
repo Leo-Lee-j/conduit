@@ -14,7 +14,7 @@ Electron 的终端和 Web UI 生态更成熟但增加运行时与双语言集成
 
 Windows MSVC 构建通过 `build.rs` 为 Conduit 主线程指定 8MiB 栈预留。新增设置页后的 Debug 构建曾在原 1MiB 预留下启动栈溢出，扩大预留后 Chat 与设置页都通过实际启动检查；该设置只对本二进制生效，不改变所有依赖的编译参数。
 
-GPUI Kit 锁定 revision `2963d6d880b9dffe59b48b0533bdc83c03201209`（0.7.3 / gpui-pre 0.3.9）。使用 Cargo.lock 固定依赖，不承诺兼容任意 GPUI Git HEAD。GPUI Shell 不列为额外必选依赖。
+GPUI Kit 锁定 revision `11345ec002d9f182a266b5d5dd3a217090700a87`（0.8.0 / gpui-pre 0.3.9）。使用 Cargo.lock 固定依赖，不承诺兼容任意 GPUI Git HEAD。GPUI Shell 不列为额外必选依赖。
 
 ## 2. 模块边界
 
@@ -186,7 +186,7 @@ v1→v2 保留身份及元数据，加迁移 Notice，不生成假 native_id。i
 - Codex app-server：`https://developers.openai.com/codex/app-server/`
 - Claude SDK transport：`https://raw.githubusercontent.com/anthropics/claude-agent-sdk-python/main/src/claude_agent_sdk/_internal/transport/subprocess_cli.py`
 - Claude SDK control query：`https://raw.githubusercontent.com/anthropics/claude-agent-sdk-python/main/src/claude_agent_sdk/_internal/query.py`
-- GPUI Kit 锁定源码：`https://github.com/longbridge/gpui-kit/tree/2963d6d880b9dffe59b48b0533bdc83c03201209`
+- GPUI Kit 锁定源码：`https://github.com/longbridge/gpui-kit/tree/11345ec002d9f182a266b5d5dd3a217090700a87`
 
 本机参考缓存位于 `target/protocol-references/` 和 `target/codex-schema/`，为构建辅助资料，不是运行依赖。
 

@@ -57,6 +57,7 @@ use std::{
 };
 
 mod chat;
+mod code_highlight;
 mod components;
 mod composer;
 mod dock;
@@ -68,6 +69,7 @@ mod git_ui;
 mod mentions;
 mod model_picker;
 mod naming;
+mod numbered_code;
 mod opencode_models;
 mod outline;
 mod performance_view;
@@ -188,6 +190,7 @@ pub struct ConduitApp {
     /// Engine used by the sidebar + button and the search dialog's empty state.
     new_session_provider: Provider,
     pending_model_selection: Option<ComposerSelection>,
+    pending_permission: PermissionLevel,
     rename_target: Option<u64>,
     rename_input: Option<Entity<InputState>>,
     delete_target: Option<u64>,
@@ -572,6 +575,7 @@ impl ConduitApp {
             show_archived: false,
             new_session_provider,
             pending_model_selection: None,
+            pending_permission: PermissionLevel::default(),
             rename_target: None,
             rename_input: None,
             delete_target: None,

@@ -289,7 +289,9 @@ impl Render for SessionModelPicker {
             .debug_selector(|| "session-model-list".into())
             // Leave space for the four controls, popover padding and composer
             // at the minimum 850x500 window size; only the model list scrolls.
-            .max_h((window.viewport_size().height - px(450.)).clamp(px(34.), px(250.)))
+            // The composer area's outer spacing (12 above, 16 below) is part
+            // of the budget, so this grows with it.
+            .max_h((window.viewport_size().height - px(469.)).clamp(px(34.), px(250.)))
             .overflow_y_scroll()
             .gap_1();
         let options = std::iter::once((None, "默认模型".to_string()))
@@ -562,8 +564,9 @@ impl Render for SessionModelPicker {
                             .cursor_pointer()
                             .disabled(disabled)
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.app
-                                    .update(cx, |app, cx| app.reload_all_models_async(window, cx));
+                                this.app.update(cx, |app, cx| {
+                                    app.reload_all_models_async(true, window, cx)
+                                });
                                 cx.notify();
                             })),
                     ),
@@ -726,15 +729,11 @@ impl ConduitApp {
     /// CLI's own safety gates for this session.
     pub(super) fn permission_picker(&self, view: Entity<Self>) -> AnyElement {
         let permission = self
-            .selected_session
+            .send_target(true)
             .and_then(|id| self.session(id))
             .map(|session| session.permission)
-            .unwrap_or_default();
-        let opencode = self
-            .selected_session
-            .and_then(|id| self.session(id))
-            .is_some_and(|s| s.provider == Provider::OpenCode)
-            || (self.selected_session.is_none() && self.new_session_provider == Provider::OpenCode);
+            .unwrap_or(self.pending_permission);
+        let opencode = self.new_session_provider == Provider::OpenCode;
         let warning = permission == PermissionLevel::FullAccess;
         let trigger = Button::new("permission-picker-trigger")
             .ghost()
@@ -904,12 +903,14 @@ impl ConduitApp {
         if !self.writable || self.closing {
             return;
         }
-        if let Some(id) = self.selected_session
+        if let Some(id) = self.send_target(true)
             && let Some(session) = self.session_mut(id)
             && session.permission != permission
         {
             session.permission = permission;
             self.persist();
+        } else if self.send_target(true).is_none() {
+            self.pending_permission = permission;
         }
         // Permission applies to the next turn; while a run is active the
         // current process keeps its existing sandbox.

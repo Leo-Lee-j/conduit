@@ -1,6 +1,7 @@
 //! Opt-in real-binary checks using a local synthetic OpenAI-compatible endpoint.
 //! All provider configuration and history are isolated; no account is contacted.
 use super::*;
+use crate::cli;
 use serde_json::json;
 use std::net::{TcpListener, TcpStream};
 
@@ -38,6 +39,15 @@ impl MockModel {
                                 .find(|v| v["role"] == "user")
                                 .map(Value::to_string)
                                 .unwrap_or_default();
+                            if latest.contains("CONDUIT_API_FAILURE") {
+                                let body = json!({"error":{"message":"Free usage limit reached","type":"quota_exceeded"}}).to_string();
+                                let response = format!(
+                                    "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                                    body.len()
+                                );
+                                let _ = socket.write_all(response.as_bytes());
+                                return;
+                            }
                             let tool_result = messages.last().is_some_and(|v| v["role"] == "tool");
                             let has_write = body["tools"].as_array().is_some_and(|tools| {
                                 tools.iter().any(|v| v["function"]["name"] == "write")
@@ -220,6 +230,7 @@ fn finish(runtime: &ChatRuntime, decision: Decision) -> (String, String, usize) 
         match runtime.events.recv_timeout(Duration::from_secs(2)) {
             Ok(Event::NativeId(id)) => native = Some(id),
             Ok(Event::Delta { text, .. }) => output.push_str(&text),
+            Ok(Event::Text { text, .. }) => output.push_str(&text),
             Ok(Event::Approval(approval)) => {
                 approvals += 1;
                 match decision {
@@ -231,7 +242,7 @@ fn finish(runtime: &ChatRuntime, decision: Decision) -> (String, String, usize) 
             Ok(Event::Finished { error, cancelled }) => {
                 assert!(error.is_none(), "{error:?}; output={output}");
                 assert_eq!(cancelled, matches!(decision, Decision::Cancel));
-                return (native.unwrap(), output, approvals);
+                return (native.unwrap_or_default(), output, approvals);
             }
             Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(error) => panic!("{error}"),
@@ -386,7 +397,9 @@ fn installed_opencode_local_protocol_smoke() {
         Some("conduit-test/mock".into()),
         route(&root, &server),
     );
-    assert_eq!(finish(&helper, Decision::Reject).2, 0);
+    let (_, output, approvals) = finish(&helper, Decision::Reject);
+    assert_eq!(approvals, 0);
+    assert!(output.contains("CONDUIT_LOCAL_OK"), "{output}");
     let requests = server.requests.lock().unwrap();
     let helper_request = requests
         .iter()
@@ -398,6 +411,45 @@ fn installed_opencode_local_protocol_smoke() {
             .is_none_or(|tools| tools.is_empty())
     );
     drop(requests);
+    drop(server);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[ignore = "runs installed OpenCode against a local mock; no model account is used"]
+fn installed_opencode_helper_reports_model_failure_promptly() {
+    let root = std::env::temp_dir().join(format!("conduit-opencode-error-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let server = MockModel::start(root.join("unused.txt"));
+    let started = Instant::now();
+    let runtime = ChatRuntime::start_text_with_route(
+        Provider::OpenCode,
+        cli::resolve(Provider::OpenCode, &Default::default())
+            .unwrap()
+            .path,
+        "CONDUIT_API_FAILURE".into(),
+        Some("conduit-test/mock".into()),
+        route(&root, &server),
+    );
+    let deadline = Instant::now() + Duration::from_secs(25);
+    loop {
+        assert!(Instant::now() < deadline, "helper swallowed API error");
+        match runtime.events.recv_timeout(Duration::from_secs(1)) {
+            Ok(Event::Finished { error, cancelled }) => {
+                assert!(!cancelled);
+                assert!(
+                    error
+                        .as_deref()
+                        .is_some_and(|e| e.contains("Free usage limit reached")),
+                    "{error:?}"
+                );
+                break;
+            }
+            Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(error) => panic!("{error}"),
+        }
+    }
+    assert!(started.elapsed() < Duration::from_secs(25));
     drop(server);
     std::fs::remove_dir_all(root).unwrap();
 }

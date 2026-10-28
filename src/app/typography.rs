@@ -13,6 +13,7 @@ pub(super) struct ChatTypography {
     pub(super) code_size: f32,
     pub(super) code_copy: bool,
     pub(super) syntax_highlight: bool,
+    pub(super) code_line_numbers: bool,
 }
 
 impl ChatTypography {
@@ -61,24 +62,11 @@ pub(super) fn code_block_actions(
     let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     move |block, _, _| {
         let index = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        h_flex()
-            .gap_1()
-            .items_center()
-            .when_some(block.lang(), |row, lang| {
-                row.child(
-                    div()
-                        .text_size(px(10.))
-                        .line_height(px(16.))
-                        .text_color(rgb(palette().faint))
-                        .child(lang),
-                )
-            })
-            .child(
-                Clipboard::new(SharedString::from(format!("{scope}-{index}")))
-                    .tooltip("复制代码")
-                    .accessibility_label("复制代码")
-                    .value(block.code()),
-            )
+        super::numbered_code::code_actions(
+            SharedString::from(format!("{scope}-{index}")),
+            block.lang(),
+            block.code(),
+        )
     }
 }
 
@@ -94,12 +82,29 @@ pub(super) fn chat_markdown_view(
     let mut view = TextView::markdown(id, text)
         .text_size(px(typography.body_size))
         .line_height(relative(typography.line_height))
+        // Vertical padding switches the chip from its tight cap-height box to
+        // the full ascender..descender extent, so the background stops hugging
+        // the glyphs. The builder keeps this apart from the themed style.
+        .inline_code_style(StyleRefinement::default().py(px(1.)))
         .selectable(selectable);
     if let Some(family) = typography.body_font.clone() {
         view = view.font_family(family);
     }
     view = view.style(typography.text_view_style());
-    if typography.code_copy {
+    if typography.code_line_numbers {
+        // The numbered renderer replaces fenced blocks wholesale, so it draws
+        // its own action row and padding; the stock refinement above would
+        // double-pad.
+        view = super::numbered_code::numbered_code_blocks(
+            view,
+            super::numbered_code::NumberedCodeConfig {
+                copy_scope: copy_scope.into(),
+                copy: typography.code_copy,
+                syntax_highlight: typography.syntax_highlight,
+                selectable,
+            },
+        );
+    } else if typography.code_copy {
         view = view.code_block_actions(code_block_actions(copy_scope.into()));
     }
     view

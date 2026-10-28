@@ -288,6 +288,8 @@ fn execute(
     events: &Sender<Event>,
 ) -> Result<()> {
     protocol.prepare()?;
+    let text_run = protocol.opencode_text_run();
+    let text_input = protocol.opencode_text_input();
     let (program, full_args) = crate::cli::command_for(&executable, &args);
     let (child, mut pipes) =
         Child::spawn_with_env(&program, &full_args, &cwd, protocol.environment())?;
@@ -296,6 +298,14 @@ fn execute(
     let writer_done = done.clone();
     let (writer_error, failures) = mpsc::channel();
     thread::spawn(move || {
+        // OpenCode run reads its prompt from stdin to EOF before starting.
+        // Close the pipe after the prompt instead of sending ACP initialize.
+        if let Some(prompt) = text_input {
+            if let Err(error) = pipes.stdin.write_all(prompt.as_bytes()) {
+                let _ = writer_error.send(error);
+            }
+            return;
+        }
         while !writer_done.load(Ordering::Acquire) {
             match input.recv_timeout(Duration::from_millis(50)) {
                 Ok(bytes) => {
@@ -312,7 +322,9 @@ fn execute(
     // Keep the Child outside the unwind boundary so even a protocol-loop panic
     // reaches the same verified cleanup barrier as cancellation and errors.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<()> {
-        send(&writer, protocol.initialize())?;
+        if !text_run {
+            send(&writer, protocol.initialize())?;
+        }
         let mut lines = Lines::new();
         let mut stderr = Vec::new();
         let mut approvals = ApprovalBroker::default();
@@ -410,6 +422,9 @@ fn execute(
             if let Some(code) = child.exit_code()? {
                 let exited = *exited_at.get_or_insert_with(Instant::now);
                 if lines.eof || exited.elapsed() > Duration::from_secs(2) {
+                    if text_run && code == 0 {
+                        return Ok(());
+                    }
                     let diagnostic = String::from_utf8_lossy(&stderr);
                     bail!("CLI 在返回任务完成事件前退出（{code}）。{diagnostic}");
                 }

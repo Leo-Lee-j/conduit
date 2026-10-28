@@ -7,6 +7,46 @@ use gpui_kit::{
 };
 
 #[gpui_kit::test]
+fn opencode_new_session_keeps_permission_selected_before_sending(cx: &mut TestAppContext) {
+    use crate::{
+        domain::{PermissionLevel, Provider, Workspace},
+        store::Store,
+    };
+    use gpui_kit::AppContext as _;
+    cx.update(gpui_kit::init);
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let store = Store {
+                workspaces: vec![Workspace {
+                    path: std::env::temp_dir(),
+                    sessions: vec![],
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.selected_session = None;
+            app.new_session_provider = Provider::OpenCode;
+            app.set_session_permission(PermissionLevel::FullAccess, window, cx);
+            let id = app.create_session(0, Provider::OpenCode, cx).unwrap();
+            assert_eq!(
+                app.session(id).unwrap().permission,
+                PermissionLevel::FullAccess
+            );
+            app.new_session_provider = Provider::Claude;
+            app.set_session_permission(PermissionLevel::ReadOnly, window, cx);
+            assert_eq!(
+                app.session(id).unwrap().permission,
+                PermissionLevel::FullAccess
+            );
+            assert_eq!(app.pending_permission, PermissionLevel::ReadOnly);
+            app
+        });
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
 fn model_picker_switches_engine_and_applies_the_full_route_to_a_new_session(
     cx: &mut TestAppContext,
 ) {
@@ -206,6 +246,7 @@ fn opencode_model_picker_defaults_to_native_catalog_and_never_ccs(cx: &mut TestA
                 cwd,
                 ModelCatalog {
                     models: vec![model("opencode/free"), model("native/glm-5")],
+                    fetched_at: Some(std::time::SystemTime::now()),
                     ..Default::default()
                 },
             );
@@ -2276,6 +2317,7 @@ fn expanded_tool_long_text_scrolls_inside_its_fixed_viewport(cx: &mut TestAppCon
             code_size: 12.0,
             code_copy: true,
             syntax_highlight: true,
+            code_line_numbers: false,
         },
         item: serde_json::from_value(serde_json::json!({
             "key":"tool", "kind":"Tool", "text":"Bash", "input":"{\"command\":\"test\"}",

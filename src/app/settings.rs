@@ -221,7 +221,7 @@ mod model_sync;
 
 impl ConduitApp {
     pub(super) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.reload_all_models_async(window, cx);
+        self.reload_all_models_async(false, window, cx);
         let view = cx.entity();
         window.open_dialog(cx, move |dialog, window, _| {
             let view = view.clone();

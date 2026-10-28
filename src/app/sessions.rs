@@ -1451,7 +1451,7 @@ impl ConduitApp {
                 channel: Default::default(),
                 reasoning_effort: Default::default(),
                 opencode: Default::default(),
-                permission: PermissionLevel::default(),
+                permission: self.pending_permission,
                 usage: Usage::default(),
             },
         );

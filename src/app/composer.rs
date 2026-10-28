@@ -503,26 +503,31 @@ impl ConduitApp {
             .selected_session
             .and_then(|id| self.turn_stats_tags(id));
         let has_status_row = turn_activity.is_some() || turn_stats.is_some();
-        let status_row = h_flex()
-            .id("turn-status-row")
-            .debug_selector(|| "turn-status-row".into())
-            .w_full()
-            .min_w_0()
-            .when(!self.store.ui.full_width_content, |row| {
-                row.max_w(px(840.)).mx_auto()
-            })
-            .items_center()
-            .justify_end()
-            .gap_2()
-            .pb(px(8.))
-            .when_some(turn_activity, |row, activity| row.child(activity))
-            .when_some(turn_stats, |row, tags| row.child(tags));
+        // Live engine activity and the step/file tags share the transcription's
+        // content width: the same 24px gutter message rows add inside the 8px
+        // list padding, so the hint never looks wider than the chat content.
+        let status_row = div().w_full().px_6().child(
+            h_flex()
+                .id("turn-status-row")
+                .debug_selector(|| "turn-status-row".into())
+                .w_full()
+                .min_w_0()
+                .when(!self.store.ui.full_width_content, |row| {
+                    row.max_w(px(840.)).mx_auto()
+                })
+                .items_center()
+                .justify_end()
+                .gap_2()
+                .pb(px(8.))
+                .when_some(turn_activity, |row, activity| row.child(activity))
+                .when_some(turn_stats, |row, tags| row.child(tags)),
+        );
         // The "jump to latest" arrow floats at the lower-right of the message
         // area, just above the composer's top-right corner, and only exists
         // while the list is scrolled away from its end. It clears the status
         // row when that row is present.
         let latest_top = px(if has_status_row { -72. } else { -40. });
-        let area = div().px_2().pt_1().pb(px(5.)).child(
+        let area = div().px_2().pt(px(12.)).pb_4().child(
             v_flex()
                 .w_full()
                 .items_center()
@@ -531,8 +536,11 @@ impl ConduitApp {
                     div()
                         .relative()
                         .w_full()
+                        .px_2()
+                        // The extra 16px cap compensates for the doubled side
+                        // gap so the composer keeps the messages' 840px column.
                         .when(!self.store.ui.full_width_content, |card| {
-                            card.max_w(px(840.)).mx_auto()
+                            card.max_w(px(856.)).mx_auto()
                         })
                         .child(composer)
                         .when(mentions_open, |area| {

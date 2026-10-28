@@ -323,10 +323,11 @@ impl ConduitApp {
     }
     pub(in crate::app) fn reload_all_models_async(
         &mut self,
+        refresh: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.ensure_opencode_models(true, cx);
+        self.ensure_opencode_models(refresh, cx);
         // Reading the CLI config files and the cc-switch SQLite database must
         // not block the first frame of the settings dialog (or the UI thread at
         // all); publish the result when the background read finishes.
@@ -444,7 +445,7 @@ impl ConduitApp {
                             .when(!self.closing, |button| button.cursor_pointer())
                             .on_click(move |_, window, cx| {
                                 refresh_view.update(cx, |this, cx| {
-                                    this.reload_all_models_async(window, cx);
+                                    this.reload_all_models_async(true, window, cx);
                                 });
                             }),
                     ),

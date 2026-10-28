@@ -4,6 +4,7 @@
 //! credentials are inspected, and neither configuration file is modified.
 use crate::domain::Provider;
 mod opencode;
+pub use opencode::CACHE_TTL as OPENCODE_CACHE_TTL;
 pub use opencode::OpenCodeModelsProbe;
 use std::{
     fs,
@@ -22,6 +23,7 @@ pub struct ModelOption {
 
 #[derive(Clone, Debug, Default)]
 pub struct ModelCatalog {
+    pub fetched_at: Option<std::time::SystemTime>,
     pub config_path: PathBuf,
     pub catalog_path: Option<PathBuf>,
     pub current: Option<String>,

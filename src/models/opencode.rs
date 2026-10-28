@@ -11,8 +11,37 @@ use std::{
         mpsc::{self, Receiver},
     },
     thread,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
+
+pub const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedCatalog {
+    workspace: PathBuf,
+    executable: PathBuf,
+    fetched_at: SystemTime,
+    models: Vec<super::ModelOption>,
+    note: Option<String>,
+}
+
+fn cache_path(cwd: &Path, executable: &Path) -> PathBuf {
+    use std::hash::{Hash, Hasher};
+    let mut key = std::collections::hash_map::DefaultHasher::new();
+    cwd.hash(&mut key);
+    executable.hash(&mut key);
+    std::fs::metadata(executable)
+        .and_then(|m| m.modified())
+        .ok()
+        .hash(&mut key);
+    crate::store::Store::path()
+        .with_file_name("opencode-models")
+        .join(format!("{:016x}.json", key.finish()))
+}
+
+fn fresh(fetched_at: SystemTime) -> bool {
+    fetched_at.elapsed().is_ok_and(|age| age < CACHE_TTL)
+}
 
 pub struct OpenCodeModelsProbe {
     pub events: Receiver<ModelCatalog>,
@@ -20,12 +49,12 @@ pub struct OpenCodeModelsProbe {
 }
 
 impl OpenCodeModelsProbe {
-    pub fn start(settings: cli::CliSettings, cwd: PathBuf) -> Self {
+    pub fn start(settings: cli::CliSettings, cwd: PathBuf, refresh: bool) -> Self {
         let (sender, events) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let cancel = cancelled.clone();
         thread::spawn(move || {
-            let result = load(&settings, &cwd, &cancel);
+            let result = load_cached(&settings, &cwd, &cancel, refresh);
             let catalog = result.unwrap_or_else(|error| ModelCatalog {
                 error: Some(format!(
                     "OpenCode 原生模型目录读取失败：{error:#}；请检查 CLI 配置后刷新"
@@ -48,6 +77,48 @@ impl Drop for OpenCodeModelsProbe {
     }
 }
 
+fn load_cached(
+    settings: &cli::CliSettings,
+    cwd: &Path,
+    cancelled: &AtomicBool,
+    refresh: bool,
+) -> Result<ModelCatalog> {
+    let executable = cli::resolve(Provider::OpenCode, settings)?.path;
+    let path = cache_path(cwd, &executable);
+    if !refresh
+        && let Ok(bytes) = std::fs::read(&path)
+        && let Ok(cache) = serde_json::from_slice::<CachedCatalog>(&bytes)
+        && cache.workspace == cwd
+        && cache.executable == executable
+        && fresh(cache.fetched_at)
+    {
+        return Ok(ModelCatalog {
+            fetched_at: Some(cache.fetched_at),
+            config_path: executable,
+            models: cache.models,
+            note: cache.note,
+            ..Default::default()
+        });
+    }
+    let catalog = load(settings, cwd, cancelled)?;
+    if !cancelled.load(Ordering::Acquire) {
+        let cache = CachedCatalog {
+            workspace: cwd.into(),
+            executable,
+            fetched_at: catalog.fetched_at.unwrap(),
+            models: catalog.models.clone(),
+            note: catalog.note.clone(),
+        };
+        if let Ok(bytes) = serde_json::to_vec(&cache) {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(path, bytes);
+        }
+    }
+    Ok(catalog)
+}
+
 fn load(settings: &cli::CliSettings, cwd: &Path, cancelled: &AtomicBool) -> Result<ModelCatalog> {
     let executable = cli::resolve(Provider::OpenCode, settings)?.path;
     let environment =
@@ -66,6 +137,7 @@ fn load(settings: &cli::CliSettings, cwd: &Path, cancelled: &AtomicBool) -> Resu
     .map_err(|_| anyhow::anyhow!("CLI 查询失败、超时或输出超限"))?;
     let mut catalog = parse_catalog(&output)?;
     catalog.config_path = executable;
+    catalog.fetched_at = Some(SystemTime::now());
     Ok(catalog)
 }
 
@@ -111,6 +183,45 @@ fn parse_catalog(output: &str) -> Result<ModelCatalog> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_cache_survives_restart_expires_daily_and_manual_refresh_bypasses_it() {
+        let root =
+            std::env::temp_dir().join(format!("conduit-catalog-cache-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let executable = root.join("fake-opencode.exe");
+        // Invalid executable: a cache hit must never try to launch it.
+        std::fs::write(&executable, b"not executable").unwrap();
+        let settings = cli::CliSettings {
+            opencode_path: Some(executable),
+            ..Default::default()
+        };
+        let executable = cli::resolve(Provider::OpenCode, &settings).unwrap().path;
+        let path = cache_path(&root, &executable);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut cache = CachedCatalog {
+            workspace: root.clone(),
+            executable,
+            fetched_at: SystemTime::now(),
+            models: parse_catalog("test/model\n{\"name\":\"Cached\"}")
+                .unwrap()
+                .models,
+            note: None,
+        };
+        let cancel = AtomicBool::new(false);
+        std::fs::write(&path, serde_json::to_vec(&cache).unwrap()).unwrap();
+        for _ in 0..2 {
+            let catalog = load_cached(&settings, &root, &cancel, false).unwrap();
+            assert_eq!(catalog.models[0].label, "Cached");
+        }
+        assert!(load_cached(&settings, &root, &cancel, true).is_err());
+        cache.fetched_at = SystemTime::now() - CACHE_TTL - Duration::from_secs(1);
+        std::fs::write(&path, serde_json::to_vec(&cache).unwrap()).unwrap();
+        assert!(load_cached(&settings, &root, &cancel, false).is_err());
+        assert!(!fresh(SystemTime::now() + Duration::from_secs(3600)));
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn native_catalog_reads_cli_names_contexts_and_discards_credentials() {

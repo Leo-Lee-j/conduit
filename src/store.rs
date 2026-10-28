@@ -81,6 +81,9 @@ pub struct UiSettings {
     /// Colors fenced code blocks by language.
     #[serde(default = "default_code_syntax_highlight")]
     pub code_syntax_highlight: bool,
+    /// Numbers the lines down the left gutter of each fenced code block.
+    #[serde(default)]
+    pub code_line_numbers: bool,
 }
 
 pub const MIN_CHAT_FONT_SIZE: f32 = 12.0;
@@ -149,6 +152,7 @@ impl Default for UiSettings {
             code_font_size: default_code_font_size(),
             code_copy_button: default_code_copy_button(),
             code_syntax_highlight: default_code_syntax_highlight(),
+            code_line_numbers: false,
         }
     }
 }
@@ -768,6 +772,7 @@ mod tests {
         assert_eq!(store.ui.code_font_size, 13.0);
         assert!(store.ui.code_copy_button);
         assert!(store.ui.code_syntax_highlight);
+        assert!(!store.ui.code_line_numbers);
         assert_eq!(store.git.commit_message_prompt, DEFAULT_COMMIT_PROMPT);
         store.ui.sessions_per_workspace = 8;
         store.ui.last_provider = Some(crate::domain::Provider::Codex);
@@ -782,6 +787,7 @@ mod tests {
         store.ui.code_font_size = 14.0;
         store.ui.code_copy_button = false;
         store.ui.code_syntax_highlight = false;
+        store.ui.code_line_numbers = true;
         store.git.commit_message_prompt =
             "Write an English subject followed by a body.\nKeep it under 72 columns.".into();
         store.save_to(&path).unwrap();
@@ -809,6 +815,7 @@ mod tests {
         assert_eq!(reloaded.ui.code_font_size, 14.0);
         assert!(!reloaded.ui.code_copy_button);
         assert!(!reloaded.ui.code_syntax_highlight);
+        assert!(reloaded.ui.code_line_numbers);
         fs::remove_file(path).unwrap();
     }
     #[test]

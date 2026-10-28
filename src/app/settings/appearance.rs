@@ -60,6 +60,7 @@ impl ConduitApp {
                 .clamp(MIN_CODE_FONT_SIZE, MAX_CODE_FONT_SIZE),
             code_copy: self.store.ui.code_copy_button,
             syntax_highlight: self.store.ui.code_syntax_highlight,
+            code_line_numbers: self.store.ui.code_line_numbers,
         }
     }
 
@@ -118,6 +119,7 @@ impl ConduitApp {
         self.store.ui.code_font_size = 13.0;
         self.store.ui.code_copy_button = true;
         self.store.ui.code_syntax_highlight = true;
+        self.store.ui.code_line_numbers = false;
         for select in [&self.chat_font_select, &self.code_font_select] {
             select.update(cx, |state, cx| {
                 state.set_selected_index(Some(IndexPath::new(0)), window, cx);
@@ -306,6 +308,7 @@ impl ConduitApp {
                 let chat = self.chat_typography();
                 let code_size = chat.code_size;
                 let copy_view = view.clone();
+                let numbers_view = view.clone();
                 let highlight_view = view.clone();
                 settings_card("代码块", settings_card_note("立即生效"))
                     .child(settings_control_row(
@@ -351,6 +354,25 @@ impl ConduitApp {
                                         return;
                                     }
                                     this.store.ui.code_copy_button = *checked;
+                                    this.persist();
+                                    cx.notify();
+                                });
+                            })
+                            .into_any_element(),
+                        true,
+                    ))
+                    .child(settings_control_row(
+                        "行号",
+                        "在代码块左侧显示行号；不随复制内容带出",
+                        Switch::new("code-line-numbers-setting")
+                            .checked(self.store.ui.code_line_numbers)
+                            .disabled(disabled)
+                            .on_change(move |checked, _, cx| {
+                                numbers_view.update(cx, |this, cx| {
+                                    if !this.writable || this.closing {
+                                        return;
+                                    }
+                                    this.store.ui.code_line_numbers = *checked;
                                     this.persist();
                                     cx.notify();
                                 });
