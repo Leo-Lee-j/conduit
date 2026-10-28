@@ -136,7 +136,13 @@ impl ConduitApp {
                 run.activity.clone(),
                 run.turn_started.elapsed(),
                 model,
-                run.reasoning_effort,
+                if session.provider == Provider::OpenCode {
+                    run.opencode_variant
+                        .clone()
+                        .unwrap_or_else(|| "默认".into())
+                } else {
+                    run.reasoning_effort.label().to_owned()
+                },
             )
         });
         if plan.is_empty() && stats.files.is_empty() && run_activity.is_none() {
@@ -280,7 +286,7 @@ impl ConduitApp {
                             .flex_shrink_0()
                             .text_size(px(11.))
                             .text_color(rgb(palette().faint))
-                            .child(format!("思考强度：{}", effort.label())),
+                            .child(format!("思考强度：{effort}")),
                     ),
             );
         }

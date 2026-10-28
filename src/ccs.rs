@@ -83,6 +83,7 @@ pub fn runtime_route(
     let app = match engine {
         Provider::Claude => "claude",
         Provider::Codex => "codex",
+        Provider::OpenCode => "opencode",
     };
     let raw: String = connection
         .query_row(
@@ -94,6 +95,7 @@ pub fn runtime_route(
     let settings: serde_json::Value =
         serde_json::from_str(&raw).map_err(|_| anyhow::anyhow!("CCS Provider 配置格式无效"))?;
     match engine {
+        Provider::OpenCode => bail!("OpenCode 暂不支持 CCS 路由，请使用 CLI 默认渠道"),
         Provider::Claude => {
             let env = &settings["env"];
             let Some(url) = env["ANTHROPIC_BASE_URL"].as_str().filter(|v| !v.is_empty()) else {
@@ -214,6 +216,7 @@ pub fn load_from(path: &Path) -> CcsCatalog {
         let app = match provider.provider {
             Provider::Claude => "claude",
             Provider::Codex => "codex",
+            Provider::OpenCode => "opencode",
         };
         let endpoint: rusqlite::Result<Option<String>> = connection.query_row(
             "SELECT CASE WHEN app_type = 'claude' THEN json_extract(settings_config, '$.env.ANTHROPIC_BASE_URL') ELSE json_extract(settings_config, '$.config') END FROM providers WHERE id = ?1 AND app_type = ?2",

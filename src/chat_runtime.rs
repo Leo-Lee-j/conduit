@@ -19,6 +19,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
+mod opencode_tests;
+
 enum Control {
     Decision { id: String, allow: bool },
 }
@@ -118,6 +121,7 @@ impl ChatRuntime {
             Default::default(),
         )
     }
+    #[allow(clippy::too_many_arguments)] // Existing engine runtime entry point.
     pub fn start_with_options(
         provider: Provider,
         executable: PathBuf,
@@ -283,6 +287,7 @@ fn execute(
     controls: Receiver<Control>,
     events: &Sender<Event>,
 ) -> Result<()> {
+    protocol.prepare()?;
     let (program, full_args) = crate::cli::command_for(&executable, &args);
     let (child, mut pipes) =
         Child::spawn_with_env(&program, &full_args, &cwd, protocol.environment())?;
@@ -314,9 +319,22 @@ fn execute(
         let mut last_message = Instant::now();
         let mut initialized = false;
         let mut exited_at = None;
+        let mut cancel_started: Option<Instant> = None;
         loop {
             if cancel.load(Ordering::Acquire) {
-                return Ok(());
+                if cancel_started.is_none() {
+                    if let Some(message) = protocol.cancel_message() {
+                        send(&writer, message)?;
+                        cancel_started = Some(Instant::now());
+                    } else {
+                        return Ok(());
+                    }
+                }
+                if cancel_started
+                    .is_some_and(|started| started.elapsed() >= Duration::from_millis(750))
+                {
+                    return Ok(());
+                }
             }
             if let Ok(error) = failures.try_recv() {
                 bail!("CLI 标准输入错误：{error}");
@@ -331,11 +349,19 @@ fn execute(
                 }
                 let step = protocol.accept(message);
                 for write in step.writes {
-                    send(&writer, write)?;
+                    // A queued configuration reply must not start a new prompt
+                    // after the user has cancelled the turn.
+                    if !cancel.load(Ordering::Acquire) {
+                        send(&writer, write)?;
+                    }
                 }
                 for event in step.events {
                     let event = match event {
                         Event::Approval(approval) => {
+                            if cancel.load(Ordering::Acquire) {
+                                send(&writer, protocol.approval_response(&approval, false))?;
+                                continue;
+                            }
                             let decision = protocol.automatic_approval(&approval);
                             let approval = approvals.issue(approval)?;
                             if let Some(allow) = decision {
@@ -388,7 +414,9 @@ fn execute(
                     bail!("CLI 在返回任务完成事件前退出（{code}）。{diagnostic}");
                 }
             }
-            if !initialized && last_message.elapsed() > Duration::from_secs(60) {
+            if (!initialized || protocol.startup_pending())
+                && last_message.elapsed() > Duration::from_secs(60)
+            {
                 bail!("CLI 初始化超过 60 秒；请检查登录状态、CLI 配置和 MCP 启动项");
             }
             thread::sleep(Duration::from_millis(10));
@@ -996,6 +1024,7 @@ mod tests {
         let model = match provider {
             Provider::Claude => std::env::var("CONDUIT_CLAUDE_TEST_MODEL"),
             Provider::Codex => std::env::var("CONDUIT_CODEX_TEST_MODEL"),
+            Provider::OpenCode => std::env::var("CONDUIT_OPENCODE_TEST_MODEL"),
         }
         .ok()
         .filter(|value| !value.is_empty());

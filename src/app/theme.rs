@@ -139,6 +139,10 @@ pub(super) fn palette() -> &'static Palette {
     }
 }
 
+pub(super) fn is_dark_mode() -> bool {
+    DARK_MODE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub(crate) fn set_palette(mode: gpui_kit::component::ThemeMode) {
     DARK_MODE.store(mode.is_dark(), std::sync::atomic::Ordering::Relaxed);
 }

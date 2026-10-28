@@ -74,6 +74,19 @@ pub enum ModelBrand {
     Doubao,
     Hunyuan,
     Gemini,
+    Step,
+    Mistral,
+    Meta,
+    Cohere,
+    Gemma,
+    Nvidia,
+    Perplexity,
+    Ai21,
+    Baichuan,
+    Yi,
+    Spark,
+    Nova,
+    Wenxin,
     OpenAI,
     Other,
 }
@@ -89,26 +102,60 @@ const BRAND_TOKENS: &[(ModelBrand, &[&str])] = &[
     (ModelBrand::Xai, &["grok", "xai"]),
     (ModelBrand::DeepSeek, &["deepseek"]),
     (ModelBrand::Qwen, &["qwen", "qwq", "tongyi"]),
-    (ModelBrand::Kimi, &["kimi", "moonshot"]),
+    (ModelBrand::Kimi, &["kimi", "moonshot", "moonshotai"]),
     (ModelBrand::Zhipu, &["glm", "chatglm", "zhipu", "cogvlm"]),
     (ModelBrand::MiniMax, &["minimax", "hailuo", "abab"]),
-    (ModelBrand::Doubao, &["doubao", "seed-", "seedream"]),
+    (ModelBrand::Doubao, &["doubao", "seed", "seedream"]),
     (ModelBrand::Hunyuan, &["hunyuan"]),
     (ModelBrand::Gemini, &["gemini"]),
+    (ModelBrand::Step, &["step", "stepfun"]),
+    (
+        ModelBrand::Mistral,
+        &[
+            "mistral",
+            "mistralai",
+            "mixtral",
+            "ministral",
+            "codestral",
+            "devstral",
+            "magistral",
+        ],
+    ),
+    (ModelBrand::Nvidia, &["nvidia", "nemotron"]),
+    (ModelBrand::Meta, &["llama", "meta-llama"]),
+    (ModelBrand::Cohere, &["cohere", "command-r", "command-a"]),
+    (ModelBrand::Gemma, &["gemma", "shieldgemma", "paligemma"]),
+    (ModelBrand::Perplexity, &["perplexity", "sonar"]),
+    (ModelBrand::Ai21, &["ai21", "jamba"]),
+    (ModelBrand::Baichuan, &["baichuan"]),
+    (ModelBrand::Yi, &["yi", "01-ai"]),
+    (ModelBrand::Spark, &["spark", "sparkdesk"]),
+    (ModelBrand::Nova, &["nova"]),
+    (ModelBrand::Wenxin, &["ernie", "wenxin"]),
     (
         ModelBrand::OpenAI,
         &["gpt", "openai", "chatgpt", "codex", "o1", "o3", "o4"],
     ),
 ];
 
-/// Resolve a vendor from a model ID. Routed and proxy-rewritten IDs keep the
-/// family name as a prefix (`grok-4.7`, `kimi-k3[1m]`, `glm-5.3`), so a
-/// substring scan is enough and no catalog field is required.
+/// Match family names at ID boundaries so routed IDs work without confusing
+/// short aliases such as `yi` and `o1` with letters/version digits in custom IDs.
 pub fn brand_of(id: &str) -> ModelBrand {
     let id = id.to_lowercase();
     BRAND_TOKENS
         .iter()
-        .find(|(_, tokens)| tokens.iter().any(|token| id.contains(token)))
+        .find(|(_, tokens)| {
+            tokens.iter().any(|token| {
+                id.match_indices(token).any(|(start, token)| {
+                    let before = id[..start].chars().next_back();
+                    let after = id[start + token.len()..].chars().next();
+                    before.is_none_or(|c| !c.is_ascii_alphanumeric())
+                        && after.is_none_or(|c| !c.is_ascii_alphabetic())
+                        && (!matches!(token, "o1" | "o3" | "o4")
+                            || after.is_none_or(|c| !c.is_ascii_alphanumeric()))
+                })
+            })
+        })
         .map_or(ModelBrand::Other, |(brand, _)| *brand)
 }
 
@@ -123,6 +170,7 @@ pub fn load_from(provider: Provider, home: &Path) -> ModelCatalog {
     match provider {
         Provider::Claude => claude(home),
         Provider::Codex => codex(home),
+        Provider::OpenCode => opencode(home),
     }
 }
 
@@ -388,6 +436,43 @@ fn codex(home: &Path) -> ModelCatalog {
     catalog
 }
 
+fn opencode(home: &Path) -> ModelCatalog {
+    let directory = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"));
+    let path = std::env::var_os("OPENCODE_CONFIG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| directory.join("opencode/opencode.json"));
+    let mut catalog = ModelCatalog {
+        config_path: path.clone(),
+        note: Some("跟随 OpenCode 配置；连接会话后更新有效模型和思考档位".into()),
+        ..Default::default()
+    };
+    let Ok(body) = fs::read_to_string(&path) else {
+        return catalog;
+    };
+    let Ok(config) = serde_json::from_str::<serde_json::Value>(&body) else {
+        return catalog;
+    };
+    catalog.current = config["model"].as_str().map(str::to_owned);
+    for (provider, value) in config["provider"].as_object().into_iter().flatten() {
+        for (model, info) in value["models"].as_object().into_iter().flatten() {
+            let id = format!("{provider}/{model}");
+            push_model_with_context(
+                &mut catalog.models,
+                &id,
+                info["name"].as_str().unwrap_or(&id),
+                "OpenCode 本地配置",
+                info["limit"]["context"].as_u64(),
+            );
+        }
+    }
+    if let Some(current) = catalog.current.clone() {
+        push_model(&mut catalog.models, &current, &current, "CLI 默认模型");
+    }
+    catalog
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,13 +622,41 @@ base_url = "https://example.invalid"
             ("qwen3-max", ModelBrand::Qwen),
             ("MiniMax-M2", ModelBrand::MiniMax),
             ("doubao-seed-1-6", ModelBrand::Doubao),
+            ("Seed-OSS-36B-Instruct", ModelBrand::Doubao),
             ("hunyuan-t1", ModelBrand::Hunyuan),
             ("gemini-2.5-pro", ModelBrand::Gemini),
+            ("step-3.5-flash", ModelBrand::Step),
+            ("stepfun/step3", ModelBrand::Step),
+            ("mistralai/mistral-large", ModelBrand::Mistral),
+            ("codestral-latest", ModelBrand::Mistral),
+            ("meta-llama/llama-4-scout", ModelBrand::Meta),
+            ("cohere/command-a", ModelBrand::Cohere),
+            ("google/gemma-3-27b-it", ModelBrand::Gemma),
+            ("nvidia/nemotron-70b", ModelBrand::Nvidia),
+            ("nvidia/llama-3.1-nemotron-70b", ModelBrand::Nvidia),
+            ("perplexity/sonar-pro", ModelBrand::Perplexity),
+            ("ai21/jamba-large", ModelBrand::Ai21),
+            ("baichuan4", ModelBrand::Baichuan),
+            ("01-ai/yi-large", ModelBrand::Yi),
+            ("sparkdesk-v4", ModelBrand::Spark),
+            ("amazon.nova-pro-v1:0", ModelBrand::Nova),
+            ("ernie-4.5", ModelBrand::Wenxin),
+            ("openrouter/moonshotai/kimi-k2", ModelBrand::Kimi),
+            ("o3-mini", ModelBrand::OpenAI),
         ] {
             assert_eq!(brand_of(id), brand, "{id}");
         }
         // Unmarked or proxy-rewritten IDs must not borrow another vendor's mark.
-        for id in ["proxy-model", "ccs-only", "custom-route"] {
+        for id in [
+            "proxy-model",
+            "ccs-only",
+            "custom-route",
+            "my-stepper",
+            "buying-guide",
+            "custom-o123",
+            "version-o35",
+            "notgpt",
+        ] {
             assert_eq!(brand_of(id), ModelBrand::Other, "{id}");
         }
     }

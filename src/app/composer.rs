@@ -276,7 +276,6 @@ impl ConduitApp {
         let can_edit = self.writable && !self.closing;
         let input_focused = self.input.read(cx).focus_handle(cx).is_focused(window);
         let mentions_open = self.file_mentions_open(window, cx);
-        let provider = selected.as_ref().map(|session| session.provider);
         let has_content = !self.input.read(cx).value().trim().is_empty()
             || self
                 .current_files()
@@ -295,18 +294,7 @@ impl ConduitApp {
             .as_ref()
             .map(|session| session.id)
             .unwrap_or_default();
-        let selected_model = selected.as_ref().and_then(|session| session.model.clone());
-        let model_picker = provider
-            .map(|provider| {
-                self.composer_model_picker(
-                    cx.entity(),
-                    session_id,
-                    provider,
-                    selected_model,
-                    !can_edit,
-                )
-            })
-            .unwrap_or_else(|| div().into_any_element());
+        let model_picker = self.composer_model_picker(cx.entity(), session_id, !can_edit);
         // One composer for every state: an active session, a workspace without
         // a session (the first send creates one with the last engine), and no
         // workspace at all. Keeping the same shell in all three states keeps
@@ -427,7 +415,6 @@ impl ConduitApp {
                     .pt(px(3.))
                     .gap_2()
                     .items_center()
-                    .child(self.engine_picker(app_entity.clone()))
                     .when(selected.is_some(), |row| {
                         row.child(self.permission_picker(app_entity.clone()))
                     })
@@ -435,7 +422,7 @@ impl ConduitApp {
                         row.child(h_flex().gap_3().items_center().min_w_0().children(parts))
                     })
                     .child(div().flex_1())
-                    .when(selected.is_some(), |row| row.child(model_picker))
+                    .child(model_picker)
                     .when(composer_enabled, |row| {
                         row.child(
                             message_action_button(

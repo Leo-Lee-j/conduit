@@ -22,12 +22,15 @@ use std::{
 pub struct CliSettings {
     pub claude_path: Option<PathBuf>,
     pub codex_path: Option<PathBuf>,
+    #[serde(default)]
+    pub opencode_path: Option<PathBuf>,
 }
 impl CliSettings {
     pub fn path(&self, provider: Provider) -> Option<&Path> {
         match provider {
             Provider::Claude => &self.claude_path,
             Provider::Codex => &self.codex_path,
+            Provider::OpenCode => &self.opencode_path,
         }
         .as_deref()
     }
@@ -35,6 +38,7 @@ impl CliSettings {
         *match provider {
             Provider::Claude => &mut self.claude_path,
             Provider::Codex => &mut self.codex_path,
+            Provider::OpenCode => &mut self.opencode_path,
         } = path;
     }
 }
@@ -143,6 +147,7 @@ pub fn resolve(provider: Provider, settings: &CliSettings) -> Result<ResolvedCli
     let (key, filename) = match provider {
         Provider::Claude => ("CONDUIT_CLAUDE_PATH", "claude.exe"),
         Provider::Codex => ("CONDUIT_CODEX_PATH", "codex.exe"),
+        Provider::OpenCode => ("CONDUIT_OPENCODE_PATH", "opencode.exe"),
     };
     let explicit = std::env::var_os(key)
         .map(|p| (PathBuf::from(p), PathSource::Environment))
@@ -164,10 +169,22 @@ pub fn resolve(provider: Provider, settings: &CliSettings) -> Result<ResolvedCli
                 .collect()
         })
         .unwrap_or_default();
+    if provider == Provider::OpenCode
+        && let Some(paths) = std::env::var_os("PATH")
+    {
+        candidates.extend(std::env::split_paths(&paths).map(|p| {
+            (
+                p.join("node_modules/opencode-ai/bin/opencode.exe"),
+                PathSource::SearchPath,
+            )
+        }));
+    }
     let common = match provider {
         Provider::Claude => {
             std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join(".local/bin/claude.exe"))
         }
+        Provider::OpenCode => std::env::var_os("USERPROFILE")
+            .map(|p| PathBuf::from(p).join(".opencode/bin/opencode.exe")),
         Provider::Codex => std::env::var_os("LOCALAPPDATA")
             .map(|p| PathBuf::from(p).join("Programs/OpenAI/Codex/bin/codex.exe")),
     };
@@ -181,6 +198,7 @@ pub fn tested_version(provider: Provider) -> &'static str {
     match provider {
         Provider::Claude => "2.1.301",
         Provider::Codex => "0.163.0",
+        Provider::OpenCode => "1.19.2",
     }
 }
 
@@ -193,10 +211,22 @@ fn parse_version(provider: Provider, output: &str) -> Result<VersionInfo> {
     let signature = match provider {
         Provider::Claude => "Claude Code",
         Provider::Codex => "codex-cli",
+        Provider::OpenCode => "",
     };
     let line = output
         .lines()
-        .find(|line| line.contains(signature))
+        .find(|line| {
+            if provider == Provider::OpenCode {
+                let value = line.trim();
+                let base = value.split(['-', '+']).next().unwrap_or("");
+                base.split('.').count() == 3
+                    && base
+                        .split('.')
+                        .all(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
+            } else {
+                line.contains(signature)
+            }
+        })
         .ok_or_else(|| anyhow::anyhow!("未识别到 {} 版本标识，请检查所选程序", provider.label()))?;
     let version = line
         .split_whitespace()
@@ -320,6 +350,17 @@ mod tests {
     #[test]
     fn unknown_versions_are_visible_without_claiming_compatibility() {
         assert!(
+            parse_version(Provider::OpenCode, "1.19.2\r\n")
+                .unwrap()
+                .verified_version
+        );
+        assert!(
+            !parse_version(Provider::OpenCode, "1.19.3-alpha.1")
+                .unwrap()
+                .verified_version
+        );
+        assert!(parse_version(Provider::OpenCode, "PowerShell 7.5.0").is_err());
+        assert!(
             parse_version(Provider::Claude, "2.1.301 (Claude Code)\r\n")
                 .unwrap()
                 .verified_version
@@ -437,7 +478,7 @@ mod tests {
     #[test]
     #[ignore = "requires installed CLIs; --version only, no model call"]
     fn installed_clis_report_versions() {
-        for provider in [Provider::Claude, Provider::Codex] {
+        for provider in Provider::ALL {
             let resolved = resolve(provider, &CliSettings::default()).unwrap();
             let probe = VersionProbe::start(provider, resolved.path);
             let info = probe

@@ -1,6 +1,8 @@
 //! Provider-specific wire formats translated into presentation events.
 use crate::domain::{PermissionLevel, Provider};
 use serde_json::{Value, json};
+mod opencode;
+pub use opencode::OpenCodeSettings;
 
 /// Which wire request an approval answers. The response shape differs per
 /// request type, so the decision must not be inferred from the ticket text.
@@ -10,6 +12,7 @@ pub enum ApprovalKind {
     FileChange,
     Permissions,
     ClaudeTool,
+    OpenCodeTool,
 }
 #[derive(Clone, Debug)]
 pub struct Approval {
@@ -23,6 +26,7 @@ pub struct Approval {
 }
 #[derive(Clone, Debug)]
 pub enum Event {
+    OpenCodeConfig(Value),
     NativeId(String),
     Usage {
         input_tokens: u64,
@@ -94,6 +98,7 @@ impl Step {
 
 pub struct Protocol {
     provider: Provider,
+    acp: opencode::State,
     cwd: String,
     prompt: String,
     native_id: Option<String>,
@@ -205,6 +210,7 @@ impl Protocol {
     pub fn new(provider: Provider, cwd: String, prompt: String, native_id: Option<String>) -> Self {
         Self {
             provider,
+            acp: Default::default(),
             cwd,
             prompt,
             native_id,
@@ -271,6 +277,17 @@ impl Protocol {
     }
     pub fn args(&self) -> Vec<String> {
         match self.provider {
+            Provider::OpenCode => vec![
+                "acp".into(),
+                "--pure".into(),
+                "--hostname".into(),
+                "127.0.0.1".into(),
+                "--port".into(),
+                "0".into(),
+                "--mdns=false".into(),
+                "--cwd".into(),
+                self.cwd.clone(),
+            ],
             Provider::Codex => vec!["app-server".into(), "--stdio".into()],
             Provider::Claude => {
                 let mut args: Vec<String> = [
@@ -337,8 +354,27 @@ impl Protocol {
             }
         }
     }
+    pub fn prepare(&mut self) -> anyhow::Result<()> {
+        if self.provider == Provider::OpenCode {
+            self.prepare_opencode()?;
+        }
+        Ok(())
+    }
+    pub fn cancel_message(&self) -> Option<Value> {
+        if self.provider != Provider::OpenCode || self.acp.startup_pending() {
+            return None;
+        }
+        let id = self.acp.session_id.as_ref()?;
+        Some(json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":id}}))
+    }
+    pub fn startup_pending(&self) -> bool {
+        self.provider == Provider::OpenCode && self.acp.startup_pending()
+    }
     pub fn initialize(&self) -> Value {
         match self.provider {
+            Provider::OpenCode => {
+                json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientInfo":{"name":"conduit","version":"0.1.0"},"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}})
+            }
             Provider::Codex => {
                 json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"conduit","title":"Conduit","version":"0.1.0"},"capabilities":{"experimentalApi":false}}})
             }
@@ -351,6 +387,7 @@ impl Protocol {
         match self.provider {
             Provider::Codex => self.codex(value),
             Provider::Claude => self.claude(value),
+            Provider::OpenCode => self.opencode(value),
         }
     }
     fn codex(&mut self, v: Value) -> Step {
@@ -904,6 +941,7 @@ impl Protocol {
     }
     pub fn approval_response(&self, approval: &Approval, allow: bool) -> Value {
         match self.provider {
+            Provider::OpenCode => opencode::approval_response(approval, allow),
             Provider::Codex => match approval.kind {
                 ApprovalKind::Command | ApprovalKind::FileChange => {
                     json!({"id":approval.wire_id,"result":{"decision":if allow { "accept" } else { "decline" }}})
@@ -922,7 +960,9 @@ impl Protocol {
                     };
                     json!({"id":approval.wire_id,"result":{"permissions":permissions,"scope":"turn"}})
                 }
-                ApprovalKind::ClaudeTool => unreachable!("Claude approvals are handled below"),
+                ApprovalKind::OpenCodeTool | ApprovalKind::ClaudeTool => {
+                    unreachable!("Claude approvals are handled below")
+                }
             },
             Provider::Claude => {
                 json!({"type":"control_response","response":{"subtype":"success","request_id":approval.wire_id,

@@ -71,7 +71,8 @@ pub(super) fn is_tool_edit(item: &ChatItem) -> bool {
     matches!(
         item.text.trim(),
         "修改文件" | "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "apply_patch"
-    )
+    ) || serde_json::from_str::<serde_json::Value>(&item.detail)
+        .is_ok_and(|value| value["acpKind"] == "edit")
 }
 
 pub(super) fn is_tool_command(item: &ChatItem) -> bool {
@@ -477,6 +478,9 @@ pub(super) fn claude_edit_diffs(title: &str, input: &str) -> Option<Vec<EditFile
 }
 
 pub(super) fn edit_tool_diffs(item: &ChatItem) -> Option<Vec<EditFileDiff>> {
+    if let Some(diffs) = opencode_edit_diffs(&item.detail) {
+        return Some(diffs);
+    }
     match item.text.trim() {
         "修改文件" => codex_edit_diffs(&item.input, &item.detail),
         "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => {
@@ -484,6 +488,37 @@ pub(super) fn edit_tool_diffs(item: &ChatItem) -> Option<Vec<EditFileDiff>> {
         }
         _ => None,
     }
+}
+
+fn opencode_edit_diffs(detail: &str) -> Option<Vec<EditFileDiff>> {
+    let value: serde_json::Value = serde_json::from_str(detail).ok()?;
+    if value["acpKind"] != "edit" {
+        return None;
+    }
+    let files = value["content"]
+        .as_array()?
+        .iter()
+        .filter(|part| part["type"] == "diff")
+        .take(8)
+        .filter_map(|part| {
+            let old = part["oldText"].as_str()?;
+            let new = part["newText"].as_str()?;
+            let lines = std::iter::once(edit_line(EditLineKind::Hunk, "@@ OpenCode @@"))
+                .chain(
+                    old.lines()
+                        .map(|line| edit_line(EditLineKind::Remove, line)),
+                )
+                .chain(new.lines().map(|line| edit_line(EditLineKind::Add, line)))
+                .take(MAX_EDIT_DIFF_LINES + 1)
+                .collect();
+            Some(EditFileDiff::new(
+                part["path"].as_str().unwrap_or("未知文件").into(),
+                "OpenCode".into(),
+                lines,
+            ))
+        })
+        .collect::<Vec<_>>();
+    (!files.is_empty()).then_some(files)
 }
 
 pub(super) fn edit_diff_line(line: &EditLine, typography: &ChatTypography) -> AnyElement {

@@ -110,6 +110,7 @@ impl ConduitApp {
         let index: usize = match provider {
             Provider::Claude => 0,
             Provider::Codex => 1,
+            Provider::OpenCode => 2,
         };
         let configured = self
             .store
@@ -474,6 +475,7 @@ impl ConduitApp {
             .w_full()
             .gap_3()
             .child(card)
+            .when(provider == Provider::OpenCode, |panel| panel.child(div().text_size(px(11.)).text_color(rgb(palette().faint)).child("ACP 接入：使用 OpenCode 自身登录与 Provider 配置；写入和命令按权限审批。外部插件、问答工具与子代理暂未开放。模型目录在连接会话后更新。")))
             .child(model_card)
             .child(
                 div()
@@ -528,17 +530,17 @@ impl ConduitApp {
                     )
                     .child(settings_row(
                         "环境变量",
-                        "CONDUIT_CLAUDE_PATH · CONDUIT_CODEX_PATH".into(),
+                        "CONDUIT_CLAUDE_PATH · CONDUIT_CODEX_PATH · CONDUIT_OPENCODE_PATH".into(),
                         false,
                     ))
                     .child(settings_row(
                         "应用配置",
-                        "在本页 Claude Code / Codex 中手动指定".into(),
+                        "在各引擎页面手动指定".into(),
                         true,
                     ))
                     .child(settings_row(
                         "PATH",
-                        "claude.exe / .cmd · codex.exe / .cmd".into(),
+                        "claude / codex / opencode 的 .exe 或 .cmd".into(),
                         true,
                     ))
                     .child(settings_row(
@@ -579,7 +581,8 @@ impl ConduitApp {
                         "Codex",
                         "在左侧「Codex」页面选择本机 .exe / .cmd 并检测版本".into(),
                         true,
-                    )),
+                    ))
+                    .child(settings_row("OpenCode", "在左侧「OpenCode」页面选择本机 .exe / .cmd 并检测版本".into(), true)),
             )
             .child(
                 div()

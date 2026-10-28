@@ -7,6 +7,293 @@ use gpui_kit::{
 };
 
 #[gpui_kit::test]
+fn model_picker_switches_engine_and_applies_the_full_route_to_a_new_session(
+    cx: &mut TestAppContext,
+) {
+    use crate::{
+        domain::{Provider, Workspace},
+        providers::{ModelChannel, ModelProvider, ProviderSource, ReasoningEffort},
+        store::Store,
+    };
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut session = super::tests::session();
+            session.model = Some("claude-sonnet-4-6".into());
+            session.reasoning_effort = ReasoningEffort::High;
+            let store = Store {
+                workspaces: vec![Workspace {
+                    path: std::env::temp_dir().join("conduit-engine-route-ui"),
+                    sessions: vec![session],
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.new_session_provider = Provider::Claude;
+            app.store.providers = vec![ModelProvider {
+                id: "codex-fixture".into(),
+                name: "Codex proxy".into(),
+                engine: Provider::Codex,
+                base_url: "https://fixture.invalid/v1".into(),
+                api_key_env: String::new(),
+                models: vec!["step-3.5-flash".into(), "gpt-5".into()],
+                source: ProviderSource::Local,
+                model_metadata: vec![],
+            }];
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    macro_rules! click {
+        ($selector:expr) => {{
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            let point = cx.debug_bounds($selector).expect($selector).center();
+            cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+            cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        }};
+    }
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("session-engine-control").is_none());
+    click!("composer-model-control");
+    click!("session-engine-control");
+    click!("session-engine-option-1");
+    assert!(
+        cx.debug_bounds("session-channel-control").is_some(),
+        "outer model panel stays open"
+    );
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert_eq!(
+            app.selected_session,
+            Some(1),
+            "history stays selected until sending"
+        );
+        assert_eq!(app.send_target(true), None);
+        let selection = app.composer_selection(1);
+        assert_eq!(selection.engine, Provider::Codex);
+        assert_eq!(selection.channel, ModelChannel::Cli);
+        assert_eq!(selection.model, None);
+        assert_eq!(selection.effort, ReasoningEffort::Default);
+    });
+    click!("session-channel-control");
+    click!("session-provider-option-1");
+    click!("session-model-option-2");
+    let slider = cx.debug_bounds("session-effort-control").unwrap();
+    let point = point(slider.left() + slider.size.width * 0.75, slider.center().y);
+    cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            let selection = app.composer_selection(1);
+            assert_eq!(
+                selection.channel,
+                ModelChannel::Provider("codex-fixture".into())
+            );
+            assert_eq!(selection.model.as_deref(), Some("gpt-5"));
+            assert_eq!(selection.effort, ReasoningEffort::High);
+            let id = app.create_session(0, Provider::Codex, cx).unwrap();
+            let created = app.session(id).unwrap();
+            assert_eq!(created.channel, selection.channel);
+            assert_eq!(created.model, selection.model);
+            assert_eq!(created.reasoning_effort, selection.effort);
+            assert!(created.native_id.is_none());
+            assert!(app.pending_model_selection.is_none());
+            let old = app.session(1).unwrap();
+            assert_eq!(old.provider, Provider::Claude);
+            assert_eq!(old.model.as_deref(), Some("claude-sonnet-4-6"));
+            assert_eq!(old.reasoning_effort, ReasoningEffort::High);
+            app.writable = false;
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn model_picker_is_available_before_the_first_session(cx: &mut TestAppContext) {
+    use crate::{domain::Workspace, store::Store};
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+    cx.update(gpui_kit::init);
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            super::ConduitApp::with_store(
+                window,
+                cx,
+                Ok(Store {
+                    workspaces: vec![Workspace {
+                        path: std::env::temp_dir().join("conduit-first-model-ui"),
+                        sessions: vec![],
+                    }],
+                    ..Default::default()
+                }),
+                false,
+                false,
+            )
+        });
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let trigger = cx
+        .debug_bounds("composer-model-control")
+        .expect("first session model selector")
+        .center();
+    cx.simulate_mouse_down(trigger, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(trigger, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("session-engine-control").is_some());
+    assert!(cx.debug_bounds("session-channel-control").is_some());
+    assert!(cx.debug_bounds("session-model-list").is_some());
+    assert!(cx.debug_bounds("session-effort-control").is_some());
+}
+
+#[gpui_kit::test]
+fn opencode_model_picker_uses_session_catalog_and_saves_native_effort(cx: &mut TestAppContext) {
+    use crate::{
+        domain::{Provider, Workspace},
+        store::Store,
+    };
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut session = super::tests::session();
+            session.provider = Provider::OpenCode;
+            session.opencode.options = serde_json::json!([
+                {"id":"model","options":[
+                    {"name":"Test provider","options":[{"value":"test/native","name":"Native model"},{"value":"test/next","name":"Next model"}]},
+                    {"value":"other/gpt-5","name":"Other provider model"}
+                ]},
+                {"id":"effort","options":[{"value":"minimal","name":"Minimal"},{"value":"max","name":"Max"},{"value":"default","name":"Default"}]}
+            ]);
+            let store = Store { workspaces:vec![Workspace {path:std::env::temp_dir().join("conduit-opencode-picker-ui"),sessions:vec![session]}], ..Default::default() };
+            let mut app = super::ConduitApp::with_store(window,cx,Ok(store),false,false);
+            app.selected_workspace = Some(0);
+            app.selected_session = Some(1);
+            app.new_session_provider = Provider::OpenCode;
+            app.writable = true;
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app,window,cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let trigger = cx
+        .debug_bounds("composer-model-control")
+        .expect("OpenCode model trigger")
+        .center();
+    cx.simulate_mouse_down(trigger, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(trigger, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(
+        cx.debug_bounds("session-effort-control").is_none(),
+        "fixed Codex/Claude effort slider must not be shown"
+    );
+    let choice = cx
+        .debug_bounds("opencode-effort-2")
+        .expect("native max variant")
+        .center();
+    cx.simulate_mouse_down(choice, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(choice, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        let session = app.session(1).unwrap();
+        assert_eq!(session.opencode.variant.as_deref(), Some("max"));
+        assert_eq!(
+            app.session_route(1).unwrap().opencode_variant.as_deref(),
+            Some("max")
+        );
+        let restored: crate::domain::SessionRecord =
+            serde_json::from_value(serde_json::to_value(session).unwrap()).unwrap();
+        assert_eq!(restored.opencode.variant.as_deref(), Some("max"));
+        assert_eq!(restored.opencode.models()[0].id, "test/native");
+    });
+    macro_rules! click {
+        ($selector:expr) => {{
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            let point = cx.debug_bounds($selector).expect($selector).center();
+            cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+            cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        }};
+    }
+    click!("session-channel-control");
+    click!("session-provider-option-2"); // CLI default, other, test
+    assert!(cx.debug_bounds("session-model-option-1").is_some());
+    assert!(
+        cx.debug_bounds("session-model-option-2").is_none(),
+        "only test's two models are shown"
+    );
+    click!("session-model-option-1");
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        let session = app.session(1).unwrap();
+        assert_eq!(session.channel, super::ModelChannel::Cli);
+        assert_eq!(session.model.as_deref(), Some("test/next"));
+        assert_eq!(
+            session.opencode.variant, None,
+            "old model's variant is cleared"
+        );
+        assert!(
+            session.opencode.variants().is_empty(),
+            "old model's effort catalog is invalidated"
+        );
+        assert_eq!(
+            session.opencode.models().len(),
+            3,
+            "full native model catalog survives filtering"
+        );
+    });
+    click!("session-channel-control");
+    click!("session-provider-option-1");
+    assert!(cx.debug_bounds("session-model-option-1").is_none());
+    cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            assert_eq!(
+                app.session(1).unwrap().model.as_deref(),
+                Some("other/gpt-5")
+            );
+            app.writable = false;
+        })
+    });
+}
+
+#[gpui_kit::test]
 fn git_branch_menu_opens_create_form_and_remains_usable_after_repaint(cx: &mut TestAppContext) {
     use crate::{domain::Workspace, git, store::Store};
     use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
@@ -805,16 +1092,41 @@ fn model_picker_renders_search_provider_and_effort_without_overlapping(cx: &mut 
     let provider = cx
         .debug_bounds("session-channel-control")
         .expect("Provider selector");
+    let engine = cx
+        .debug_bounds("session-engine-control")
+        .expect("engine inside model panel");
     let models = cx
         .debug_bounds("session-model-list")
         .expect("scrollable model list");
     let footer = cx
         .debug_bounds("session-model-footer")
         .expect("visible footer");
+    assert!(engine.bottom() <= provider.top());
     assert!(provider.bottom() <= models.top());
     assert!(models.size.height <= px(250.));
     assert!(models.bottom() < footer.top());
     assert!(footer.bottom() < cx.debug_bounds("composer-model-control").unwrap().top());
+    for (width, height) in [(850., 500.), (1200., 800.)] {
+        cx.simulate_resize(gpui_kit::size(px(width), px(height)));
+        cx.run_until_parked();
+        for _ in 0..2 {
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            cx.run_until_parked();
+        }
+        let panel = cx.debug_bounds("session-model-panel").unwrap();
+        assert!(
+            panel.top() >= px(0.),
+            "panel above viewport at {width}x{height}: {panel:?}"
+        );
+        assert!(panel.left() >= px(0.) && panel.right() <= px(width));
+        let footer = cx.debug_bounds("session-model-footer").unwrap();
+        assert!(
+            footer.bottom() < cx.debug_bounds("composer-model-control").unwrap().top(),
+            "footer overlaps composer: {footer:?}"
+        );
+    }
     for _ in 0..4 {
         cx.simulate_keystrokes("escape");
         cx.run_until_parked();
@@ -1374,6 +1686,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
         interrupted: true,
         channel: Default::default(),
         reasoning_effort: Default::default(),
+        opencode: Default::default(),
         permission: Default::default(),
         usage: Default::default(),
     };
@@ -1676,6 +1989,7 @@ fn long_chat_virtualizes_real_rows_and_keeps_history_jump_on_append(cx: &mut Tes
                         interrupted: false,
                         channel: Default::default(),
                         reasoning_effort: Default::default(),
+                        opencode: Default::default(),
                         permission: PermissionLevel::default(),
                         usage: Usage::default(),
                     }],
@@ -1895,6 +2209,7 @@ fn drag_across_assistant_reply_tracks_the_pointer(cx: &mut TestAppContext) {
                         interrupted: false,
                         channel: Default::default(),
                         reasoning_effort: Default::default(),
+                        opencode: Default::default(),
                         permission: PermissionLevel::default(),
                         usage: Usage::default(),
                     }],
@@ -2356,6 +2671,7 @@ fn composer_files_paste_drafts_removal_and_failed_send(cx: &mut TestAppContext) 
         interrupted: false,
         channel: Default::default(),
         reasoning_effort: Default::default(),
+        opencode: Default::default(),
         permission: Default::default(),
         usage: Default::default(),
     };
@@ -2521,6 +2837,7 @@ fn attachment_tags_size_to_names_and_stay_inside_the_user_bubble(cx: &mut TestAp
                         interrupted: false,
                         channel: Default::default(),
                         reasoning_effort: Default::default(),
+                        opencode: Default::default(),
                         permission: Default::default(),
                         usage: Default::default(),
                     }],
@@ -2712,6 +3029,7 @@ fn deleting_blank_session_skips_confirmation(cx: &mut TestAppContext) {
         interrupted: false,
         channel: Default::default(),
         reasoning_effort: Default::default(),
+        opencode: Default::default(),
         permission: Default::default(),
         usage: Default::default(),
     };

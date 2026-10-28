@@ -254,8 +254,7 @@ impl Store {
                 // Never let their synthetic sessions replace real app state.
                 #[cfg(test)]
                 {
-                    return std::env::temp_dir()
-                        .join(format!("conduit-tests-{}", std::process::id()));
+                    std::env::temp_dir().join(format!("conduit-tests-{}", std::process::id()))
                 }
                 #[cfg(not(test))]
                 PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_else(|| ".".into()))
@@ -582,6 +581,7 @@ mod tests {
             interrupted: false,
             channel: Default::default(),
             reasoning_effort: Default::default(),
+            opencode: Default::default(),
             permission: crate::domain::PermissionLevel::default(),
             usage: crate::domain::Usage::default(),
         });
@@ -787,9 +787,11 @@ mod tests {
         let mut old = serde_json::to_value(&session).unwrap();
         old.as_object_mut().unwrap().remove("channel");
         old.as_object_mut().unwrap().remove("reasoning_effort");
+        old.as_object_mut().unwrap().remove("opencode");
         let restored: crate::domain::SessionRecord = serde_json::from_value(old).unwrap();
         assert_eq!(restored.channel, ModelChannel::Cli);
         assert_eq!(restored.reasoning_effort, ReasoningEffort::Default);
+        assert!(restored.opencode.variant.is_none());
         session.channel = ModelChannel::Provider("custom".into());
         session.reasoning_effort = ReasoningEffort::High;
         let mut store = Store::default();

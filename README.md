@@ -1,8 +1,16 @@
 # Conduit
 
-Windows 本地 AI 编程 Chat 工作台，使用 **Rust + GPUI + GPUI Kit**，底层运行 Claude Code CLI / Codex CLI。
+Windows 本地 AI 编程 Chat 工作台，使用 **Rust + GPUI + GPUI Kit**，底层运行 Claude Code CLI / Codex CLI / OpenCode CLI。
 
 当前是 **Chat M0 原型**：工作区、会话历史、流式回复、工具卡片、审批映射、取消、原生对话续接、会话级模型选择和 Git 变更/手动提交推送面板已接通，Git 文件列表支持双击打开居中只读 diff 窗口。两款 CLI 的真实对话与续接测试已通过；审批协议层的允许、拒绝和待审批取消回归已通过，已完成七轮 UI 自动预验并修复设置弹窗窄窗裁切；界面输入、审批弹窗交互与长时间使用仍需验收。不是完整的 Codex 桌面端复刻。
+
+## OpenCode CLI
+
+已接入 OpenCode **1.19.2** 的 ACP 接口。在输入区引擎菜单选择 **OpenCode**，也可在“设置 → OpenCode”指定 `.exe` / `.cmd` 路径并检测版本；支持 `CONDUIT_OPENCODE_PATH`。登录和 Provider 仍在 OpenCode CLI 中配置。
+
+支持流式文字、工具卡片、允许本次/拒绝、取消、原生会话续聊，以及按会话选择模型和 OpenCode 原生思考档位。连接会话后读取有效模型目录；切换模型后，新的档位目录在下次连接时更新。普通权限下写入、命令和目录外访问需要审批；只读仅开放读取工具；这些是工具权限规则，不是文件系统沙箱。
+
+首版使用 `--pure`，暂不开放外部插件、问答工具、子代理、OpenCode 终端历史自动导入和 Conduit 自定义 Provider/CCS 桥接。Conduit 内创建的会话可保存并原生续聊。自动命名和 Git 说明生成使用独立临时历史库，并禁用工具。接入边界与验证命令见 [OpenCode 使用说明](docs/opencode-cli.md)。
 
 ## CLI 历史会话导入
 
@@ -22,8 +30,8 @@ cargo run --locked -- --git
 
 1. 先在官方 CLI 中完成安装和登录。
 2. 点击“添加目录”或在聊天左上角的工作区选择器里添加目录，选择你信任的本地工作区。
-3. 输入区左下角的引擎下拉（Claude Code / Codex）用于选择**新会话**引擎，并记住上次使用的引擎。选中工作区但还没有会话时，直接在输入框输入任务并发送，会用上次的引擎自动新建会话。
-4. 输入区的模型面板支持搜索、选择 Provider/模型，以及调整思考强度（默认、低、中、高、极高）；选择在下一条消息生效。CCS 中的 Provider 配置会同步到应用统一的 Provider 列表，与自定义 Provider 一起按会话选择。自定义 Provider 在“设置 → 模型与 Provider”中配置名称、引擎、Base URL、API Key 环境变量名和模型列表。
+3. 输入区的模型弹窗统一选择 **引擎（Claude Code / Codex / OpenCode）→ Provider → 模型 → 思考强度**，并记住上次使用的引擎。无会话时也可提前选择；首次发送会自动新建会话。切换引擎后的下一条消息会新建对应引擎的会话，保留当前会话。
+4. 模型弹窗支持搜索，配置在下一条消息生效。Claude / Codex 提供默认、低、中、高、极高；OpenCode 使用连接后返回的原生思考档位。CCS 中的 Provider 配置会同步到应用统一的 Provider 列表，与自定义 Provider 一起按会话选择。自定义 Provider 在“设置 → 模型与 Provider”中配置名称、引擎、Base URL、API Key 环境变量名和模型列表。
 5. 输入任务后按 **Enter** 发送；**Ctrl+Enter** 或 **Shift+Enter** 换行，也可点击发送按钮。
    输入 **@** 可搜索当前工作区文件（文件名、相对路径或模糊匹配），用 **↑/↓** 选择、**Enter / Tab** 引用、**Esc** 关闭，也可鼠标点击。确认后显示为输入区文件卡片；弹层打开时 Enter 只选择文件，无结果时不会发送。支持继续添加多个文件，与拖入、粘贴和附件按钮共用校验与去重。搜索遵循忽略规则；工作区外或被忽略文件可用附件按钮选择。详情见 [文件引用交互](docs/chat-file-mentions.md)。
 6. 回复以 Markdown 显示；自己发出的消息默认保持纯文本，只有完整的 ``` 围栏代码块会按代码排版渲染（等宽、可选高亮与复制），行内反引号、`#`、`-` 等记号不会被重新解释。聊天文字可像普通文本一样拖拽选中并按 Ctrl+C 复制（选中后焦点会离开输入框，点回去即可继续打字）。工具卡片可打开右侧侧边栏。引擎状态旁实时显示本轮耗时、模型与思考强度；超过 60s 的耗时显示为分秒。本轮回复结束后，悬浮 AI 回复才显示下方的复制、重试按钮及模型、时间、总耗时（按此顺序排列），耗时重启后保留。导入历史优先读取 CLI 轮次耗时；旧记录仅有消息时间戳时显示“耗时约 … s”，时间数据缺失时不显示。CLI 请求审批时，可允许本次或拒绝。
@@ -46,7 +54,8 @@ cargo run --locked -- --git
 
 - 自定义 Provider 可配置名称、执行引擎、Base URL、API Key 环境变量名和模型列表。
 - CCS 中每个 Provider 的名称、端点及模型会同步加入同一列表，“来自 CCS”只表示配置来源。点击“同步配置”按稳定 ID 更新；凭证在执行所选 Provider 时读取，不复制进应用状态。
-- CLI 默认仍跟随当前 CLI 配置。聊天先选择具体 Provider，再选择其模型和思考强度，均按会话保存。旧版 CCS 会话选择自动迁移。
+- CLI 默认仍跟随当前 CLI 配置。聊天输入区通过同一个模型弹窗按 **引擎 → Provider → 模型 → 思考强度** 选择；无会话时同样可提前配置，首次发送后按会话保存。切换引擎会清空待选配置，并在下次发送时新建对应引擎的会话；旧会话保留原有上下文。旧版 CCS 会话选择自动迁移。
+- OpenCode 的原生 Provider 按 `provider/model` 目录分组，思考强度使用它返回的原生档位；切换模型后清除旧档位。CLI 引擎及 24 个模型家族使用本地嵌入的品牌 SVG，保留原有颜色与渐变，来源见 `assets/icons/README.md`。
 
 同步不会写回 CLI / cc-switch 配置，也不会切换 cc-switch 当前 Provider。模型目录读取和同步在后台执行；打开聊天模型面板只读取内存中的 Provider 列表。
 
@@ -140,6 +149,7 @@ cargo test --locked real_claude_cancel_during_pending_approval -- --ignored --no
 
 - [产品设计](docs/product-design.md)
 - [技术设计](docs/technical-design.md)
+- [OpenCode CLI 接入评估](docs/opencode-cli-evaluation.md)
 - [Git 界面与 History 候选方案](docs/git-ui-design.md)
 - [验证记录及待验收项](docs/m0-validation.md)
 - [UI 自动预验记录](docs/m0-ui-acceptance-run.md)

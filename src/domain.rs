@@ -5,13 +5,16 @@ use std::path::PathBuf;
 pub enum Provider {
     Claude,
     Codex,
+    OpenCode,
 }
 
 impl Provider {
+    pub const ALL: [Self; 3] = [Self::Claude, Self::Codex, Self::OpenCode];
     pub fn label(self) -> &'static str {
         match self {
             Self::Claude => "Claude Code",
             Self::Codex => "Codex",
+            Self::OpenCode => "OpenCode",
         }
     }
 
@@ -105,6 +108,8 @@ pub struct SessionRecord {
     #[serde(default)]
     pub reasoning_effort: crate::providers::ReasoningEffort,
     #[serde(default)]
+    pub opencode: crate::protocol::OpenCodeSettings,
+    #[serde(default)]
     pub messages: Vec<ChatItem>,
     #[serde(default)]
     pub interrupted: bool,
@@ -178,7 +183,7 @@ impl SessionRecord {
     ) {
         let turn = format!("{prefix}-");
         let details = serde_json::from_str::<serde_json::Value>(detail).unwrap_or_default();
-        let native_key = ["itemId", "tool_use_id"]
+        let native_key = ["itemId", "tool_use_id", "toolCallId"]
             .iter()
             .find_map(|key| details[*key].as_str().filter(|id| !id.is_empty()));
         let key = native_key.map(|key| format!("{turn}{key}"));

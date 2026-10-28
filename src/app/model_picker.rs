@@ -19,11 +19,7 @@ impl SessionModelPicker {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let effort = app
-            .read(cx)
-            .session(session_id)
-            .map(|s| s.reasoning_effort)
-            .unwrap_or_default();
+        let effort = app.read(cx).composer_selection(session_id).effort;
         let slider = cx.new(|_| {
             SliderState::new()
                 .min(0.)
@@ -51,17 +47,9 @@ impl SessionModelPicker {
                             slider.set_value(effort.index() as f32, window, cx)
                         });
                         this.app.update(cx, |app, cx| {
-                            if !app.writable
-                                || app.closing
-                                || app.runs.contains_key(&this.session_id)
-                            {
-                                return;
-                            }
-                            if let Some(session) = app.session_mut(this.session_id) {
-                                session.reasoning_effort = effort;
-                            }
-                            app.dirty = true;
-                            cx.notify();
+                            app.update_composer_selection(this.session_id, cx, |s| {
+                                s.effort = effort
+                            });
                         });
                         cx.notify();
                     });
@@ -81,28 +69,85 @@ impl SessionModelPicker {
 impl Render for SessionModelPicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let app = self.app.read(cx);
-        let Some(session) = app.session(self.session_id) else {
-            return v_flex();
+        let selection = app.composer_selection(self.session_id);
+        let engine = selection.engine;
+        let channel = selection.channel;
+        let selected = selection.model;
+        let effort = selection.effort;
+        let native_models = if engine == Provider::OpenCode {
+            if selection.opencode.options.is_array() {
+                selection.opencode.models()
+            } else {
+                app.channel_models(engine, &ModelChannel::Cli).1
+            }
+        } else {
+            vec![]
         };
-        let engine = session.provider;
-        let channel = session.channel.clone();
-        let selected = session.model.clone();
-        let effort = session.reasoning_effort;
-        let channel_label = app.channel_label(engine, &channel);
-        let (note, mut models) = app.channel_models(engine, &channel);
-        let disabled = !app.writable || app.closing || app.runs.contains_key(&self.session_id);
-        let mut channels = vec![(ModelChannel::Cli, "CLI 默认".to_string())];
+        let (note, mut models) = if engine == Provider::OpenCode && channel == ModelChannel::Cli {
+            (
+                app.catalogs
+                    .get(&engine)
+                    .and_then(|c| c.error.clone().or_else(|| c.note.clone())),
+                native_models.clone(),
+            )
+        } else {
+            app.channel_models(engine, &channel)
+        };
+        let variants = selection.opencode.variants();
+        let variant = selection.opencode.variant.clone();
+        // Native OpenCode providers are encoded in provider/model IDs. Keep
+        // the CLI route and filter within its actual catalog, never inventing
+        // an API endpoint or copying credentials into a custom provider.
+        let native_provider = (engine == Provider::OpenCode && channel == ModelChannel::Cli)
+            .then(|| {
+                selected
+                    .as_deref()?
+                    .split_once('/')
+                    .map(|(p, _)| p.to_string())
+            })
+            .flatten();
+        let native_providers: BTreeMap<String, String> = if engine == Provider::OpenCode {
+            let mut providers = BTreeMap::new();
+            for model in &native_models {
+                if let Some((provider, _)) = model.id.split_once('/') {
+                    providers
+                        .entry(provider.to_string())
+                        .or_insert_with(|| model.id.clone());
+                }
+            }
+            providers
+        } else {
+            BTreeMap::new()
+        };
+        let channel_label = native_provider
+            .clone()
+            .unwrap_or_else(|| app.channel_label(engine, &channel));
+        let pending = app.model_picker_session_id(self.session_id).is_none();
+        let disabled = !app.writable
+            || app.closing
+            || app
+                .model_picker_session_id(self.session_id)
+                .is_some_and(|id| app.session_busy(id));
+        let mut channels = vec![(ModelChannel::Cli, None, "CLI 默认".to_string())];
+        channels.extend(
+            native_providers
+                .into_iter()
+                .map(|(name, model)| (ModelChannel::Cli, Some(model), name)),
+        );
         channels.extend(
             app.store
                 .providers
                 .iter()
                 .filter(|p| p.engine == engine)
-                .map(|p| (ModelChannel::Provider(p.id.clone()), p.name.clone())),
+                .map(|p| (ModelChannel::Provider(p.id.clone()), None, p.name.clone())),
         );
         if let Some(id) = &selected
             && !models.iter().any(|m| m.id == *id)
         {
             models::push_model(&mut models, id, id, "当前会话模型");
+        }
+        if let Some(provider) = &native_provider {
+            models.retain(|model| model.id.split_once('/').is_some_and(|(p, _)| p == provider));
         }
         let query = self.search.read(cx).value().trim().to_lowercase();
         models.retain(|m| {
@@ -111,6 +156,7 @@ impl Render for SessionModelPicker {
                 || m.label.to_lowercase().contains(&query)
         });
         let count = models.len();
+        let show_default = native_provider.is_none();
         let picker = cx.entity();
         let channel_picker = Popover::new("session-channel-picker")
             .anchor(Anchor::TopLeft)
@@ -154,9 +200,16 @@ impl Render for SessionModelPicker {
                     .max_h(px(280.))
                     .overflow_y_scroll()
                     .gap_1();
-                for (index, (option, label)) in channels.iter().enumerate() {
-                    let active = *option == channel;
+                for (index, (option, native_model, label)) in channels.iter().enumerate() {
+                    let active = *option == channel
+                        && match native_model {
+                            Some(model) => {
+                                native_provider.as_deref() == model.split_once('/').map(|(p, _)| p)
+                            }
+                            None => native_provider.is_none(),
+                        };
                     let option = option.clone();
+                    let native_model = native_model.clone();
                     let picker = picker.clone();
                     let popover = popover.clone();
                     list = list.child(
@@ -165,6 +218,8 @@ impl Render for SessionModelPicker {
                             .w_full()
                             .h(px(34.))
                             .px_2()
+                            .disabled(disabled)
+                            .accessibility_label(format!("Provider {label}"))
                             .cursor_pointer()
                             .when(active, |b| b.bg(rgb(palette().surface_hover)))
                             .child(
@@ -186,31 +241,24 @@ impl Render for SessionModelPicker {
                             .on_click(move |_, window, cx| {
                                 picker.update(cx, |this, cx| {
                                     this.app.update(cx, |app, cx| {
-                                        if !app.writable
-                                            || app.closing
-                                            || app.runs.contains_key(&this.session_id)
-                                        {
-                                            return;
-                                        }
-                                        let model = None;
-                                        if let Some(s) = app.session_mut(this.session_id) {
-                                            if s.channel == option {
+                                        app.update_composer_selection(this.session_id, cx, |s| {
+                                            if active {
                                                 return;
                                             }
+                                            if s.channel != option {
+                                                s.opencode = Default::default();
+                                            }
                                             s.channel = option.clone();
-                                            s.model = model;
-                                            s.reasoning_effort = ReasoningEffort::Default;
-                                        }
-                                        app.persist();
-                                        cx.notify();
+                                            s.set_model(native_model.clone());
+                                            s.effort = ReasoningEffort::Default;
+                                        });
                                     });
                                     this.search.update(cx, |s, cx| s.set_value("", window, cx));
                                     let effort = this
                                         .app
                                         .read(cx)
-                                        .session(this.session_id)
-                                        .map(|s| s.reasoning_effort)
-                                        .unwrap_or_default();
+                                        .composer_selection(this.session_id)
+                                        .effort;
                                     this.slider.update(cx, |s, cx| {
                                         s.set_value(effort.index() as f32, window, cx)
                                     });
@@ -227,7 +275,9 @@ impl Render for SessionModelPicker {
         let mut list = v_flex()
             .id("session-model-options")
             .debug_selector(|| "session-model-list".into())
-            .max_h((window.viewport_size().height - px(290.)).clamp(px(80.), px(250.)))
+            // Leave space for the four controls, popover padding and composer
+            // at the minimum 850x500 window size; only the model list scrolls.
+            .max_h((window.viewport_size().height - px(450.)).clamp(px(46.), px(250.)))
             .overflow_y_scroll()
             .gap_1();
         let options = std::iter::once((
@@ -235,6 +285,7 @@ impl Render for SessionModelPicker {
             "默认模型".to_string(),
             "跟随所选 Provider 的默认配置".to_string(),
         ))
+        .filter(|_| show_default)
         .chain(models.into_iter().map(|m| {
             (
                 Some(m.id.clone()),
@@ -262,6 +313,7 @@ impl Render for SessionModelPicker {
                     .when(active, |b| b.bg(rgb(palette().surface_hover)))
                     .child(
                         h_flex()
+                            .debug_selector(move || format!("session-model-option-{index}"))
                             .w_full()
                             .items_center()
                             .gap_2()
@@ -290,17 +342,22 @@ impl Render for SessionModelPicker {
                             )
                             .when(active, |r| r.child(Icon::new(IconName::Check).small())),
                     )
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         this.app.update(cx, |app, cx| {
-                            if !app.runs.contains_key(&this.session_id) {
-                                app.set_session_model(this.session_id, model.clone(), cx);
-                            }
+                            app.update_composer_selection(this.session_id, cx, |s| {
+                                s.set_model(model.clone())
+                            });
+                        });
+                        let effort = this.app.read(cx).composer_selection(this.session_id).effort;
+                        this.slider.update(cx, |slider, cx| {
+                            slider.set_value(effort.index() as f32, window, cx)
                         });
                         cx.notify();
                     })),
             );
         }
         v_flex()
+            .debug_selector(|| "session-model-panel".into())
             .w(px(340.))
             .gap_2()
             .child(
@@ -314,16 +371,24 @@ impl Render for SessionModelPicker {
                             .text_size(px(13.))
                             .font_semibold()
                             .text_color(rgb(palette().text))
-                            .child("模型与思考"),
+                            .child("模型配置"),
                     )
                     .child(
                         div()
                             .text_size(px(10.))
                             .text_color(rgb(palette().faint))
-                            .child(engine.label()),
+                            .child(if pending { "新会话" } else { "当前会话" }),
                     ),
             )
+            .child(self.engine_picker(cx))
             .child(channel_picker)
+            .child(
+                div()
+                    .px_2()
+                    .text_size(px(11.))
+                    .text_color(rgb(palette().faint))
+                    .child("模型"),
+            )
             .child(
                 div()
                     .debug_selector(|| "session-model-search".into())
@@ -343,68 +408,144 @@ impl Render for SessionModelPicker {
             .when_some(note, |c, note| {
                 c.child(
                     div()
+                        .id("session-model-note")
+                        .truncate()
+                        .tooltip({
+                            let note = note.clone();
+                            move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(note.clone())
+                                    .build(window, cx)
+                            }
+                        })
                         .px_2()
                         .text_size(px(10.))
                         .text_color(rgb(palette().faint))
                         .child(note),
                 )
             })
-            .child(
-                v_flex()
-                    .px_2()
-                    .pt_3()
-                    .pb_2()
-                    .gap_3()
-                    .border_t_1()
-                    .border_color(rgb(palette().border))
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(palette().muted))
-                                    .child("思考强度"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .font_semibold()
-                                    .text_color(rgb(palette().text))
-                                    .child(effort.label()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .debug_selector(|| "session-effort-control".into())
-                            .w_full()
-                            .child(
-                                Slider::new(&self.slider)
-                                    .w_full()
-                                    .disabled(disabled)
-                                    .accessibility_label("模型思考强度"),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .justify_between()
-                            .children(ReasoningEffort::ALL.map(|level| {
+            .when(engine == Provider::OpenCode, |panel| {
+                let picker = cx.entity();
+                panel.child(
+                    v_flex()
+                        .px_2()
+                        .gap_2()
+                        .child(div().text_size(px(11.)).child("思考强度"))
+                        .child(
+                            h_flex()
+                                .id("opencode-effort-options")
+                                .flex_wrap()
+                                .max_h(px(72.))
+                                .overflow_y_scroll()
+                                .gap_1()
+                                .children(
+                                    std::iter::once(("default".to_string(), "默认".to_string()))
+                                        .chain(
+                                            variants
+                                                .into_iter()
+                                                .filter(|(value, _)| value != "default"),
+                                        )
+                                        .enumerate()
+                                        .map(move |(index, (value, label))| {
+                                            let selected =
+                                                variant.as_deref().unwrap_or("default") == value;
+                                            let picker = picker.clone();
+                                            Button::new(("opencode-effort", index))
+                                                .small()
+                                                .ghost()
+                                                .child(
+                                                    div()
+                                                        .debug_selector(move || {
+                                                            format!("opencode-effort-{index}")
+                                                        })
+                                                        .child(label),
+                                                )
+                                                .disabled(disabled)
+                                                .cursor_pointer()
+                                                .when(selected, |b| {
+                                                    b.bg(rgb(palette().surface_hover))
+                                                })
+                                                .on_click(move |_, _, cx| {
+                                                    picker.update(cx, |this, cx| {
+                                                        this.app.update(cx, |app, cx| {
+                                                            app.update_composer_selection(
+                                                                this.session_id,
+                                                                cx,
+                                                                |s| {
+                                                                    s.opencode.variant = (value
+                                                                        != "default")
+                                                                        .then(|| value.clone());
+                                                                },
+                                                            );
+                                                        });
+                                                        cx.notify();
+                                                    });
+                                                })
+                                        }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(10.))
+                                .text_color(rgb(palette().faint))
+                                .child("可用档位在连接模型后更新"),
+                        ),
+                )
+            })
+            .when(engine != Provider::OpenCode, |panel| {
+                panel.child(
+                    v_flex()
+                        .px_2()
+                        .pt_3()
+                        .pb_2()
+                        .gap_3()
+                        .border_t_1()
+                        .border_color(rgb(palette().border))
+                        .child(
+                            h_flex()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .text_size(px(11.))
+                                        .text_color(rgb(palette().muted))
+                                        .child("思考强度"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .font_semibold()
+                                        .text_color(rgb(palette().text))
+                                        .child(effort.label()),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .debug_selector(|| "session-effort-control".into())
+                                .w_full()
+                                .child(
+                                    Slider::new(&self.slider)
+                                        .w_full()
+                                        .disabled(disabled)
+                                        .accessibility_label("模型思考强度"),
+                                ),
+                        )
+                        .child(h_flex().w_full().justify_between().children(
+                            ReasoningEffort::ALL.map(|level| {
                                 div()
                                     .text_size(px(10.))
                                     .text_color(rgb(palette().faint))
                                     .child(level.label())
-                            })),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .line_height(relative(1.4))
-                            .text_color(rgb(palette().faint))
-                            .child("更高强度可能增加耗时；支持的档位由模型决定"),
-                    ),
-            )
+                            }),
+                        ))
+                        .child(
+                            div()
+                                .text_size(px(10.))
+                                .line_height(relative(1.4))
+                                .text_color(rgb(palette().faint))
+                                .child("更高强度可能增加耗时；支持的档位由模型决定"),
+                        ),
+                )
+            })
             .child(
                 h_flex()
                     .debug_selector(|| "session-model-footer".into())
@@ -418,7 +559,11 @@ impl Render for SessionModelPicker {
                             .flex_1()
                             .text_size(px(10.))
                             .text_color(rgb(palette().faint))
-                            .child("仅影响本会话，下一条消息生效"),
+                            .child(if pending {
+                                "首次发送时使用以上配置新建会话"
+                            } else {
+                                "下一条消息生效；切换引擎将新建会话"
+                            }),
                     )
                     .child(
                         Button::new("session-model-refresh")
@@ -437,25 +582,38 @@ impl Render for SessionModelPicker {
     }
 }
 
-impl ConduitApp {
-    pub(super) fn engine_picker(&self, view: Entity<Self>) -> AnyElement {
-        let provider = self.new_session_provider;
+impl SessionModelPicker {
+    fn engine_picker(&self, cx: &Context<Self>) -> AnyElement {
+        let app = self.app.read(cx);
+        let provider = app.new_session_provider;
+        let disabled = !app.writable || app.closing;
+        let view = cx.entity();
         let trigger = Button::new("engine-picker-trigger")
             .ghost()
-            .small()
-            .h(px(22.))
-            .px_1()
+            .w_full()
+            .h(px(34.))
+            .px_2()
+            .disabled(disabled)
             .cursor_pointer()
-            .tooltip("切换引擎")
+            .accessibility_label("选择 CLI 引擎")
             .child(
                 h_flex()
-                    .gap_1()
+                    .debug_selector(|| "session-engine-control".into())
+                    .w_full()
+                    .gap_2()
                     .items_center()
-                    .child(provider_icon(provider))
                     .child(
                         div()
                             .text_size(px(11.))
-                            .text_color(rgb(palette().muted))
+                            .text_color(rgb(palette().faint))
+                            .child("引擎"),
+                    )
+                    .child(provider_icon(provider))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(12.))
+                            .text_color(rgb(palette().text))
                             .child(provider.label()),
                     )
                     .child(
@@ -465,44 +623,56 @@ impl ConduitApp {
                     ),
             );
         Popover::new("engine-picker")
-            .anchor(Anchor::BottomLeft)
-            .offset(px(6.))
+            .anchor(Anchor::TopLeft)
             .trigger(trigger)
             .content(move |_, _, cx| {
                 let popover = cx.entity().downgrade();
-                let mut list = v_flex().w(px(180.)).gap(px(1.));
-                for option in [Provider::Claude, Provider::Codex] {
-                    let app = view.clone();
+                let mut list = v_flex().w(px(300.)).gap_1();
+                for (index, option) in Provider::ALL.into_iter().enumerate() {
+                    let picker = view.clone();
                     let popover = popover.clone();
                     let active = option == provider;
                     list = list.child(
-                        Button::new(if option == Provider::Claude {
-                            "engine-option-claude"
-                        } else {
-                            "engine-option-codex"
+                        Button::new(match option {
+                            Provider::Claude => "engine-option-claude",
+                            Provider::Codex => "engine-option-codex",
+                            Provider::OpenCode => "engine-option-opencode",
                         })
                         .ghost()
-                        .h(px(30.))
+                        .h(px(34.))
                         .w_full()
                         .px_2()
                         .cursor_pointer()
                         .accessibility_label(option.label())
                         .child(
                             h_flex()
+                                .debug_selector(move || format!("session-engine-option-{index}"))
                                 .w_full()
                                 .gap_2()
                                 .items_center()
                                 .child(provider_icon(option))
                                 .child(
                                     div()
+                                        .flex_1()
                                         .text_size(px(12.))
                                         .text_color(rgb(palette().muted))
                                         .child(option.label()),
-                                ),
+                                )
+                                .when(active, |row| row.child(Icon::new(IconName::Check).small())),
                         )
                         .when(active, |button| button.bg(rgb(palette().surface_hover)))
                         .on_click(move |_, window, cx| {
-                            app.update(cx, |this, cx| this.select_engine(option, window, cx));
+                            picker.update(cx, |this, cx| {
+                                this.app
+                                    .update(cx, |app, cx| app.select_engine(option, window, cx));
+                                this.search.update(cx, |s, cx| s.set_value("", window, cx));
+                                let effort =
+                                    this.app.read(cx).composer_selection(this.session_id).effort;
+                                this.slider.update(cx, |slider, cx| {
+                                    slider.set_value(effort.index() as f32, window, cx)
+                                });
+                                cx.notify();
+                            });
                             if let Some(popover) = popover.clone().upgrade() {
                                 popover.update(cx, |popover, cx| popover.dismiss(window, cx));
                             }
@@ -513,8 +683,56 @@ impl ConduitApp {
             })
             .into_any_element()
     }
+}
 
-    /// Session permission selector next to the engine picker. FullAccess is
+impl ConduitApp {
+    /// Resolve the same destination used by sending: a selected conversation
+    /// for this engine, or the configuration for the next new conversation.
+    pub(super) fn model_picker_session_id(&self, session_id: u64) -> Option<u64> {
+        self.selected_session
+            .filter(|id| *id == session_id)
+            .filter(|id| {
+                self.session(*id)
+                    .is_some_and(|s| s.provider == self.new_session_provider)
+            })
+    }
+
+    pub(super) fn composer_selection(&self, session_id: u64) -> ComposerSelection {
+        if let Some(session) = self
+            .model_picker_session_id(session_id)
+            .and_then(|id| self.session(id))
+        {
+            return ComposerSelection::from_session(session);
+        }
+        self.pending_model_selection
+            .as_ref()
+            .filter(|s| s.engine == self.new_session_provider)
+            .cloned()
+            .unwrap_or_else(|| ComposerSelection::new(self.new_session_provider))
+    }
+
+    pub(super) fn update_composer_selection(
+        &mut self,
+        session_id: u64,
+        cx: &mut Context<Self>,
+        update: impl FnOnce(&mut ComposerSelection),
+    ) {
+        let target = self.model_picker_session_id(session_id);
+        if !self.writable || self.closing || target.is_some_and(|id| self.session_busy(id)) {
+            return;
+        }
+        let mut selection = self.composer_selection(session_id);
+        update(&mut selection);
+        if let Some(session) = target.and_then(|id| self.session_mut(id)) {
+            selection.apply(session);
+            self.persist();
+        } else {
+            self.pending_model_selection = Some(selection);
+        }
+        cx.notify();
+    }
+
+    /// Session permission selector in the composer. FullAccess is
     /// visually flagged (warning colors + alert icon) because it removes the
     /// CLI's own safety gates for this session.
     pub(super) fn permission_picker(&self, view: Entity<Self>) -> AnyElement {
@@ -523,6 +741,11 @@ impl ConduitApp {
             .and_then(|id| self.session(id))
             .map(|session| session.permission)
             .unwrap_or_default();
+        let opencode = self
+            .selected_session
+            .and_then(|id| self.session(id))
+            .is_some_and(|s| s.provider == Provider::OpenCode)
+            || (self.selected_session.is_none() && self.new_session_provider == Provider::OpenCode);
         let warning = permission == PermissionLevel::FullAccess;
         let trigger = Button::new("permission-picker-trigger")
             .ghost()
@@ -639,14 +862,20 @@ impl ConduitApp {
                                         .pl_6()
                                         .text_size(px(10.))
                                         .text_color(rgb(palette().faint))
-                                        .child(match option {
-                                            PermissionLevel::ReadOnly => {
+                                        .child(match (opencode, option) {
+                                            (true, PermissionLevel::ReadOnly) => {
+                                                "OpenCode：仅开放读取工具，禁止命令与写入"
+                                            }
+                                            (true, PermissionLevel::WorkspaceWrite) => {
+                                                "OpenCode：写入、命令及目录外访问需要审批"
+                                            }
+                                            (_, PermissionLevel::ReadOnly) => {
                                                 "Codex：只读沙箱；Claude：仅开放读取工具"
                                             }
-                                            PermissionLevel::WorkspaceWrite => {
+                                            (_, PermissionLevel::WorkspaceWrite) => {
                                                 "Codex：工作区沙箱；Claude：自动接受文件编辑"
                                             }
-                                            PermissionLevel::FullAccess => {
+                                            (_, PermissionLevel::FullAccess) => {
                                                 "警告：不受沙箱限制，命令不经审批直接执行"
                                             }
                                         }),
@@ -712,57 +941,47 @@ impl ConduitApp {
         cx.notify();
     }
 
-    pub(super) fn set_session_model(
-        &mut self,
-        id: u64,
-        model: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.writable || self.closing {
-            return;
-        }
-        if let Some(session) = self.session_mut(id) {
-            session.model = model;
-        }
-        self.persist();
-        cx.notify();
-    }
-
     pub(super) fn composer_model_picker(
         &self,
         view: Entity<Self>,
         session_id: u64,
-        provider: Provider,
-        selected_model: Option<String>,
         disabled: bool,
     ) -> AnyElement {
-        let (label, channel, effort) = self
-            .session(session_id)
-            .map(|s| {
-                let (_, models) = self.channel_models(s.provider, &s.channel);
-                let label = selected_model
-                    .as_ref()
-                    .map(|id| {
-                        models
-                            .iter()
-                            .find(|m| m.id == *id)
-                            .map(|m| m.label.clone())
-                            .unwrap_or_else(|| id.clone())
-                    })
-                    .unwrap_or_else(|| "默认模型".into());
-                (
-                    label,
-                    self.channel_label(s.provider, &s.channel),
-                    s.reasoning_effort,
-                )
+        let selection = self.composer_selection(session_id);
+        let provider = selection.engine;
+        let selected_model = selection.model;
+        let (_, mut models) = self.channel_models(provider, &selection.channel);
+        if provider == Provider::OpenCode && selection.opencode.options.is_array() {
+            models = selection.opencode.models();
+        }
+        let label = selected_model
+            .as_ref()
+            .map(|id| {
+                models
+                    .iter()
+                    .find(|m| m.id == *id)
+                    .map(|m| m.label.clone())
+                    .unwrap_or_else(|| id.clone())
             })
-            .unwrap_or_else(|| {
-                (
-                    "默认模型".into(),
-                    "CLI 默认".into(),
-                    ReasoningEffort::Default,
-                )
-            });
+            .unwrap_or_else(|| "默认模型".into());
+        let channel = if provider == Provider::OpenCode && selection.channel == ModelChannel::Cli {
+            selected_model
+                .as_deref()
+                .and_then(|id| id.split_once('/'))
+                .map(|(provider, _)| provider.to_owned())
+                .unwrap_or_else(|| self.channel_label(provider, &selection.channel))
+        } else {
+            self.channel_label(provider, &selection.channel)
+        };
+        let effort = if provider == Provider::OpenCode {
+            selection
+                .opencode
+                .variant
+                .clone()
+                .unwrap_or_else(|| "默认".into())
+        } else {
+            selection.effort.label().to_owned()
+        };
         let trigger = Button::new("composer-model-trigger")
             .ghost()
             .small()
@@ -771,8 +990,11 @@ impl ConduitApp {
             .rounded(px(7.))
             .disabled(disabled)
             .when(!disabled, |b| b.cursor_pointer())
-            .accessibility_label("选择 Provider、模型和思考强度")
-            .tooltip(format!("{channel} · 思考强度：{}", effort.label()))
+            .accessibility_label("选择引擎、Provider、模型和思考强度")
+            .tooltip(format!(
+                "{} · {channel} · 思考强度：{effort}",
+                provider.label()
+            ))
             .on_click(|_, _, cx| cx.stop_propagation())
             .child(
                 h_flex()
@@ -782,18 +1004,24 @@ impl ConduitApp {
                     .child(model_mark(provider, selected_model.as_deref()))
                     .child(
                         div()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette().faint))
+                            .child(provider.label()),
+                    )
+                    .child(
+                        div()
                             .max_w(px(170.))
                             .truncate()
                             .text_size(px(12.))
                             .text_color(rgb(palette().muted))
                             .child(label),
                     )
-                    .when(effort != ReasoningEffort::Default, |row| {
+                    .when(effort != "默认", |row| {
                         row.child(
                             div()
                                 .text_size(px(10.))
                                 .text_color(rgb(palette().faint))
-                                .child(effort.label()),
+                                .child(effort.clone()),
                         )
                     })
                     .child(
@@ -870,7 +1098,10 @@ impl ConduitApp {
             .session(id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
         match &s.channel {
-            ModelChannel::Cli => Ok(RuntimeRoute::default()),
+            ModelChannel::Cli => Ok(RuntimeRoute {
+                opencode_variant: s.opencode.variant.clone(),
+                ..Default::default()
+            }),
             ModelChannel::Ccs(id) => self
                 .store
                 .providers
@@ -947,10 +1178,11 @@ impl ConduitApp {
             .content(move |_, _, cx| {
                 let popover = cx.entity().downgrade();
                 let mut list = v_flex().w(px(220.)).gap(px(1.));
-                let options: [(Option<Provider>, &str); 3] = [
+                let options: [(Option<Provider>, &str); 4] = [
                     (None, "跟随当前会话"),
                     (Some(Provider::Claude), Provider::Claude.label()),
                     (Some(Provider::Codex), Provider::Codex.label()),
+                    (Some(Provider::OpenCode), Provider::OpenCode.label()),
                 ];
                 for (index, (option, name)) in options.into_iter().enumerate() {
                     let view = view.clone();
@@ -1350,10 +1582,11 @@ impl ConduitApp {
             .content(move |_, _, cx| {
                 let popover = cx.entity().downgrade();
                 let mut list = v_flex().w(px(220.)).gap(px(1.));
-                let options: [(Option<Provider>, &str); 3] = [
+                let options: [(Option<Provider>, &str); 4] = [
                     (None, "跟随当前会话"),
                     (Some(Provider::Claude), Provider::Claude.label()),
                     (Some(Provider::Codex), Provider::Codex.label()),
+                    (Some(Provider::OpenCode), Provider::OpenCode.label()),
                 ];
                 for (index, (option, name)) in options.into_iter().enumerate() {
                     let view = view.clone();

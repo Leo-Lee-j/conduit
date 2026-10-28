@@ -149,11 +149,9 @@ impl ConduitApp {
             return;
         }
         let closing_active = self.selected_session.is_some_and(|id| ids.contains(&id));
-        if closing_active {
-            if let Some(id) = self.selected_session {
-                self.drafts
-                    .insert(id, self.input.read(cx).value().to_string());
-            }
+        if closing_active && let Some(id) = self.selected_session {
+            self.drafts
+                .insert(id, self.input.read(cx).value().to_string());
         }
         self.open_tabs.retain(|tab| !ids.contains(tab));
         if !closing_active {
@@ -492,6 +490,12 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.writable || self.closing {
+            return;
+        }
+        if self.new_session_provider != provider {
+            self.pending_model_selection = None;
+        }
         self.new_session_provider = provider;
         self.remember_provider(provider);
         // Switching the engine targets the *next* new session: it never
@@ -1168,6 +1172,7 @@ impl ConduitApp {
         }
         self.selected_workspace = Some(workspace);
         self.selected_session = session;
+        self.pending_model_selection = None;
         if let Some(id) = session {
             self.unread_completed.remove(&id);
             self.push_tab(id);
@@ -1440,12 +1445,21 @@ impl ConduitApp {
                 interrupted: false,
                 channel: Default::default(),
                 reasoning_effort: Default::default(),
+                opencode: Default::default(),
                 permission: PermissionLevel::default(),
                 usage: Usage::default(),
             },
         );
         self.selected_workspace = Some(index);
         self.selected_session = Some(id);
+        if self
+            .pending_model_selection
+            .as_ref()
+            .is_some_and(|s| s.engine == provider)
+            && let Some(selection) = self.pending_model_selection.take()
+        {
+            selection.apply(&mut self.store.workspaces[index].sessions[0]);
+        }
         self.push_tab(id);
         self.new_session_provider = provider;
         self.remember_provider(provider);

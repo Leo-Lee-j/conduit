@@ -94,11 +94,9 @@ fn merge_session(
     next_id: &mut u64,
     session: ImportedSession,
 ) -> usize {
-    if let Some(existing) = workspace
-        .sessions
-        .iter_mut()
-        .find(|s| s.native_id.as_deref() == Some(session.native_id.as_str()))
-    {
+    if let Some(existing) = workspace.sessions.iter_mut().find(|s| {
+        s.provider == session.provider && s.native_id.as_deref() == Some(session.native_id.as_str())
+    }) {
         existing.created_at = session.created_at;
         if !session.title.is_empty() {
             existing.title = session.title;
@@ -126,6 +124,7 @@ fn merge_session(
         interrupted: false,
         channel: Default::default(),
         reasoning_effort: Default::default(),
+        opencode: Default::default(),
         permission: crate::domain::PermissionLevel::default(),
         usage: crate::domain::Usage::default(),
     });
@@ -1524,6 +1523,7 @@ mod tests {
             model: None,
             channel: Default::default(),
             reasoning_effort: Default::default(),
+            opencode: Default::default(),
             permission: crate::domain::PermissionLevel::default(),
             usage: crate::domain::Usage::default(),
             messages: vec![ChatItem {

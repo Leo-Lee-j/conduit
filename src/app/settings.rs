@@ -305,7 +305,7 @@ impl ConduitApp {
                                     .line_height(relative(1.6))
                                     .text_color(rgb(palette().muted))
                                     .child(
-                                        "Conduit 是本地 CLI 会话工作台：把 Claude Code 与 Codex 的对话、工作区和 Git 变更收进一个界面。所有文件与历史都保留在你自己的机器上，不上传云端。",
+                                        "Conduit 是本地 CLI 会话工作台：把 Claude Code、Codex 与 OpenCode 的对话、工作区和 Git 变更收进一个界面。所有文件与历史都保留在你自己的机器上，不上传云端。",
                                     ),
                             )
                             .child(
@@ -348,6 +348,7 @@ impl ConduitApp {
                 SettingsTab::Cli => "settings-tab-cli",
                 SettingsTab::Provider(Provider::Claude) => "settings-tab-claude",
                 SettingsTab::Provider(Provider::Codex) => "settings-tab-codex",
+                SettingsTab::Provider(Provider::OpenCode) => "settings-tab-opencode",
                 SettingsTab::Models => "settings-tab-models",
             })
             .ghost()
@@ -512,6 +513,11 @@ impl ConduitApp {
                 SettingsTab::Provider(Provider::Codex),
                 "Codex",
                 provider_icon(Provider::Codex).into_any_element(),
+            ))
+            .child(nav_item(
+                SettingsTab::Provider(Provider::OpenCode),
+                "OpenCode",
+                provider_icon(Provider::OpenCode).into_any_element(),
             ))
             .child(section("模型"))
             .child(nav_item(

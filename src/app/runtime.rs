@@ -284,6 +284,7 @@ impl ConduitApp {
             && self.store.ui.naming_mode == NamingMode::FirstMessage
             && first_turn)
             .then(|| prompt.clone());
+        let opencode_variant = route.opencode_variant.clone();
         let runtime = ChatRuntime::start_with_options(
             provider,
             executable,
@@ -305,6 +306,9 @@ impl ConduitApp {
             id,
             ActiveRun::new(runtime, worktree, prefix, usage, model, effort),
         );
+        if let Some(run) = self.runs.get_mut(&id) {
+            run.opencode_variant = opencode_variant;
+        }
         if append_user {
             self.input
                 .update(cx, |input, cx| input.set_value("", window, cx));
@@ -525,6 +529,13 @@ impl ConduitApp {
                 structural_change = true;
             }
             match event {
+                Event::OpenCodeConfig(options) => {
+                    if let Some(session) = self.session_mut(id) {
+                        session.opencode.options = options;
+                    }
+                    self.dirty = true;
+                    cx.emit(crate::providers::ProviderCatalogChanged);
+                }
                 Event::Plan { steps } => {
                     let steps = steps
                         .into_iter()

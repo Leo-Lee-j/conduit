@@ -2,11 +2,62 @@
 
 use super::*;
 
+/// Composer routing while there is no session for the selected engine yet.
+/// Applied only when the first message creates that engine's conversation.
+#[derive(Clone)]
+pub(super) struct ComposerSelection {
+    pub(super) engine: Provider,
+    pub(super) channel: ModelChannel,
+    pub(super) model: Option<String>,
+    pub(super) effort: ReasoningEffort,
+    pub(super) opencode: crate::protocol::OpenCodeSettings,
+}
+
+impl ComposerSelection {
+    pub(super) fn new(engine: Provider) -> Self {
+        Self {
+            engine,
+            channel: ModelChannel::Cli,
+            model: None,
+            effort: ReasoningEffort::Default,
+            opencode: Default::default(),
+        }
+    }
+
+    pub(super) fn from_session(session: &SessionRecord) -> Self {
+        Self {
+            engine: session.provider,
+            channel: session.channel.clone(),
+            model: session.model.clone(),
+            effort: session.reasoning_effort,
+            opencode: session.opencode.clone(),
+        }
+    }
+
+    pub(super) fn apply(self, session: &mut SessionRecord) {
+        debug_assert_eq!(self.engine, session.provider);
+        session.channel = self.channel;
+        session.model = self.model;
+        session.reasoning_effort = self.effort;
+        session.opencode = self.opencode;
+    }
+
+    pub(super) fn set_model(&mut self, model: Option<String>) {
+        if self.model != model {
+            self.effort = ReasoningEffort::Default;
+            self.opencode.variant = None;
+            if let Some(options) = self.opencode.options.as_array_mut() {
+                options.retain(|o| o["id"] != "effort");
+            }
+        }
+        self.model = model;
+    }
+}
+
 pub(super) struct SessionSummary {
     pub(super) id: u64,
     pub(super) provider: Provider,
     pub(super) native_id: Option<String>,
-    pub(super) model: Option<String>,
     pub(super) message_count: usize,
 }
 
@@ -16,7 +67,6 @@ impl From<&SessionRecord> for SessionSummary {
             id: session.id,
             provider: session.provider,
             native_id: session.native_id.clone(),
-            model: session.model.clone(),
             message_count: session.messages.len(),
         }
     }
@@ -179,6 +229,7 @@ pub(super) struct ActiveRun {
     pub(super) model: Option<String>,
     /// Snapshot of this turn's effort; picker changes apply only to the next turn.
     pub(super) reasoning_effort: ReasoningEffort,
+    pub(super) opencode_variant: Option<String>,
     pub(super) message_index: MessageIndex,
     /// Usage reported by the running turn, plus turn-local token accounting
     /// used to derive the streaming tokens/s figure.
@@ -211,6 +262,7 @@ impl ActiveRun {
             activity: "正在启动 CLI…".into(),
             model,
             reasoning_effort,
+            opencode_variant: None,
             message_index: MessageIndex::default(),
             usage,
             turn_tokens_at_start: usage.total_tokens,

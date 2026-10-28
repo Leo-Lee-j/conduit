@@ -6,6 +6,25 @@ use crate::{
     domain::{ChatItem, ItemKind, PermissionLevel, Provider, SessionRecord, Usage},
     protocol::Event,
 };
+
+#[test]
+fn opencode_diff_content_is_classified_and_bounded_for_the_existing_edit_view() {
+    let mut s = session();
+    apply_event(&mut s, "turn-0", Event::Tool {
+        key: "edit-1".into(), title: "update configuration".into(), status: "已完成".into(),
+        detail: serde_json::json!({"acpKind":"edit","content":[{"type":"diff","path":"settings.rs","oldText":"old setting","newText":"new setting"}]}).to_string(),
+    });
+    let item = &s.messages[0];
+    assert!(super::is_tool_edit(item));
+    let diffs = super::edit_tool_diffs(item).unwrap();
+    assert_eq!(diffs[0].path, "settings.rs");
+    assert_eq!((diffs[0].added, diffs[0].removed), (1, 1));
+    let mut long = item.clone();
+    long.detail = serde_json::json!({"acpKind":"edit","content":[{"type":"diff","path":"large.rs","oldText":"","newText":"line\n".repeat(1000)}]}).to_string();
+    let diffs = super::edit_tool_diffs(&long).unwrap();
+    assert_eq!(diffs[0].lines.len(), super::MAX_EDIT_DIFF_LINES);
+    assert!(diffs[0].truncated);
+}
 #[test]
 fn assistant_reply_combines_text_across_tools_within_user_boundaries() {
     let mut s = session();
@@ -354,6 +373,7 @@ pub(super) fn session() -> SessionRecord {
         interrupted: false,
         channel: Default::default(),
         reasoning_effort: Default::default(),
+        opencode: Default::default(),
         permission: PermissionLevel::default(),
         usage: Usage::default(),
     }

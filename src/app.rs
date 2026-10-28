@@ -184,6 +184,7 @@ pub struct ConduitApp {
     show_archived: bool,
     /// Engine used by the sidebar + button and the search dialog's empty state.
     new_session_provider: Provider,
+    pending_model_selection: Option<ComposerSelection>,
     rename_target: Option<u64>,
     rename_input: Option<Entity<InputState>>,
     delete_target: Option<u64>,
@@ -519,7 +520,7 @@ impl ConduitApp {
             unread_completed: HashSet::new(),
             probes: HashMap::new(),
             diagnostics: HashMap::new(),
-            catalogs: [Provider::Claude, Provider::Codex]
+            catalogs: Provider::ALL
                 .into_iter()
                 .map(|provider| (provider, models::load(provider)))
                 .collect(),
@@ -563,6 +564,7 @@ impl ConduitApp {
             search_query: String::new(),
             show_archived: false,
             new_session_provider,
+            pending_model_selection: None,
             rename_target: None,
             rename_input: None,
             delete_target: None,

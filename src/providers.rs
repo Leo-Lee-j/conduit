@@ -91,6 +91,7 @@ impl ModelProvider {
         let engine = match engine {
             Provider::Claude => "claude",
             Provider::Codex => "codex",
+            Provider::OpenCode => "opencode",
         };
         format!("ccs:{engine}:{id}")
     }
@@ -120,6 +121,9 @@ impl ModelProvider {
         }
     }
     pub fn validate(&self) -> Result<()> {
+        if self.engine == Provider::OpenCode {
+            bail!("OpenCode 首版使用 CLI 自身 Provider 配置，请在 opencode 中配置模型");
+        }
         if self.name.trim().is_empty() {
             bail!("请输入 Provider 名称");
         }
@@ -173,6 +177,7 @@ impl ModelProvider {
 pub struct RuntimeRoute {
     pub config: serde_json::Map<String, Value>,
     pub default_model: Option<String>,
+    pub opencode_variant: Option<String>,
     pub env: BTreeMap<String, String>,
 }
 
@@ -180,6 +185,7 @@ impl RuntimeRoute {
     pub fn endpoint(engine: Provider, name: &str, url: &str, key: Option<String>) -> Self {
         let mut route = Self::default();
         match engine {
+            Provider::OpenCode => {}
             Provider::Claude => {
                 route.env.insert("ANTHROPIC_BASE_URL".into(), url.into());
                 route
