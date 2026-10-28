@@ -96,8 +96,8 @@ pub(super) struct PlanStep {
     pub(super) status: PlanStatus,
 }
 
-/// File churn of the latest turn, shown in the floating stats pill above the
-/// composer. Paths stay sorted so repeated edits merge into one row.
+/// File churn of the latest turn, shown in the stats tags above the composer.
+/// Paths stay sorted so repeated edits merge into one row.
 #[derive(Clone, Debug, Default)]
 pub(super) struct TurnFileStats {
     pub(super) files: BTreeMap<String, FileStat>,

@@ -16,13 +16,17 @@ pub(super) struct ChatTypography {
 }
 
 impl ChatTypography {
-    /// `None` keeps the theme's code block style. A fixed, process-wide empty
-    /// highlight theme disables coloring without re-parsing every frame.
-    pub(super) fn text_view_style(&self) -> Option<TextViewStyle> {
-        if self.syntax_highlight && !self.code_copy {
-            return None;
-        }
-        let mut style = TextViewStyle::default();
+    /// Inline code always gets a distinct chip background and weight: the
+    /// theme's accent sits too close to the chat canvas to read as code.
+    pub(super) fn text_view_style(&self) -> TextViewStyle {
+        let mut style = TextViewStyle {
+            inline_code: HighlightStyle {
+                background_color: Some(Hsla::from(rgb(palette().inline_code_bg))),
+                font_weight: Some(FontWeight::MEDIUM),
+                ..Default::default()
+            },
+            ..TextViewStyle::default()
+        };
         if !self.syntax_highlight {
             style.highlight_theme = plain_highlight_theme();
         }
@@ -30,7 +34,7 @@ impl ChatTypography {
             // The action row floats over the block's top-right corner.
             style.code_block = StyleRefinement::default().pt(px(34.));
         }
-        Some(style)
+        style
     }
 }
 
@@ -94,9 +98,7 @@ pub(super) fn chat_markdown_view(
     if let Some(family) = typography.body_font.clone() {
         view = view.font_family(family);
     }
-    if let Some(style) = typography.text_view_style() {
-        view = view.style(style);
-    }
+    view = view.style(typography.text_view_style());
     if typography.code_copy {
         view = view.code_block_actions(code_block_actions(copy_scope.into()));
     }

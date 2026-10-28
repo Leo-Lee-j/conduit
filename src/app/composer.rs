@@ -494,17 +494,39 @@ impl ConduitApp {
             composer = composer.max_w(px(840.)).mx_auto();
         }
         let composer: AnyElement = composer.into_any_element();
-        // The "jump to latest" arrow floats at the lower-right of the message
-        // area, just above the composer's top-right corner, and only exists
-        // while the list is scrolled away from its end.
+        // Live engine activity stays on the left; the step and file-churn tags
+        // dock to the right edge, just above the composer's top-right corner.
+        let turn_activity = self
+            .selected_session
+            .and_then(|id| self.turn_activity_strip(id));
         let turn_stats = self
             .selected_session
-            .and_then(|id| self.turn_stats_pill(id, cx));
+            .and_then(|id| self.turn_stats_tags(id));
+        let has_status_row = turn_activity.is_some() || turn_stats.is_some();
+        let status_row = h_flex()
+            .id("turn-status-row")
+            .debug_selector(|| "turn-status-row".into())
+            .w_full()
+            .min_w_0()
+            .when(!self.store.ui.full_width_content, |row| {
+                row.max_w(px(840.)).mx_auto()
+            })
+            .items_center()
+            .justify_end()
+            .gap_2()
+            .pb(px(8.))
+            .when_some(turn_activity, |row, activity| row.child(activity))
+            .when_some(turn_stats, |row, tags| row.child(tags));
+        // The "jump to latest" arrow floats at the lower-right of the message
+        // area, just above the composer's top-right corner, and only exists
+        // while the list is scrolled away from its end. It clears the status
+        // row when that row is present.
+        let latest_top = px(if has_status_row { -72. } else { -40. });
         let area = div().px_2().pt_1().pb(px(5.)).child(
             v_flex()
                 .w_full()
                 .items_center()
-                .when_some(turn_stats, |column, stats| column.child(stats))
+                .when(has_status_row, |column| column.child(status_row))
                 .child(
                     div()
                         .relative()
@@ -523,7 +545,7 @@ impl ConduitApp {
                                     .tooltip("转到最新消息")
                                     .accessibility_label("转到最新消息")
                                     .absolute()
-                                    .top(px(-40.))
+                                    .top(latest_top)
                                     .right(px(14.))
                                     .w(px(30.))
                                     .h(px(30.))

@@ -420,6 +420,7 @@ impl ConduitApp {
     }
 
     pub(super) fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.poll_opencode_models(cx);
         // Refresh session ages every minute while idle, and running elapsed
         // labels once a second; avoid repainting every 33 ms poll otherwise.
         let label_interval = if self.runs.is_empty() { 60 } else { 1 };
@@ -870,6 +871,7 @@ impl ConduitApp {
         if self.closing
             && self.runs.is_empty()
             && self.probes.is_empty()
+            && self.opencode_model_probes.is_empty()
             && self.git_operation.is_none()
             && self.commit_generation.is_none()
         {

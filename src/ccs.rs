@@ -35,6 +35,7 @@ impl CcsCatalog {
     pub fn imported_providers(&self) -> impl Iterator<Item = crate::providers::ModelProvider> + '_ {
         self.providers
             .iter()
+            .filter(|p| p.provider != Provider::OpenCode)
             .map(|p| crate::providers::ModelProvider {
                 id: crate::providers::ModelProvider::ccs_id(p.provider, &p.id),
                 name: p.name.clone(),

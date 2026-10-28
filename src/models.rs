@@ -3,6 +3,8 @@
 //! Only model identifiers and non-secret endpoint information are read. No
 //! credentials are inspected, and neither configuration file is modified.
 use crate::domain::Provider;
+mod opencode;
+pub use opencode::OpenCodeModelsProbe;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -170,7 +172,10 @@ pub fn load_from(provider: Provider, home: &Path) -> ModelCatalog {
     match provider {
         Provider::Claude => claude(home),
         Provider::Codex => codex(home),
-        Provider::OpenCode => opencode(home),
+        Provider::OpenCode => ModelCatalog {
+            note: Some("打开模型面板后从 OpenCode CLI 读取原生模型目录".into()),
+            ..Default::default()
+        },
     }
 }
 
@@ -432,43 +437,6 @@ fn codex(home: &Path) -> ModelCatalog {
     }
     if catalog.models.is_empty() {
         catalog.note = Some("未发现模型定义；将使用 CLI 自身默认模型。".into());
-    }
-    catalog
-}
-
-fn opencode(home: &Path) -> ModelCatalog {
-    let directory = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".config"));
-    let path = std::env::var_os("OPENCODE_CONFIG")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| directory.join("opencode/opencode.json"));
-    let mut catalog = ModelCatalog {
-        config_path: path.clone(),
-        note: Some("跟随 OpenCode 配置；连接会话后更新有效模型和思考档位".into()),
-        ..Default::default()
-    };
-    let Ok(body) = fs::read_to_string(&path) else {
-        return catalog;
-    };
-    let Ok(config) = serde_json::from_str::<serde_json::Value>(&body) else {
-        return catalog;
-    };
-    catalog.current = config["model"].as_str().map(str::to_owned);
-    for (provider, value) in config["provider"].as_object().into_iter().flatten() {
-        for (model, info) in value["models"].as_object().into_iter().flatten() {
-            let id = format!("{provider}/{model}");
-            push_model_with_context(
-                &mut catalog.models,
-                &id,
-                info["name"].as_str().unwrap_or(&id),
-                "OpenCode 本地配置",
-                info["limit"]["context"].as_u64(),
-            );
-        }
-    }
-    if let Some(current) = catalog.current.clone() {
-        push_model(&mut catalog.models, &current, &current, "CLI 默认模型");
     }
     catalog
 }

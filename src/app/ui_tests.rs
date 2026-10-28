@@ -167,6 +167,142 @@ fn model_picker_is_available_before_the_first_session(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn opencode_model_picker_defaults_to_native_catalog_and_never_ccs(cx: &mut TestAppContext) {
+    use crate::{
+        ccs::{CcsCatalog, CcsProvider},
+        domain::{Provider, Workspace},
+        models::{ModelCatalog, ModelOption},
+        providers::{ModelChannel, ModelProvider, ProviderSource},
+        store::Store,
+    };
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let cwd = std::env::temp_dir().join("conduit-native-catalog-ui");
+            let mut app = super::ConduitApp::with_store(
+                window,
+                cx,
+                Ok(Store {
+                    workspaces: vec![Workspace {
+                        path: cwd.clone(),
+                        sessions: vec![],
+                    }],
+                    ..Default::default()
+                }),
+                false,
+                false,
+            );
+            app.new_session_provider = Provider::OpenCode;
+            let model = |id: &str| ModelOption {
+                id: id.into(),
+                label: id.into(),
+                note: "native fixture".into(),
+                context_window: None,
+            };
+            app.opencode_catalogs.insert(
+                cwd,
+                ModelCatalog {
+                    models: vec![model("opencode/free"), model("native/glm-5")],
+                    ..Default::default()
+                },
+            );
+            app.ccs = CcsCatalog {
+                providers: vec![CcsProvider {
+                    provider: Provider::OpenCode,
+                    id: "ccs".into(),
+                    name: "CCS default".into(),
+                    current: true,
+                    models: vec![model("ccs-default")],
+                    base_url: String::new(),
+                }],
+                ..Default::default()
+            };
+            app.store.providers.push(ModelProvider {
+                id: "old-ccs".into(),
+                name: "CCS default".into(),
+                engine: Provider::OpenCode,
+                base_url: String::new(),
+                api_key_env: String::new(),
+                models: vec!["ccs-default".into()],
+                source: ProviderSource::Ccs { id: "ccs".into() },
+                model_metadata: vec![],
+            });
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    macro_rules! click {
+        ($selector:expr) => {{
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            let point = cx.debug_bounds($selector).expect($selector).center();
+            cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+            cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        }};
+    }
+    click!("composer-model-control");
+    assert!(
+        cx.debug_bounds("session-model-option-2").is_some(),
+        "all native models visible before first send"
+    );
+    assert!(cx.debug_bounds("session-model-option-3").is_none());
+    click!("session-model-option-2");
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            let selected = app.composer_selection(0);
+            assert_eq!(selected.model.as_deref(), Some("native/glm-5"));
+            assert_eq!(selected.channel, ModelChannel::Cli);
+            assert!(
+                app.opencode_model_probes.is_empty(),
+                "cached directory opens without a CLI call"
+            );
+            let helper = app.git_generation_catalog(Provider::OpenCode);
+            assert_eq!(helper.models.len(), 2);
+            assert!(!helper.models.iter().any(|m| m.id == "ccs-default"));
+            // Switching workspaces cannot expose the previous workspace's catalog
+            // or silently fall back to CCS when the CLI query fails.
+            let other = std::env::temp_dir().join("conduit-native-other-ui");
+            app.store.workspaces.push(Workspace {
+                path: other.clone(),
+                sessions: vec![],
+            });
+            app.selected_workspace = Some(1);
+            app.opencode_catalogs.insert(
+                other,
+                ModelCatalog {
+                    error: Some("fixture failed".into()),
+                    ..Default::default()
+                },
+            );
+            let (error, models) = app.channel_models(Provider::OpenCode, &ModelChannel::Cli);
+            assert_eq!(error.as_deref(), Some("fixture failed"));
+            assert!(models.is_empty());
+            app.selected_workspace = Some(0);
+            app.pending_model_selection = None;
+            cx.notify();
+        })
+    });
+    click!("session-channel-control");
+    assert!(cx.debug_bounds("session-provider-option-2").is_some());
+    assert!(
+        cx.debug_bounds("session-provider-option-3").is_none(),
+        "CCS provider not offered for OpenCode"
+    );
+    cx.update(|_, cx| app.update(cx, |app, _| app.writable = false));
+}
+
+#[gpui_kit::test]
 fn opencode_model_picker_uses_session_catalog_and_saves_native_effort(cx: &mut TestAppContext) {
     use crate::{
         domain::{Provider, Workspace},
@@ -193,6 +329,10 @@ fn opencode_model_picker_uses_session_catalog_and_saves_native_effort(cx: &mut T
             app.selected_session = Some(1);
             app.new_session_provider = Provider::OpenCode;
             app.writable = true;
+            app.opencode_catalogs.insert(
+                app.selected_workspace_path().unwrap(),
+                crate::models::ModelCatalog { models: app.session(1).unwrap().opencode.models(), ..Default::default() },
+            );
             app
         });
         *output.borrow_mut() = Some(app.clone());
@@ -1188,6 +1328,7 @@ fn model_picker_renders_search_provider_and_effort_without_overlapping(cx: &mut 
 fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut TestAppContext) {
     use crate::{domain::Workspace, protocol::Event, store::Store};
     use gpui_kit::AppContext as _;
+    use gpui_kit::{Modifiers, MouseButton};
     cx.update(gpui_kit::init);
     let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
     let output = slot.clone();
@@ -1304,8 +1445,37 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
         assert_eq!(run.reasoning_effort, super::ReasoningEffort::High);
     });
     assert!((activity.center().y - stats.center().y).abs() < px(1.));
+    assert!(
+        stats.left() >= activity.right(),
+        "step and file tags dock right of the activity strip"
+    );
     assert!(spinner.left() >= text.right());
     assert!(spinner.left() - text.right() <= px(10.));
+    // Tags reveal the step and file details above them; a click elsewhere
+    // dismisses the panel.
+    let tags = cx.debug_bounds("turn-stats").unwrap().center();
+    cx.simulate_mouse_down(tags, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(tags, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("turn-stats-details").is_some());
+    cx.simulate_mouse_down(
+        point(px(6.), px(6.)),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        point(px(6.), px(6.)),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("turn-stats-details").is_none());
     assert!(cx.debug_bounds("activity-1-2").is_some());
     assert!(cx.debug_bounds("activity-1-3").is_some());
     assert!(cx.debug_bounds("reply-actions-1").is_none());

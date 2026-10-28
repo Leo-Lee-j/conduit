@@ -238,6 +238,16 @@ impl Store {
             }
         }
         for session in self.workspaces.iter_mut().flat_map(|w| &mut w.sessions) {
+            if session.provider == crate::domain::Provider::OpenCode
+                && session.channel != crate::providers::ModelChannel::Cli
+            {
+                // OpenCode owns its provider routing; old CCS/custom defaults
+                // cannot be interpreted as OpenCode provider/model IDs.
+                session.channel = crate::providers::ModelChannel::Cli;
+                session.model = None;
+                session.reasoning_effort = Default::default();
+                session.opencode = Default::default();
+            }
             if let crate::providers::ModelChannel::Ccs(id) = &session.channel {
                 session.channel = crate::providers::ModelChannel::Provider(
                     crate::providers::ModelProvider::ccs_id(session.provider, id),
@@ -429,6 +439,52 @@ fn same_failure_text(message: &str, error: &str) -> bool {
 mod tests {
     use super::*;
     use crate::domain::{Provider, SessionRecord};
+
+    #[test]
+    fn opencode_ccs_routes_migrate_to_native_without_changing_context() {
+        use crate::providers::ModelChannel;
+        let mut session: SessionRecord = serde_json::from_value(serde_json::json!({
+            "id": 7, "provider": "OpenCode", "created_at": 0, "exit_code": null,
+            "native_id": "native-context", "channel": {"ccs": "old-default"},
+            "model": "ccs-model", "reasoning_effort": "high"
+        }))
+        .unwrap();
+        let catalog = crate::ccs::CcsCatalog {
+            providers: vec![crate::ccs::CcsProvider {
+                provider: Provider::OpenCode,
+                name: "CCS default".into(),
+                id: "old-default".into(),
+                current: true,
+                models: vec![],
+                base_url: String::new(),
+            }],
+            ..Default::default()
+        };
+        let mut store = Store::default();
+        store.workspaces.push(crate::domain::Workspace {
+            path: PathBuf::from("C:\\work"),
+            sessions: vec![session.clone()],
+        });
+        store.sync_ccs_providers(&catalog);
+        assert!(
+            store.providers.is_empty(),
+            "OpenCode never imports CCS provider routes"
+        );
+        let restored = &store.workspaces[0].sessions[0];
+        assert_eq!(restored.channel, ModelChannel::Cli);
+        assert_eq!(restored.model, None);
+        assert_eq!(restored.reasoning_effort, Default::default());
+        assert_eq!(restored.native_id, session.native_id);
+        session.channel = ModelChannel::Cli;
+        session.model = Some("native/model".into());
+        store.workspaces[0].sessions = vec![session];
+        store.sync_ccs_providers(&catalog);
+        assert_eq!(
+            store.workspaces[0].sessions[0].model.as_deref(),
+            Some("native/model"),
+            "explicit native selections survive sync"
+        );
+    }
 
     #[test]
     fn ccs_sync_merges_into_provider_registry_and_migrates_session_selection() {

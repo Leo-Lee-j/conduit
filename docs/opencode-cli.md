@@ -8,7 +8,7 @@
 
 第一次发送可使用默认模型；新建/恢复会话后，ACP 返回该工作区的有效模型与思考档位。目录按会话保存，避免不同工作区配置串用。模型使用完整 `provider/model` ID；思考档位保存 OpenCode 原始值，例如 `minimal`、`max`，不会把 Codex 的 `xhigh` 静默映射为 `max`。
 
-切换模型时清除旧档位；新模型的档位目录在下一次连接时返回。初始目录仅尝试读取全局 `opencode.json` 的模型定义，完整的项目配置、JSONC、环境覆盖和登录 Provider 以 CLI 返回为准。不支持的模型/档位会在发送 prompt 前报错。
+切换模型时清除旧档位；新模型的档位目录在下一次连接时返回。首次打开模型弹窗或切换到 OpenCode 时，在当前工作区后台执行 `opencode models --verbose --pure`，直接展示 CLI 返回的原生模型目录并按原生 Provider 分组，无需先发送消息。项目配置、JSONC、环境覆盖和登录 Provider 由 OpenCode 自行解析；Conduit 不合并 CCS 默认模型、CCS Provider 或自定义路由。目录按工作区缓存，刷新重新查询；修改 CLI 路径会清空缓存。查询最多等待 20 秒、输出上限 16 MiB，取消或关闭应用会清理查询进程树。读取失败会提示重试，不回退到 CCS。不支持的模型/档位会在发送 prompt 前报错。
 
 每轮创建独立受管进程，通过 ACP 新建或恢复原生会话；重启 Conduit 后仍使用保存的原生 ID。优先 `session/resume`，不支持时回退到 `session/load` 并忽略旧历史回放，避免重复消息。无法恢复时显式报错，不自动创建丢失上下文的新会话。
 

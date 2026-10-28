@@ -106,13 +106,87 @@ impl ConduitApp {
         .detach();
     }
 
-    /// Floating summary above the composer: plan progress and the file churn
-    /// of the latest turn. Clicking it reveals the step and file details.
-    pub(super) fn turn_stats_pill(
-        &self,
-        session_id: u64,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    /// Live engine activity above the composer. Turn steps and file churn live
+    /// in [`Self::turn_stats_tags`], pinned to the composer's top-right corner.
+    pub(super) fn turn_activity_strip(&self, session_id: u64) -> Option<AnyElement> {
+        let session = self.session(session_id)?;
+        let run = self.runs.get(&session_id)?;
+        let model = run
+            .model
+            .as_deref()
+            .map(|model| {
+                self.catalogs
+                    .get(&session.provider)
+                    .map_or_else(|| model.to_string(), |catalog| catalog.label(model))
+            })
+            .unwrap_or_else(|| "CLI 默认模型".into());
+        let effort = if session.provider == Provider::OpenCode {
+            run.opencode_variant
+                .clone()
+                .unwrap_or_else(|| "默认".into())
+        } else {
+            run.reasoning_effort.label().to_owned()
+        };
+        Some(
+            h_flex()
+                .id("engine-activity")
+                .debug_selector(|| "engine-activity".into())
+                .flex_1()
+                .min_w_0()
+                .flex_wrap()
+                .items_center()
+                .gap_2()
+                .child(provider_icon(session.provider))
+                .child(
+                    div()
+                        .id("engine-activity-text")
+                        .debug_selector(|| "engine-activity-text".into())
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(12.))
+                        .text_color(rgb(palette().muted))
+                        .child(run.activity.clone()),
+                )
+                .child(
+                    div()
+                        .id("engine-activity-spinner")
+                        .debug_selector(|| "engine-activity-spinner".into())
+                        .child(Spinner::new().small().color(rgb(palette().loading).into())),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "engine-elapsed".into())
+                        .flex_shrink_0()
+                        .text_size(px(11.))
+                        .text_color(rgb(palette().faint))
+                        .child(format_elapsed(run.turn_started.elapsed(), false)),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "engine-model".into())
+                        .min_w_0()
+                        .max_w(px(240.))
+                        .truncate()
+                        .text_size(px(11.))
+                        .text_color(rgb(palette().muted))
+                        .child(model),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "engine-reasoning-effort".into())
+                        .flex_shrink_0()
+                        .text_size(px(11.))
+                        .text_color(rgb(palette().faint))
+                        .child(format!("思考强度：{effort}")),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// Step and file-churn tags for the latest turn, docked above the
+    /// composer's top-right corner. Clicking them opens the per-step and
+    /// per-file details above the tags; clicking outside closes the panel.
+    pub(super) fn turn_stats_tags(&self, session_id: u64) -> Option<AnyElement> {
         let session = self.session(session_id)?;
         let plan = self
             .plans
@@ -121,293 +195,219 @@ impl ConduitApp {
             .filter(|steps| !steps.is_empty())
             .unwrap_or_else(|| plan_from_messages(session));
         let stats = turn_file_stats(session);
-        let live = self.runs.contains_key(&session_id);
-        let run_activity = self.runs.get(&session_id).map(|run| {
-            let model = run
-                .model
-                .as_deref()
-                .map(|model| {
-                    self.catalogs
-                        .get(&session.provider)
-                        .map_or_else(|| model.to_string(), |catalog| catalog.label(model))
-                })
-                .unwrap_or_else(|| "CLI 默认模型".into());
-            (
-                run.activity.clone(),
-                run.turn_started.elapsed(),
-                model,
-                if session.provider == Provider::OpenCode {
-                    run.opencode_variant
-                        .clone()
-                        .unwrap_or_else(|| "默认".into())
-                } else {
-                    run.reasoning_effort.label().to_owned()
-                },
-            )
-        });
-        if plan.is_empty() && stats.files.is_empty() && run_activity.is_none() {
+        if plan.is_empty() && stats.files.is_empty() {
             return None;
         }
+        let live = self.runs.contains_key(&session_id);
         let completed = plan
             .iter()
             .filter(|step| step.status == PlanStatus::Completed)
             .count();
         let total = plan.len();
-        let files = stats.files.len();
-        let open = self.stats_details;
-        let mut pill = h_flex()
-            .id("turn-stats")
-            .debug_selector(|| "turn-stats".into())
-            .h(px(30.))
-            .px_3()
-            .gap_2()
-            .items_center()
-            .rounded_full()
-            .border_1()
-            .border_color(rgb(palette().border))
-            .bg(rgb(palette().surface))
-            .shadow_sm()
-            .cursor_pointer()
-            .hover(|style| style.bg(rgb(palette().surface_hover)))
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.stats_details = !this.stats_details;
-                cx.notify();
-            }))
-            .child(
-                Icon::new(if open {
-                    IconName::ChevronDown
-                } else {
-                    IconName::ChevronLeft
-                })
-                .size(px(13.))
-                .text_color(rgb(palette().faint)),
-            );
-        if total > 0 {
-            pill = pill.child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(rgb(palette().muted))
-                    .child(format!("步骤 {completed} / {total}")),
-            );
-        }
-        if total > 0 && files > 0 {
-            pill = pill.child(
-                div()
-                    .text_size(px(10.))
-                    .text_color(rgb(palette().faint))
-                    .child("·"),
-            );
-        }
-        if files > 0 {
-            pill = pill
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(rgb(palette().muted))
-                        .child(format!("{files} 个文件已修改")),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(rgb(palette().diff_add_text))
-                        .child(format!("+{}", stats.added)),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(rgb(palette().diff_remove_text))
-                        .child(format!("-{}", stats.removed)),
-                );
-        }
         let root = self
             .store
             .workspaces
             .iter()
             .find(|workspace| workspace.sessions.iter().any(|item| item.id == session_id))
             .map(|workspace| workspace.path.to_string_lossy().into_owned());
-        let mut status_row = h_flex()
-            .id("turn-status-row")
-            .debug_selector(|| "turn-status-row".into())
-            .w_full()
-            .min_w_0()
-            .when(!self.store.ui.full_width_content, |row| {
-                row.max_w(px(840.)).mx_auto()
-            })
+        let mut tags = h_flex()
+            .id("turn-stats")
+            .debug_selector(|| "turn-stats".into())
             .items_center()
-            .when(!live, |row| row.justify_center())
-            .gap_2();
-        if let Some((activity, elapsed, model, effort)) = run_activity {
-            status_row = status_row.child(
-                h_flex()
-                    .id("engine-activity")
-                    .debug_selector(|| "engine-activity".into())
-                    .min_w_0()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_2()
-                    .child(provider_icon(session.provider))
+            .gap(px(6.));
+        if total > 0 {
+            let done = completed == total;
+            tags = tags.child(
+                stat_tag()
+                    .child(
+                        Icon::new(if done {
+                            FullIconName::CircleCheck
+                        } else {
+                            FullIconName::CircleDashed
+                        })
+                        .size(px(11.))
+                        .text_color(rgb(if done {
+                            palette().diff_add_text
+                        } else {
+                            palette().faint
+                        })),
+                    )
                     .child(
                         div()
-                            .id("engine-activity-text")
-                            .debug_selector(|| "engine-activity-text".into())
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(12.))
                             .text_color(rgb(palette().muted))
-                            .child(activity),
-                    )
-                    .child(
-                        div()
-                            .id("engine-activity-spinner")
-                            .debug_selector(|| "engine-activity-spinner".into())
-                            .child(Spinner::new().small().color(rgb(palette().loading).into())),
-                    )
-                    .child(
-                        div()
-                            .debug_selector(|| "engine-elapsed".into())
-                            .flex_shrink_0()
-                            .text_size(px(11.))
-                            .text_color(rgb(palette().faint))
-                            .child(format_elapsed(elapsed, false)),
-                    )
-                    .child(
-                        div()
-                            .debug_selector(|| "engine-model".into())
-                            .min_w_0()
-                            .max_w(px(240.))
-                            .truncate()
-                            .text_size(px(11.))
-                            .text_color(rgb(palette().muted))
-                            .child(model),
-                    )
-                    .child(
-                        div()
-                            .debug_selector(|| "engine-reasoning-effort".into())
-                            .flex_shrink_0()
-                            .text_size(px(11.))
-                            .text_color(rgb(palette().faint))
-                            .child(format!("思考强度：{effort}")),
+                            .child(format!("步骤 {completed} / {total}")),
                     ),
             );
         }
-        status_row = status_row.when(live, |row| row.child(div().flex_1()));
-        if total > 0 || files > 0 {
-            status_row = status_row.child(pill.flex_shrink_0());
-        }
-        let mut column = v_flex().w_full().items_center().pb(px(8.));
-        if open && (total > 0 || files > 0) {
-            column = column
-                .child(self.turn_stats_details(&plan, &stats, root.as_deref(), live))
-                .child(div().h(px(8.)));
-        }
-        Some(column.child(status_row).into_any_element())
-    }
-
-    pub(super) fn turn_stats_details(
-        &self,
-        plan: &[PlanStep],
-        stats: &TurnFileStats,
-        root: Option<&str>,
-        live: bool,
-    ) -> AnyElement {
-        let mut rows = v_flex()
-            .id("turn-stats-details")
-            .w_full()
-            .min_w_0()
-            .when(!self.store.ui.full_width_content, |rows| {
-                rows.max_w(px(840.)).mx_auto()
-            })
-            .max_h(px(240.))
-            .overflow_y_scroll()
-            .p_3()
-            .gap_1()
-            .rounded(px(12.))
-            .border_1()
-            .border_color(rgb(palette().border))
-            .bg(rgb(palette().surface))
-            .shadow_sm();
-        for step in plan {
-            let icon = match step.status {
-                PlanStatus::Completed => Icon::new(IconName::CircleCheck)
-                    .size(px(13.))
-                    .text_color(rgb(palette().diff_add_text))
-                    .into_any_element(),
-                PlanStatus::InProgress if live => Spinner::new()
-                    .small()
-                    .color(rgb(palette().muted).into())
-                    .into_any_element(),
-                PlanStatus::InProgress => Icon::new(FullIconName::CircleDot)
-                    .size(px(13.))
-                    .text_color(rgb(palette().warning_text))
-                    .into_any_element(),
-                PlanStatus::Pending => Icon::new(FullIconName::CircleDashed)
-                    .size(px(13.))
-                    .text_color(rgb(palette().faint))
-                    .into_any_element(),
-            };
-            rows = rows.child(
-                h_flex()
-                    .w_full()
-                    .min_w_0()
-                    .items_center()
-                    .gap_2()
-                    .child(icon)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(12.))
-                            .text_color(rgb(match step.status {
-                                PlanStatus::Completed => palette().faint,
-                                PlanStatus::InProgress => palette().text,
-                                PlanStatus::Pending => palette().muted,
-                            }))
-                            .child(step.text.clone()),
-                    ),
-            );
-        }
-        if !plan.is_empty() && !stats.files.is_empty() {
-            rows = rows.child(div().w_full().h(px(1.)).my_1().bg(rgb(palette().border)));
-        }
-        for (path, stat) in &stats.files {
-            rows = rows.child(
-                h_flex()
-                    .w_full()
-                    .min_w_0()
-                    .items_center()
-                    .gap_2()
+        if !stats.files.is_empty() {
+            tags = tags.child(
+                stat_tag()
                     .child(
                         Icon::new(IconName::File)
-                            .size(px(12.))
+                            .size(px(11.))
                             .text_color(rgb(palette().faint)),
                     )
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(11.))
                             .text_color(rgb(palette().muted))
-                            .child(workspace_relative_path(path, root)),
+                            .child(format!("{} 个文件", stats.files.len())),
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
                             .text_color(rgb(palette().diff_add_text))
-                            .child(format!("+{}", stat.added)),
+                            .child(format!("+{}", stats.added)),
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
                             .text_color(rgb(palette().diff_remove_text))
-                            .child(format!("-{}", stat.removed)),
+                            .child(format!("-{}", stats.removed)),
                     ),
             );
         }
-        rows.into_any_element()
+        let trigger = Button::new(SharedString::from(format!(
+            "turn-stats-trigger-{session_id}"
+        )))
+        .ghost()
+        .h(px(24.))
+        .px(px(0.))
+        .rounded(px(8.))
+        .cursor_pointer()
+        .accessibility_label("查看步骤与文件变更明细")
+        .child(tags);
+        let panel_plan = plan;
+        let panel_stats = stats;
+        Some(
+            Popover::new(SharedString::from(format!("turn-stats-{session_id}")))
+                .anchor(Anchor::BottomRight)
+                .offset(px(8.))
+                .appearance(false)
+                .trigger(trigger)
+                .content(move |_, _, _| {
+                    turn_stats_details(&panel_plan, &panel_stats, root.as_deref(), live)
+                })
+                .into_any_element(),
+        )
     }
+}
 
+fn stat_tag() -> Div {
+    h_flex()
+        .h(px(24.))
+        .px(px(8.))
+        .gap(px(5.))
+        .items_center()
+        .rounded(px(6.))
+        .border_1()
+        .border_color(rgb(palette().border))
+        .bg(rgb(palette().surface_strong))
+        .text_size(px(11.))
+        .line_height(px(15.))
+}
+
+/// Steps and per-file churn of the latest turn, shown in a popover above the
+/// stats tags above the composer.
+fn turn_stats_details(
+    plan: &[PlanStep],
+    stats: &TurnFileStats,
+    root: Option<&str>,
+    live: bool,
+) -> AnyElement {
+    let mut rows = v_flex()
+        .id("turn-stats-details")
+        .debug_selector(|| "turn-stats-details".into())
+        .w(px(340.))
+        .max_h(px(240.))
+        .overflow_y_scroll()
+        .p_3()
+        .gap_1()
+        .rounded(px(12.))
+        .border_1()
+        .border_color(rgb(palette().border))
+        .bg(rgb(palette().surface))
+        .shadow_sm();
+    for step in plan {
+        let icon = match step.status {
+            PlanStatus::Completed => Icon::new(IconName::CircleCheck)
+                .size(px(13.))
+                .text_color(rgb(palette().diff_add_text))
+                .into_any_element(),
+            PlanStatus::InProgress if live => Spinner::new()
+                .small()
+                .color(rgb(palette().muted).into())
+                .into_any_element(),
+            PlanStatus::InProgress => Icon::new(FullIconName::CircleDot)
+                .size(px(13.))
+                .text_color(rgb(palette().warning_text))
+                .into_any_element(),
+            PlanStatus::Pending => Icon::new(FullIconName::CircleDashed)
+                .size(px(13.))
+                .text_color(rgb(palette().faint))
+                .into_any_element(),
+        };
+        rows = rows.child(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .gap_2()
+                .child(icon)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(12.))
+                        .text_color(rgb(match step.status {
+                            PlanStatus::Completed => palette().faint,
+                            PlanStatus::InProgress => palette().text,
+                            PlanStatus::Pending => palette().muted,
+                        }))
+                        .child(step.text.clone()),
+                ),
+        );
+    }
+    if !plan.is_empty() && !stats.files.is_empty() {
+        rows = rows.child(div().w_full().h(px(1.)).my_1().bg(rgb(palette().border)));
+    }
+    for (path, stat) in &stats.files {
+        rows = rows.child(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .gap_2()
+                .child(
+                    Icon::new(IconName::File)
+                        .size(px(12.))
+                        .text_color(rgb(palette().faint)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(11.))
+                        .text_color(rgb(palette().muted))
+                        .child(workspace_relative_path(path, root)),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(palette().diff_add_text))
+                        .child(format!("+{}", stat.added)),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(palette().diff_remove_text))
+                        .child(format!("-{}", stat.removed)),
+                ),
+        );
+    }
+    rows.into_any_element()
+}
+
+impl ConduitApp {
     pub(super) fn tool_group_header(
         &self,
         session_id: u64,

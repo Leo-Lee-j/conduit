@@ -232,6 +232,7 @@ impl ConduitApp {
             let modal_height = (viewport_height - 96.).clamp(360., 560.);
             let margin_top = ((viewport_height - modal_height) * 0.5).max(24.);
             dialog
+                .entrance(gpui_kit::component::dialog::DialogEntrance::Fade)
                 .w(px(840.))
                 .margin_top(px(margin_top))
                 .p_0()

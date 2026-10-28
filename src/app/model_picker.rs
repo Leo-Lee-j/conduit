@@ -75,19 +75,18 @@ impl Render for SessionModelPicker {
         let selected = selection.model;
         let effort = selection.effort;
         let native_models = if engine == Provider::OpenCode {
-            if selection.opencode.options.is_array() {
-                selection.opencode.models()
+            let catalog_models = app.channel_models(engine, &ModelChannel::Cli).1;
+            if !catalog_models.is_empty() {
+                catalog_models
             } else {
-                app.channel_models(engine, &ModelChannel::Cli).1
+                selection.opencode.models()
             }
         } else {
             vec![]
         };
         let (note, mut models) = if engine == Provider::OpenCode && channel == ModelChannel::Cli {
             (
-                app.catalogs
-                    .get(&engine)
-                    .and_then(|c| c.error.clone().or_else(|| c.note.clone())),
+                app.channel_models(engine, &ModelChannel::Cli).0,
                 native_models.clone(),
             )
         } else {
@@ -101,7 +100,8 @@ impl Render for SessionModelPicker {
         let native_provider = (engine == Provider::OpenCode && channel == ModelChannel::Cli)
             .then(|| {
                 selected
-                    .as_deref()?
+                    .as_deref()
+                    .filter(|id| native_models.iter().any(|model| model.id == *id))?
                     .split_once('/')
                     .map(|(p, _)| p.to_string())
             })
@@ -128,20 +128,32 @@ impl Render for SessionModelPicker {
             || app
                 .model_picker_session_id(self.session_id)
                 .is_some_and(|id| app.session_busy(id));
-        let mut channels = vec![(ModelChannel::Cli, None, "CLI 默认".to_string())];
+        let mut channels = vec![(
+            ModelChannel::Cli,
+            None,
+            if engine == Provider::OpenCode {
+                "OpenCode 原生"
+            } else {
+                "CLI 默认"
+            }
+            .to_string(),
+        )];
         channels.extend(
             native_providers
                 .into_iter()
                 .map(|(name, model)| (ModelChannel::Cli, Some(model), name)),
         );
-        channels.extend(
-            app.store
-                .providers
-                .iter()
-                .filter(|p| p.engine == engine)
-                .map(|p| (ModelChannel::Provider(p.id.clone()), None, p.name.clone())),
-        );
+        if engine != Provider::OpenCode {
+            channels.extend(
+                app.store
+                    .providers
+                    .iter()
+                    .filter(|p| p.engine == engine)
+                    .map(|p| (ModelChannel::Provider(p.id.clone()), None, p.name.clone())),
+            );
+        }
         if let Some(id) = &selected
+            && engine != Provider::OpenCode
             && !models.iter().any(|m| m.id == *id)
         {
             models::push_model(&mut models, id, id, "当前会话模型");
@@ -277,34 +289,24 @@ impl Render for SessionModelPicker {
             .debug_selector(|| "session-model-list".into())
             // Leave space for the four controls, popover padding and composer
             // at the minimum 850x500 window size; only the model list scrolls.
-            .max_h((window.viewport_size().height - px(450.)).clamp(px(46.), px(250.)))
+            .max_h((window.viewport_size().height - px(450.)).clamp(px(34.), px(250.)))
             .overflow_y_scroll()
             .gap_1();
-        let options = std::iter::once((
-            None,
-            "默认模型".to_string(),
-            "跟随所选 Provider 的默认配置".to_string(),
-        ))
-        .filter(|_| show_default)
-        .chain(models.into_iter().map(|m| {
-            (
-                Some(m.id.clone()),
-                m.label.clone(),
-                if m.note.is_empty() && m.label != m.id {
-                    m.id
-                } else {
-                    m.note
-                },
-            )
-        }));
-        for (index, (model, label, note)) in options.enumerate() {
+        let options = std::iter::once((None, "默认模型".to_string()))
+            .filter(|_| show_default)
+            .chain(
+                models
+                    .into_iter()
+                    .map(|m| (Some(m.id.clone()), m.label.clone())),
+            );
+        for (index, (model, label)) in options.enumerate() {
             let active = selected == model;
             let mark = model_mark(engine, model.as_deref());
             list = list.child(
                 Button::new(("session-model-option", index))
                     .ghost()
                     .w_full()
-                    .h(px(46.))
+                    .h(px(34.))
                     .px_2()
                     .rounded(px(7.))
                     .disabled(disabled)
@@ -319,26 +321,13 @@ impl Render for SessionModelPicker {
                             .gap_2()
                             .child(mark)
                             .child(
-                                v_flex()
+                                div()
                                     .flex_1()
                                     .min_w_0()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .truncate()
-                                            .text_size(px(12.))
-                                            .text_color(rgb(palette().text))
-                                            .child(label),
-                                    )
-                                    .when(!note.is_empty(), |c| {
-                                        c.child(
-                                            div()
-                                                .truncate()
-                                                .text_size(px(10.))
-                                                .text_color(rgb(palette().faint))
-                                                .child(note),
-                                        )
-                                    }),
+                                    .truncate()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(palette().text))
+                                    .child(label),
                             )
                             .when(active, |r| r.child(Icon::new(IconName::Check).small())),
                     )
@@ -934,6 +923,10 @@ impl ConduitApp {
     }
 
     pub(super) fn reload_models(&mut self, provider: Provider, cx: &mut Context<Self>) {
+        if provider == Provider::OpenCode {
+            self.ensure_opencode_models(true, cx);
+            return;
+        }
         self.catalogs.insert(provider, models::load(provider));
         self.ccs = ccs::load();
         self.store.sync_ccs_providers(&self.ccs);
@@ -951,7 +944,7 @@ impl ConduitApp {
         let provider = selection.engine;
         let selected_model = selection.model;
         let (_, mut models) = self.channel_models(provider, &selection.channel);
-        if provider == Provider::OpenCode && selection.opencode.options.is_array() {
+        if provider == Provider::OpenCode && models.is_empty() {
             models = selection.opencode.models();
         }
         let label = selected_model
@@ -1035,6 +1028,11 @@ impl ConduitApp {
             .offset(px(8.))
             .trigger(trigger)
             .content(move |_, window, cx| {
+                view.update(cx, |app, cx| {
+                    if app.new_session_provider == Provider::OpenCode {
+                        app.ensure_opencode_models(false, cx);
+                    }
+                });
                 let picker = window.use_keyed_state(
                     ("session-model-picker", session_id),
                     cx,
@@ -1047,7 +1045,12 @@ impl ConduitApp {
 
     pub(super) fn channel_label(&self, engine: Provider, channel: &ModelChannel) -> String {
         match channel {
-            ModelChannel::Cli => "CLI 默认".into(),
+            ModelChannel::Cli => if engine == Provider::OpenCode {
+                "OpenCode 原生"
+            } else {
+                "CLI 默认"
+            }
+            .into(),
             ModelChannel::Ccs(id) => self.channel_label(
                 engine,
                 &ModelChannel::Provider(ModelProvider::ccs_id(engine, id)),
@@ -1067,6 +1070,17 @@ impl ConduitApp {
         engine: Provider,
         channel: &ModelChannel,
     ) -> (Option<String>, Vec<models::ModelOption>) {
+        if engine == Provider::OpenCode {
+            return self
+                .engine_catalog(engine)
+                .map(|catalog| {
+                    (
+                        catalog.error.clone().or_else(|| catalog.note.clone()),
+                        catalog.models.clone(),
+                    )
+                })
+                .unwrap_or_else(|| (Some("正在从 OpenCode CLI 读取原生模型目录…".into()), vec![]));
+        }
         match channel {
             ModelChannel::Cli => self
                 .catalogs
@@ -1122,6 +1136,9 @@ impl ConduitApp {
     /// Model catalog merged with cc-switch synced models, for the Git
     /// generation model picker.
     pub(super) fn git_generation_catalog(&self, provider: Provider) -> ModelCatalog {
+        if provider == Provider::OpenCode {
+            return self.engine_catalog(provider).cloned().unwrap_or_default();
+        }
         let catalog = self.catalogs.get(&provider);
         let synced = self.ccs.current(provider);
         match (catalog, synced) {

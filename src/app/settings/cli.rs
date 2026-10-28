@@ -57,6 +57,10 @@ impl ConduitApp {
         let previous = self.store.cli.clone();
         self.store.cli.set(provider, path);
         if self.persist() {
+            if provider == Provider::OpenCode {
+                self.opencode_model_probes.clear();
+                self.opencode_catalogs.clear();
+            }
             if let Some(probe) = self.probes.get(&provider) {
                 probe.cancel();
             }
@@ -286,7 +290,7 @@ impl ConduitApp {
                     ),
             )
             .child(actions);
-        let catalog = self.catalogs.get(&provider);
+        let catalog = self.engine_catalog(provider);
         let current_model = catalog
             .and_then(|catalog| catalog.current.clone())
             .unwrap_or_else(|| "CLI 默认".into());

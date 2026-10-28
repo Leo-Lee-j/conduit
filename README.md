@@ -55,7 +55,7 @@ cargo run --locked -- --git
 - 自定义 Provider 可配置名称、执行引擎、Base URL、API Key 环境变量名和模型列表。
 - CCS 中每个 Provider 的名称、端点及模型会同步加入同一列表，“来自 CCS”只表示配置来源。点击“同步配置”按稳定 ID 更新；凭证在执行所选 Provider 时读取，不复制进应用状态。
 - CLI 默认仍跟随当前 CLI 配置。聊天输入区通过同一个模型弹窗按 **引擎 → Provider → 模型 → 思考强度** 选择；无会话时同样可提前配置，首次发送后按会话保存。切换引擎会清空待选配置，并在下次发送时新建对应引擎的会话；旧会话保留原有上下文。旧版 CCS 会话选择自动迁移。
-- OpenCode 的原生 Provider 按 `provider/model` 目录分组，思考强度使用它返回的原生档位；切换模型后清除旧档位。CLI 引擎及 24 个模型家族使用本地嵌入的品牌 SVG，保留原有颜色与渐变，来源见 `assets/icons/README.md`。
+- OpenCode 初次打开模型弹窗即在后台读取 `opencode models --verbose --pure` 的原生模型列表，按 `provider/model` 分组并按工作区缓存，不使用 CCS 默认模型或 CCS Provider；读取失败可刷新重试。思考强度使用连接后返回的原生档位，切换模型后清除旧档位。CLI 引擎及 24 个模型家族使用本地嵌入的品牌 SVG，保留原有颜色与渐变，来源见 `assets/icons/README.md`。
 
 同步不会写回 CLI / cc-switch 配置，也不会切换 cc-switch 当前 Provider。模型目录读取和同步在后台执行；打开聊天模型面板只读取内存中的 Provider 列表。
 

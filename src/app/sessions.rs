@@ -498,6 +498,9 @@ impl ConduitApp {
         }
         self.new_session_provider = provider;
         self.remember_provider(provider);
+        if provider == Provider::OpenCode {
+            self.ensure_opencode_models(false, cx);
+        }
         // Switching the engine targets the *next* new session: it never
         // jumps to an existing history session. The current session stays
         // selected and its tab stays open.
@@ -1420,7 +1423,9 @@ impl ConduitApp {
         }
         let id = self.next_id;
         self.next_id += 1;
-        self.catalogs.insert(provider, models::load(provider));
+        if provider != Provider::OpenCode {
+            self.catalogs.insert(provider, models::load(provider));
+        }
         self.ccs = ccs::load();
         self.store.sync_ccs_providers(&self.ccs);
         let model = self

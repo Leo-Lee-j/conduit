@@ -283,14 +283,14 @@ impl Drop for VersionProbe {
     }
 }
 
-fn read_available(file: &mut File, output: &mut Vec<u8>) -> Result<()> {
+fn read_available(file: &mut File, output: &mut Vec<u8>, limit: usize) -> Result<()> {
     if let Ok(count) = available(file)
         && count > 0
     {
         let mut buffer = [0; 4096];
         let count = file.read(&mut buffer[..(count as usize).min(4096)])?;
-        if output.len() + count > 64 * 1024 {
-            bail!("CLI 版本输出超过 64 KiB，已停止检测");
+        if output.len() + count > limit {
+            bail!("CLI 输出超过 {} KiB，已停止检测", limit / 1024);
         }
         output.extend_from_slice(&buffer[..count]);
     }
@@ -302,8 +302,33 @@ fn probe_command(
     cancel: &AtomicBool,
     timeout: Duration,
 ) -> Result<String> {
+    capture_command(
+        executable,
+        args,
+        &std::env::temp_dir(),
+        &Default::default(),
+        cancel,
+        timeout,
+        64 * 1024,
+    )
+}
+
+/// Bounded read-only diagnostics, with the same Job cleanup as CLI turns.
+pub(crate) fn capture_command(
+    executable: &Path,
+    args: &[String],
+    cwd: &Path,
+    environment: &std::collections::BTreeMap<String, String>,
+    cancel: &AtomicBool,
+    timeout: Duration,
+    limit: usize,
+) -> Result<String> {
     let (program, full_args) = command_for(executable, args);
-    let (child, mut pipes) = Child::spawn(&program, &full_args, &std::env::temp_dir())?;
+    let (child, mut pipes) = if environment.is_empty() {
+        Child::spawn(&program, &full_args, cwd)?
+    } else {
+        Child::spawn_with_env(&program, &full_args, cwd, environment)?
+    };
     drop(pipes.stdin);
     let result = (|| {
         let started = Instant::now();
@@ -314,21 +339,21 @@ fn probe_command(
                 bail!("检测已取消");
             }
             if started.elapsed() > timeout {
-                bail!("CLI 版本检测超时，已停止进程树");
+                bail!("CLI 查询超时，已停止进程树");
             }
-            read_available(&mut pipes.stdout, &mut stdout)?;
-            read_available(&mut pipes.stderr, &mut stderr)?;
+            read_available(&mut pipes.stdout, &mut stdout, limit)?;
+            read_available(&mut pipes.stderr, &mut stderr, limit)?;
             if let Some(code) = child.exit_code()? {
                 // Drain all output after exit, including a version line without a newline.
                 while available(&pipes.stdout).unwrap_or(0) > 0 {
-                    read_available(&mut pipes.stdout, &mut stdout)?;
+                    read_available(&mut pipes.stdout, &mut stdout, limit)?;
                 }
                 while available(&pipes.stderr).unwrap_or(0) > 0 {
-                    read_available(&mut pipes.stderr, &mut stderr)?;
+                    read_available(&mut pipes.stderr, &mut stderr, limit)?;
                 }
                 if code != 0 {
                     bail!(
-                        "CLI --version 退出码 {code}：{}",
+                        "CLI 查询退出码 {code}：{}",
                         String::from_utf8_lossy(&stderr)
                     );
                 }

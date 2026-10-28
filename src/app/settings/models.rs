@@ -326,6 +326,7 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.ensure_opencode_models(true, cx);
         // Reading the CLI config files and the cc-switch SQLite database must
         // not block the first frame of the settings dialog (or the UI thread at
         // all); publish the result when the background read finishes.
@@ -336,7 +337,6 @@ impl ConduitApp {
                     (
                         models::load(Provider::Claude),
                         models::load(Provider::Codex),
-                        models::load(Provider::OpenCode),
                         ccs::load(),
                     )
                 })
@@ -344,8 +344,7 @@ impl ConduitApp {
             let _ = this.update_in(cx, |this, _, cx| {
                 this.catalogs.insert(Provider::Claude, loaded.0);
                 this.catalogs.insert(Provider::Codex, loaded.1);
-                this.catalogs.insert(Provider::OpenCode, loaded.2);
-                this.ccs = loaded.3;
+                this.ccs = loaded.2;
                 this.store.sync_ccs_providers(&this.ccs);
                 cx.emit(crate::providers::ProviderCatalogChanged);
                 if this.writable {

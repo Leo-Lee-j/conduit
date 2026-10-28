@@ -68,6 +68,7 @@ mod git_ui;
 mod mentions;
 mod model_picker;
 mod naming;
+mod opencode_models;
 mod outline;
 mod performance_view;
 mod runtime;
@@ -132,6 +133,8 @@ pub struct ConduitApp {
     probes: HashMap<Provider, VersionProbe>,
     diagnostics: HashMap<Provider, String>,
     catalogs: HashMap<Provider, ModelCatalog>,
+    opencode_catalogs: HashMap<PathBuf, ModelCatalog>,
+    opencode_model_probes: HashMap<PathBuf, models::OpenCodeModelsProbe>,
     ccs: CcsCatalog,
     message: Option<String>,
     settings_tab: SettingsTab,
@@ -209,8 +212,6 @@ pub struct ConduitApp {
     expanded_errors: HashSet<(u64, String)>,
     /// Live plan reported by the current turn, keyed by session.
     plans: HashMap<u64, Vec<PlanStep>>,
-    /// Whether the floating turn summary expands into its step/file details.
-    stats_details: bool,
     /// Last elapsed-label repaint: every second during turns, every minute idle.
     last_live_tick: Instant,
     tool_scrolls: HashMap<(u64, String), ScrollHandle>,
@@ -455,6 +456,7 @@ impl ConduitApp {
                 this.branch_probe = None;
                 if !this.runs.is_empty()
                     || !this.probes.is_empty()
+                    || !this.opencode_model_probes.is_empty()
                     || this.git_operation.is_some()
                     || this.commit_generation.is_some()
                     || !this.session_namings.is_empty()
@@ -473,6 +475,9 @@ impl ConduitApp {
                         run.cancel();
                     }
                     for probe in this.probes.values() {
+                        probe.cancel();
+                    }
+                    for probe in this.opencode_model_probes.values() {
                         probe.cancel();
                     }
                     cx.notify();
@@ -524,6 +529,8 @@ impl ConduitApp {
                 .into_iter()
                 .map(|provider| (provider, models::load(provider)))
                 .collect(),
+            opencode_catalogs: HashMap::new(),
+            opencode_model_probes: HashMap::new(),
             ccs,
             message,
             settings_tab: SettingsTab::General,
@@ -590,7 +597,6 @@ impl ConduitApp {
             expanded_reasoning: HashSet::new(),
             expanded_errors: HashSet::new(),
             plans: HashMap::new(),
-            stats_details: false,
             last_live_tick: Instant::now(),
             tool_scrolls: HashMap::new(),
             message_focus: None,
