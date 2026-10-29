@@ -1,11 +1,12 @@
 //! 文件引用：校验待发送文件，发送时再生成路径引用。
 //!
 //! 引用永远是「路径」而不是文件内容：引擎 CLI 自己读文件，所以 prompt 保持很轻，
-//! 图片附件也继续不在范围内。工作区内的路径用相对形式（工作区搬家后同一条消息仍然
+//! 支持文本与图片。工作区内的路径用相对形式（工作区搬家后同一条消息仍然
 //! 有效）；工作区外的文件同样可以引用，只能给绝对形式，引擎按绝对路径读取。
 
 use gpui_kit::assets::IconName;
 use std::{
+    collections::HashSet,
     fs::File,
     io::Read,
     path::{Path, PathBuf},
@@ -31,7 +32,7 @@ impl Rejection {
             Self::Missing => "文件不存在或不可读",
             Self::Directory => "目录暂不支持引用",
             Self::TooLarge => "超过 8 MiB",
-            Self::Binary => "二进制文件不能作为引用",
+            Self::Binary => "暂不支持图片以外的二进制文件",
         }
     }
 }
@@ -109,7 +110,97 @@ fn looks_binary(path: &Path) -> Result<bool, Rejection> {
     file.take(BINARY_SNIFF_BYTES)
         .read_to_end(&mut buffer)
         .map_err(|_| Rejection::Missing)?;
-    Ok(buffer.contains(&0))
+    Ok(buffer.contains(&0) && image::guess_format(&buffer).is_err())
+}
+
+/// Persist clipboard pixels alongside app state, so history and retries keep a
+/// readable path after a restart. Repeated pastes resolve to the same attachment.
+pub fn save_clipboard_image(image: &gpui_kit::Image, directory: &Path) -> anyhow::Result<PathBuf> {
+    use anyhow::{Context, bail};
+    use std::io::Write;
+
+    if image.bytes.is_empty() {
+        bail!("剪贴板图片为空");
+    }
+    if image.bytes.len() as u64 > MAX_REFERENCED_BYTES {
+        bail!("图片超过 8 MiB");
+    }
+    std::fs::create_dir_all(directory).context("无法创建图片附件目录")?;
+    let path = directory.join(format!(
+        "clipboard-{:016x}.{}",
+        image.id(),
+        image.format.extension()
+    ));
+    match File::options().write(true).create_new(true).open(&path) {
+        Ok(mut file) => {
+            if let Err(error) = file.write_all(&image.bytes).and_then(|()| file.sync_all()) {
+                drop(file);
+                let _ = std::fs::remove_file(&path);
+                return Err(error).context("无法保存剪贴板图片");
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            if std::fs::read(&path).context("无法读取已保存的图片")? != image.bytes {
+                bail!("图片附件名称冲突，请重试");
+            }
+        }
+        Err(error) => return Err(error).context("无法保存剪贴板图片"),
+    }
+    Ok(path)
+}
+
+/// Only flat, app-generated clipboard files belong to this collector. Never
+/// follow directory links or remove user files, subdirectories, or symlinks.
+pub fn prune_clipboard_images(directory: &Path, referenced: &[PathBuf]) -> anyhow::Result<usize> {
+    use anyhow::{Context, bail};
+
+    let metadata = match directory.symlink_metadata() {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error).context("无法访问图片附件目录"),
+    };
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        bail!("图片附件目录不是普通目录");
+    }
+    let root = directory.canonicalize()?;
+    let referenced: HashSet<_> = referenced
+        .iter()
+        .filter_map(|path| path.canonicalize().ok())
+        .collect();
+    let mut removed = 0;
+    for entry in std::fs::read_dir(&root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some((id, extension)) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("clipboard-"))
+            .and_then(|name| name.split_once('.'))
+        else {
+            continue;
+        };
+        if id.len() != 16
+            || !id.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || !matches!(
+                extension,
+                "png" | "jpg" | "webp" | "gif" | "svg" | "bmp" | "tiff" | "ico" | "pnm"
+            )
+        {
+            continue;
+        }
+        let path = entry.path().canonicalize()?;
+        if path.parent() != Some(root.as_path()) || referenced.contains(&path) {
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => removed += 1,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("无法删除无引用的图片附件"),
+        }
+    }
+    Ok(removed)
 }
 
 /// Deduplicate selections across picker, drop and paste operations by canonical path.
@@ -226,6 +317,71 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, contents).unwrap();
         path
+    }
+
+    #[test]
+    fn image_files_are_references_and_clipboard_images_are_persistent_and_deduplicated() {
+        let bytes = include_bytes!("../assets/app-icons/Square44x44Logo.png");
+        let directory = workspace_root().join("clipboard-images");
+        let image = gpui_kit::Image::from_bytes(gpui_kit::ImageFormat::Png, bytes.to_vec());
+        let path = save_clipboard_image(&image, &directory).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(save_clipboard_image(&image, &directory).unwrap(), path);
+        let (references, rejected) = resolve(std::slice::from_ref(&path), &workspace_root());
+        assert!(rejected.is_empty());
+        assert_eq!(references.len(), 1);
+        // Snipping Tool can expose BMP rather than PNG bytes.
+        let bmp = write("clipboard-images/screenshot.bmp", b"BM\0\0\0\0");
+        assert!(resolve(&[bmp], &workspace_root()).1.is_empty());
+        let disguised_binary = write("clipboard-images/binary.png", b"\0not an image");
+        assert_eq!(
+            resolve(&[disguised_binary], &workspace_root()).1[0].reason,
+            Rejection::Binary
+        );
+        let empty = gpui_kit::Image::empty();
+        assert!(save_clipboard_image(&empty, &directory).is_err());
+        let large = gpui_kit::Image::from_bytes(
+            gpui_kit::ImageFormat::Png,
+            vec![0; MAX_REFERENCED_BYTES as usize + 1],
+        );
+        assert!(save_clipboard_image(&large, &directory).is_err());
+        // A failed or colliding write must never replace an existing attachment.
+        std::fs::write(&path, b"existing").unwrap();
+        assert!(save_clipboard_image(&image, &directory).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"existing");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn clipboard_cleanup_removes_only_unreferenced_managed_files() {
+        let directory = workspace_root().join("clipboard-gc");
+        let image = gpui_kit::Image::from_bytes(
+            gpui_kit::ImageFormat::Png,
+            include_bytes!("../assets/app-icons/Square44x44Logo.png").to_vec(),
+        );
+        let path = save_clipboard_image(&image, &directory).unwrap();
+        let original = directory.join("original.png");
+        let non_image = directory.join("clipboard-0000000000000000.txt");
+        let malformed = directory.join("clipboard-not-a-hash.png");
+        for file in [&original, &non_image, &malformed] {
+            std::fs::write(file, b"user owned").unwrap();
+        }
+        let nested = directory.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let nested_image = save_clipboard_image(&image, &nested).unwrap();
+        let outside = workspace_root().join(path.file_name().unwrap());
+        std::fs::write(&outside, &image.bytes).unwrap();
+        let alias = directory.join("nested/..").join(path.file_name().unwrap());
+        assert_eq!(prune_clipboard_images(&directory, &[alias]).unwrap(), 0);
+        assert!(path.exists());
+        assert_eq!(prune_clipboard_images(&directory, &[]).unwrap(), 1);
+        assert!(!path.exists());
+        assert!(original.exists());
+        assert!(non_image.exists());
+        assert!(malformed.exists());
+        assert!(nested_image.exists());
+        assert!(outside.exists());
+        assert_eq!(prune_clipboard_images(&directory, &[]).unwrap(), 0);
     }
 
     #[test]

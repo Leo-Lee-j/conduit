@@ -3087,9 +3087,210 @@ fn composer_files_paste_drafts_removal_and_failed_send(cx: &mut TestAppContext) 
             "ordinary text paste must keep working"
         );
     });
+    let image = gpui_kit::Image::from_bytes(
+        gpui_kit::ImageFormat::Png,
+        include_bytes!("../../assets/app-icons/Square44x44Logo.png").to_vec(),
+    );
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem {
+            entries: vec![
+                ClipboardEntry::Image(image.clone()),
+                ClipboardEntry::String(gpui_kit::ClipboardString::new("图片的替代文本".into())),
+            ],
+        })
+    });
+    cx.simulate_keystrokes("ctrl-v");
+    let pasted = cx.update(|_, cx| {
+        let this = app.read(cx);
+        let files = &this.current_files().unwrap().references;
+        assert_eq!(files.len(), 3);
+        let path = files.last().unwrap().path.clone();
+        assert_eq!(std::fs::read(&path).unwrap(), image.bytes);
+        assert!(!this.input.read(cx).value().contains("图片的替代文本"));
+        path
+    });
+    cx.simulate_keystrokes("ctrl-v");
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            assert_eq!(this.current_files().unwrap().references.len(), 3);
+            this.switch(0, Some(2), window, cx);
+            assert!(this.current_files().is_none());
+            this.writable = false;
+            assert!(this.paste_attachments(&ClipboardItem::new_image(&image), window, cx));
+            assert!(this.current_files().is_none());
+            this.writable = true;
+            this.switch(0, None, window, cx);
+            assert_eq!(this.current_files().unwrap().references.len(), 3);
+            // A clipboard containing both paths and a thumbnail adds only paths.
+            this.remove_file(&pasted, window, cx);
+            assert!(this.paste_attachments(
+                &ClipboardItem {
+                    entries: vec![
+                        ClipboardEntry::ExternalPaths(ExternalPaths(
+                            [second.clone()].into_iter().collect()
+                        )),
+                        ClipboardEntry::Image(image.clone()),
+                    ],
+                },
+                window,
+                cx
+            ));
+            assert_eq!(this.current_files().unwrap().references.len(), 2);
+            assert!(this.paste_attachments(
+                &ClipboardItem::new_image(&gpui_kit::Image::empty()),
+                window,
+                cx
+            ));
+            assert!(
+                this.current_files()
+                    .unwrap()
+                    .feedback
+                    .as_ref()
+                    .unwrap()
+                    .contains("图片为空")
+            );
+        });
+    });
+    assert!(
+        !pasted.exists(),
+        "removing the last draft reference must delete its cached image"
+    );
     std::fs::remove_file(second).unwrap();
     let _ = std::fs::remove_dir(root);
 }
+#[gpui_kit::test]
+fn clipboard_images_are_collected_after_the_last_draft_or_history_reference(
+    cx: &mut TestAppContext,
+) {
+    use crate::{domain::Workspace, store::Store};
+    use gpui_kit::{AppContext as _, ClipboardItem};
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    let root = std::env::temp_dir().join(format!("conduit-image-cleanup-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let image = gpui_kit::Image::from_bytes(
+        gpui_kit::ImageFormat::Png,
+        include_bytes!("../../assets/app-icons/Square44x44Logo.png").to_vec(),
+    );
+    let directory = Store::path().with_file_name("attachments");
+    let pasted = file_ref::save_clipboard_image(&image, &directory).unwrap();
+    let orphan = file_ref::save_clipboard_image(
+        &gpui_kit::Image::from_bytes(gpui_kit::ImageFormat::Bmp, b"BM\0orphan".to_vec()),
+        &directory,
+    )
+    .unwrap();
+    let original = root.join("original.png");
+    std::fs::write(&original, &image.bytes).unwrap();
+    let user: ChatItem = serde_json::from_value(serde_json::json!({
+        "key": "user-image", "kind": "User", "text": file_ref::compose_prompt("查看图片", &[
+            file_ref::FileReference { path: pasted.clone(), mention: file_ref::display_path(&pasted).replace('\\', "/") }
+        ])
+    })).unwrap();
+    let session = |id, messages| {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "provider": "Claude", "created_at": 0, "exit_code": null,
+            "title": "Image cleanup", "messages": messages
+        }))
+        .unwrap()
+    };
+    let store = Store {
+        workspaces: vec![Workspace {
+            path: root.clone(),
+            sessions: vec![session(1, vec![user.clone()]), session(2, vec![])],
+        }],
+        ..Default::default()
+    };
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let app = cx.new(|cx| super::ConduitApp::with_store(window, cx, Ok(store), false, false));
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    assert!(
+        !orphan.exists(),
+        "startup must collect leftovers from a discarded draft"
+    );
+    assert!(pasted.exists(), "startup must preserve sent images");
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            this.switch(0, Some(2), window, cx);
+            this.paste_attachments(&ClipboardItem::new_image(&image), window, cx);
+            this.remove_file(&pasted.canonicalize().unwrap(), window, cx);
+            assert!(
+                pasted.exists(),
+                "removing a draft must preserve another session's history image"
+            );
+            this.paste_attachments(&ClipboardItem::new_image(&image), window, cx);
+            this.delete_session(1, cx);
+            assert!(
+                pasted.exists(),
+                "a second session's unsent draft still owns the image"
+            );
+
+            this.session_mut(2).unwrap().messages.push(user.clone());
+            this.remove_file(&pasted.canonicalize().unwrap(), window, cx);
+            assert!(
+                pasted.exists(),
+                "sending transfers ownership from the draft to history"
+            );
+            assert!(this.persist());
+            let locked = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(Store::path())
+                .unwrap();
+            this.delete_session(2, cx);
+            assert!(
+                pasted.exists(),
+                "failed state writes must not delete an image referenced on disk"
+            );
+            drop(locked);
+            this.persist_and_cleanup_attachments();
+            assert!(
+                !pasted.exists(),
+                "deleting the last saved reference must collect the image"
+            );
+
+            this.switch(0, None, window, cx);
+            this.paste_attachments(&ClipboardItem::new_image(&image), window, cx);
+            assert!(pasted.exists());
+            this.discard_composer_attachments();
+            assert!(
+                !pasted.exists(),
+                "closing must collect unsent workspace drafts"
+            );
+
+            this.paste_attachments(&ClipboardItem::new_image(&image), window, cx);
+            this.attach_paths(std::slice::from_ref(&original), window, cx);
+            this.remove_workspace(0, cx);
+            assert!(
+                !pasted.exists(),
+                "removing a workspace must collect its last draft image"
+            );
+            assert!(
+                original.exists(),
+                "user-selected originals must never be deleted"
+            );
+
+            file_ref::save_clipboard_image(&image, &directory).unwrap();
+            this.writable = false;
+            this.cleanup_attachments();
+            assert!(
+                pasted.exists(),
+                "read-only or corrupt state must disable collection"
+            );
+            this.writable = true;
+            this.cleanup_attachments();
+            assert!(!pasted.exists());
+        })
+    });
+    std::fs::remove_file(original).unwrap();
+    let _ = std::fs::remove_dir(root);
+}
+
 #[gpui_kit::test]
 fn attachment_tags_size_to_names_and_stay_inside_the_user_bubble(cx: &mut TestAppContext) {
     use crate::{
@@ -3698,6 +3899,120 @@ fn tabs_share_running_and_unread_dots_and_clear_on_open(cx: &mut TestAppContext)
 }
 
 #[gpui_kit::test]
+fn session_tab_right_click_menu_targets_the_tab_under_the_pointer(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let first = super::tests::session();
+            let mut second = first.clone();
+            second.id = 2;
+            second.title = "后台会话".into();
+            let path = std::env::temp_dir().join("conduit-tab-menu");
+            let store = crate::store::Store {
+                workspaces: vec![crate::domain::Workspace {
+                    path: path.clone(),
+                    sessions: vec![first, second],
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.writable = false;
+            app.selected_session = Some(1);
+            app.open_tabs = vec![1, 2];
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let tab = cx.debug_bounds("session-tab-2").unwrap();
+    cx.simulate_mouse_move(tab.center(), None, Modifiers::default());
+    cx.run_until_parked();
+    cx.simulate_mouse_down(tab.center(), MouseButton::Right, Modifiers::default());
+    cx.simulate_mouse_up(tab.center(), MouseButton::Right, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let close_all = cx.update(|window, _| {
+        window
+            .within("popup-menu")
+            .find_by_label("全部关闭")
+            .bounds()
+            .center()
+    });
+    cx.simulate_mouse_move(close_all, None, Modifiers::default());
+    cx.simulate_mouse_down(close_all, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(close_all, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert!(app.open_tabs.is_empty());
+        assert_eq!(app.selected_session, None);
+    });
+}
+
+#[gpui_kit::test]
+fn session_tab_close_button_closes_without_selecting_the_tab(cx: &mut TestAppContext) {
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let first = super::tests::session();
+            let mut second = first.clone();
+            second.id = 2;
+            second.title = "后台会话".into();
+            let path = std::env::temp_dir().join("conduit-tab-close");
+            let store = crate::store::Store {
+                workspaces: vec![crate::domain::Workspace {
+                    path: path.clone(),
+                    sessions: vec![first, second],
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.writable = false;
+            app.selected_session = Some(1);
+            app.open_tabs = vec![1, 2];
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let close = cx.debug_bounds("session-tab-close-2").unwrap().center();
+    cx.simulate_mouse_move(close, None, Modifiers::default());
+    cx.simulate_mouse_down(close, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(close, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert_eq!(app.open_tabs, vec![1]);
+        assert_eq!(app.selected_session, Some(1));
+    });
+}
+
+#[gpui_kit::test]
 fn composer_recalls_sent_prompts_with_arrow_keys(cx: &mut TestAppContext) {
     use crate::{
         domain::{ChatItem, ItemKind, Provider, SessionRecord, Workspace},
@@ -3950,4 +4265,48 @@ fn startup_page_stays_away_without_workspaces(cx: &mut TestAppContext) {
     });
     // Nothing to import, so the app opens directly without a gate.
     assert!(cx.debug_bounds("startup-loading").is_none());
+}
+
+#[gpui_kit::test]
+fn builtin_theme_packs_back_the_active_theme(cx: &mut TestAppContext) {
+    use crate::store::{AppearanceMode, Store};
+    use gpui_kit::{AppContext as _, Hsla, component::Theme, rgb};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            super::ConduitApp::with_store(window, cx, Ok(Store::default()), false, false)
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let theme = Theme::global(cx);
+        assert!(theme.mode.is_dark());
+        assert_eq!(theme.dark_theme.name.as_ref(), "Conduit Dark");
+        assert_eq!(theme.light_theme.name.as_ref(), "Conduit Light");
+        // The selected folder tab uses the conversation canvas, so the tab
+        // meets the content below without a seam.
+        let expected: Hsla = rgb(0x0e0e10).into();
+        assert_eq!(theme.tokens.tab_active.color, expected);
+        assert_eq!(super::palette().canvas, 0x0e0e10);
+    });
+    // Switching appearance loads the other pack and moves the runtime palette
+    // with it.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.store.ui.appearance = AppearanceMode::Light;
+            app.apply_appearance(window, cx);
+        });
+    });
+    cx.update(|_, cx| {
+        let theme = Theme::global(cx);
+        assert!(!theme.mode.is_dark());
+        let expected: Hsla = rgb(0xf7f7f8).into();
+        assert_eq!(theme.tokens.tab_active.color, expected);
+        assert_eq!(super::palette().canvas, 0xf7f7f8);
+    });
 }

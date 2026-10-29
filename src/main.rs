@@ -58,6 +58,8 @@ fn main() {
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            gpui_kit::component::set_locale("zh-CN");
+            app::install_theme_packs(cx);
             let initial_mode = match appearance {
                 store::AppearanceMode::System => {
                     gpui_kit::component::ThemeMode::from(cx.window_appearance())

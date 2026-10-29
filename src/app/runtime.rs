@@ -904,7 +904,7 @@ impl ConduitApp {
             && self.git_operation.is_none()
             && self.commit_generation.is_none()
         {
-            self.persist();
+            self.discard_composer_attachments();
             window.remove_window();
             cx.quit();
         }

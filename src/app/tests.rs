@@ -22,7 +22,11 @@ fn opencode_diff_content_is_classified_and_bounded_for_the_existing_edit_view() 
     let mut long = item.clone();
     long.detail = serde_json::json!({"acpKind":"edit","content":[{"type":"diff","path":"large.rs","oldText":"","newText":"line\n".repeat(1000)}]}).to_string();
     let diffs = super::edit_tool_diffs(&long).unwrap();
-    assert_eq!(diffs[0].lines.len(), super::MAX_EDIT_DIFF_LINES);
+    // Two file headers plus one hunk header wrap the bounded body.
+    assert_eq!(
+        diffs[0].patch.lines().count(),
+        super::MAX_EDIT_DIFF_LINES + 2
+    );
     assert!(diffs[0].truncated);
 }
 #[test]
@@ -692,6 +696,12 @@ fn edit_diffs_parse_old_new_pairs_and_codex_patches() {
     .unwrap();
     assert_eq!(claude[0].path, "src/main.rs");
     assert_eq!((claude[0].added, claude[0].removed), (2, 1));
+    let parsed = gpui_kit::component::diff::DiffFile::parse(&claude[0].patch).unwrap();
+    assert_eq!(
+        (parsed[0].additions(), parsed[0].deletions()),
+        (2, 1),
+        "the synthesized patch must round-trip through the diff parser"
+    );
 
     let codex = super::edit_tool_diffs(&item(
         "修改文件",
@@ -701,6 +711,11 @@ fn edit_diffs_parse_old_new_pairs_and_codex_patches() {
     assert_eq!(codex[0].path, "notes.txt");
     assert_eq!(codex[0].note, "更新");
     assert_eq!((codex[0].added, codex[0].removed), (1, 1));
+    assert!(
+        codex[0].patch.contains("@@ -1,1 +1,1 @@"),
+        "real hunk headers keep their source line numbers: {}",
+        codex[0].patch
+    );
 }
 #[test]
 fn turn_file_stats_merge_repeated_edits_of_the_latest_turn() {

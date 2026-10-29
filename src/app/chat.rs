@@ -1102,9 +1102,11 @@ impl ConduitApp {
                         .clone();
                     content = content.child(tool_detail_panel(
                         &tool_id,
+                        &detail_key,
                         item,
                         &tool_scroll,
                         &typography,
+                        &mut self.tool_diffs,
                         cx,
                     ));
                 }
@@ -1220,12 +1222,15 @@ impl ConduitApp {
                                 .text_color(rgb(palette().faint)),
                             ),
                     )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.scroll.remeasure_items(index..index + 1);
-                        if !this.expanded_tools.remove(&detail_key) {
-                            this.expanded_tools.insert(detail_key.clone());
+                    .on_click(cx.listener({
+                        let detail_key = detail_key.clone();
+                        move |this, _, _, cx| {
+                            this.scroll.remeasure_items(index..index + 1);
+                            if !this.expanded_tools.remove(&detail_key) {
+                                this.expanded_tools.insert(detail_key.clone());
+                            }
+                            cx.notify();
                         }
-                        cx.notify();
                     }));
                 let mut card = v_flex()
                     .w_full()
@@ -1244,9 +1249,11 @@ impl ConduitApp {
                         .clone();
                     card = card.child(tool_detail_panel(
                         &tool_id,
+                        &detail_key,
                         item,
                         &tool_scroll,
                         &typography,
+                        &mut self.tool_diffs,
                         cx,
                     ));
                 }

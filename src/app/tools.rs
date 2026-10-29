@@ -260,8 +260,8 @@ pub(super) fn format_tool_text(text: &str) -> String {
 }
 
 /// Chat tools that rewrite files carry either a unified patch (Codex) or an
-/// old/new pair (Claude). Parse both into a small, bounded line model so the
-/// expanded card can show a red/green diff instead of raw JSON.
+/// old/new pair (Claude). Parse both into a small, bounded line model and
+/// synthesize one unified patch for the diff viewer instead of raw JSON.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum EditLineKind {
     Add,
@@ -276,11 +276,19 @@ pub(super) struct EditLine {
     pub(super) text: String,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum EditFileStatus {
+    Modified,
+    Added,
+    Deleted,
+}
+
 #[derive(Clone)]
 pub(super) struct EditFileDiff {
     pub(super) path: String,
     pub(super) note: String,
-    pub(super) lines: Vec<EditLine>,
+    /// A unified patch built from the parsed lines, ready for `DiffFile::parse`.
+    pub(super) patch: String,
     pub(super) added: usize,
     pub(super) removed: usize,
     pub(super) truncated: bool,
@@ -289,7 +297,12 @@ pub(super) struct EditFileDiff {
 pub(super) const MAX_EDIT_DIFF_LINES: usize = 400;
 
 impl EditFileDiff {
-    pub(super) fn new(path: String, note: String, mut lines: Vec<EditLine>) -> Self {
+    pub(super) fn new(
+        path: String,
+        note: String,
+        status: EditFileStatus,
+        mut lines: Vec<EditLine>,
+    ) -> Self {
         let truncated = lines.len() > MAX_EDIT_DIFF_LINES;
         lines.truncate(MAX_EDIT_DIFF_LINES);
         let added = lines
@@ -300,15 +313,105 @@ impl EditFileDiff {
             .iter()
             .filter(|line| line.kind == EditLineKind::Remove)
             .count();
+        let patch = synthesize_patch(&path, status, &lines);
         Self {
             path,
             note,
-            lines,
+            patch,
             added,
             removed,
             truncated,
         }
     }
+}
+
+/// Rewrites parsed lines as one unified patch. Real hunk headers keep their
+/// original line numbers; generated markers are renumbered from the counters.
+fn synthesize_patch(path: &str, status: EditFileStatus, lines: &[EditLine]) -> String {
+    let mut patch = String::new();
+    if status == EditFileStatus::Added {
+        patch.push_str("--- /dev/null\n");
+    } else {
+        patch.push_str(&format!("--- a/{path}\n"));
+    }
+    if status == EditFileStatus::Deleted {
+        patch.push_str("+++ /dev/null\n");
+    } else {
+        patch.push_str(&format!("+++ b/{path}\n"));
+    }
+    let mut old_pos = usize::from(status != EditFileStatus::Added);
+    let mut new_pos = usize::from(status != EditFileStatus::Deleted);
+    let mut header = None;
+    let mut body = Vec::new();
+    for line in lines {
+        if line.kind == EditLineKind::Hunk {
+            flush_hunk(&mut patch, &mut body, &mut old_pos, &mut new_pos, header);
+            header = hunk_starts(&line.text);
+        } else {
+            body.push(line);
+        }
+    }
+    flush_hunk(&mut patch, &mut body, &mut old_pos, &mut new_pos, header);
+    patch
+}
+
+fn flush_hunk(
+    patch: &mut String,
+    body: &mut Vec<&EditLine>,
+    old_pos: &mut usize,
+    new_pos: &mut usize,
+    header: Option<(usize, usize)>,
+) {
+    if body.is_empty() {
+        return;
+    }
+    let old_count = body
+        .iter()
+        .filter(|line| line.kind != EditLineKind::Add)
+        .count();
+    let new_count = body
+        .iter()
+        .filter(|line| line.kind != EditLineKind::Remove)
+        .count();
+    if old_count == 0 && new_count == 0 {
+        body.clear();
+        return;
+    }
+    let (old_start, new_start) = header.unwrap_or((*old_pos, *new_pos));
+    patch.push_str(&format!(
+        "@@ -{old_start},{old_count} +{new_start},{new_count} @@\n"
+    ));
+    for line in body.drain(..) {
+        patch.push(match line.kind {
+            EditLineKind::Add => '+',
+            EditLineKind::Remove => '-',
+            _ => ' ',
+        });
+        patch.push_str(&line.text);
+        patch.push('\n');
+    }
+    *old_pos = old_start + old_count;
+    *new_pos = new_start + new_count;
+}
+
+fn hunk_starts(text: &str) -> Option<(usize, usize)> {
+    let rest = text.strip_prefix("@@ -")?;
+    let (old, rest) = digits(rest)?;
+    let rest = match rest.strip_prefix(',') {
+        Some(rest) => digits(rest)?.1,
+        None => rest,
+    };
+    let rest = rest.strip_prefix(" +")?;
+    let (new, _) = digits(rest)?;
+    Some((old, new))
+}
+
+fn digits(text: &str) -> Option<(usize, &str)> {
+    let end = text.find(|character: char| !character.is_ascii_digit())?;
+    if end == 0 {
+        return None;
+    }
+    Some((text[..end].parse().ok()?, &text[end..]))
 }
 
 pub(super) fn json_path(value: &serde_json::Value) -> Option<String> {
@@ -404,7 +507,12 @@ pub(super) fn codex_edit_diffs(input: &str, detail: &str) -> Option<Vec<EditFile
         if lines.is_empty() {
             continue;
         }
-        files.push(EditFileDiff::new(path, note, lines));
+        let status = match note.as_str() {
+            "新增" => EditFileStatus::Added,
+            "删除" => EditFileStatus::Deleted,
+            _ => EditFileStatus::Modified,
+        };
+        files.push(EditFileDiff::new(path, note, status, lines));
     }
     (!files.is_empty()).then_some(files)
 }
@@ -474,7 +582,12 @@ pub(super) fn claude_edit_diffs(title: &str, input: &str) -> Option<Vec<EditFile
     if lines.is_empty() {
         return None;
     }
-    Some(vec![EditFileDiff::new(path, note, lines)])
+    let status = if title == "Write" {
+        EditFileStatus::Added
+    } else {
+        EditFileStatus::Modified
+    };
+    Some(vec![EditFileDiff::new(path, note, status, lines)])
 }
 
 pub(super) fn edit_tool_diffs(item: &ChatItem) -> Option<Vec<EditFileDiff>> {
@@ -503,6 +616,13 @@ fn opencode_edit_diffs(detail: &str) -> Option<Vec<EditFileDiff>> {
         .filter_map(|part| {
             let old = part["oldText"].as_str()?;
             let new = part["newText"].as_str()?;
+            let status = if old.is_empty() {
+                EditFileStatus::Added
+            } else if new.is_empty() {
+                EditFileStatus::Deleted
+            } else {
+                EditFileStatus::Modified
+            };
             let lines = std::iter::once(edit_line(EditLineKind::Hunk, "@@ OpenCode @@"))
                 .chain(
                     old.lines()
@@ -514,6 +634,7 @@ fn opencode_edit_diffs(detail: &str) -> Option<Vec<EditFileDiff>> {
             Some(EditFileDiff::new(
                 part["path"].as_str().unwrap_or("未知文件").into(),
                 "OpenCode".into(),
+                status,
                 lines,
             ))
         })
@@ -521,51 +642,25 @@ fn opencode_edit_diffs(detail: &str) -> Option<Vec<EditFileDiff>> {
     (!files.is_empty()).then_some(files)
 }
 
-pub(super) fn edit_diff_line(line: &EditLine, typography: &ChatTypography) -> AnyElement {
-    let (background, color, marker) = match line.kind {
-        EditLineKind::Add => (Some(palette().diff_add_bg), palette().diff_add_text, "+"),
-        EditLineKind::Remove => (
-            Some(palette().diff_remove_bg),
-            palette().diff_remove_text,
-            "-",
-        ),
-        EditLineKind::Hunk => (None, palette().warning_text, ""),
-        EditLineKind::Context => (None, palette().muted, ""),
-    };
-    h_flex()
-        .w_full()
-        .min_w_0()
-        .when(line.kind == EditLineKind::Hunk, |row| {
-            row.bg(rgb(palette().surface_strong)).py(px(1.))
-        })
-        .when_some(background, |row, background| row.bg(rgb(background)))
-        .font_family(typography.code_font.clone())
-        .text_size(px(typography.code_size))
-        .line_height(relative(1.45))
-        .child(
-            div()
-                .w(px(22.))
-                .flex_shrink_0()
-                .pr_1()
-                .text_right()
-                .text_color(rgb(palette().faint))
-                .child(marker),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_color(rgb(color))
-                .child(line.text.clone()),
-        )
-        .into_any_element()
+/// Upper bound for one expanded edit card; the diff viewer scrolls inside it.
+const MAX_EDIT_DIFF_HEIGHT: f32 = 320.;
+
+/// One parsed diff state per tool card, kept across renders so scrolling and
+/// folded hunks survive chat repaints. `patch` invalidates it while the tool
+/// call is still streaming.
+pub(super) struct CachedDiff {
+    patch: String,
+    state: Entity<DiffState>,
 }
 
 pub(super) fn edit_diff_content(
     tool_id: &str,
+    detail_key: &(u64, String),
     item: &ChatItem,
     scroll: &ScrollHandle,
     typography: &ChatTypography,
+    diffs: &mut HashMap<(u64, String), CachedDiff>,
+    cx: &mut Context<ConduitApp>,
 ) -> (AnyElement, String) {
     let input = format_tool_text(&item.input);
     let output = format_tool_text(&item.detail);
@@ -573,98 +668,117 @@ pub(super) fn edit_diff_content(
     let Some(files) = edit_tool_diffs(item) else {
         return tool_content(tool_id, item, scroll, typography);
     };
-    let mut content = v_flex().w_full().min_w_0().flex_shrink_0().p_3().gap_3();
-    for file in files {
-        let mut rows = v_flex().w_full().min_w_0();
-        for line in &file.lines {
-            rows = rows.child(edit_diff_line(line, typography));
-        }
-        let mut header = h_flex()
+    let mut patch = String::new();
+    let mut headers = HashMap::new();
+    for file in &files {
+        patch.push_str(&file.patch);
+        headers.insert(
+            SharedString::from(file.path.clone()),
+            (SharedString::from(file.note.clone()), file.truncated),
+        );
+    }
+    let Some(state) = cached_diff(detail_key, &patch, diffs, cx) else {
+        let fallback = div()
             .w_full()
             .min_w_0()
-            .items_center()
-            .gap_2()
-            .px_3()
-            .py_2()
-            .bg(rgb(palette().surface_strong))
-            .child(
-                Icon::new(FullIconName::File)
-                    .size(px(13.))
-                    .text_color(rgb(palette().faint)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .font_family(typography.code_font.clone())
-                    .text_size(px(11.))
-                    .text_color(rgb(palette().text))
-                    .child(file.path.clone()),
-            );
-        if !file.note.is_empty() {
-            header = header.child(
-                div()
-                    .flex_shrink_0()
-                    .px_1()
-                    .rounded(px(4.))
-                    .bg(rgb(palette().surface))
-                    .text_size(px(9.))
-                    .text_color(rgb(palette().faint))
-                    .child(file.note.clone()),
-            );
-        }
-        if file.truncated {
-            header = header.child(
-                div()
-                    .flex_shrink_0()
-                    .text_size(px(9.))
-                    .text_color(rgb(palette().warning_text))
-                    .child("已截断"),
-            );
-        }
-        header = header
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_size(px(10.))
-                    .text_color(rgb(palette().diff_add_text))
-                    .child(format!("+{}", file.added)),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_size(px(10.))
-                    .text_color(rgb(palette().diff_remove_text))
-                    .child(format!("-{}", file.removed)),
-            );
-        content = content.child(
+            .max_h(px(MAX_EDIT_DIFF_HEIGHT))
+            .overflow_hidden()
+            .p_3()
+            .font_family(typography.code_font.clone())
+            .text_size(px(typography.code_size))
+            .child(patch)
+            .into_any_element();
+        return (fallback, copy_text);
+    };
+    let rows = patch.lines().count() + files.len();
+    let height = edit_diff_height(rows, cx);
+    let diff = Diff::new(&state)
+        .line_number(true)
+        .syntax_highlight(false)
+        .change_indicator(DiffChangeIndicator::Bars)
+        .hunk_separator(DiffHunkSeparator::LineInfo)
+        .hover_highlight(DiffHoverHighlight::Line)
+        .soft_wrap(true)
+        .header_title_suffix(move |file, _, _| {
+            let Some((note, truncated)) = headers.get(file.path()) else {
+                return div().into_any_element();
+            };
+            h_flex()
+                .gap(px(4.))
+                .items_center()
+                .when(!note.is_empty(), |row| {
+                    row.child(
+                        div()
+                            .px(px(4.))
+                            .rounded(px(4.))
+                            .bg(rgb(palette().surface_strong))
+                            .text_size(px(9.))
+                            .text_color(rgb(palette().faint))
+                            .child(note.clone()),
+                    )
+                })
+                .when(*truncated, |row| {
+                    row.child(
+                        div()
+                            .text_size(px(9.))
+                            .text_color(rgb(palette().warning_text))
+                            .child("已截断"),
+                    )
+                })
+                .into_any_element()
+        });
+    let viewport = div()
+        .w_full()
+        .min_w_0()
+        .flex_shrink_0()
+        .p_3()
+        .child(
             v_flex()
                 .w_full()
                 .min_w_0()
+                .h(px(height))
                 .overflow_hidden()
                 .rounded(px(8.))
-                .border_1()
-                .border_color(rgb(palette().border))
-                .child(header)
-                .child(rows),
-        );
-    }
-    let viewport = div()
-        .id(SharedString::from(format!("{tool_id}-diff-content")))
-        .max_h(px(320.))
-        .min_h_0()
-        .flex_shrink_0()
-        .w_full()
-        .min_w_0()
-        .overflow_y_scroll()
-        .track_scroll(scroll)
-        .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
-        .relative()
-        .child(content)
-        .vertical_scrollbar(scroll)
+                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                .child(diff),
+        )
         .into_any_element();
     (viewport, copy_text)
+}
+
+fn cached_diff(
+    key: &(u64, String),
+    patch: &str,
+    diffs: &mut HashMap<(u64, String), CachedDiff>,
+    cx: &mut Context<ConduitApp>,
+) -> Option<Entity<DiffState>> {
+    if let Some(cached) = diffs.get(key)
+        && cached.patch == patch
+    {
+        return Some(cached.state.clone());
+    }
+    let files = DiffFile::parse(patch).ok()?;
+    if files.is_empty() {
+        return None;
+    }
+    let state = cx.new(|cx| {
+        DiffState::new(files, cx)
+            .with_mode(DiffMode::Unified)
+            .with_context_lines(None)
+    });
+    diffs.insert(
+        key.clone(),
+        CachedDiff {
+            patch: patch.to_string(),
+            state: state.clone(),
+        },
+    );
+    Some(state)
+}
+
+fn edit_diff_height(rows: usize, cx: &App) -> f32 {
+    let row_height = f32::from(gpui_kit::component::Theme::global(cx).mono_font_size) * 1.6;
+    (rows.max(1) as f32 * row_height).clamp(64., MAX_EDIT_DIFF_HEIGHT)
 }
 
 /// Use a block viewport around natural-height flex content. Constraining the
@@ -743,15 +857,17 @@ pub(super) fn tool_content(
 /// Shared expanded body for tool cards and compact activity rows.
 pub(super) fn tool_detail_panel(
     tool_id: &str,
+    detail_key: &(u64, String),
     item: &ChatItem,
     scroll: &ScrollHandle,
     typography: &ChatTypography,
+    diffs: &mut HashMap<(u64, String), CachedDiff>,
     cx: &mut Context<ConduitApp>,
 ) -> AnyElement {
     let dock_key = item.key.clone();
     let edit = is_tool_edit(item);
     let (content, copy_text) = if edit {
-        edit_diff_content(tool_id, item, scroll, typography)
+        edit_diff_content(tool_id, detail_key, item, scroll, typography, diffs, cx)
     } else {
         tool_content(tool_id, item, scroll, typography)
     };

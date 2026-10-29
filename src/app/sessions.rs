@@ -469,7 +469,7 @@ impl ConduitApp {
         self.detail_text = None;
         self.select_fallback_session();
         self.delete_target = None;
-        self.persist();
+        self.persist_and_cleanup_attachments();
         self.sync_git_workspace(cx);
         cx.notify();
     }
@@ -564,52 +564,13 @@ impl ConduitApp {
         let context_window_display = usage.context_window;
         let estimated = usage.context_window_estimated;
         let context_ratio = context_ratio.unwrap_or(f64::INFINITY);
-        let ring = if context_ratio.is_finite() {
-            // 270° arc gauge drawn as an SVG stroke; gpui renders SVG paths
-            // with a fixed viewBox, so the arc is recomputed per ratio.
-            let radius = 7.0f64;
-            let center = 9.0f64;
-            let start_angle = 135.0f64;
-            let sweep = 270.0 * context_ratio;
-            let point = |angle: f64| {
-                let radians = angle.to_radians();
-                (
-                    center + radius * radians.cos(),
-                    center + radius * radians.sin(),
-                )
-            };
-            let (sx, sy) = point(start_angle);
-            let (ex, ey) = point(start_angle + sweep);
-            let large = if sweep > 180.0 { 1 } else { 0 };
-            let color = if context_ratio >= 0.9 {
-                palette().danger_text
-            } else if context_ratio >= 0.75 {
-                palette().warning_text
-            } else {
-                palette().highlight_text
-            };
-            let svg = format!(
-                "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 18 18\">\
-                 <circle cx=\"9\" cy=\"9\" r=\"7\" fill=\"none\" stroke=\"#{border:06x}\" stroke-width=\"2\"/>\
-                 <path d=\"M {sx:.2} {sy:.2} A 7 7 0 {large} 1 {ex:.2} {ey:.2}\" fill=\"none\" stroke=\"#{color:06x}\" stroke-width=\"2\" stroke-linecap=\"round\"/>\
-                 </svg>",
-                border = palette().border,
-                color = color,
-            );
-            h_flex()
-                .id("context-ring")
-                .w(px(18.))
-                .h(px(18.))
-                .flex_shrink_0()
-                .child(
-                    Icon::default()
-                        .data(svg.as_bytes())
-                        .size(px(18.))
-                        .into_any_element(),
-                )
-                .into_any_element()
+        let context_percent = (context_ratio * 100.) as f32;
+        let context_color = if context_ratio >= 0.9 {
+            palette().danger_text
+        } else if context_ratio >= 0.75 {
+            palette().warning_text
         } else {
-            div().into_any_element()
+            palette().highlight_text
         };
         let mut parts: Vec<AnyElement> = vec![];
         let speed_label = tokens_per_second
@@ -682,7 +643,18 @@ impl ConduitApp {
                     })
                     .gap_1()
                     .items_center()
-                    .child(ring)
+                    .child(
+                        gpui_kit::component::progress::Progress::new("context-progress")
+                            .value(context_percent)
+                            .color(rgb(context_color))
+                            .xsmall()
+                            .w(px(40.))
+                            .flex_shrink_0()
+                            .accessibility_label(format!(
+                                "上下文使用 {:.0}%",
+                                context_percent
+                            )),
+                    )
                     .child(
                         div()
                             .text_size(px(10.))
@@ -818,7 +790,7 @@ impl ConduitApp {
             self.selected_workspace = Some(selected - 1);
         }
         self.detail_text = None;
-        self.persist();
+        self.persist_and_cleanup_attachments();
         self.sync_git_workspace(cx);
         cx.notify();
     }
@@ -972,26 +944,30 @@ impl ConduitApp {
         cx.notify();
     }
 
-    /// Conversation tab strip: one tab per open session, horizontally
-    /// scrollable, with a fixed-width action area pinned to the right.
+    /// Conversation tab strip: one Folder tab per open session, horizontally
+    /// scrollable, with a fixed-width action area pinned to the right. The tabs
+    /// sit flush with the content below, so the selected tab's curves meet the
+    /// conversation without a dividing border.
     pub(super) fn session_tab_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let app_entity = cx.entity();
-        let active = self.selected_session;
-        let mut tabs = h_flex()
-            .id("session-tabs")
-            .h_full()
-            .flex_1()
-            .min_w_0()
-            .gap(px(4.))
-            .pr(px(4.))
-            .overflow_x_scroll()
-            .lock_scroll_axis();
-        for id in &self.open_tabs {
-            let id = *id;
-            let Some(session) = self.session(id) else {
-                continue;
-            };
-            let selected = active == Some(id);
+        let open: Vec<u64> = self
+            .open_tabs
+            .iter()
+            .copied()
+            .filter(|id| self.session(*id).is_some())
+            .collect();
+        let selected_index = self
+            .selected_session
+            .and_then(|id| open.iter().position(|tab| *tab == id));
+        let mut bar = TabBar::new("session-tabs")
+            .folder()
+            .with_size(Size::Medium)
+            // Folder tabs are 32 high with a 4px top gap; the bar holds exactly
+            // that so the selected tab meets the conversation at its bottom.
+            .h(px(36.))
+            .when_some(selected_index, |bar, index| bar.selected_index(index));
+        for id in open.iter().copied() {
+            let session = self.session(id).expect("filtered above");
             let running = self.runs.contains_key(&id);
             let unread = self.unread_completed.contains(&id);
             let title = if session.title.is_empty() {
@@ -1001,90 +977,37 @@ impl ConduitApp {
             };
             let title = single_line_title(&title);
             let tab_group = SharedString::from(format!("session-tab-{id}"));
-            let tab_app = app_entity.clone();
-            tabs = tabs.child(
-                h_flex()
-                    .id(("session-tab", id))
+            bar = bar.child(
+                Tab::new()
                     .debug_selector(move || format!("session-tab-{id}"))
+                    .aria_label(title.clone())
                     .group(tab_group.clone())
-                    .h(px(30.))
-                    .my_auto()
-                    .px(px(10.))
-                    .gap(px(6.))
-                    .flex_shrink_0()
-                    .items_center()
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(rgb(if selected {
-                        palette().border
-                    } else {
-                        palette().sidebar_bg
-                    }))
-                    .when(selected, |tab| tab.bg(rgb(palette().surface)))
-                    .text_size(px(12.))
-                    .text_color(rgb(if selected {
-                        palette().text
-                    } else {
-                        palette().muted
-                    }))
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgb(palette().surface_hover)))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if let Some(workspace) = this
-                            .store
-                            .workspaces
-                            .iter()
-                            .position(|workspace| workspace.sessions.iter().any(|s| s.id == id))
-                        {
-                            this.switch(workspace, Some(id), window, cx);
+                    .on_hover(cx.listener(move |this, hovered, _, _| {
+                        if *hovered {
+                            this.tab_menu_target = Some(id);
+                        } else if this.tab_menu_target == Some(id) {
+                            this.tab_menu_target = None;
                         }
                     }))
-                    .context_menu({
-                        move |menu, _, _| {
-                            let left_app = tab_app.clone();
-                            let right_app = tab_app.clone();
-                            let all_app = tab_app.clone();
-                            menu.min_w(px(170.))
-                                .item(
-                                    PopupMenuItem::new("关闭右侧会话")
-                                        .icon(IconName::ChevronRight)
-                                        .on_click(move |_, _, cx| {
-                                            right_app.update(cx, |this, cx| {
-                                                this.close_tabs_right(id, cx)
-                                            });
-                                        }),
-                                )
-                                .item(
-                                    PopupMenuItem::new("关闭左侧会话")
-                                        .icon(IconName::ChevronLeft)
-                                        .on_click(move |_, _, cx| {
-                                            left_app.update(cx, |this, cx| {
-                                                this.close_tabs_left(id, cx)
-                                            });
-                                        }),
-                                )
-                                .item(
-                                    PopupMenuItem::new("全部关闭")
-                                        .icon(IconName::Delete)
-                                        .on_click(move |_, _, cx| {
-                                            all_app.update(cx, |this, cx| this.close_all_tabs(cx));
-                                        }),
-                                )
-                        }
-                    })
-                    .child(provider_icon(session.provider))
+                    .prefix(provider_icon(session.provider))
                     .child(
                         div()
                             .max_w(px(180.))
                             .truncate()
                             .line_height(px(16.))
                             .whitespace_nowrap()
+                            .text_size(px(12.))
                             .child(title),
                     )
                     .when(running || unread, |tab| {
-                        tab.child(session_activity_dot("tab-activity", id, running))
+                        tab.child(div().ml(px(2.)).flex_shrink_0().child(session_activity_dot(
+                            "tab-activity",
+                            id,
+                            running,
+                        )))
                     })
-                    .child(
+                    .suffix(
                         Button::new(("session-tab-close", id))
                             .debug_selector(move || format!("session-tab-close-{id}"))
                             .ghost()
@@ -1104,36 +1027,75 @@ impl ConduitApp {
                                 this.close_tab(id, cx);
                                 cx.stop_propagation();
                             })),
-                    ),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if let Some(workspace) = this
+                            .store
+                            .workspaces
+                            .iter()
+                            .position(|workspace| workspace.sessions.iter().any(|s| s.id == id))
+                        {
+                            this.switch(workspace, Some(id), window, cx);
+                        }
+                    })),
             );
         }
-        if self.open_tabs.is_empty() {
-            tabs = tabs.child(
-                h_flex()
-                    .h_full()
-                    .px_3()
+        if open.is_empty() {
+            bar = bar.prefix(
+                div()
+                    .h(px(32.))
+                    .pl(px(12.))
+                    .flex()
                     .items_center()
                     .text_size(px(12.))
                     .text_color(rgb(palette().faint))
                     .child("未选择工作区"),
             );
         }
-        h_flex()
-            .h(px(44.))
-            .pl_2()
-            .pr_3()
-            .border_b_1()
-            .border_color(rgb(palette().border))
-            .items_center()
-            .child(tabs)
+        let context_app = app_entity;
+        div()
+            .h(px(36.))
             .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap_1()
-                    .child(div().w(px(1.)).h(px(18.)).mx_1().bg(rgb(palette().border)))
-                    .child(self.detail_toggle(cx)),
+                bar.suffix(
+                    h_flex()
+                        .h_full()
+                        .items_center()
+                        .gap_1()
+                        .pr(px(12.))
+                        .child(div().w(px(1.)).h(px(18.)).mx_1().bg(rgb(palette().border)))
+                        .child(self.detail_toggle(cx)),
+                ),
             )
+            .context_menu(move |menu, _, cx| {
+                let Some(id) = context_app.read(cx).tab_menu_target else {
+                    return menu;
+                };
+                let left_app = context_app.clone();
+                let right_app = context_app.clone();
+                let all_app = context_app.clone();
+                menu.min_w(px(170.))
+                    .item(
+                        PopupMenuItem::new("关闭右侧会话")
+                            .icon(IconName::ChevronRight)
+                            .on_click(move |_, _, cx| {
+                                right_app.update(cx, |this, cx| this.close_tabs_right(id, cx));
+                            }),
+                    )
+                    .item(
+                        PopupMenuItem::new("关闭左侧会话")
+                            .icon(IconName::ChevronLeft)
+                            .on_click(move |_, _, cx| {
+                                left_app.update(cx, |this, cx| this.close_tabs_left(id, cx));
+                            }),
+                    )
+                    .item(
+                        PopupMenuItem::new("全部关闭")
+                            .icon(IconName::Delete)
+                            .on_click(move |_, _, cx| {
+                                all_app.update(cx, |this, cx| this.close_all_tabs(cx));
+                            }),
+                    )
+            })
             .into_any_element()
     }
 

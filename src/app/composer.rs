@@ -36,6 +36,108 @@ pub(super) struct ComposerFiles {
 }
 
 impl ConduitApp {
+    /// A deduplicated image can be shared by drafts and sent messages across
+    /// workspaces. Rebuild reachability only when attachments are discarded.
+    pub(super) fn cleanup_attachments(&mut self) {
+        if !self.writable {
+            return;
+        }
+        let mut referenced = self
+            .composer_files
+            .values()
+            .flat_map(|files| files.references.iter().map(|file| file.path.clone()))
+            .collect::<Vec<_>>();
+        for workspace in &self.store.workspaces {
+            for session in &workspace.sessions {
+                for message in &session.messages {
+                    if message.kind == ItemKind::User {
+                        referenced.extend(file_ref::split_prompt(&message.text).1.into_iter().map(
+                            |path| {
+                                let path = PathBuf::from(path);
+                                if path.is_absolute() {
+                                    path
+                                } else {
+                                    workspace.path.join(path)
+                                }
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+        if let Err(error) = file_ref::prune_clipboard_images(
+            &Store::path().with_file_name("attachments"),
+            &referenced,
+        ) {
+            self.message = Some(format!("清理图片附件失败：{error:#}"));
+        }
+    }
+
+    /// Never delete files while the saved transcript still contains old refs.
+    pub(super) fn persist_and_cleanup_attachments(&mut self) {
+        if self.persist() {
+            self.cleanup_attachments();
+        }
+    }
+
+    pub(super) fn discard_composer_attachments(&mut self) {
+        self.composer_files.clear();
+        self.persist_and_cleanup_attachments();
+    }
+
+    /// Let the input perform its normal text paste unless files or pixels exist.
+    pub(super) fn paste_attachments(
+        &mut self,
+        item: &ClipboardItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let mut paths = Vec::new();
+        let mut images = Vec::new();
+        for entry in &item.entries {
+            match entry {
+                ClipboardEntry::ExternalPaths(files) => paths.extend_from_slice(files.paths()),
+                ClipboardEntry::Image(image) => images.push(image),
+                ClipboardEntry::String(_) => {}
+            }
+        }
+        if paths.is_empty() && images.is_empty() {
+            return false;
+        }
+        if self.closing || !self.writable {
+            return true;
+        }
+        let Some(target) = self.composer_target() else {
+            self.message = Some("请先在左上角选择工作区。".into());
+            cx.notify();
+            return true;
+        };
+        let mut errors = Vec::new();
+        // File managers may expose a thumbnail alongside file paths. Prefer the
+        // original files instead of attaching a second copy of their pixels.
+        if paths.is_empty() {
+            let directory = Store::path().with_file_name("attachments");
+            for image in images {
+                match file_ref::save_clipboard_image(image, &directory) {
+                    Ok(path) => paths.push(path),
+                    Err(error) => errors.push(format!("粘贴图片失败：{error:#}")),
+                }
+            }
+        }
+        if !self.attach_paths(&paths, window, cx) {
+            self.persist_and_cleanup_attachments();
+        }
+        if !errors.is_empty() {
+            let draft = self.composer_files.entry(target).or_default();
+            if let Some(feedback) = draft.feedback.take() {
+                errors.insert(0, feedback);
+            }
+            draft.feedback = Some(errors.join("；"));
+            cx.notify();
+        }
+        true
+    }
+
     pub(super) fn composer_target(&self) -> Option<ComposerTarget> {
         self.selected_workspace
             .and_then(|index| self.store.workspaces.get(index))
@@ -95,6 +197,7 @@ impl ConduitApp {
             draft.references.retain(|reference| reference.path != path);
             draft.feedback = None;
         }
+        self.persist_and_cleanup_attachments();
         self.input.read(cx).focus_handle(cx).focus(window, cx);
         cx.notify();
     }
@@ -493,28 +596,9 @@ impl ConduitApp {
                 if let Some(family) = typography.body_font.clone() {
                     composer_input = composer_input.font_family(family);
                 }
-                // 资源管理器 Ctrl+C 文件后在这里 Ctrl+V，剪贴板会以 ExternalPaths
-                // 报出路径；没有文件时返回 false，交回默认文本粘贴。
                 let paste_app = app_entity.clone();
                 composer_input.on_paste(move |item, window, cx| {
-                    let paths: Vec<PathBuf> = item
-                        .entries
-                        .iter()
-                        .filter_map(|entry| match entry {
-                            ClipboardEntry::ExternalPaths(dropped) => {
-                                Some(dropped.paths().to_vec())
-                            }
-                            _ => None,
-                        })
-                        .flatten()
-                        .collect();
-                    if paths.is_empty() {
-                        return false;
-                    }
-                    paste_app.update(cx, |this, cx| {
-                        this.attach_paths(&paths, window, cx);
-                    });
-                    true
+                    paste_app.update(cx, |this, cx| this.paste_attachments(item, window, cx))
                 })
             }))
             .child(
@@ -537,7 +621,7 @@ impl ConduitApp {
                             message_action_button(
                                 "attach-file".into(),
                                 Icon::new(FullIconName::Paperclip),
-                                "添加文件（也可输入 @、拖入或粘贴文件）",
+                                "添加文件（也可输入 @、拖入或 Ctrl+V 粘贴文件/图片）",
                             )
                             .on_click(cx.listener(Self::pick_files)),
                         )

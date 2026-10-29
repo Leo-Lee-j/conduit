@@ -1,96 +1,176 @@
 //! Settings dialogs, preferences, and CLI configuration.
 
 use super::*;
+use gpui_kit::component::group_box::GroupBoxVariant;
+use gpui_kit::component::setting::{
+    SettingField, SettingGroup, SettingItem, SettingPage, Settings,
+};
 
-pub(super) fn settings_label(text: &'static str) -> impl IntoElement {
-    div()
-        .w(px(84.))
-        .flex_shrink_0()
-        .text_size(px(11.))
-        .text_color(rgb(palette().faint))
-        .child(text)
+/// One settings page: title and icon. The page header is collapsed, so the
+/// title only appears in the sidebar.
+fn settings_page(title: impl Into<SharedString>, icon: FullIconName) -> SettingPage {
+    SettingPage::new(title)
+        .icon(icon)
+        .resettable(false)
+        .header_style(&page_header_style())
 }
 
-/// A read-only settings card row: fixed label on the left, value on the right.
-pub(super) fn settings_row(label: &'static str, value: String, divider: bool) -> AnyElement {
-    let mut row = h_flex().px_4().py_3().gap_4().items_center();
-    if divider {
-        row = row.border_t_1().border_color(rgb(palette().border));
-    }
-    row.child(settings_label(label))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_size(px(11.))
-                .text_color(rgb(palette().muted))
-                .child(value),
-        )
-        .into_any_element()
-}
-
-/// A bordered settings card: a title row followed by the caller's own rows.
-pub(super) fn settings_card(title: &'static str, trailing: AnyElement) -> Div {
-    v_flex()
-        .w_full()
+/// SettingPage always renders its own header; the design has no page title bar,
+/// so the header is collapsed to zero height and clipped.
+fn page_header_style() -> StyleRefinement {
+    StyleRefinement::default()
+        .h(px(0.))
+        .p_0()
+        .border_0()
         .overflow_hidden()
-        .rounded(px(12.))
-        .border_1()
+}
+
+fn sidebar_style() -> StyleRefinement {
+    StyleRefinement::default()
+        .bg(rgb(palette().sidebar_bg))
+        .border_r_1()
         .border_color(rgb(palette().border))
-        .bg(rgb(palette().surface_strong))
-        .child(
-            h_flex()
-                .px_4()
-                .py_3()
-                .items_center()
-                .border_b_1()
-                .border_color(rgb(palette().border))
-                .child(
-                    div()
-                        .text_size(px(13.))
-                        .font_semibold()
-                        .text_color(rgb(palette().text))
-                        .child(title),
-                )
-                .child(div().flex_1())
-                .child(trailing),
-        )
 }
 
-/// The short right-aligned note a settings card header ends with.
-pub(super) fn settings_card_note(text: &'static str) -> AnyElement {
-    div()
-        .text_size(px(10.))
-        .text_color(rgb(palette().faint))
-        .child(text)
-        .into_any_element()
+/// A read-only setting value, right-aligned in the row.
+pub(super) fn value_field(value: String) -> SettingField<SharedString> {
+    SettingField::render(move |_, _, _| {
+        div()
+            .max_w(px(240.))
+            .truncate()
+            .text_size(px(11.))
+            .text_color(rgb(palette().muted))
+            .child(value.clone())
+    })
 }
 
-/// A settings row: fixed label, wrapping hint, and a right-aligned control.
-/// Unlike [`settings_row`] the control is an element, so pickers and steppers
-/// can sit at the trailing edge.
-pub(super) fn settings_control_row(
-    label: &'static str,
-    hint: &'static str,
-    control: AnyElement,
-    divider: bool,
-) -> AnyElement {
-    let mut row = h_flex().w_full().px_4().py_3().gap_4().items_center();
-    if divider {
-        row = row.border_t_1().border_color(rgb(palette().border));
-    }
-    row.child(settings_label(label))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_size(px(11.))
-                .text_color(rgb(palette().muted))
-                .child(hint),
-        )
-        .child(control)
-        .into_any_element()
+pub(super) fn value_item(title: impl Into<SharedString>, value: String) -> SettingItem {
+    SettingItem::new(title, value_field(value))
+}
+
+/// A wrapping paragraph, for status and hint text that cannot be truncated.
+pub(super) fn paragraph_field(value: String) -> SettingField<SharedString> {
+    SettingField::render(move |_, _, _| {
+        div()
+            .w_full()
+            .text_size(px(11.))
+            .line_height(relative(1.5))
+            .text_color(rgb(palette().faint))
+            .child(value.clone())
+    })
+}
+
+/// A wrapping paragraph for errors, in the danger color.
+pub(super) fn error_field(value: String) -> SettingField<SharedString> {
+    SettingField::render(move |_, _, _| {
+        div()
+            .w_full()
+            .text_size(px(11.))
+            .line_height(relative(1.5))
+            .text_color(rgb(palette().danger_text))
+            .child(value.clone())
+    })
+}
+
+/// A switch that saves to the store as soon as it changes.
+pub(super) fn switch_field(
+    view: Entity<ConduitApp>,
+    get: fn(&ConduitApp) -> bool,
+    set: fn(&mut ConduitApp, bool),
+) -> SettingField<bool> {
+    let read_view = view.clone();
+    SettingField::switch(
+        move |cx: &App| get(read_view.read(cx)),
+        move |value, cx| {
+            view.update(cx, |this, cx| {
+                if !this.writable || this.closing {
+                    return;
+                }
+                set(this, value);
+                this.persist();
+                cx.notify();
+            });
+        },
+    )
+}
+
+/// A −/+ stepper for a bounded integer setting.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn count_stepper_field(
+    id: &'static str,
+    value: usize,
+    min: usize,
+    max: usize,
+    decrease_label: &'static str,
+    increase_label: &'static str,
+    disabled: bool,
+    view: Entity<ConduitApp>,
+    set: fn(&mut ConduitApp, usize),
+) -> SettingField<SharedString> {
+    let can_decrease = !disabled && value > min;
+    let can_increase = !disabled && value < max;
+    let decrease_value = value.saturating_sub(1).max(min);
+    let increase_value = (value + 1).min(max);
+    let decrease_view = view.clone();
+    let increase_view = view;
+    SettingField::render(move |_, _, _| {
+        let decrease = decrease_view.clone();
+        let increase = increase_view.clone();
+        h_flex()
+            .gap_1()
+            .items_center()
+            .child(
+                Button::new(format!("{id}-minus"))
+                    .label("−")
+                    .accessibility_label(decrease_label)
+                    .small()
+                    .ghost()
+                    .disabled(!can_decrease)
+                    .when(can_decrease, |button| button.cursor_pointer())
+                    .on_click(move |_, _, cx| {
+                        decrease.update(cx, |this, cx| {
+                            if !this.writable || this.closing {
+                                return;
+                            }
+                            set(this, decrease_value);
+                            this.persist();
+                            cx.notify();
+                        });
+                    }),
+            )
+            .child(
+                h_flex()
+                    .w(px(26.))
+                    .justify_center()
+                    .text_size(px(12.))
+                    .text_color(rgb(if disabled {
+                        palette().faint
+                    } else {
+                        palette().text
+                    }))
+                    .child(value.to_string()),
+            )
+            .child(
+                Button::new(format!("{id}-plus"))
+                    .label("+")
+                    .accessibility_label(increase_label)
+                    .small()
+                    .ghost()
+                    .disabled(!can_increase)
+                    .when(can_increase, |button| button.cursor_pointer())
+                    .on_click(move |_, _, cx| {
+                        increase.update(cx, |this, cx| {
+                            if !this.writable || this.closing {
+                                return;
+                            }
+                            set(this, increase_value);
+                            this.persist();
+                            cx.notify();
+                        });
+                    }),
+            )
+            .into_any_element()
+    })
 }
 
 /// One row of a font dropdown. Row zero always restores the default family.
@@ -151,7 +231,19 @@ impl TypographyField {
     }
 }
 
-pub(super) fn typography_stepper(
+pub(super) fn typography_field(
+    id: &'static str,
+    value: f32,
+    disabled: bool,
+    field: TypographyField,
+    view: Entity<ConduitApp>,
+) -> SettingField<SharedString> {
+    SettingField::render(move |_, _, _| {
+        typography_stepper(id, value, disabled, field, view.clone())
+    })
+}
+
+fn typography_stepper(
     id: &'static str,
     value: f32,
     disabled: bool,
@@ -245,7 +337,7 @@ impl ConduitApp {
                 .rounded(px(16.))
                 .bg(rgb(palette().surface))
                 .border_color(rgb(palette().border))
-                .close_button(true)
+                .close_button(false)
                 .content(move |content, window, cx| {
                     let body = view.read(cx).settings_modal_content(window, view.clone());
                     content.child(body)
@@ -317,322 +409,29 @@ impl ConduitApp {
     }
 
     pub(super) fn settings_modal_content(&self, window: &Window, view: Entity<Self>) -> AnyElement {
-        let (title, subtitle) = match self.settings_tab {
-            SettingsTab::General => ("通用", "本机数据与诊断设置"),
-            SettingsTab::Appearance => ("外观", "主题、聊天排版与侧栏显示密度"),
-            SettingsTab::Session => ("会话", "会话命名与标签页行为"),
-            SettingsTab::Git => ("Git", "配置 Commit Message 的 AI 生成提示词"),
-            SettingsTab::Cli => ("CLI", "可执行文件路径查找顺序与版本检测说明"),
-            SettingsTab::Provider(provider) => (provider.label(), "管理可执行文件路径与版本检测"),
-            SettingsTab::Models => (
-                "模型与 Provider",
-                "管理自定义 Provider、CLI 模型与 CCS 渠道",
-            ),
-        };
-        let nav_item = |tab: SettingsTab, label: &'static str, leading: AnyElement| -> AnyElement {
-            let view = view.clone();
-            let active = self.settings_tab == tab;
-            Button::new(match tab {
-                SettingsTab::General => "settings-tab-general",
-                SettingsTab::Appearance => "settings-tab-appearance",
-                SettingsTab::Session => "settings-tab-session",
-                SettingsTab::Git => "settings-tab-git",
-                SettingsTab::Cli => "settings-tab-cli",
-                SettingsTab::Provider(Provider::Claude) => "settings-tab-claude",
-                SettingsTab::Provider(Provider::Codex) => "settings-tab-codex",
-                SettingsTab::Provider(Provider::OpenCode) => "settings-tab-opencode",
-                SettingsTab::Models => "settings-tab-models",
-            })
-            .ghost()
-            .h(px(32.))
-            .w_full()
-            .px_2()
-            .rounded(px(8.))
-            .selected(active)
-            .accessibility_label(label)
-            .cursor_pointer()
-            .on_click(move |_, _, cx| {
-                view.update(cx, |this, cx| {
-                    this.settings_tab = tab;
-                    cx.notify();
-                });
-            })
-            .child(
-                h_flex()
-                    .w_full()
-                    .gap_2()
-                    .items_center()
-                    .child(leading)
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .text_color(rgb(if active {
-                                palette().text
-                            } else {
-                                palette().muted
-                            }))
-                            .child(label),
-                    ),
-            )
-            .into_any_element()
-        };
-        let section = |text: &'static str| {
-            div()
-                .px_2()
-                .pt_3()
-                .pb_1()
-                .text_size(px(10.))
-                .text_color(rgb(palette().faint))
-                .child(text)
-        };
-        let general_icon = if self.settings_tab == SettingsTab::General {
-            palette().text
-        } else {
-            palette().faint
-        };
-        let general_leading = h_flex()
-            .w(px(14.))
-            .flex_shrink_0()
-            .justify_center()
-            .child(
-                Icon::new(IconName::Settings)
-                    .small()
-                    .text_color(rgb(general_icon)),
-            )
-            .into_any_element();
-        let appearance_icon = if self.settings_tab == SettingsTab::Appearance {
-            palette().text
-        } else {
-            palette().faint
-        };
-        let appearance_leading = h_flex()
-            .w(px(14.))
-            .flex_shrink_0()
-            .justify_center()
-            .child(
-                Icon::new(IconName::Palette)
-                    .small()
-                    .text_color(rgb(appearance_icon)),
-            )
-            .into_any_element();
-        let models_icon = if self.settings_tab == SettingsTab::Models {
-            palette().text
-        } else {
-            palette().faint
-        };
-        let models_leading = h_flex()
-            .w(px(14.))
-            .flex_shrink_0()
-            .justify_center()
-            .child(
-                Icon::new(IconName::Cpu)
-                    .small()
-                    .text_color(rgb(models_icon)),
-            )
-            .into_any_element();
-        let cli_icon = if self.settings_tab == SettingsTab::Cli {
-            palette().text
-        } else {
-            palette().faint
-        };
-        let cli_leading = h_flex()
-            .w(px(14.))
-            .flex_shrink_0()
-            .justify_center()
-            .child(
-                Icon::new(gpui_kit::assets::IconName::Terminal)
-                    .small()
-                    .text_color(rgb(cli_icon)),
-            )
-            .into_any_element();
-        let nav = v_flex()
-            .w(px(208.))
-            .h_full()
-            .p_3()
-            .gap_1()
-            .bg(rgb(palette().sidebar_bg))
-            .border_r_1()
-            .border_color(rgb(palette().border))
-            .child(
-                div()
-                    .px_2()
-                    .pt_2()
-                    .pb_3()
-                    .text_size(px(16.))
-                    .font_semibold()
-                    .text_color(rgb(palette().text))
-                    .child("设置"),
-            )
-            .child(section("应用"))
-            .child(nav_item(SettingsTab::General, "通用", general_leading))
-            .child(nav_item(
-                SettingsTab::Appearance,
-                "外观",
-                appearance_leading,
-            ))
-            .child(nav_item(
-                SettingsTab::Session,
-                "会话",
-                Icon::new(gpui_kit::assets::IconName::Sparkles)
-                    .small()
-                    .text_color(rgb(if self.settings_tab == SettingsTab::Session {
-                        palette().text
-                    } else {
-                        palette().faint
-                    }))
-                    .into_any_element(),
-            ))
-            .child(nav_item(
-                SettingsTab::Git,
-                "Git",
-                Icon::new(gpui_kit::assets::IconName::GitFork)
-                    .small()
-                    .text_color(rgb(if self.settings_tab == SettingsTab::Git {
-                        palette().text
-                    } else {
-                        palette().faint
-                    }))
-                    .into_any_element(),
-            ))
-            .child(section("CLI"))
-            .child(nav_item(SettingsTab::Cli, "CLI", cli_leading))
-            .child(nav_item(
-                SettingsTab::Provider(Provider::Claude),
-                "Claude Code",
-                provider_icon(Provider::Claude).into_any_element(),
-            ))
-            .child(nav_item(
-                SettingsTab::Provider(Provider::Codex),
-                "Codex",
-                provider_icon(Provider::Codex).into_any_element(),
-            ))
-            .child(nav_item(
-                SettingsTab::Provider(Provider::OpenCode),
-                "OpenCode",
-                provider_icon(Provider::OpenCode).into_any_element(),
-            ))
-            .child(section("模型"))
-            .child(nav_item(
-                SettingsTab::Models,
-                "模型与 Provider",
-                models_leading,
-            ))
-            .child(div().flex_1())
-            .child(
-                div()
-                    .px_2()
-                    .text_size(px(10.))
-                    .text_color(rgb(palette().faint))
-                    .child("本地 CLI · Windows"),
-            );
-        let page = match self.settings_tab {
-            SettingsTab::General => self.settings_general_content(view.clone()),
-            SettingsTab::Appearance => self.settings_appearance_content(view.clone()),
-            SettingsTab::Session => self.settings_session_content(view.clone()),
-            SettingsTab::Git => self.settings_git_content(view.clone()),
-            SettingsTab::Cli => self.settings_cli_content(),
-            SettingsTab::Provider(provider) => {
-                self.settings_provider_content(provider, view.clone())
-            }
-            SettingsTab::Models => self.settings_models_content(view.clone()),
-        };
-        let body = v_flex()
-            .id("settings-modal-body")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .px_6()
-            .py_5()
-            .gap_4()
-            .when(!self.writable, |column| {
-                column.child(
-                    div()
-                        .px_3()
-                        .py_2()
-                        .rounded(px(8.))
-                        .bg(rgb(palette().danger_bg))
-                        .text_size(px(11.))
-                        .text_color(rgb(palette().danger_text))
-                        .child("当前数据目录为只读，无法保存设置或会话模型。"),
-                )
-            })
-            .when_some(self.message.clone(), |column, message| {
-                column.child(
-                    div()
-                        .px_3()
-                        .py_2()
-                        .rounded(px(8.))
-                        .bg(rgb(palette().danger_bg))
-                        .text_size(px(11.))
-                        .text_color(rgb(palette().danger_text))
-                        .child(message),
-                )
-            })
-            .child(page);
-        let right = v_flex()
-            .flex_1()
-            .h_full()
-            .min_w_0()
-            .child(
-                v_flex()
-                    .px_6()
-                    .pt_5()
-                    .pb_4()
-                    .pr(px(44.))
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_size(px(18.))
-                            .font_semibold()
-                            .text_color(rgb(palette().text))
-                            .child(title),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(rgb(palette().muted))
-                            .child(subtitle),
-                    ),
-            )
-            .child(div().h(px(1.)).bg(rgb(palette().border)))
-            .child(body)
-            .child(
-                h_flex()
-                    .px_6()
-                    .py_3()
-                    .gap_3()
-                    .items_center()
-                    .border_t_1()
-                    .border_color(rgb(palette().border))
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_size(px(11.))
-                            .text_color(rgb(palette().faint))
-                            .child("配置保存在本地，具体生效范围见各页面说明"),
-                    )
-                    .child(
-                        Button::new("settings-done")
-                            .label("完成")
-                            .small()
-                            .primary()
-                            .cursor_pointer()
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
-                    ),
-            );
-        // Keep the footer reachable at the documented minimum window size
-        // (850x500 client area). The dialog layer clips content taller than the
-        // viewport minus its edge margins, so the height follows the window and
-        // the body scrolls instead of losing the 完成 button.
+        let disabled = !self.writable || self.closing;
+        let settings = Settings::new("conduit-settings")
+            .sidebar_width(px(208.))
+            .sidebar_size_range(px(184.)..px(240.))
+            .with_group_variant(GroupBoxVariant::Outline)
+            .sidebar_style(&sidebar_style())
+            .pages(vec![
+                self.settings_general_page(disabled, view.clone()),
+                self.settings_appearance_page(disabled, view.clone()),
+                self.settings_session_page(disabled, view.clone()),
+                self.settings_git_page(disabled, view.clone()),
+                self.settings_cli_page(disabled, view.clone()),
+                self.settings_models_page(disabled, view.clone()),
+            ]);
+        // The dialog layer clips content taller than the viewport minus its edge
+        // margins, so the content follows the window and each page scrolls.
         let modal_height = (f32::from(window.viewport_size().height) - 96.).clamp(360., 560.);
-        h_flex()
+        v_flex()
             .w_full()
             .h(px(modal_height))
-            .items_stretch()
             .overflow_hidden()
             .rounded(px(16.))
-            .child(nav)
-            .child(right)
+            .child(div().flex_1().min_h_0().w_full().child(settings))
             .into_any_element()
     }
 }

@@ -1,8 +1,12 @@
 //! Application palette and appearance synchronization.
 
+use gpui_kit::component::{Theme, ThemeConfig, ThemeRegistry, ThemeSet};
+use std::rc::Rc;
+
 /// Application colors that are not owned by the component theme. The dark
 /// values preserve the original palette; the light variant is derived from the
 /// same roles so both modes stay consistent.
+#[derive(Clone, Copy)]
 pub(super) struct Palette {
     pub(super) canvas: u32,
     pub(super) sidebar_bg: u32,
@@ -23,8 +27,6 @@ pub(super) struct Palette {
     pub(super) highlight_bg: u32,
     pub(super) diff_add_text: u32,
     pub(super) diff_remove_text: u32,
-    pub(super) diff_add_bg: u32,
-    pub(super) diff_remove_bg: u32,
     pub(super) inline_code_bg: u32,
     pub(super) git_added_text: u32,
     pub(super) git_modified_text: u32,
@@ -46,7 +48,7 @@ pub(super) struct Palette {
     pub(super) error_text: u32,
 }
 
-static DARK_PALETTE: Palette = Palette {
+const DARK_PALETTE: Palette = Palette {
     canvas: 0x0e0e10,
     sidebar_bg: 0x131315,
     surface: 0x19191c,
@@ -66,8 +68,6 @@ static DARK_PALETTE: Palette = Palette {
     highlight_bg: 0x3a3220,
     diff_add_text: 0x9fdcab,
     diff_remove_text: 0xe6a1a1,
-    diff_add_bg: 0x18261c,
-    diff_remove_bg: 0x2b1b1a,
     inline_code_bg: 0x33333b,
     git_added_text: 0x8fb8e6,
     git_modified_text: 0x9fdcab,
@@ -89,7 +89,7 @@ static DARK_PALETTE: Palette = Palette {
     error_text: 0xe6a1a1,
 };
 
-static LIGHT_PALETTE: Palette = Palette {
+const LIGHT_PALETTE: Palette = Palette {
     canvas: 0xf7f7f8,
     sidebar_bg: 0xf1f1f3,
     surface: 0xffffff,
@@ -109,8 +109,6 @@ static LIGHT_PALETTE: Palette = Palette {
     highlight_bg: 0xfff0bf,
     diff_add_text: 0x1e6631,
     diff_remove_text: 0xa43636,
-    diff_add_bg: 0xeaf6ec,
-    diff_remove_bg: 0xfbeceb,
     inline_code_bg: 0xe8e8ee,
     git_added_text: 0x2c5f9e,
     git_modified_text: 0x1e6631,
@@ -134,12 +132,12 @@ static LIGHT_PALETTE: Palette = Palette {
 
 static DARK_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
-pub(super) fn palette() -> &'static Palette {
-    if DARK_MODE.load(std::sync::atomic::Ordering::Relaxed) {
-        &DARK_PALETTE
-    } else {
-        &LIGHT_PALETTE
-    }
+/// The palette every render path reads. Kept as runtime state so a theme pack
+/// can later replace it without touching the call sites.
+static ACTIVE_PALETTE: std::sync::RwLock<Palette> = std::sync::RwLock::new(DARK_PALETTE);
+
+pub(super) fn palette() -> Palette {
+    *ACTIVE_PALETTE.read().unwrap()
 }
 
 pub(super) fn is_dark_mode() -> bool {
@@ -148,4 +146,81 @@ pub(super) fn is_dark_mode() -> bool {
 
 pub(crate) fn set_palette(mode: gpui_kit::component::ThemeMode) {
     DARK_MODE.store(mode.is_dark(), std::sync::atomic::Ordering::Relaxed);
+    let palette = if mode.is_dark() {
+        DARK_PALETTE
+    } else {
+        LIGHT_PALETTE
+    };
+    *ACTIVE_PALETTE.write().unwrap() = palette;
+}
+
+const THEME_PACKS: &str = include_str!("../../assets/themes/conduit.json");
+
+/// Installs the built-in theme packs as the light/dark themes, so
+/// `Theme::change` reloads the pack instead of the library defaults. A pack
+/// only overrides the tokens the app owns; every other color falls back to the
+/// library value, which keeps component visuals unchanged.
+pub(crate) fn install_theme_packs(cx: &mut gpui_kit::App) {
+    let packs = match serde_json::from_str::<ThemeSet>(THEME_PACKS) {
+        Ok(set) => set.themes,
+        Err(error) => {
+            eprintln!("内置主题包解析失败: {error}");
+            return;
+        }
+    };
+    let mut light: Option<Rc<ThemeConfig>> = None;
+    let mut dark: Option<Rc<ThemeConfig>> = None;
+    for pack in packs {
+        let pack = Rc::new(pack);
+        if pack.mode.is_dark() {
+            dark = Some(pack);
+        } else {
+            light = Some(pack);
+        }
+    }
+    // Register the packs so the registry's name-based reload resolves them
+    // instead of dropping back to the library themes.
+    if let Err(error) = ThemeRegistry::global_mut(cx).load_themes_from_str(THEME_PACKS) {
+        eprintln!("内置主题包注册失败: {error}");
+    }
+    Theme::update(cx, |theme| {
+        if let Some(light) = light {
+            theme.light_theme = light;
+        }
+        if let Some(dark) = dark {
+            theme.dark_theme = dark;
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_packs_cover_both_modes_and_own_the_tab_tokens() {
+        let set: ThemeSet = serde_json::from_str(THEME_PACKS).expect("theme packs parse");
+        let dark = set
+            .themes
+            .iter()
+            .find(|theme| theme.mode.is_dark())
+            .expect("dark pack");
+        let light = set
+            .themes
+            .iter()
+            .find(|theme| !theme.mode.is_dark())
+            .expect("light pack");
+        assert_eq!(dark.name.as_ref(), "Conduit Dark");
+        assert_eq!(light.name.as_ref(), "Conduit Light");
+        for pack in [dark, light] {
+            assert!(pack.colors.tab.is_some());
+            assert!(pack.colors.tab_active.is_some());
+            assert!(pack.colors.tab_active_foreground.is_some());
+            assert!(pack.colors.tab_foreground.is_some());
+            assert!(pack.colors.tab_bar.is_some());
+            // The folder tab strip relies on the syntax palette staying in the
+            // pack; the library fills unset colors from its own defaults.
+            assert!(pack.highlight.is_some());
+        }
+    }
 }

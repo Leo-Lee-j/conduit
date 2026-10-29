@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 anyhow = "1"
 ignore = "0.4"
+image = { version = "0.25.10", default-features = false }
 gpui-kit = { git = "https://github.com/longbridge/gpui-kit.git", rev = "11345ec002d9f182a266b5d5dd3a217090700a87", features = ["syntect"] }
 raw-window-handle = "0.6"
 rusqlite = { version = "0.40", features = ["bundled"] }

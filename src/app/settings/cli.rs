@@ -97,31 +97,48 @@ impl ConduitApp {
         cx.notify();
     }
 
-    pub(in crate::app) fn settings_provider_content(
+    pub(in crate::app) fn settings_cli_page(
+        &self,
+        disabled: bool,
+        view: Entity<Self>,
+    ) -> SettingPage {
+        settings_page("CLI", FullIconName::SquareTerminal).groups(vec![
+            SettingGroup::new()
+                .title("路径查找顺序")
+                .items(vec![
+                    value_item(
+                        "环境变量",
+                        "CONDUIT_CLAUDE_PATH · CONDUIT_CODEX_PATH · CONDUIT_OPENCODE_PATH".into(),
+                    ),
+                    value_item("应用配置", "在下面各引擎分组中手动指定".into()),
+                    value_item("PATH", "claude / codex / opencode 的 .exe 或 .cmd".into()),
+                    value_item(
+                        "常见安装位置",
+                        "~/.local/bin · %LOCALAPPDATA%\\Programs\\OpenAI\\Codex".into(),
+                    ),
+                ])
+                .footer(|_, _| "按上面的顺序查找，前者优先。"),
+            self.settings_provider_group(Provider::Claude, 0, disabled, view.clone()),
+            self.settings_provider_group(Provider::Codex, 1, disabled, view.clone()),
+            self.settings_provider_group(Provider::OpenCode, 2, disabled, view),
+        ])
+    }
+
+    fn settings_provider_group(
         &self,
         provider: Provider,
+        index: usize,
+        disabled: bool,
         view: Entity<Self>,
-    ) -> AnyElement {
-        let disabled = !self.writable || self.closing;
-        let label = |text: &'static str| {
-            div()
-                .w(px(84.))
-                .flex_shrink_0()
-                .text_size(px(11.))
-                .text_color(rgb(palette().faint))
-                .child(text)
-        };
-        let index: usize = match provider {
-            Provider::Claude => 0,
-            Provider::Codex => 1,
-            Provider::OpenCode => 2,
-        };
+    ) -> SettingGroup {
+        let closing = self.closing;
         let configured = self
             .store
             .cli
             .path(provider)
             .map(display_path)
             .unwrap_or_else(|| "自动查找（环境变量 / PATH）".into());
+        let has_path = self.store.cli.path(provider).is_some();
         let effective = match cli::resolve(provider, &self.store.cli) {
             Ok(cli) => format!("{}：{}", cli.source.label(), display_path(&cli.path)),
             Err(error) => format!("尚不可用：{error:#}"),
@@ -132,164 +149,99 @@ impl ConduitApp {
             .get(&provider)
             .cloned()
             .unwrap_or_else(|| "尚未检测版本。".into());
+        let tested = cli::tested_version(provider);
+        let mut cli_footer = format!(
+            "版本检测只运行 --version，不调用模型，也不验证登录状态；请先在官方 CLI 中完成登录。已验证版本 {tested}。"
+        );
+        if provider == Provider::OpenCode {
+            cli_footer.push_str(
+                " ACP 接入使用 OpenCode 自身登录与 Provider 配置；外部插件、问答工具与子代理暂未开放。",
+            );
+        }
+
         let choose_view = view.clone();
+        let choose = SettingField::render(move |_, _, _| {
+            let choose_view = choose_view.clone();
+            Button::new(("settings-choose", index))
+                .label("更改")
+                .small()
+                .outline()
+                .disabled(disabled)
+                .when(!disabled, |button| button.cursor_pointer())
+                .on_click(move |_, window, cx| {
+                    choose_view.update(cx, |this, cx| {
+                        this.choose_cli(provider, window, cx);
+                    });
+                })
+        });
+
         let clear_view = view.clone();
-        let mut actions = h_flex()
-            .px_4()
-            .py_2()
-            .gap_2()
-            .justify_end()
-            .border_t_1()
-            .border_color(rgb(palette().border))
-            .child(
+        let probe_view = view.clone();
+        let cancel_view = view.clone();
+        let actions = SettingField::render(move |_, _, _| {
+            let mut row = h_flex().w_full().justify_end().gap_2().child({
+                let clear_view = clear_view.clone();
                 Button::new(("settings-clear", index))
                     .label("清除配置")
                     .small()
                     .ghost()
-                    .disabled(disabled || self.store.cli.path(provider).is_none())
-                    .when(
-                        !disabled && self.store.cli.path(provider).is_some(),
-                        |button| button.cursor_pointer(),
-                    )
+                    .disabled(disabled || !has_path)
+                    .when(!disabled && has_path, |button| button.cursor_pointer())
                     .on_click(move |_, _, cx| {
                         clear_view.update(cx, |this, cx| {
                             this.set_cli_path(provider, None, cx);
                         });
-                    }),
-            );
-        if probing {
-            let cancel_view = view.clone();
-            actions = actions.child(
-                Button::new(("settings-cancel-probe", index))
-                    .label("取消检测")
-                    .small()
-                    .ghost()
-                    .disabled(self.closing)
-                    .when(!self.closing, |button| button.cursor_pointer())
-                    .on_click(move |_, _, cx| {
-                        cancel_view.update(cx, |this, cx| {
-                            if let Some(probe) = this.probes.get(&provider) {
-                                probe.cancel();
-                            }
-                            this.diagnostics.insert(provider, "正在停止检测…".into());
-                            cx.notify();
-                        });
-                    }),
-            );
-        } else {
-            let probe_view = view.clone();
-            actions = actions.child(
-                Button::new(("settings-probe", index))
-                    .label("检测版本")
-                    .small()
-                    .outline()
-                    .disabled(self.closing)
-                    .when(!self.closing, |button| button.cursor_pointer())
-                    .on_click(move |_, _, cx| {
-                        probe_view.update(cx, |this, cx| {
-                            this.probe_cli(provider, cx);
-                        });
-                    }),
-            );
-        }
-        let card = v_flex()
-            .w_full()
-            .overflow_hidden()
-            .rounded(px(12.))
-            .border_1()
-            .border_color(rgb(palette().border))
-            .bg(rgb(palette().surface_strong))
-            .child(
-                h_flex()
-                    .px_4()
-                    .py_3()
-                    .gap_2()
-                    .items_center()
-                    .border_b_1()
-                    .border_color(rgb(palette().border))
-                    .child(provider_icon(provider))
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_semibold()
-                            .text_color(rgb(palette().text))
-                            .child("可执行文件"),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .text_color(rgb(palette().faint))
-                            .child(format!("已验证版本 {}", cli::tested_version(provider))),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .px_4()
-                    .py_3()
-                    .gap_4()
-                    .items_center()
-                    .child(label("可执行文件"))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(12.))
-                            .text_color(rgb(palette().muted))
-                            .child(configured),
-                    )
-                    .child(
-                        Button::new(("settings-choose", index))
-                            .label("更改")
-                            .small()
-                            .outline()
-                            .disabled(disabled)
-                            .when(!disabled, |button| button.cursor_pointer())
-                            .on_click(move |_, window, cx| {
-                                choose_view.update(cx, |this, cx| {
-                                    this.choose_cli(provider, window, cx);
-                                });
-                            }),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .px_4()
-                    .py_3()
-                    .gap_4()
-                    .items_center()
-                    .border_t_1()
-                    .border_color(rgb(palette().border))
-                    .child(label("本次启动"))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(11.))
-                            .text_color(rgb(palette().muted))
-                            .child(effective),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .px_4()
-                    .py_3()
-                    .gap_4()
-                    .items_start()
-                    .border_t_1()
-                    .border_color(rgb(palette().border))
-                    .child(label("状态"))
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_size(px(11.))
-                            .text_color(rgb(palette().faint))
-                            .child(diagnostic),
-                    ),
-            )
-            .child(actions);
+                    })
+            });
+            if probing {
+                let cancel_view = cancel_view.clone();
+                row = row.child(
+                    Button::new(("settings-cancel-probe", index))
+                        .label("取消检测")
+                        .small()
+                        .ghost()
+                        .disabled(closing)
+                        .when(!closing, |button| button.cursor_pointer())
+                        .on_click(move |_, _, cx| {
+                            cancel_view.update(cx, |this, cx| {
+                                if let Some(probe) = this.probes.get(&provider) {
+                                    probe.cancel();
+                                }
+                                this.diagnostics.insert(provider, "正在停止检测…".into());
+                                cx.notify();
+                            });
+                        }),
+                );
+            } else {
+                let probe_view = probe_view.clone();
+                row = row.child(
+                    Button::new(("settings-probe", index))
+                        .label("检测版本")
+                        .small()
+                        .outline()
+                        .disabled(closing)
+                        .when(!closing, |button| button.cursor_pointer())
+                        .on_click(move |_, _, cx| {
+                            probe_view.update(cx, |this, cx| {
+                                this.probe_cli(provider, cx);
+                            });
+                        }),
+                );
+            }
+            row
+        });
+
+        let capabilities = vec![
+            SettingItem::new("可执行文件", choose)
+                .description(configured)
+                .disabled(disabled),
+            SettingItem::new("本次启动", paragraph_field(effective))
+                .layout(Axis::Vertical)
+                .description("当前进程实际使用的程序；更换后对下一次启动的会话生效。"),
+            SettingItem::new("状态", paragraph_field(diagnostic)).layout(Axis::Vertical),
+            SettingItem::new("操作", actions).layout(Axis::Vertical),
+        ];
+
         let catalog = self.engine_catalog(provider);
         let current_model = catalog
             .and_then(|catalog| catalog.current.clone())
@@ -305,48 +257,85 @@ impl ConduitApp {
             .unwrap_or_else(|| "CLI 内置".into());
         let detail = catalog.and_then(|catalog| catalog.detail.clone());
         let model_count = catalog.map(|catalog| catalog.models.len()).unwrap_or(0);
-        let mut model_rows = v_flex().w_full();
-        if let Some(catalog) = catalog {
-            for model in &catalog.models {
-                let is_current = catalog.current.as_deref() == Some(model.id.as_str());
-                let show_id = model.label != model.id;
-                let mut value = v_flex().flex_1().min_w_0().gap(px(1.)).child(
-                    div()
-                        .truncate()
-                        .text_size(px(12.))
-                        .text_color(rgb(palette().text))
-                        .child(model.label.clone()),
-                );
-                if show_id {
-                    value = value.child(
-                        div()
-                            .truncate()
-                            .text_size(px(10.))
-                            .text_color(rgb(palette().faint))
-                            .child(model.id.clone()),
-                    );
-                }
-                model_rows = model_rows.child(
+        let rows: Vec<_> = catalog
+            .map(|catalog| {
+                let current = catalog.current.as_deref();
+                catalog
+                    .models
+                    .iter()
+                    .map(|model| {
+                        (
+                            model.id.clone(),
+                            model.label.clone(),
+                            model.note.clone(),
+                            current == Some(model.id.as_str()),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let empty = rows.is_empty();
+        let catalog_error = catalog.and_then(|catalog| catalog.error.clone());
+        let catalog_note = catalog.and_then(|catalog| catalog.note.clone());
+        let mut model_items = vec![value_item("来源", source)];
+        if let Some(catalog_path) = catalog_path {
+            model_items.push(value_item("模型目录", catalog_path));
+        }
+        model_items.push(value_item("当前默认", current_model));
+        model_items.push(value_item("接口", endpoint));
+        if let Some(detail) = detail {
+            model_items.push(value_item("附加配置", detail));
+        }
+        model_items.push(value_item("可用模型", format!("{model_count} 个")));
+        if let Some(catalog_error) = catalog_error {
+            model_items.push(
+                SettingItem::new("读取失败", error_field(catalog_error))
+                    .layout(Axis::Vertical)
+                    .keywords(["错误"]),
+            );
+        }
+        let list = SettingField::render(move |_, _, _| {
+            let mut list = v_flex().w_full().gap_2();
+            for (id, label, note, current) in &rows {
+                let show_id = label != id;
+                list = list.child(
                     h_flex()
-                        .px_4()
-                        .py_3()
-                        .gap_3()
+                        .w_full()
+                        .gap_2()
                         .items_center()
-                        .border_t_1()
-                        .border_color(rgb(palette().border))
-                        .child(model_mark(provider, Some(&model.id)))
-                        .child(value)
-                        .when(!model.note.is_empty(), |row| {
-                            row.child(
+                        .child(model_mark(provider, Some(id)))
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(px(12.))
+                                        .text_color(rgb(palette().text))
+                                        .child(label.clone()),
+                                )
+                                .when(show_id, |this| {
+                                    this.child(
+                                        div()
+                                            .truncate()
+                                            .text_size(px(10.))
+                                            .text_color(rgb(palette().faint))
+                                            .child(id.clone()),
+                                    )
+                                }),
+                        )
+                        .when(!note.is_empty(), |this| {
+                            this.child(
                                 div()
                                     .flex_shrink_0()
                                     .text_size(px(10.))
                                     .text_color(rgb(palette().faint))
-                                    .child(model.note.clone()),
+                                    .child(note.clone()),
                             )
                         })
-                        .when(is_current, |row| {
-                            row.child(
+                        .when(*current, |this| {
+                            this.child(
                                 div()
                                     .px_2()
                                     .py(px(2.))
@@ -359,242 +348,51 @@ impl ConduitApp {
                         }),
                 );
             }
-            if catalog.models.is_empty() {
-                model_rows = model_rows.child(
-                    h_flex()
-                        .px_4()
-                        .py_3()
-                        .border_t_1()
-                        .border_color(rgb(palette().border))
+            if empty {
+                list = list.child(
+                    div()
                         .text_size(px(11.))
                         .text_color(rgb(palette().faint))
                         .child("未发现模型定义，可在 CLI 中配置后重新读取。"),
                 );
             }
-        }
-        let sync_row = |label: &'static str, value: String, divider: bool| -> AnyElement {
-            let mut row = h_flex().px_4().py_3().gap_4().items_center();
-            if divider {
-                row = row.border_t_1().border_color(rgb(palette().border));
-            }
-            row.child(settings_label(label))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(11.))
-                        .text_color(rgb(palette().muted))
-                        .child(value),
-                )
-                .into_any_element()
-        };
+            list
+        });
+        model_items.push(
+            SettingItem::new("模型列表", list)
+                .layout(Axis::Vertical)
+                .description("来自 CLI 自身配置，只读；切换模型请在 CLI 中操作。"),
+        );
         let sync_view = view.clone();
-        let mut model_card = v_flex()
-            .w_full()
-            .overflow_hidden()
-            .rounded(px(12.))
-            .border_1()
-            .border_color(rgb(palette().border))
-            .bg(rgb(palette().surface_strong))
-            .child(
-                h_flex()
-                    .px_4()
-                    .py_3()
-                    .gap_2()
-                    .items_center()
-                    .border_b_1()
-                    .border_color(rgb(palette().border))
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_semibold()
-                            .text_color(rgb(palette().text))
-                            .child("当前模型"),
-                    )
-                    .child(
-                        div()
-                            .px_2()
-                            .py(px(2.))
-                            .rounded(px(4.))
-                            .bg(rgb(palette().surface_hover))
-                            .text_size(px(9.))
-                            .text_color(rgb(palette().faint))
-                            .child("CLI"),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new(("settings-sync-models", index))
-                            .label("重新读取")
-                            .small()
-                            .ghost()
-                            .disabled(self.closing)
-                            .when(!self.closing, |button| button.cursor_pointer())
-                            .on_click(move |_, _, cx| {
-                                sync_view.update(cx, |this, cx| {
-                                    this.reload_models(provider, cx);
-                                });
-                            }),
-                    ),
-            )
-            .child(sync_row("来源", source, false));
-        if let Some(catalog_path) = catalog_path {
-            model_card = model_card.child(sync_row("模型目录", catalog_path, true));
-        }
-        model_card = model_card
-            .child(sync_row("当前默认", current_model, true))
-            .child(sync_row("接口", endpoint, true));
-        if let Some(detail) = detail {
-            model_card = model_card.child(sync_row("附加配置", detail, true));
-        }
-        model_card = model_card
-            .child(sync_row("可用模型", format!("{model_count} 个"), true))
-            .child(model_rows);
-        if let Some(catalog) = catalog {
-            if let Some(error) = &catalog.error {
-                model_card = model_card.child(
-                    div()
-                        .px_4()
-                        .py_2()
-                        .border_t_1()
-                        .border_color(rgb(palette().border))
-                        .text_size(px(10.))
-                        .text_color(rgb(palette().danger_text))
-                        .child(error.clone()),
-                );
-            } else if let Some(note) = &catalog.note {
-                model_card = model_card.child(
-                    div()
-                        .px_4()
-                        .py_2()
-                        .border_t_1()
-                        .border_color(rgb(palette().border))
-                        .text_size(px(10.))
-                        .text_color(rgb(palette().faint))
-                        .child(note.clone()),
-                );
-            }
-        }
-        v_flex()
-            .w_full()
-            .gap_3()
-            .child(card)
-            .when(provider == Provider::OpenCode, |panel| panel.child(div().text_size(px(11.)).text_color(rgb(palette().faint)).child("ACP 接入：使用 OpenCode 自身登录与 Provider 配置；写入和命令按权限审批。外部插件、问答工具与子代理暂未开放。模型目录在连接会话后更新。")))
-            .child(model_card)
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .line_height(relative(1.5))
-                    .text_color(rgb(palette().faint))
-                    .child("版本检测只运行 --version，不调用模型，也不验证登录状态；请先在官方 CLI 中完成登录。"),
-            )
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .line_height(relative(1.5))
-                    .text_color(rgb(palette().faint))
-                    .child("此处只显示 CLI 当前模型；完整来源与 CCS 同步见左侧「模型同步」。不读取或显示密钥，也不会写回 CLI 配置。"),
-            )
-            .into_any_element()
-    }
+        let sync = SettingField::render(move |_, _, _| {
+            let sync_view = sync_view.clone();
+            Button::new(("settings-sync-models", index))
+                .label("重新读取")
+                .small()
+                .ghost()
+                .disabled(closing)
+                .when(!closing, |button| button.cursor_pointer())
+                .on_click(move |_, _, cx| {
+                    sync_view.update(cx, |this, cx| {
+                        this.reload_models(provider, cx);
+                    });
+                })
+        });
+        model_items.push(
+            SettingItem::new("重新读取", sync)
+                .description("重新读取 CLI 配置中的模型定义")
+                .disabled(closing),
+        );
+        let model_footer = catalog_note.unwrap_or_else(|| {
+            "此处只显示 CLI 当前模型；完整来源与 CCS 同步见「模型同步」页面。不读取或显示密钥，也不会写回 CLI 配置。".into()
+        });
+        let footer = format!("{cli_footer}\n\n{model_footer}");
 
-    pub(in crate::app) fn settings_cli_content(&self) -> AnyElement {
-        v_flex()
-            .w_full()
-            .gap_4()
-            .child(
-                v_flex()
-                    .w_full()
-                    .overflow_hidden()
-                    .rounded(px(12.))
-                    .border_1()
-                    .border_color(rgb(palette().border))
-                    .bg(rgb(palette().surface_strong))
-                    .child(
-                        h_flex()
-                            .px_4()
-                            .py_3()
-                            .items_center()
-                            .border_b_1()
-                            .border_color(rgb(palette().border))
-                            .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .font_semibold()
-                                    .text_color(rgb(palette().text))
-                                    .child("路径查找顺序"),
-                            )
-                            .child(div().flex_1())
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .text_color(rgb(palette().faint))
-                                    .child("前者优先"),
-                            ),
-                    )
-                    .child(settings_row(
-                        "环境变量",
-                        "CONDUIT_CLAUDE_PATH · CONDUIT_CODEX_PATH · CONDUIT_OPENCODE_PATH".into(),
-                        false,
-                    ))
-                    .child(settings_row(
-                        "应用配置",
-                        "在各引擎页面手动指定".into(),
-                        true,
-                    ))
-                    .child(settings_row(
-                        "PATH",
-                        "claude / codex / opencode 的 .exe 或 .cmd".into(),
-                        true,
-                    ))
-                    .child(settings_row(
-                        "常见安装位置",
-                        "~/.local/bin · %LOCALAPPDATA%\\Programs\\OpenAI\\Codex".into(),
-                        true,
-                    )),
-            )
-            .child(
-                v_flex()
-                    .w_full()
-                    .overflow_hidden()
-                    .rounded(px(12.))
-                    .border_1()
-                    .border_color(rgb(palette().border))
-                    .bg(rgb(palette().surface_strong))
-                    .child(
-                        h_flex()
-                            .px_4()
-                            .py_3()
-                            .items_center()
-                            .border_b_1()
-                            .border_color(rgb(palette().border))
-                            .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .font_semibold()
-                                    .text_color(rgb(palette().text))
-                                    .child("可执行文件与版本"),
-                            ),
-                    )
-                    .child(settings_row(
-                        "Claude Code",
-                        "在左侧「Claude Code」页面选择本机 .exe / .cmd 并检测版本".into(),
-                        false,
-                    ))
-                    .child(settings_row(
-                        "Codex",
-                        "在左侧「Codex」页面选择本机 .exe / .cmd 并检测版本".into(),
-                        true,
-                    ))
-                    .child(settings_row("OpenCode", "在左侧「OpenCode」页面选择本机 .exe / .cmd 并检测版本".into(), true)),
-            )
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .line_height(relative(1.5))
-                    .text_color(rgb(palette().faint))
-                    .child("修改 CLI 路径或版本设置仅影响后续启动的会话；路径无效时会显式报错，不会自动改用另一份程序。"),
-            )
-            .into_any_element()
+        SettingGroup::new()
+            .title(provider.label())
+            .description("可执行文件、版本检测与 CLI 当前模型")
+            .items(capabilities)
+            .items(model_items)
+            .footer(move |_, _| footer.clone())
     }
 }

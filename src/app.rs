@@ -39,7 +39,7 @@ use gpui_kit::{
         select::{Select, SelectEvent, SelectState},
         slider::{Slider, SliderEvent, SliderState},
         spinner::Spinner,
-        switch::Switch,
+        tab::{Tab, TabBar},
         text::{TextView, TextViewStyle},
         *,
     },
@@ -95,8 +95,8 @@ use search::{highlight_ranges, search_snippet};
 use sessions::*;
 use settings::*;
 use state::*;
-pub(crate) use theme::set_palette;
 use theme::*;
+pub(crate) use theme::{install_theme_packs, set_palette};
 use tools::*;
 use typography::*;
 
@@ -126,6 +126,9 @@ pub struct ConduitApp {
     /// Open session tabs, ordered left to right by when they were opened.
     /// Selecting a tab keeps its position; only new tabs append at the end.
     open_tabs: Vec<u64>,
+    /// The open tab under the pointer, so the strip's right-click menu knows
+    /// which tab it was opened on.
+    tab_menu_target: Option<u64>,
     input: Entity<TextareaState>,
     drafts: HashMap<u64, String>,
     workspace_drafts: HashMap<PathBuf, String>,
@@ -145,7 +148,6 @@ pub struct ConduitApp {
     opencode_model_probes: HashMap<PathBuf, models::OpenCodeModelsProbe>,
     ccs: CcsCatalog,
     message: Option<String>,
-    settings_tab: SettingsTab,
     git_prompt_input: Entity<TextareaState>,
     /// Font pickers for chat body text and code; rebuilt from the installed
     /// families when the app starts.
@@ -229,6 +231,8 @@ pub struct ConduitApp {
     /// Last elapsed-label repaint: every second during turns, every minute idle.
     last_live_tick: Instant,
     tool_scrolls: HashMap<(u64, String), ScrollHandle>,
+    /// Parsed diff viewers for expanded edit cards, keyed like `tool_scrolls`.
+    tool_diffs: HashMap<(u64, String), CachedDiff>,
     message_focus: Option<(u64, String, Instant)>,
     pending_message_jump: bool,
     performance: Entity<PerformanceMonitor>,
@@ -297,6 +301,7 @@ impl ConduitApp {
             Ok(store) => (store, None, true),
             Err(error) => (Store::default(), Some(error), false),
         };
+        install_theme_packs(cx);
         let initial_mode = match store.ui.appearance {
             AppearanceMode::System => gpui_kit::component::ThemeMode::from(window.appearance()),
             AppearanceMode::Light => gpui_kit::component::ThemeMode::Light,
@@ -505,7 +510,7 @@ impl ConduitApp {
                     cx.notify();
                     false
                 } else {
-                    this.persist();
+                    this.discard_composer_attachments();
                     true
                 }
             })
@@ -536,12 +541,13 @@ impl ConduitApp {
         let app = cx.entity().downgrade();
         let timeline = cx.new(|_| shell::ChatTimeline::new(app.clone(), scroll.clone()));
         let sidebar_view = cx.new(|cx| sidebar::SidebarView::new(app, cx));
-        Self {
+        let mut app = Self {
             store,
             writable,
             selected_workspace,
             selected_session,
             open_tabs: selected_session.into_iter().collect(),
+            tab_menu_target: None,
             input,
             drafts: HashMap::new(),
             workspace_drafts: HashMap::new(),
@@ -560,7 +566,6 @@ impl ConduitApp {
             opencode_model_probes: HashMap::new(),
             ccs,
             message,
-            settings_tab: SettingsTab::General,
             git_prompt_input,
             chat_font_select,
             code_font_select,
@@ -630,13 +635,18 @@ impl ConduitApp {
             plans: HashMap::new(),
             last_live_tick: Instant::now(),
             tool_scrolls: HashMap::new(),
+            tool_diffs: HashMap::new(),
             message_focus: None,
             pending_message_jump: false,
             performance: cx.new(|_| PerformanceMonitor::new()),
             performance_open: false,
             copied_action: None,
             copied_action_seq: 0,
-        }
+        };
+        // Drafts are memory-only, so leftover clipboard files from a previous
+        // exit or crash can be collected once the store has loaded successfully.
+        app.cleanup_attachments();
+        app
     }
 
     /// Arms the startup page before the window's first frame. The initial

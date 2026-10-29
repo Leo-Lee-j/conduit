@@ -375,17 +375,6 @@ pub(super) fn update_commit_text(
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum SettingsTab {
-    General,
-    Appearance,
-    Session,
-    Git,
-    Cli,
-    Provider(Provider),
-    Models,
-}
-
 /// Independent tool windows sharing the application's right-hand dock.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum DetailView {
