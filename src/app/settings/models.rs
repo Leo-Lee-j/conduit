@@ -464,9 +464,7 @@ impl ConduitApp {
             list
         })
         .keywords(keywords);
-        SettingGroup::new()
-            .title("Provider 列表")
-            .items(vec![add, list])
+        settings_section("Provider 列表").items(vec![add, list])
     }
 
     fn models_source_group(&self, view: Entity<Self>) -> SettingGroup {
@@ -528,8 +526,7 @@ impl ConduitApp {
                     .keywords(["说明"]),
             );
         }
-        SettingGroup::new()
-            .title("模型来源")
+        settings_section("模型来源")
             .items(items)
             .footer(|_, _| {
                 "CCS 中的 Provider 配置会自动同步到 Provider 列表，与自定义 Provider 一起供聊天选择。同步不会切换 cc-switch 当前 Provider。"
@@ -537,7 +534,7 @@ impl ConduitApp {
     }
 
     fn models_provider_group(&self, provider: Provider) -> SettingGroup {
-        let catalog = self.catalogs.get(&provider);
+        let catalog = self.engine_catalog(provider);
         let current = catalog
             .and_then(|catalog| catalog.current.clone())
             .unwrap_or_else(|| "CLI 默认".into());
@@ -562,12 +559,21 @@ impl ConduitApp {
             .unwrap_or_default();
         let error = catalog.and_then(|catalog| catalog.error.clone());
         let note = catalog.and_then(|catalog| catalog.note.clone());
-        let mut items = vec![
-            value_item("配置", config_path),
+        let mut items = vec![value_item("配置", config_path)];
+        if let Some(path) = catalog.and_then(|catalog| catalog.catalog_path.as_deref()) {
+            items.push(value_item("模型目录", display_path(path)));
+        }
+        if let Some(endpoint) = catalog.and_then(|catalog| catalog.endpoint.clone()) {
+            items.push(value_item("接口", endpoint));
+        }
+        if let Some(detail) = catalog.and_then(|catalog| catalog.detail.clone()) {
+            items.push(value_item("附加配置", detail));
+        }
+        items.extend(vec![
             value_item("当前默认", current),
             value_item("可用模型", format!("{model_count} 个")),
             SettingItem::new("模型列表", model_list_field(provider, rows)).layout(Axis::Vertical),
-        ];
+        ]);
         if let Some(error) = error {
             items.push(
                 SettingItem::new("读取失败", error_field(error))
@@ -575,7 +581,7 @@ impl ConduitApp {
                     .keywords(["错误"]),
             );
         }
-        let group = SettingGroup::new().title(provider.label()).items(items);
+        let group = settings_section(provider.label()).items(items);
         if let Some(note) = note {
             group.footer(move |_, _| note.clone())
         } else {
@@ -588,7 +594,7 @@ impl ConduitApp {
         disabled: bool,
         view: Entity<Self>,
     ) -> SettingPage {
-        settings_page("模型同步", FullIconName::Layers).groups(vec![
+        settings_page("模型与服务", FullIconName::Layers).groups(vec![
             self.providers_group(disabled, view.clone()),
             self.models_source_group(view),
             self.models_provider_group(Provider::Claude),

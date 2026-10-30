@@ -24,7 +24,7 @@
 
 .EXAMPLE
   # Capture the settings page and open the model sync page first.
-  ./scripts/ui-acceptance.ps1 -Action capture -Name settings-models -AppArgs '--settings' -ClickButton '模型同步'
+  ./scripts/ui-acceptance.ps1 -Action capture -Name settings-models -AppArgs '--settings' -ClickButton '模型与服务'
 
 .EXAMPLE
   # Capture the narrow layout at the documented minimum window size.

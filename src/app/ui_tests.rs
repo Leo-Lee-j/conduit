@@ -26,7 +26,8 @@ fn settings_dismisses_on_outside_click_and_keeps_inside_clicks(cx: &mut TestAppC
         gpui_kit::component::Root::new(app, window, cx)
     });
     let app = slot.borrow().as_ref().unwrap().clone();
-    for close_with_escape in [false, true] {
+    for (width, height, close_method) in [(850., 500., 0), (1280., 900., 1), (850., 500., 2)] {
+        cx.simulate_resize(gpui_kit::size(px(width), px(height)));
         cx.update(|window, cx| app.update(cx, |app, cx| app.open_settings(window, cx)));
         cx.run_until_parked();
         cx.update(|window, cx| {
@@ -34,12 +35,61 @@ fn settings_dismisses_on_outside_click_and_keeps_inside_clicks(cx: &mut TestAppC
             assert!(window.has_active_dialog(cx));
         });
         let surface = cx.debug_bounds("dialog-0").unwrap();
+        let modal = cx.debug_bounds("settings-modal").expect("settings surface");
+        let header = cx
+            .debug_bounds("settings-modal-header")
+            .expect("fixed header");
+        let body = cx
+            .debug_bounds("settings-modal-body")
+            .expect("scrollable body");
+        let footer = cx
+            .debug_bounds("settings-modal-footer")
+            .expect("fixed footer");
+        let close = cx.debug_bounds("settings-close").expect("close button");
+        assert!(modal.left() >= px(16.) && modal.right() <= px(width - 16.));
+        assert!(modal.top() >= px(16.) && modal.bottom() <= px(height - 16.));
+        assert!(body.top() >= header.bottom() && body.bottom() <= footer.top());
+        assert!(
+            body.size.height >= px(300.),
+            "settings keep room for their content"
+        );
+        assert!(close.top() >= header.top() && close.bottom() <= header.bottom());
         let inside = point(surface.left() + px(12.), surface.center().y);
         cx.simulate_mouse_down(inside, MouseButton::Left, Modifiers::default());
         cx.simulate_mouse_up(inside, MouseButton::Left, Modifiers::default());
         cx.update(|window, cx| assert!(window.has_active_dialog(cx)));
-        if close_with_escape {
+        let appearance = cx.update(|window, _| {
+            gpui_kit::base::test_support::find(window, &[], &"0-1".into())
+                .expect("appearance navigation")
+                .bounds()
+        });
+        cx.simulate_mouse_down(appearance.center(), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(appearance.center(), MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let mut previous = None;
+        for selector in [
+            "appearance-theme-system",
+            "appearance-theme-light",
+            "appearance-theme-dark",
+        ] {
+            let card = cx.debug_bounds(selector).expect("theme preview card");
+            assert!(card.left() >= body.left() && card.right() <= body.right());
+            assert!(card.top() >= body.top() && card.bottom() <= body.bottom());
+            if let Some(last) = previous {
+                let last: gpui_kit::Bounds<gpui_kit::Pixels> = last;
+                assert!(card.left() > last.right(), "theme cards do not overlap");
+                assert_eq!(card.top(), last.top());
+            }
+            previous = Some(card);
+        }
+        if close_method == 1 {
             cx.simulate_keystrokes("escape");
+        } else if close_method == 2 {
+            cx.simulate_mouse_down(close.center(), MouseButton::Left, Modifiers::default());
+            cx.simulate_mouse_up(close.center(), MouseButton::Left, Modifiers::default());
         } else {
             let outside = point(px(10.), px(100.));
             cx.simulate_mouse_down(outside, MouseButton::Left, Modifiers::default());

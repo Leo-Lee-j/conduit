@@ -6,23 +6,35 @@ use gpui_kit::component::setting::{
     SettingField, SettingGroup, SettingItem, SettingPage, Settings,
 };
 
-/// One settings page: title and icon. The page header is collapsed, so the
-/// title only appears in the sidebar.
-fn settings_page(title: impl Into<SharedString>, icon: FullIconName) -> SettingPage {
+/// Each page keeps its title visible while the settings below it scroll.
+fn settings_page(title: &'static str, icon: FullIconName) -> SettingPage {
+    let description = match title {
+        "通用" => "调整工作台布局，管理本机数据与诊断。",
+        "外观" => "选择主题，调整聊天文字与代码的阅读体验。",
+        "会话" => "设置会话标题的生成方式与使用的模型。",
+        "Git" => "自定义提交说明的生成模型与提示词。",
+        "CLI" => "管理引擎路径，检查本机 CLI 是否可用。",
+        "模型与服务" => "管理 Provider，查看和同步 CLI 中的模型配置。",
+        _ => "",
+    };
     SettingPage::new(title)
         .icon(icon)
         .resettable(false)
+        .description(description)
         .header_style(&page_header_style())
 }
 
-/// SettingPage always renders its own header; the design has no page title bar,
-/// so the header is collapsed to zero height and clipped.
 fn page_header_style() -> StyleRefinement {
     StyleRefinement::default()
-        .h(px(0.))
-        .p_0()
-        .border_0()
-        .overflow_hidden()
+        .px(px(24.))
+        .py(px(20.))
+        .gap(px(6.))
+        .flex_shrink_0()
+        .text_size(px(18.))
+        .font_semibold()
+        .text_color(rgb(palette().text))
+        .bg(rgb(palette().surface))
+        .border_color(rgb(palette().border))
 }
 
 fn sidebar_style() -> StyleRefinement {
@@ -32,14 +44,44 @@ fn sidebar_style() -> StyleRefinement {
         .border_color(rgb(palette().border))
 }
 
+/// Section headings live in the card. Leaving the library's group title unset
+/// keeps the sidebar flat instead of duplicating every section as a submenu.
+fn settings_section(title: impl Into<SharedString>) -> SettingGroup {
+    let title = title.into();
+    let keywords = [title.clone()];
+    SettingGroup::new().py(px(12.)).gap(px(10.)).item(
+        SettingItem::render(move |_, _, _| {
+            div()
+                .w_full()
+                .pb(px(12.))
+                .border_b_1()
+                .border_color(rgb(palette().border))
+                .text_size(px(13.))
+                .font_semibold()
+                .text_color(rgb(palette().text))
+                .child(title.clone())
+        })
+        .keywords(keywords),
+    )
+}
+
+fn settings_modal_height(window: &Window) -> f32 {
+    (f32::from(window.viewport_size().height) - 64.).clamp(0., 680.)
+}
+
 /// A read-only setting value, right-aligned in the row.
 pub(super) fn value_field(value: String) -> SettingField<SharedString> {
     SettingField::render(move |_, _, _| {
+        let tooltip_value = value.clone();
         div()
-            .max_w(px(240.))
+            .max_w(px(320.))
             .truncate()
-            .text_size(px(11.))
+            .text_size(px(12.))
             .text_color(rgb(palette().muted))
+            .id("settings-value")
+            .tooltip(move |window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(tooltip_value.clone()).build(window, cx)
+            })
             .child(value.clone())
     })
 }
@@ -53,9 +95,9 @@ pub(super) fn paragraph_field(value: String) -> SettingField<SharedString> {
     SettingField::render(move |_, _, _| {
         div()
             .w_full()
-            .text_size(px(11.))
+            .text_size(px(12.))
             .line_height(relative(1.5))
-            .text_color(rgb(palette().faint))
+            .text_color(rgb(palette().muted))
             .child(value.clone())
     })
 }
@@ -65,7 +107,7 @@ pub(super) fn error_field(value: String) -> SettingField<SharedString> {
     SettingField::render(move |_, _, _| {
         div()
             .w_full()
-            .text_size(px(11.))
+            .text_size(px(12.))
             .line_height(relative(1.5))
             .text_color(rgb(palette().danger_text))
             .child(value.clone())
@@ -117,7 +159,12 @@ pub(super) fn count_stepper_field(
         let decrease = decrease_view.clone();
         let increase = increase_view.clone();
         h_flex()
-            .gap_1()
+            .gap(px(2.))
+            .p(px(2.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(rgb(palette().border))
+            .bg(rgb(palette().surface_strong))
             .items_center()
             .child(
                 Button::new(format!("{id}-minus"))
@@ -140,7 +187,7 @@ pub(super) fn count_stepper_field(
             )
             .child(
                 h_flex()
-                    .w(px(26.))
+                    .w(px(36.))
                     .justify_center()
                     .text_size(px(12.))
                     .text_color(rgb(if disabled {
@@ -259,7 +306,12 @@ fn typography_stepper(
     let increase = view;
     let enabled = !disabled;
     h_flex()
-        .gap_1()
+        .gap(px(2.))
+        .p(px(2.))
+        .rounded(px(8.))
+        .border_1()
+        .border_color(rgb(palette().border))
+        .bg(rgb(palette().surface_strong))
         .items_center()
         .child(
             Button::new(format!("{id}-minus"))
@@ -277,7 +329,7 @@ fn typography_stepper(
         )
         .child(
             h_flex()
-                .w(px(32.))
+                .w(px(36.))
                 .justify_center()
                 .text_size(px(12.))
                 .text_color(rgb(if disabled {
@@ -317,12 +369,10 @@ impl ConduitApp {
         let view = cx.entity();
         window.open_dialog(cx, move |dialog, window, _| {
             let view = view.clone();
-            // Center the dialog vertically. The content follows the viewport
-            // height (see settings_modal_content), so the same formula keeps
-            // top and bottom margins equal and still fits the minimum window.
             let viewport_height = f32::from(window.viewport_size().height);
-            let modal_height = (viewport_height - 96.).clamp(360., 560.);
-            let margin_top = ((viewport_height - modal_height) * 0.5).max(24.);
+            let modal_height = settings_modal_height(window);
+            let margin_top = ((viewport_height - modal_height) * 0.5).max(16.);
+            let modal_width = (f32::from(window.viewport_size().width) - 48.).clamp(0., 920.);
             dialog
                 // The library paints its scrim at full opacity on the first
                 // frame and fades only the surface, so an entrance animation
@@ -330,7 +380,7 @@ impl ConduitApp {
                 .entrance(gpui_kit::component::dialog::DialogEntrance::None)
                 .overlay(true)
                 .overlay_closable(true)
-                .w(px(840.))
+                .w(px(modal_width))
                 .margin_top(px(margin_top))
                 .p_0()
                 .gap(px(0.))
@@ -411,10 +461,11 @@ impl ConduitApp {
     pub(super) fn settings_modal_content(&self, window: &Window, view: Entity<Self>) -> AnyElement {
         let disabled = !self.writable || self.closing;
         let settings = Settings::new("conduit-settings")
-            .sidebar_width(px(208.))
-            .sidebar_size_range(px(184.)..px(240.))
+            .sidebar_width(px(184.))
+            .sidebar_size_range(px(168.)..px(220.))
             .with_group_variant(GroupBoxVariant::Outline)
             .sidebar_style(&sidebar_style())
+            .header_style(&StyleRefinement::default().p(px(16.)))
             .pages(vec![
                 self.settings_general_page(disabled, view.clone()),
                 self.settings_appearance_page(disabled, view.clone()),
@@ -423,15 +474,86 @@ impl ConduitApp {
                 self.settings_cli_page(disabled, view.clone()),
                 self.settings_models_page(disabled, view.clone()),
             ]);
-        // The dialog layer clips content taller than the viewport minus its edge
-        // margins, so the content follows the window and each page scrolls.
-        let modal_height = (f32::from(window.viewport_size().height) - 96.).clamp(360., 560.);
+        let modal_height = settings_modal_height(window);
         v_flex()
+            .id("settings-modal")
+            .debug_selector(|| "settings-modal".into())
             .w_full()
             .h(px(modal_height))
             .overflow_hidden()
             .rounded(px(16.))
-            .child(div().flex_1().min_h_0().w_full().child(settings))
+            .child(
+                h_flex()
+                    .id("settings-modal-header")
+                    .debug_selector(|| "settings-modal-header".into())
+                    .h(px(56.))
+                    .flex_shrink_0()
+                    .px(px(20.))
+                    .justify_between()
+                    .border_b_1()
+                    .border_color(rgb(palette().border))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                Icon::new(FullIconName::Settings)
+                                    .small()
+                                    .text_color(rgb(palette().muted)),
+                            )
+                            .child(div().text_size(px(14.)).font_semibold().child("设置")),
+                    )
+                    .child(
+                        div()
+                            .id("settings-close-control")
+                            .debug_selector(|| "settings-close".into())
+                            .child(
+                                Button::new("settings-close")
+                                    .icon(FullIconName::X)
+                                    .ghost()
+                                    .small()
+                                    .accessibility_label("关闭设置")
+                                    .tooltip("关闭设置（Esc）")
+                                    .cursor_pointer()
+                                    .on_click(|_, window, cx| window.close_dialog(cx)),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .id("settings-modal-body")
+                    .debug_selector(|| "settings-modal-body".into())
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .child(settings),
+            )
+            .child(
+                h_flex()
+                    .id("settings-modal-footer")
+                    .debug_selector(|| "settings-modal-footer".into())
+                    .h(px(36.))
+                    .flex_shrink_0()
+                    .px(px(20.))
+                    .gap_2()
+                    .border_t_1()
+                    .border_color(rgb(palette().border))
+                    .bg(rgb(palette().surface_strong))
+                    .text_size(px(11.))
+                    .text_color(rgb(palette().muted))
+                    .child(
+                        Icon::new(if disabled {
+                            FullIconName::Lock
+                        } else {
+                            FullIconName::Check
+                        })
+                        .small(),
+                    )
+                    .child(if disabled {
+                        "当前为只读模式"
+                    } else {
+                        "偏好设置修改后自动保存"
+                    }),
+            )
             .into_any_element()
     }
 }

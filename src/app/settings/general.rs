@@ -14,6 +14,33 @@ impl ConduitApp {
             .map(display_path)
             .unwrap_or_else(|| "—".into());
         let state_file = display_path(&state_path);
+        let sessions_limit = count_stepper_field(
+            "sessions-limit",
+            self.store.ui.sessions_per_workspace.clamp(1, 30),
+            1,
+            30,
+            "减少工作区会话数",
+            "增加工作区会话数",
+            disabled,
+            view.clone(),
+            |app, value| app.store.ui.sessions_per_workspace = value,
+        );
+        let max_tabs_limit = count_stepper_field(
+            "max-tabs",
+            self.store.ui.max_tabs.clamp(1, MAX_TAB_LIMIT),
+            1,
+            MAX_TAB_LIMIT,
+            "减少最大标签数量",
+            "增加最大标签数量",
+            disabled,
+            view.clone(),
+            |app, value| app.store.ui.max_tabs = value,
+        );
+        let full_width = switch_field(
+            view.clone(),
+            |app| app.store.ui.full_width_content,
+            |app, value| app.store.ui.full_width_content = value,
+        );
         let performance_view = view.clone();
         let performance_read = performance_view.clone();
         let performance = SettingField::switch(
@@ -35,14 +62,24 @@ impl ConduitApp {
             },
         );
         settings_page("通用", FullIconName::Settings).groups(vec![
-            SettingGroup::new()
-                .title("本机数据")
+            settings_section("工作台布局").items(vec![
+                SettingItem::new("内容铺满", full_width)
+                    .description("开启后聊天内容铺满可用区域，关闭时居中显示")
+                    .disabled(disabled),
+                SettingItem::new("侧栏会话数量", sessions_limit)
+                    .description("每个工作区默认显示的会话数，更多会话可展开查看")
+                    .disabled(disabled),
+                SettingItem::new("标签页上限", max_tabs_limit)
+                    .description("超出上限时自动关闭最早打开的标签页")
+                    .disabled(disabled),
+            ]),
+            settings_section("本机数据")
                 .items(vec![
                     value_item("数据目录", data_dir),
                     value_item("配置文件", state_file),
                 ])
                 .footer(|_, _| "配置只保存在本机；外观与诊断设置随本地状态保存。"),
-            SettingGroup::new().title("诊断").item(
+            settings_section("诊断").item(
                 SettingItem::new("性能监测", performance)
                     .description("在底部工具栏显示性能入口并采集指标")
                     .disabled(disabled),
@@ -100,8 +137,7 @@ impl ConduitApp {
                 .naming_mode_picker(mode_view.clone(), disabled || !auto_rename)
         });
         settings_page("会话", FullIconName::Sparkles).group(
-            SettingGroup::new()
-                .title("会话命名")
+            settings_section("会话命名")
                 .items(vec![
                     SettingItem::new("自动命名", auto_rename)
                         .description(
@@ -179,7 +215,7 @@ impl ConduitApp {
                 })
         });
         settings_page("Git", FullIconName::GitFork).groups(vec![
-            SettingGroup::new().title("生成引擎").items(vec![
+            settings_section("生成引擎").items(vec![
                 SettingItem::new("生成 CLI", provider)
                     .description("用于生成 Commit Message 的 CLI；默认跟随当前会话")
                     .disabled(disabled),
@@ -187,7 +223,7 @@ impl ConduitApp {
                     .description("指定 CLI 后可固定模型；默认跟随当前会话（或 CLI 默认）")
                     .disabled(disabled),
             ]),
-            SettingGroup::new().title("Commit Message 提示词").items(vec![
+            settings_section("Commit Message 提示词").items(vec![
                 SettingItem::new("提示词", prompt)
                     .layout(Axis::Vertical)
                     .description(

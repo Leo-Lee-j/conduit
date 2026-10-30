@@ -11,6 +11,12 @@ fn theme_options(selected: AppearanceMode, view: Entity<ConduitApp>, disabled: b
      -> AnyElement {
         let view = view.clone();
         let active = selected == mode;
+        let preview = palette_for_mode(match mode {
+            AppearanceMode::Light => gpui_kit::component::ThemeMode::Light,
+            AppearanceMode::Dark => gpui_kit::component::ThemeMode::Dark,
+            AppearanceMode::System if is_dark_mode() => gpui_kit::component::ThemeMode::Dark,
+            AppearanceMode::System => gpui_kit::component::ThemeMode::Light,
+        });
         let label_color = if disabled {
             palette().faint
         } else {
@@ -28,87 +34,146 @@ fn theme_options(selected: AppearanceMode, view: Entity<ConduitApp>, disabled: b
         } else {
             palette().text
         };
-        Button::new(id)
-            .ghost()
-            .h(px(54.))
+        div()
             .w_full()
-            .px_3()
-            .rounded(px(8.))
-            .selected(active)
-            .accessibility_label(label)
-            .disabled(disabled)
-            .when(!disabled, |button| button.cursor_pointer())
-            .on_click(move |_, window, cx| {
-                view.update(cx, |this, cx| {
-                    if !this.writable || this.closing {
-                        return;
-                    }
-                    if this.store.ui.appearance != mode {
-                        this.store.ui.appearance = mode;
-                        this.persist();
-                    }
-                    this.apply_appearance(window, cx);
-                });
-            })
+            .debug_selector(move || id.into())
             .child(
-                h_flex()
+                Button::new(id)
+                    .outline()
+                    .h(px(124.))
                     .w_full()
-                    .items_center()
-                    .gap_3()
-                    .child(Icon::new(icon).small().text_color(rgb(icon_color)))
+                    .p(px(10.))
+                    .rounded(px(10.))
+                    .border_color(rgb(if active {
+                        palette().focus
+                    } else {
+                        palette().border
+                    }))
+                    .bg(rgb(if active {
+                        palette().surface_strong
+                    } else {
+                        palette().surface
+                    }))
+                    .selected(active)
+                    .accessibility_label(label)
+                    .disabled(disabled)
+                    .when(!disabled, |button| button.cursor_pointer())
+                    .on_click(move |_, window, cx| {
+                        view.update(cx, |this, cx| {
+                            if !this.writable || this.closing {
+                                return;
+                            }
+                            if this.store.ui.appearance != mode {
+                                this.store.ui.appearance = mode;
+                                this.persist();
+                            }
+                            this.apply_appearance(window, cx);
+                        });
+                    })
                     .child(
                         v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap(px(2.))
+                            .w_full()
+                            .gap_2()
                             .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .font_medium()
-                                    .text_color(rgb(label_color))
-                                    .child(label),
+                                h_flex()
+                                    .w_full()
+                                    .h(px(48.))
+                                    .rounded(px(5.))
+                                    .overflow_hidden()
+                                    .border_1()
+                                    .border_color(rgb(preview.border))
+                                    .bg(rgb(preview.canvas))
+                                    .child(
+                                        div()
+                                            .w(px(22.))
+                                            .h_full()
+                                            .bg(rgb(preview.sidebar_bg))
+                                            .border_r_1()
+                                            .border_color(rgb(preview.border)),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .px_2()
+                                            .gap(px(5.))
+                                            .child(
+                                                div()
+                                                    .w(relative(0.65))
+                                                    .h(px(4.))
+                                                    .rounded(px(2.))
+                                                    .bg(rgb(preview.muted)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .w_full()
+                                                    .h(px(4.))
+                                                    .rounded(px(2.))
+                                                    .bg(rgb(preview.border)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .w(relative(0.8))
+                                                    .h(px(4.))
+                                                    .rounded(px(2.))
+                                                    .bg(rgb(preview.border)),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .gap(px(6.))
+                                    .child(Icon::new(icon).small().text_color(rgb(icon_color)))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .text_size(px(13.))
+                                            .font_medium()
+                                            .text_color(rgb(label_color))
+                                            .child(label),
+                                    )
+                                    .when(active, |row| {
+                                        row.child(
+                                            Icon::new(gpui_kit::assets::IconName::Check)
+                                                .small()
+                                                .text_color(rgb(check_color)),
+                                        )
+                                    }),
                             )
                             .child(
                                 div()
-                                    .text_size(px(10.))
-                                    .text_color(rgb(palette().faint))
+                                    .text_size(px(11.))
+                                    .text_color(rgb(palette().muted))
                                     .child(detail),
                             ),
-                    )
-                    .when(active, |row| {
-                        row.child(
-                            Icon::new(gpui_kit::assets::IconName::Check)
-                                .small()
-                                .text_color(rgb(check_color)),
-                        )
-                    }),
+                    ),
             )
             .into_any_element()
     };
-    v_flex()
+    h_flex()
         .w_full()
-        .gap_1()
-        .child(theme_option(
+        .gap_3()
+        .child(div().flex_1().min_w_0().child(theme_option(
             AppearanceMode::System,
             "跟随系统",
-            "随 Windows 的浅色 / 深色外观自动切换",
+            "自动匹配系统外观",
             gpui_kit::assets::IconName::Monitor,
             "appearance-theme-system",
-        ))
-        .child(theme_option(
+        )))
+        .child(div().flex_1().min_w_0().child(theme_option(
             AppearanceMode::Light,
             "浅色",
-            "始终使用浅色背景与深色文字",
+            "明亮、清晰",
             gpui_kit::assets::IconName::Sun,
             "appearance-theme-light",
-        ))
-        .child(theme_option(
+        )))
+        .child(div().flex_1().min_w_0().child(theme_option(
             AppearanceMode::Dark,
             "深色",
-            "始终使用深色背景与浅色文字",
+            "柔和的深色背景",
             gpui_kit::assets::IconName::Moon,
             "appearance-theme-dark",
-        ))
+        )))
         .into_any_element()
 }
 
@@ -321,35 +386,6 @@ impl ConduitApp {
                     });
                 })
         });
-        let sessions = self.store.ui.sessions_per_workspace.clamp(1, 30);
-        let sessions_limit = count_stepper_field(
-            "sessions-limit",
-            sessions,
-            1,
-            30,
-            "减少工作区会话数",
-            "增加工作区会话数",
-            disabled,
-            view.clone(),
-            |app, value| app.store.ui.sessions_per_workspace = value,
-        );
-        let max_tabs = self.store.ui.max_tabs.clamp(1, MAX_TAB_LIMIT);
-        let max_tabs_limit = count_stepper_field(
-            "max-tabs",
-            max_tabs,
-            1,
-            MAX_TAB_LIMIT,
-            "减少最大标签数量",
-            "增加最大标签数量",
-            disabled,
-            view.clone(),
-            |app, value| app.store.ui.max_tabs = value,
-        );
-        let full_width = switch_field(
-            view.clone(),
-            |app| app.store.ui.full_width_content,
-            |app, value| app.store.ui.full_width_content = value,
-        );
         let code_copy = switch_field(
             view.clone(),
             |app| app.store.ui.code_copy_button,
@@ -366,18 +402,17 @@ impl ConduitApp {
             |app, value| app.store.ui.code_syntax_highlight = value,
         );
         settings_page("外观", FullIconName::Palette).groups(vec![
-            SettingGroup::new()
-                .title("主题")
+            settings_section("主题")
                 .item(
                     SettingItem::render(move |_, _, _| {
                         theme_options(selected, theme_view.clone(), disabled)
                     })
                     .keywords(["主题", "浅色", "深色", "跟随系统"]),
                 )
-                .footer(|_, _| "主题切换会立即应用并保存；跟随系统时，Windows 明暗变化会自动同步。"),
-            SettingGroup::new().title("聊天文字").items(vec![
+                .footer(|_, _| "选择后立即应用；跟随系统时自动同步 Windows 外观。"),
+            settings_section("聊天文字").items(vec![
                 SettingItem::new("正文字体", chat_font)
-                    .description("用户消息、回复与输入框；默认跟随系统界面字体")
+                    .description("用于消息与输入框，默认使用系统字体")
                     .disabled(disabled),
                 SettingItem::new("字号", chat_size)
                     .description("12–20 px；默认 15")
@@ -386,9 +421,9 @@ impl ConduitApp {
                     .description("1.2–2.0；默认 1.5")
                     .disabled(disabled),
             ]),
-            SettingGroup::new().title("代码块").items(vec![
+            settings_section("代码块").items(vec![
                 SettingItem::new("代码字体", code_font)
-                    .description("Markdown 代码块、行内代码与工具输出；默认系统等宽字体")
+                    .description("用于代码块与工具输出，默认使用系统等宽字体")
                     .disabled(disabled),
                 SettingItem::new("代码字号", code_size)
                     .description("10–18 px；默认 13")
@@ -403,7 +438,7 @@ impl ConduitApp {
                     .description("按语言着色；关闭后保持等宽单色")
                     .disabled(disabled),
             ]),
-            SettingGroup::new().title("聊天预览").items(vec![
+            settings_section("聊天预览").items(vec![
                 SettingItem::render(move |_, _, cx| {
                     let app = preview_view.read(cx);
                     chat_markdown_view(
@@ -419,21 +454,6 @@ impl ConduitApp {
                     .description("字体、字号、行高与代码块选项一起恢复默认。")
                     .disabled(disabled),
             ]),
-            SettingGroup::new().title("内容区域").item(
-                SettingItem::new("内容铺满", full_width)
-                    .description("关闭时右侧内容以 840px 居中显示；开启后铺满整个内容区")
-                    .disabled(disabled),
-            ),
-            SettingGroup::new().title("侧栏").item(
-                SettingItem::new("工作区会话数", sessions_limit)
-                    .description("默认 5 条，范围 1–30，超出时侧栏可展开")
-                    .disabled(disabled),
-            ),
-            SettingGroup::new().title("标签页").item(
-                SettingItem::new("最大 tab 数量", max_tabs_limit)
-                    .description("默认 8 个，范围 1–20；超过数量自动关闭最老的标签")
-                    .disabled(disabled),
-            ),
         ])
     }
 }

@@ -146,12 +146,15 @@ pub(super) fn is_dark_mode() -> bool {
 
 pub(crate) fn set_palette(mode: gpui_kit::component::ThemeMode) {
     DARK_MODE.store(mode.is_dark(), std::sync::atomic::Ordering::Relaxed);
-    let palette = if mode.is_dark() {
+    *ACTIVE_PALETTE.write().unwrap() = palette_for_mode(mode);
+}
+
+pub(super) fn palette_for_mode(mode: gpui_kit::component::ThemeMode) -> Palette {
+    if mode.is_dark() {
         DARK_PALETTE
     } else {
         LIGHT_PALETTE
-    };
-    *ACTIVE_PALETTE.write().unwrap() = palette;
+    }
 }
 
 const THEME_PACKS: &str = include_str!("../../assets/themes/conduit.json");

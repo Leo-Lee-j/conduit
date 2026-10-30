@@ -922,18 +922,6 @@ impl ConduitApp {
         cx.notify();
     }
 
-    pub(super) fn reload_models(&mut self, provider: Provider, cx: &mut Context<Self>) {
-        if provider == Provider::OpenCode {
-            self.ensure_opencode_models(true, cx);
-            return;
-        }
-        self.catalogs.insert(provider, models::load(provider));
-        self.ccs = ccs::load();
-        self.store.sync_ccs_providers(&self.ccs);
-        cx.emit(crate::providers::ProviderCatalogChanged);
-        cx.notify();
-    }
-
     pub(super) fn composer_model_picker(
         &self,
         view: Entity<Self>,
