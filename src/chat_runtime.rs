@@ -84,6 +84,7 @@ impl ChatRuntime {
     ) -> Self {
         Self::start_text_with_route(provider, executable, prompt, model, Default::default())
     }
+    #[allow(dead_code)] // compatibility entry point for callers without a workspace
     pub fn start_text_with_route(
         provider: Provider,
         executable: PathBuf,
@@ -91,7 +92,25 @@ impl ChatRuntime {
         model: Option<String>,
         route: crate::providers::RuntimeRoute,
     ) -> Self {
-        let cwd = std::env::temp_dir();
+        Self::start_text_with_route_in(
+            provider,
+            executable,
+            prompt,
+            model,
+            route,
+            std::env::temp_dir(),
+        )
+    }
+
+    /// Preserve workspace-native provider/config discovery for helper requests.
+    pub fn start_text_with_route_in(
+        provider: Provider,
+        executable: PathBuf,
+        prompt: String,
+        model: Option<String>,
+        route: crate::providers::RuntimeRoute,
+        cwd: PathBuf,
+    ) -> Self {
         let protocol = Protocol::new(provider, cwd.to_string_lossy().into_owned(), prompt, None)
             .with_model(model)
             .with_options(Default::default(), route)
@@ -861,6 +880,55 @@ mod tests {
             }
         ));
     }
+    #[test]
+    fn text_helper_runs_in_the_requested_workspace_without_a_model_request() {
+        let directory = std::env::temp_dir().join(format!(
+            "conduit-helper-cwd-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let executable = directory.join("helper.cmd");
+        std::fs::write(
+            &executable,
+            "@echo off\r\nset /p INIT=\r\ntype cwd-response.json\r\n",
+        )
+        .unwrap();
+        std::fs::write(directory.join("cwd-response.json"), concat!(
+            "{\"type\":\"assistant\",\"message\":{\"id\":\"reply\",\"content\":[{\"type\":\"text\",\"text\":\"workspace-config-used\"}]}}\n",
+            "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}\n"
+        )).unwrap();
+        let runtime = ChatRuntime::start_text_with_route_in(
+            Provider::Claude,
+            executable,
+            "test".into(),
+            None,
+            Default::default(),
+            directory.clone(),
+        );
+        let mut reply = String::new();
+        loop {
+            match runtime
+                .events
+                .recv_timeout(Duration::from_secs(15))
+                .unwrap()
+            {
+                Event::Text { text, .. } => reply.push_str(&text),
+                Event::Finished { error, cancelled } => {
+                    assert_eq!(error, None);
+                    assert!(!cancelled);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(reply, "workspace-config-used");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     #[ignore = "requires installed CLIs; handshake only, no model request"]
     fn installed_commit_helpers_initialize_without_model_request() {

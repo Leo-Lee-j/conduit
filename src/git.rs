@@ -165,6 +165,10 @@ pub struct Repository {
 
 #[derive(Clone, Debug)]
 pub enum Operation {
+    Stage {
+        files: Vec<String>,
+        target: CommitTarget,
+    },
     Branch(Box<BranchRequest>),
     Commit {
         message: String,
@@ -728,11 +732,74 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
     let mut committed = false;
     let result = (|| -> Result<String> {
         let git = resolve_git().ok_or_else(|| anyhow!("未找到 git.exe"))?;
-        if let Some(state) = branches::integration_state(&git, workspace, cancel)? {
+        if !matches!(&operation, Operation::Stage { .. })
+            && let Some(state) = branches::integration_state(&git, workspace, cancel)?
+        {
             bail!("仓库存在进行中的 {}，请先继续或中止", state.label());
         }
         match operation {
             Operation::Branch(_) => unreachable!(),
+            Operation::Stage { files, target } => {
+                if files.is_empty() {
+                    bail!("请选择需要暂存的文件");
+                }
+                if commit_target(&git, workspace, cancel)? != target {
+                    bail!("分支、HEAD 或暂存区已变化，请刷新后重新暂存");
+                }
+                // Porcelain paths are repository-relative, even from a nested workspace.
+                // Literal NUL-delimited pathspecs avoid wildcard expansion and Windows'
+                // command-line length limit, and never stage unselected files.
+                for file in &files {
+                    if file.is_empty()
+                        || file.contains('\0')
+                        || Path::new(file)
+                            .components()
+                            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+                        || file
+                            .split(['/', '\\'])
+                            .any(|c| c == ".." || c == "." || c.is_empty())
+                        || file.contains(':')
+                    {
+                        bail!("暂存路径必须是仓库内的文件：{file}");
+                    }
+                }
+                let root = run_git(&git, workspace, &["rev-parse", "--show-toplevel"], cancel)?;
+                let root = PathBuf::from(root.trim());
+                let spec = std::env::temp_dir().join(format!(
+                    "conduit-stage-{}-{}.paths",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)?
+                        .as_nanos()
+                ));
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&spec)?;
+                let result = (|| -> Result<String> {
+                    use std::io::Write as _;
+                    for path in &files {
+                        file.write_all(path.as_bytes())?;
+                        file.write_all(&[0])?;
+                    }
+                    drop(file);
+                    run_git_with_timeout(
+                        &git,
+                        &root,
+                        &[
+                            "--literal-pathspecs",
+                            "add",
+                            &format!("--pathspec-from-file={}", spec.display()),
+                            "--pathspec-file-nul",
+                        ],
+                        cancel,
+                        Duration::from_secs(120),
+                    )
+                })();
+                let _ = std::fs::remove_file(&spec);
+                result?;
+                Ok(format!("已暂存 {} 个文件", files.len()))
+            }
             Operation::Commit {
                 message,
                 target,
@@ -1159,6 +1226,89 @@ mod tests {
         }
     }
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn stage_selected_files_is_literal_supports_batches_and_preserves_other_changes() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        repo.stage("initial\n");
+        repo.run(&["commit", "-qm", "initial"]);
+        for name in [
+            "literal[1].txt",
+            "literal1.txt",
+            "中文 文件.txt",
+            "outside.txt",
+        ] {
+            std::fs::write(repo.path.join(name), name).unwrap();
+        }
+        std::fs::create_dir(repo.path.join("nested")).unwrap();
+        let target = load(&repo.path, &AtomicBool::new(false)).unwrap().target;
+        let result = operate(
+            &repo.path.join("nested"),
+            Operation::Stage {
+                files: vec!["literal[1].txt".into(), "中文 文件.txt".into()],
+                target,
+            },
+            &AtomicBool::new(false),
+        );
+        assert_eq!(result.error, None, "{result:?}");
+        let staged = repo.run(&[
+            "-c",
+            "core.quotepath=false",
+            "diff",
+            "--cached",
+            "--name-only",
+        ]);
+        assert!(staged.contains("literal[1].txt"));
+        assert!(staged.contains("中文 文件.txt"));
+        assert!(
+            !staged
+                .lines()
+                .any(|name| name == "literal1.txt" || name == "outside.txt")
+        );
+        assert!(
+            repo.run(&["status", "--porcelain"])
+                .contains("?? outside.txt")
+        );
+        assert!(!result.committed);
+    }
+    #[test]
+    fn staging_rejects_stale_index_and_paths_outside_the_repository() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        repo.stage("initial\n");
+        repo.run(&["commit", "-qm", "initial"]);
+        std::fs::write(repo.path.join("chosen.txt"), "chosen").unwrap();
+        let target = load(&repo.path, &AtomicBool::new(false)).unwrap().target;
+        for name in ["../outside", "C:/outside", ":(glob)*", "./chosen.txt"] {
+            let result = operate(
+                &repo.path,
+                Operation::Stage {
+                    files: vec![name.into()],
+                    target: target.clone(),
+                },
+                &AtomicBool::new(false),
+            );
+            assert!(result.error.is_some(), "unsafe path {name}");
+        }
+        std::fs::write(repo.path.join("other.txt"), "other").unwrap();
+        repo.run(&["add", "other.txt"]);
+        let result = operate(
+            &repo.path,
+            Operation::Stage {
+                files: vec!["chosen.txt".into()],
+                target,
+            },
+            &AtomicBool::new(false),
+        );
+        assert!(result.error.as_deref().unwrap().contains("已变化"));
+        assert!(
+            repo.run(&["status", "--porcelain"])
+                .contains("?? chosen.txt")
+        );
+    }
 
     #[test]
     fn commit_only_includes_index_and_preserves_unstaged_and_untracked_files() {

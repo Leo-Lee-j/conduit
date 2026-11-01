@@ -56,6 +56,9 @@ pub struct UiSettings {
     /// (or the CLI default when a naming engine is pinned).
     #[serde(default)]
     pub naming_model: Option<String>,
+    /// Independent naming route; None follows the session only when no engine is pinned.
+    #[serde(default)]
+    pub naming_channel: Option<crate::providers::ModelChannel>,
     /// Maximum number of session tabs kept open; opening more closes the oldest.
     #[serde(default = "default_max_tabs")]
     pub max_tabs: usize,
@@ -145,6 +148,7 @@ impl Default for UiSettings {
             auto_rename: true,
             naming_provider: None,
             naming_model: None,
+            naming_channel: None,
             chat_font_family: None,
             chat_font_size: default_chat_font_size(),
             chat_line_height: default_chat_line_height(),
@@ -171,6 +175,9 @@ pub struct GitSettings {
     /// default (or the session model when following the session).
     #[serde(default)]
     pub generation_model: Option<String>,
+    /// Independent commit-generation route, without changing global CLI settings.
+    #[serde(default)]
+    pub generation_channel: Option<crate::providers::ModelChannel>,
 }
 
 fn default_commit_prompt() -> String {
@@ -183,6 +190,7 @@ impl Default for GitSettings {
             commit_message_prompt: default_commit_prompt(),
             generation_provider: None,
             generation_model: None,
+            generation_channel: None,
         }
     }
 }
@@ -407,7 +415,15 @@ impl Store {
 /// notices already carried by the preceding assistant text.
 fn dedupe_restored_messages(session: &mut crate::domain::SessionRecord) {
     let mut kept: Vec<crate::domain::ChatItem> = Vec::with_capacity(session.messages.len());
-    for item in session.messages.drain(..) {
+    for mut item in session.messages.drain(..) {
+        if item.kind == crate::domain::ItemKind::Assistant
+            && crate::failure::is_engine_error_text(&item.text)
+        {
+            item.kind = crate::domain::ItemKind::Error;
+            if item.detail.is_empty() {
+                item.detail = item.text.clone();
+            }
+        }
         let duplicate_assistant = item.kind == crate::domain::ItemKind::Assistant
             && !item.text.trim().is_empty()
             && kept.last().is_some_and(|previous| {
@@ -419,8 +435,10 @@ fn dedupe_restored_messages(session: &mut crate::domain::SessionRecord) {
             && {
                 let error = item.text.trim_start_matches("执行失败：").trim();
                 kept.iter().rev().take(3).any(|previous| {
-                    previous.kind == crate::domain::ItemKind::Assistant
-                        && same_failure_text(&previous.text, error)
+                    matches!(
+                        previous.kind,
+                        crate::domain::ItemKind::Assistant | crate::domain::ItemKind::Error
+                    ) && same_failure_text(&previous.text, error)
                 })
             };
         if !duplicate_assistant && !duplicate_failure {
@@ -428,6 +446,7 @@ fn dedupe_restored_messages(session: &mut crate::domain::SessionRecord) {
         }
     }
     session.messages = kept;
+    crate::failure::coalesce_restored_failures(session);
 }
 
 fn same_failure_text(message: &str, error: &str) -> bool {
@@ -819,11 +838,51 @@ mod tests {
         fs::remove_file(path).unwrap();
     }
     #[test]
+    fn background_generation_routes_and_session_speed_roundtrip() {
+        use crate::{
+            domain::{Provider, Usage},
+            providers::ModelChannel,
+        };
+        let legacy: Store =
+            serde_json::from_str(r#"{"version":2,"workspaces":[],"ui":{},"git":{}}"#).unwrap();
+        assert_eq!(legacy.ui.naming_channel, None);
+        assert_eq!(legacy.git.generation_channel, None);
+        let mut store = Store::default();
+        store.ui.naming_provider = Some(Provider::Claude);
+        store.ui.naming_channel = Some(ModelChannel::Provider("title-route".into()));
+        store.ui.naming_model = Some("title-model".into());
+        store.git.generation_provider = Some(Provider::OpenCode);
+        store.git.generation_channel = Some(ModelChannel::Cli);
+        store.git.generation_model = Some("native/commit-model".into());
+        let restored: Store =
+            serde_json::from_str(&serde_json::to_string(&store).unwrap()).unwrap();
+        assert_eq!(restored.ui.naming_channel, store.ui.naming_channel);
+        assert_eq!(restored.ui.naming_model, store.ui.naming_model);
+        assert_eq!(
+            restored.git.generation_channel,
+            store.git.generation_channel
+        );
+        assert_eq!(restored.git.generation_model, store.git.generation_model);
+        let mut session: crate::domain::SessionRecord =
+            serde_json::from_str(r#"{"id":1,"provider":"Claude","created_at":0,"exit_code":null}"#)
+                .unwrap();
+        session.usage = Usage {
+            session_output_tokens: 500,
+            session_elapsed_ms: 5_000,
+            ..Default::default()
+        };
+        let restored: crate::domain::SessionRecord =
+            serde_json::from_str(&serde_json::to_string(&session).unwrap()).unwrap();
+        assert_eq!(restored.usage.average_output_speed(), Some(100));
+    }
+
+    #[test]
     fn commit_prompt_uses_saved_preferences_and_appends_staged_context() {
         let mut settings = GitSettings {
             commit_message_prompt: "Use English and include a concise body.".into(),
             generation_provider: None,
             generation_model: None,
+            generation_channel: None,
         };
         let prompt = settings.generation_prompt(&["src/中文.rs"], "+a staged change");
         assert!(prompt.starts_with(&settings.commit_message_prompt));

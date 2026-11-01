@@ -1270,6 +1270,27 @@ impl ConduitApp {
                 } else {
                     item.detail.clone()
                 };
+                let repeats = failure_repeats(item);
+                let active = self
+                    .runs
+                    .get(&session_id)
+                    .is_some_and(|run| item.key.starts_with(&format!("{}-", run.prefix)));
+                let recovered = session.messages[index + 1..]
+                    .iter()
+                    .take_while(|item| item.kind != ItemKind::User)
+                    .any(|item| item.kind == ItemKind::Assistant && !item.text.trim().is_empty());
+                let title = if active {
+                    "引擎遇到问题，任务仍在进行"
+                } else if recovered {
+                    "引擎曾遇到问题，随后已继续响应"
+                } else {
+                    failure_title(&item.text)
+                };
+                let guidance = if active {
+                    "请等待当前任务结束，无需重复发送；引擎可能会自动重试。"
+                } else {
+                    failure_guidance(&raw_error)
+                };
                 let summary = failure_summary(&item.text);
                 let error_key = (session_id, item.key.clone());
                 let expanded = self.expanded_errors.contains(&error_key);
@@ -1279,7 +1300,6 @@ impl ConduitApp {
                 let can_retry = self.writable
                     && !self.closing
                     && !self.runs.contains_key(&session_id)
-                    && session.native_id.is_some()
                     && session.messages[..index]
                         .iter()
                         .any(|message| message.kind == ItemKind::User)
@@ -1349,8 +1369,16 @@ impl ConduitApp {
                                     .text_size(px(12.))
                                     .font_semibold()
                                     .text_color(rgb(palette().text))
-                                    .child("本次回复未完成"),
+                                    .child(title),
                             )
+                            .when(repeats > 1, |row| {
+                                row.child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .text_color(rgb(palette().muted))
+                                        .child(format!("重复 {repeats} 次")),
+                                )
+                            })
                             .child(actions),
                     )
                     .child(
@@ -1359,6 +1387,13 @@ impl ConduitApp {
                             .line_height(relative(1.5))
                             .text_color(rgb(palette().muted))
                             .child(summary),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .line_height(relative(1.4))
+                            .text_color(rgb(palette().faint))
+                            .child(guidance),
                     )
                     .child(
                         h_flex().child(

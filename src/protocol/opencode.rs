@@ -200,9 +200,8 @@ impl Protocol {
                     .to_string_lossy()
                     .into_owned(),
             );
-            self.route
-                .env
-                .insert("OPENCODE_DISABLE_PROJECT_CONFIG".into(), "1".into());
+            // Keep workspace provider/model configuration. Managed permissions,
+            // disabled tools and the private DB still isolate helper side effects.
             self.acp.helper_directory = Some(directory);
         }
         Ok(())

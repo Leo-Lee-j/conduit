@@ -3,6 +3,29 @@
 use super::*;
 use gpui_kit::component::status_bar::StatusBar;
 
+#[derive(Clone)]
+struct WorkspaceDrag {
+    path: PathBuf,
+}
+struct WorkspaceDragPreview {
+    name: String,
+}
+impl Render for WorkspaceDragPreview {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .gap_2()
+            .items_center()
+            .px_3()
+            .py_2()
+            .rounded(px(8.))
+            .bg(rgb(palette().surface))
+            .border_1()
+            .border_color(rgb(palette().highlight_text))
+            .child(Icon::new(IconName::Folder).small())
+            .child(self.name.clone())
+    }
+}
+
 /// Cache session navigation independently of wheel-driven transcript frames.
 pub(super) struct SidebarView {
     app: WeakEntity<ConduitApp>,
@@ -32,12 +55,57 @@ impl Render for SidebarView {
             self.render_count += 1;
         }
         self.app
-            .update(cx, |app, cx| app.render_sidebar(cx))
+            .update(cx, |app, cx| app.render_navigation(cx))
             .unwrap_or_else(|_| div().into_any_element())
     }
 }
 
 impl ConduitApp {
+    /// Reorder by stable paths and remap all index-based navigation state.
+    pub(super) fn reorder_workspace(
+        &mut self,
+        source: &Path,
+        target: &Path,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.writable || self.closing {
+            return;
+        }
+        let Some(from) = self.store.workspaces.iter().position(|w| w.path == source) else {
+            return;
+        };
+        let Some(to) = self.store.workspaces.iter().position(|w| w.path == target) else {
+            return;
+        };
+        if from == to {
+            return;
+        }
+        let remap = |index: usize| {
+            if index == from {
+                to
+            } else if from < to && index > from && index <= to {
+                index - 1
+            } else if to < from && index >= to && index < from {
+                index + 1
+            } else {
+                index
+            }
+        };
+        let moved = self.store.workspaces.remove(from);
+        self.store.workspaces.insert(to, moved);
+        self.selected_workspace = self.selected_workspace.map(remap);
+        self.remove_workspace_target = self.remove_workspace_target.map(remap);
+        self.expanded_workspaces = self
+            .expanded_workspaces
+            .iter()
+            .copied()
+            .map(remap)
+            .collect();
+        // Sessions, tabs, running tasks and Git caches retain their path/id identity.
+        self.persist();
+        cx.notify();
+    }
+
     pub(super) fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let can_edit = self.writable && !self.closing;
         let app_entity = cx.entity();
@@ -186,11 +254,20 @@ impl ConduitApp {
             let limit = self.store.ui.sessions_per_workspace.clamp(1, 30);
             let expanded = self.expanded_workspaces.contains(&index);
             let importing = self.history_loading.contains(&workspace.path);
+            let drag_path = workspace.path.clone();
+            let drop_path = workspace.path.clone();
+            let drag_name = workspace
+                .path
+                .file_name()
+                .unwrap_or(workspace.path.as_os_str())
+                .to_string_lossy()
+                .into_owned();
             let total = sessions.len();
             list =
                 list.child(
                     h_flex()
                         .id(("workspace", index))
+                        .debug_selector(move || format!("workspace-item-{index}"))
                         .group("workspace-row")
                         .h(px(30.))
                         .flex_shrink_0()
@@ -207,6 +284,24 @@ impl ConduitApp {
                         .when(workspace_selected, |row| row.bg(rgb(palette().surface)))
                         .cursor_pointer()
                         .hover(|style| style.bg(rgb(palette().surface_hover)))
+                        .when(can_edit, |row| {
+                            row.on_drag(WorkspaceDrag { path: drag_path }, move |_, _, _, cx| {
+                                cx.stop_propagation();
+                                cx.new(|_| WorkspaceDragPreview {
+                                    name: drag_name.clone(),
+                                })
+                            })
+                            .drag_over::<WorkspaceDrag>(|row, _, _, _| {
+                                row.bg(rgb(palette().surface_hover))
+                                    .border_1()
+                                    .border_color(rgb(palette().highlight_text))
+                            })
+                            .on_drop(cx.listener(
+                                move |this, dragged: &WorkspaceDrag, _, cx| {
+                                    this.reorder_workspace(&dragged.path, &drop_path, cx);
+                                },
+                            ))
+                        })
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.switch(index, last, window, cx)
                         }))
@@ -549,19 +644,6 @@ impl ConduitApp {
                         .cursor_pointer()
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.open_about_dialog(window, cx);
-                        })),
-                )
-                .right(
-                    Button::new("sidebar-settings")
-                        .ghost()
-                        .small()
-                        .compact()
-                        .icon(IconName::Settings)
-                        .tooltip("设置")
-                        .accessibility_label("设置")
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_settings(window, cx);
                         })),
                 ),
         );

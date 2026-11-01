@@ -265,6 +265,12 @@ fn opencode_managed_agents_override_inherited_rules_and_helpers_have_private_sto
     let path = helper.acp.helper_directory.clone().unwrap();
     assert!(path.is_dir());
     assert!(helper.environment()["OPENCODE_DB"].starts_with(path.to_str().unwrap()));
+    assert!(
+        !helper
+            .environment()
+            .contains_key("OPENCODE_DISABLE_PROJECT_CONFIG"),
+        "helpers must retain workspace-native provider configuration"
+    );
     let config: Value =
         serde_json::from_str(&helper.environment()["OPENCODE_CONFIG_CONTENT"]).unwrap();
     assert_eq!(

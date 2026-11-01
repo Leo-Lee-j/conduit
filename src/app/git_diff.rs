@@ -13,6 +13,9 @@ pub(super) fn git_change_color(kind: git::ChangeKind) -> u32 {
 /// Read-only diff window for one Git change, modelled on JetBrains' diff
 /// viewer: a version bar, navigation and folding tools, and a split view.
 pub(super) struct GitDiffDialog {
+    embedded: bool,
+    focus: FocusHandle,
+    last_patch: Option<String>,
     pub(super) comparison: Option<git::ComparisonRequest>,
     pub(super) workspace: PathBuf,
     pub(super) file: git::ChangedFile,
@@ -37,6 +40,17 @@ impl GitDiffDialog {
         Self::new_source(workspace, file, None, window, cx)
     }
 
+    pub(super) fn new_document(
+        workspace: PathBuf,
+        file: git::ChangedFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut view = Self::new(workspace, file, window, cx);
+        view.embedded = true;
+        view
+    }
+
     pub(super) fn new_source(
         workspace: PathBuf,
         file: git::ChangedFile,
@@ -51,6 +65,9 @@ impl GitDiffDialog {
         });
         let subscription = cx.observe(&state, |_, _, cx| cx.notify());
         let mut dialog = Self {
+            embedded: false,
+            focus: cx.focus_handle(),
+            last_patch: None,
             comparison,
             workspace,
             file,
@@ -73,14 +90,17 @@ impl GitDiffDialog {
         self.cancelled = cancelled.clone();
         self.loading = true;
         self.error = None;
-        self.notes.clear();
-        self.unchanged_expanded = false;
-        self.state
-            .update(cx, |state, cx| state.set_files(Vec::new(), cx));
+        if !self.embedded {
+            self.notes.clear();
+            self.unchanged_expanded = false;
+            self.state
+                .update(cx, |state, cx| state.set_files(Vec::new(), cx));
+        }
         cx.notify();
         let workspace = self.workspace.clone();
         let file = self.file.clone();
         let comparison = self.comparison.clone();
+        let ticket = cancelled.clone();
         self._load_task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -93,7 +113,7 @@ impl GitDiffDialog {
                 })
                 .await;
             let _ = this.update_in(cx, |this, window, cx| {
-                if this.cancelled.load(Ordering::Relaxed) {
+                if ticket.load(Ordering::Relaxed) || !Arc::ptr_eq(&ticket, &this.cancelled) {
                     return;
                 }
                 this.finish_load(result, window, cx);
@@ -107,24 +127,43 @@ impl GitDiffDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let had_focus = self.focus.is_focused(window)
+            || self.state.read(cx).focus_handle(cx).is_focused(window);
         self.loading = false;
         match result {
+            Ok(diff)
+                if self.embedded && self.last_patch.as_deref() == Some(diff.patch.as_str()) =>
+            {
+                self.notes = diff.notes;
+                self.error = None;
+            }
             Ok(diff) => match DiffFile::parse(&diff.patch) {
                 Ok(files) => {
+                    self.last_patch = Some(diff.patch);
+                    self.unchanged_expanded = false;
                     self.notes = diff.notes;
                     self.state
                         .update(cx, |state, cx| state.set_files(files, cx));
-                    self.focus_diff(window, cx);
                 }
                 Err(error) => self.error = Some(format!("无法解析该文件的差异：{error}")),
             },
             Err(error) => self.error = Some(format!("{error:#}")),
         }
+        // Empty, binary and error bodies do not render DiffState. Keep keyboard actions
+        // attached to a visible focus target, including same-patch recovery after a failure.
+        if !self.embedded || had_focus {
+            self.focus_diff(window, cx);
+        }
         cx.notify();
     }
 
     pub(super) fn focus_diff(&self, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.state.read(cx).focus_handle(cx), cx);
+        let files = self.state.read(cx).files();
+        if files.is_empty() || files.iter().any(DiffFile::is_binary) || self.error.is_some() {
+            self.focus.focus(window, cx);
+        } else {
+            window.focus(&self.state.read(cx).focus_handle(cx), cx);
+        }
     }
 
     pub(super) fn set_mode(&mut self, mode: DiffMode, window: &mut Window, cx: &mut Context<Self>) {
@@ -333,17 +372,19 @@ impl GitDiffDialog {
                                     }),
                             ),
                     )
-                    .child(
-                        Button::new("git-diff-close")
-                            .ghost()
-                            .small()
-                            .compact()
-                            .icon(FullIconName::X)
-                            .tooltip("关闭差异窗口 (Esc)")
-                            .accessibility_label("关闭差异窗口")
-                            .cursor_pointer()
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
-                    ),
+                    .when(!self.embedded, |row| {
+                        row.child(
+                            Button::new("git-diff-close")
+                                .ghost()
+                                .small()
+                                .compact()
+                                .icon(FullIconName::X)
+                                .tooltip("关闭差异窗口 (Esc)")
+                                .accessibility_label("关闭差异窗口")
+                                .cursor_pointer()
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                    }),
             )
             .into_any_element()
     }
@@ -492,7 +533,7 @@ impl GitDiffDialog {
     }
 
     pub(super) fn body(&self, cx: &mut Context<Self>) -> AnyElement {
-        if self.loading {
+        if self.loading && self.state.read(cx).files().is_empty() {
             return v_flex()
                 .size_full()
                 .items_center()
@@ -649,7 +690,11 @@ impl GitDiffDialog {
                 div()
                     .text_size(px(9.))
                     .text_color(rgb(palette().faint))
-                    .child("F7 下一处差异 · Shift+F7 上一处 · Esc 关闭"),
+                    .child(if self.embedded {
+                        "F7 下一处差异 · Shift+F7 上一处 · Esc / Ctrl+W 关闭标签"
+                    } else {
+                        "F7 下一处差异 · Shift+F7 上一处 · Esc 关闭"
+                    }),
             )
             .into_any_element()
     }
@@ -667,10 +712,11 @@ impl Render for GitDiffDialog {
             .id("git-diff-dialog")
             .debug_selector(|| "git-diff-dialog".into())
             .key_context("GitDiffDialog")
+            .track_focus(&self.focus)
             .size_full()
             .min_h_0()
             .bg(rgb(palette().surface))
-            .rounded(px(16.))
+            .when(!self.embedded, |view| view.rounded(px(16.)))
             .overflow_hidden()
             .on_action(cx.listener(|this, _: &NextDiff, window, cx| {
                 this.next_change(window, cx);

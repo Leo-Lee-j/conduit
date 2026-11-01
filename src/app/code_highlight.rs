@@ -26,6 +26,27 @@ pub(super) fn highlight_names(language: &str, code: &str) -> Vec<(Range<usize>, 
     parse(syntax, code)
 }
 
+/// Infer file syntax without reading the file again or wrapping its contents in Markdown.
+pub(super) fn highlight_file(
+    path: &std::path::Path,
+    code: &str,
+) -> Vec<(Range<usize>, &'static str)> {
+    let syntaxes = &*SYNTAXES;
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    let syntax = syntaxes
+        .find_syntax_by_token(name)
+        .or_else(|| {
+            path.extension()
+                .and_then(|e| e.to_str())
+                .and_then(|e| find_syntax(e))
+        })
+        .or_else(|| syntaxes.find_syntax_by_first_line(code.lines().next().unwrap_or_default()));
+    syntax.map(|s| parse(s, code)).unwrap_or_default()
+}
+
 fn find_syntax(language: &str) -> Option<&'static SyntaxReference> {
     let syntaxes = &*SYNTAXES;
     let canonical = canonical_language(language);
@@ -329,5 +350,18 @@ mod tests {
             assert!(code.is_char_boundary(range.start), "{range:?}");
             assert!(code.is_char_boundary(range.end), "{range:?}");
         }
+    }
+    #[test]
+    fn file_syntax_infers_extensions_and_unknown_files_stay_plain() {
+        use std::path::Path;
+        assert!(!super::highlight_file(Path::new("src/main.rs"), "fn main() {}\n").is_empty());
+        assert!(
+            !super::highlight_file(Path::new("script.py"), "def main():\n    print('中文')\n")
+                .is_empty()
+        );
+        assert!(
+            super::highlight_file(Path::new("file.unknown"), "plain text without syntax")
+                .is_empty()
+        );
     }
 }

@@ -3895,7 +3895,7 @@ fn tabs_share_running_and_unread_dots_and_clear_on_open(cx: &mut TestAppContext)
             let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
             app.writable = false;
             app.selected_session = Some(1);
-            app.open_tabs = vec![1, 2];
+            app.open_tabs = vec![super::DocumentTab::Chat(1), super::DocumentTab::Chat(2)];
             app.runs.insert(
                 2,
                 super::ActiveRun::new(
@@ -3972,7 +3972,7 @@ fn session_tab_right_click_menu_targets_the_tab_under_the_pointer(cx: &mut TestA
             let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
             app.writable = false;
             app.selected_session = Some(1);
-            app.open_tabs = vec![1, 2];
+            app.open_tabs = vec![super::DocumentTab::Chat(1), super::DocumentTab::Chat(2)];
             app
         });
         *output.borrow_mut() = Some(app.clone());
@@ -4036,7 +4036,7 @@ fn session_tab_close_button_closes_without_selecting_the_tab(cx: &mut TestAppCon
             let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
             app.writable = false;
             app.selected_session = Some(1);
-            app.open_tabs = vec![1, 2];
+            app.open_tabs = vec![super::DocumentTab::Chat(1), super::DocumentTab::Chat(2)];
             app
         });
         *output.borrow_mut() = Some(app.clone());
@@ -4057,7 +4057,7 @@ fn session_tab_close_button_closes_without_selecting_the_tab(cx: &mut TestAppCon
     });
     cx.update(|_, cx| {
         let app = app.read(cx);
-        assert_eq!(app.open_tabs, vec![1]);
+        assert_eq!(app.open_tabs, vec![super::DocumentTab::Chat(1)]);
         assert_eq!(app.selected_session, Some(1));
     });
 }
@@ -4359,4 +4359,300 @@ fn builtin_theme_packs_back_the_active_theme(cx: &mut TestAppContext) {
         assert_eq!(theme.tokens.tab_active.color, expected);
         assert_eq!(super::palette().canvas, 0xf7f7f8);
     });
+}
+
+#[gpui_kit::test]
+fn session_average_speed_survives_new_turns_and_counts_stream_updates_once(
+    cx: &mut TestAppContext,
+) {
+    use crate::{
+        domain::{Usage, Workspace},
+        protocol::Event,
+        store::Store,
+    };
+    use gpui_kit::AppContext as _;
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (runtime, sender) = crate::chat_runtime::ChatRuntime::test_channel();
+    let path = std::env::temp_dir().join("conduit-session-speed-ui");
+    let path_for_window = path.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let store = Store {
+                workspaces: vec![Workspace {
+                    path: path_for_window.clone(),
+                    sessions: vec![super::tests::session()],
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.writable = false;
+            app.selected_workspace = Some(0);
+            app.selected_session = Some(1);
+            let mut run = super::ActiveRun::new(
+                runtime,
+                path_for_window,
+                "speed-first".into(),
+                Usage::default(),
+                None,
+                Default::default(),
+            );
+            run.turn_started = std::time::Instant::now() - std::time::Duration::from_secs(1);
+            app.runs.insert(1, run);
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    sender
+        .send(Event::Usage(Usage {
+            output_tokens: 100,
+            total_tokens: 100,
+            turn_output_tokens: Some(100),
+            context_tokens: Some(100),
+            ..Default::default()
+        }))
+        .unwrap();
+    sender
+        .send(Event::Finished {
+            error: None,
+            cancelled: false,
+        })
+        .unwrap();
+    cx.update(|window, cx| app.update(cx, |this, cx| this.poll(window, cx)));
+    let first = cx.update(|_, cx| app.read(cx).session(1).unwrap().usage);
+    assert_eq!(first.session_output_tokens, 100);
+    assert!(first.session_elapsed_ms >= 1_000);
+    let (runtime, sender) = crate::chat_runtime::ChatRuntime::test_channel();
+    cx.update(|_, cx| {
+        app.update(cx, |this, _| {
+            let mut run = super::ActiveRun::new(
+                runtime,
+                path,
+                "speed-second".into(),
+                first,
+                None,
+                Default::default(),
+            );
+            assert_eq!(
+                run.usage.average_output_speed(),
+                first.average_output_speed(),
+                "starting a turn must keep the session average"
+            );
+            run.turn_started = std::time::Instant::now() - std::time::Duration::from_secs(9);
+            this.runs.insert(1, run);
+        })
+    });
+    for _ in 0..2 {
+        sender
+            .send(Event::Usage(Usage {
+                output_tokens: 1_000,
+                total_tokens: 1_000,
+                turn_output_tokens: Some(900),
+                context_tokens: Some(1_000),
+                ..Default::default()
+            }))
+            .unwrap();
+    }
+    cx.update(|window, cx| app.update(cx, |this, cx| this.poll(window, cx)));
+    cx.update(|_, cx| {
+        let usage = app.read(cx).runs.get(&1).unwrap().usage;
+        assert_eq!(
+            usage.session_output_tokens, 1_000,
+            "repeated snapshots must replace, not accumulate"
+        );
+        assert!(usage.session_elapsed_ms >= first.session_elapsed_ms + 9_000);
+    });
+    sender
+        .send(Event::Finished {
+            error: None,
+            cancelled: false,
+        })
+        .unwrap();
+    cx.update(|window, cx| app.update(cx, |this, cx| this.poll(window, cx)));
+    cx.update(|_, cx| {
+        let usage = app.read(cx).session(1).unwrap().usage;
+        assert_eq!(usage.session_output_tokens, 1_000);
+        let expected = (1_000.0 * 1_000.0 / usage.session_elapsed_ms as f64).round() as u64;
+        assert_eq!(usage.average_output_speed(), Some(expected));
+        assert!(
+            usage.average_output_speed().unwrap() > 50,
+            "not just the second turn's output speed"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn workspace_drag_reorders_and_preserves_navigation_identity(cx: &mut TestAppContext) {
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let workspaces = (0..3)
+                .map(|index| {
+                    let mut session = super::tests::session();
+                    session.id = index + 1;
+                    session.title = format!("session-{index}");
+                    crate::domain::Workspace {
+                        path: std::env::temp_dir().join(format!("conduit-workspace-drag-{index}")),
+                        sessions: vec![session],
+                    }
+                })
+                .collect();
+            let store = crate::store::Store {
+                version: 2,
+                workspaces,
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.selected_workspace = Some(1);
+            app.selected_session = Some(2);
+            app.open_tabs = vec![super::DocumentTab::Chat(2)];
+            app.expanded_workspaces = [0, 1].into_iter().collect();
+            app.remove_workspace_target = Some(0);
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let source = cx.debug_bounds("workspace-item-0").unwrap().center();
+    let target = cx.debug_bounds("workspace-item-2").unwrap().center();
+    cx.simulate_mouse_down(source, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(
+        point(source.x + px(12.), source.y),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    cx.simulate_mouse_move(target, Some(MouseButton::Left), Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    cx.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        app.update(cx, |this, cx| {
+            assert_eq!(this.store.workspaces[2].sessions[0].id, 1);
+            assert_eq!(this.selected_workspace, Some(0));
+            assert_eq!(this.selected_session, Some(2));
+            assert_eq!(this.open_tabs, vec![super::DocumentTab::Chat(2)]);
+            assert_eq!(this.remove_workspace_target, Some(2));
+            assert!(this.expanded_workspaces.contains(&0) && this.expanded_workspaces.contains(&2));
+            let saved = crate::store::Store::load().unwrap();
+            assert_eq!(saved.workspaces[2].sessions[0].id, 1);
+            let source = this.store.workspaces[1].path.clone();
+            let target = this.store.workspaces[0].path.clone();
+            this.reorder_workspace(&source, &target, cx);
+            assert_eq!(this.selected_workspace, Some(1));
+            assert_eq!(this.selected_session, Some(2));
+            this.writable = false;
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn commit_generation_recovers_from_transient_errors_and_preserves_edited_drafts(
+    cx: &mut TestAppContext,
+) {
+    use crate::protocol::Event;
+    use gpui_kit::AppContext as _;
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let store = crate::store::Store {
+                workspaces: vec![crate::domain::Workspace {
+                    path: std::env::temp_dir().join("conduit-commit-generation-ui"),
+                    sessions: vec![],
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.writable = false;
+            app.selected_workspace = Some(0);
+            app.ensure_commit_draft(window, cx);
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    for (reply, diagnostic, edited) in [
+        (
+            "```text\nfeat: staged changes\n\nDetailed body\n```",
+            Some("503 unavailable"),
+            false,
+        ),
+        ("", Some("401 unauthorized"), false),
+        ("feat: do not overwrite", None, true),
+    ] {
+        let (runtime, sender) = crate::chat_runtime::ChatRuntime::test_channel();
+        cx.update(|window, cx| {
+            app.update(cx, |this, cx| {
+                let path = this.selected_workspace_path().unwrap();
+                let original = this.commit_drafts[&path].input.read(cx).value().to_string();
+                this.commit_generation = Some(super::CommitGeneration {
+                    path: path.clone(),
+                    runtime,
+                    started: std::time::Instant::now(),
+                    original,
+                    parts: vec![],
+                    error: None,
+                    last_diagnostic: None,
+                });
+                if edited {
+                    this.commit_drafts[&path].input.update(cx, |input, cx| {
+                        input.set_value("manual message", window, cx)
+                    });
+                }
+            })
+        });
+        if let Some(error) = diagnostic {
+            sender.send(Event::ErrorBanner(error.into())).unwrap();
+        }
+        sender
+            .send(Event::Text {
+                key: "reply".into(),
+                text: reply.into(),
+            })
+            .unwrap();
+        sender
+            .send(Event::Finished {
+                error: None,
+                cancelled: false,
+            })
+            .unwrap();
+        cx.update(|window, cx| app.update(cx, |this, cx| this.poll_git_actions(window, cx)));
+        cx.update(|_, cx| {
+            let this = app.read(cx);
+            let path = this.selected_workspace_path().unwrap();
+            assert!(this.commit_generation.is_none());
+            let text = this.commit_drafts[&path].input.read(cx).value().to_string();
+            let feedback = &this.git_feedback[&path];
+            if edited {
+                assert_eq!(text, "manual message");
+                assert!(feedback.text.contains("未覆盖"));
+            } else if reply.is_empty() {
+                assert!(feedback.error);
+                assert!(feedback.text.contains("401"));
+            } else {
+                assert_eq!(text, "feat: staged changes\n\nDetailed body");
+                assert!(!feedback.error);
+            }
+        });
+    }
 }

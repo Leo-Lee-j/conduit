@@ -104,40 +104,80 @@ const BRAND_SVGS: &[(&str, &[u8])] = &[
     ("wenxin", include_bytes!("../../assets/icons/wenxin.svg")),
 ];
 
-// GPUI's Icon/Svg paints an alpha mask in text_color and loses the original
-// colors. ImageFormat::Svg preserves fills/gradients. Cache both currentColor
-// variants once; fixed brand colors are never tinted by surrounding controls.
-static BRAND_IMAGES: std::sync::LazyLock<HashMap<(&str, bool), Arc<Image>>> =
+// Keep full-color SVGs, but rasterize at the actual device-pixel size. The
+// generic Image SVG decoder supersamples a fixed intrinsic size, leaving tiny
+// marks to be downscaled by the GPU and blurring fine strokes.
+static BRAND_RENDERER: std::sync::LazyLock<SvgRenderer> =
+    std::sync::LazyLock::new(|| SvgRenderer::new(Arc::new(gpui_kit::assets::AllAssets)));
+static BRAND_PARSED: std::sync::LazyLock<HashMap<(&str, bool), ParsedSvg>> =
     std::sync::LazyLock::new(|| {
         BRAND_SVGS
             .iter()
             .flat_map(|(name, bytes)| {
                 [false, true].map(|dark| {
                     let ink = if dark { "#F3F3F4" } else { "#17171B" };
-                    let svg = std::str::from_utf8(bytes).expect("embedded brand SVG");
+                    let svg = std::str::from_utf8(bytes)
+                        .expect("embedded brand SVG")
+                        .replace("currentColor", ink)
+                        .replace("\"1em\"", "\"24\"");
                     (
                         (*name, dark),
-                        Arc::new(Image::from_bytes(
-                            ImageFormat::Svg,
-                            svg.replace("currentColor", ink)
-                                .replace("\"1em\"", "\"64\"")
-                                .into_bytes(),
-                        )),
+                        BRAND_RENDERER
+                            .parse_svg(svg.as_bytes())
+                            .expect("valid brand SVG"),
                     )
                 })
             })
             .collect()
     });
+type BrandImageCache = HashMap<(&'static str, bool, i32, i32), Arc<RenderImage>>;
+static BRAND_IMAGES: std::sync::LazyLock<std::sync::Mutex<BrandImageCache>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
-fn brand_image(name: &'static str) -> Img {
-    let dark = is_dark_mode();
-    img(BRAND_IMAGES[&(name, dark)].clone())
-        .size(px(14.))
-        .flex_shrink_0()
-        .object_fit(ObjectFit::Contain)
+fn brand_render(name: &'static str, dark: bool, width: i32, height: i32) -> Arc<RenderImage> {
+    let mut cache = BRAND_IMAGES.lock().expect("brand image cache");
+    cache
+        .entry((name, dark, width, height))
+        .or_insert_with(|| {
+            BRAND_RENDERER
+                .render_parsed(
+                    &BRAND_PARSED[&(name, dark)],
+                    SvgSize::ExactSize(size(DevicePixels(width), DevicePixels(height))),
+                )
+                .expect("brand SVG rasterization")
+        })
+        .clone()
 }
 
-pub(super) fn provider_icon(provider: Provider) -> Img {
+fn brand_image(name: &'static str) -> Div {
+    let dark = is_dark_mode();
+    div().size(px(14.)).flex_shrink_0().child(
+        canvas(
+            move |bounds, window, _| {
+                let scale = window.scale_factor();
+                let width = (f32::from(bounds.size.width) * scale).round().max(1.) as i32;
+                let height = (f32::from(bounds.size.height) * scale).round().max(1.) as i32;
+                let origin = point(
+                    px((f32::from(bounds.origin.x) * scale).round() / scale),
+                    px((f32::from(bounds.origin.y) * scale).round() / scale),
+                );
+                (
+                    brand_render(name, dark, width, height),
+                    Bounds::new(
+                        origin,
+                        size(px(width as f32 / scale), px(height as f32 / scale)),
+                    ),
+                )
+            },
+            |_, (image, bounds), window, _| {
+                let _ = window.paint_image(bounds, bounds, Corners::default(), image, 0, false);
+            },
+        )
+        .size_full(),
+    )
+}
+
+pub(super) fn provider_icon(provider: Provider) -> Div {
     brand_image(match provider {
         Provider::Claude => "claudecode",
         Provider::Codex => "codex",
@@ -146,7 +186,7 @@ pub(super) fn provider_icon(provider: Provider) -> Img {
 }
 
 /// Model family wins over the hosting provider, including routed model IDs.
-pub(super) fn model_icon(provider: Provider, id: &str) -> Img {
+pub(super) fn model_icon(provider: Provider, id: &str) -> Div {
     use models::ModelBrand;
     let name = match models::brand_of(id) {
         ModelBrand::Anthropic => "claude",
@@ -180,7 +220,7 @@ pub(super) fn model_icon(provider: Provider, id: &str) -> Img {
 
 /// Mark for a picker or chip that may still follow the CLI default: without a
 /// model override there is no vendor to show, only the engine.
-pub(super) fn model_mark(provider: Provider, id: Option<&str>) -> Img {
+pub(super) fn model_mark(provider: Provider, id: Option<&str>) -> Div {
     match id {
         Some(id) => model_icon(provider, id),
         None => provider_icon(provider),
@@ -235,46 +275,56 @@ pub(super) fn session_menu_button(
 
 #[cfg(test)]
 mod brand_tests {
-    use super::BRAND_IMAGES;
-    use gpui_kit::SvgRenderer;
-    use std::sync::Arc;
+    use super::{BRAND_SVGS, brand_render};
+
+    #[test]
+    fn brand_rasterization_matches_device_pixels_and_reuses_cached_images() {
+        for pixels in [14, 18, 21, 28, 42] {
+            let image = brand_render("openai", true, pixels, pixels);
+            let cached = brand_render("openai", true, pixels, pixels);
+            assert!(std::sync::Arc::ptr_eq(&image, &cached));
+            assert_eq!(i32::from(image.size(0).width), pixels);
+            assert_eq!(i32::from(image.size(0).height), pixels);
+            assert_ne!(image.id, brand_render("openai", false, pixels, pixels).id);
+        }
+    }
 
     #[test]
     fn embedded_brand_images_render_in_both_themes_and_keep_colors() {
-        for (&(name, dark), image) in BRAND_IMAGES.iter() {
-            let rendered = image
-                .to_image_data(SvgRenderer::new(Arc::new(gpui_kit::assets::AllAssets)))
-                .unwrap_or_else(|error| panic!("{name} dark={dark}: {error}"));
-            let pixels = rendered.as_bytes(0).unwrap();
-            assert!(
-                pixels.as_chunks::<4>().0.iter().any(|p| p[3] > 200),
-                "empty {name}"
-            );
-            if !matches!(name, "openai" | "opencode" | "grok") {
+        for &(name, _) in BRAND_SVGS {
+            for dark in [false, true] {
+                let rendered = brand_render(name, dark, 28, 28);
+                let pixels = rendered.as_bytes(0).unwrap();
                 assert!(
-                    pixels.as_chunks::<4>().0.iter().any(|p| {
-                        p[3] > 200 && p[0].abs_diff(p[1]).max(p[1].abs_diff(p[2])) > 30
-                    }),
-                    "brand color missing: {name}"
+                    pixels.as_chunks::<4>().0.iter().any(|p| p[3] > 200),
+                    "empty {name}"
                 );
-            }
-            if name == "gemini" {
-                // BGRA: the Gemini gradient has both red- and blue-dominant
-                // regions. A text-colored SVG mask cannot satisfy both.
-                assert!(
-                    pixels
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .any(|p| p[3] > 200 && p[0] > p[2].saturating_add(50))
-                );
-                assert!(
-                    pixels
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .any(|p| p[3] > 200 && p[2] > p[0].saturating_add(50))
-                );
+                if !matches!(name, "openai" | "opencode" | "grok") {
+                    assert!(
+                        pixels.as_chunks::<4>().0.iter().any(|p| {
+                            p[3] > 200 && p[0].abs_diff(p[1]).max(p[1].abs_diff(p[2])) > 30
+                        }),
+                        "brand color missing: {name}"
+                    );
+                }
+                if name == "gemini" {
+                    // BGRA: the Gemini gradient has both red- and blue-dominant
+                    // regions. A text-colored SVG mask cannot satisfy both.
+                    assert!(
+                        pixels
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .any(|p| p[3] > 200 && p[0] > p[2].saturating_add(50))
+                    );
+                    assert!(
+                        pixels
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .any(|p| p[3] > 200 && p[2] > p[0].saturating_add(50))
+                    );
+                }
             }
         }
     }

@@ -86,6 +86,15 @@ impl ConduitApp {
     }
 
     pub(super) fn select_fallback_session(&mut self) {
+        if self.active_file.is_some() || self.active_diff.is_some() {
+            if self
+                .selected_session
+                .is_some_and(|id| self.session(id).is_none_or(|s| s.archived))
+            {
+                self.selected_session = None;
+            }
+            return;
+        }
         if self
             .selected_session
             .is_some_and(|id| self.session(id).is_some_and(|session| !session.archived))
@@ -115,19 +124,18 @@ impl ConduitApp {
         }
     }
 
-    /// Open a tab without reordering the strip. New tabs append at the end and
-    /// the oldest non-selected tab is evicted past the configured limit.
+    /// Chat tabs keep their own limit; file browsing cannot evict a conversation.
     pub(super) fn push_tab(&mut self, id: u64) {
-        if !self.open_tabs.contains(&id) {
-            self.open_tabs.push(id);
+        let tab = DocumentTab::Chat(id);
+        if !self.open_tabs.contains(&tab) {
+            self.open_tabs.push(tab);
         }
         let limit = self.store.ui.max_tabs.clamp(1, MAX_TAB_LIMIT);
-        while self.open_tabs.len() > limit {
-            if let Some(position) = self
-                .open_tabs
-                .iter()
-                .position(|tab| Some(*tab) != self.selected_session)
-            {
+        while self.open_tabs.iter().filter(|t| t.chat().is_some()).count() > limit {
+            if let Some(position) = self.open_tabs.iter().position(|tab| {
+                tab.chat()
+                    .is_some_and(|other| other != id && !self.runs.contains_key(&other))
+            }) {
                 self.open_tabs.remove(position);
             } else {
                 break;
@@ -135,77 +143,8 @@ impl ConduitApp {
         }
     }
 
-    /// Drop a tab without touching the current selection; used when the tab
-    /// is closed while another session stays active.
     pub(super) fn remove_tab(&mut self, id: u64) {
-        self.open_tabs.retain(|tab| *tab != id);
-    }
-
-    /// Close a group of tabs while keeping the conversation records in the
-    /// sidebar. If the active tab is among them, select the newest remaining
-    /// open tab, matching the single-tab close behavior.
-    pub(super) fn close_tabs(&mut self, ids: &[u64], cx: &mut Context<Self>) {
-        if ids.is_empty() {
-            return;
-        }
-        let closing_active = self.selected_session.is_some_and(|id| ids.contains(&id));
-        if closing_active && let Some(id) = self.selected_session {
-            self.drafts
-                .insert(id, self.input.read(cx).value().to_string());
-        }
-        self.open_tabs.retain(|tab| !ids.contains(tab));
-        if !closing_active {
-            cx.notify();
-            return;
-        }
-
-        let next = self
-            .open_tabs
-            .iter()
-            .rev()
-            .copied()
-            .find(|id| self.session(*id).is_some());
-        if let Some(next) = next {
-            let window = cx
-                .windows()
-                .into_iter()
-                .find_map(|handle| handle.downcast::<Self>());
-            if let Some(window) = window {
-                let _ = window.update(cx, |_, window, cx| {
-                    if let Some(workspace) = self.store.workspaces.iter().position(|workspace| {
-                        workspace.sessions.iter().any(|session| session.id == next)
-                    }) {
-                        self.switch(workspace, Some(next), window, cx);
-                    }
-                });
-            }
-        } else {
-            self.selected_session = None;
-            self.detail_text = None;
-            self.message = None;
-            cx.notify();
-        }
-    }
-
-    pub(super) fn close_tabs_left(&mut self, id: u64, cx: &mut Context<Self>) {
-        let Some(position) = self.open_tabs.iter().position(|tab| *tab == id) else {
-            return;
-        };
-        let ids = self.open_tabs[..position].to_vec();
-        self.close_tabs(&ids, cx);
-    }
-
-    pub(super) fn close_tabs_right(&mut self, id: u64, cx: &mut Context<Self>) {
-        let Some(position) = self.open_tabs.iter().position(|tab| *tab == id) else {
-            return;
-        };
-        let ids = self.open_tabs[position + 1..].to_vec();
-        self.close_tabs(&ids, cx);
-    }
-
-    pub(super) fn close_all_tabs(&mut self, cx: &mut Context<Self>) {
-        let ids = self.open_tabs.clone();
-        self.close_tabs(&ids, cx);
+        self.open_tabs.retain(|tab| *tab != DocumentTab::Chat(id));
     }
 
     pub(super) fn toggle_archive(&mut self, id: u64, cx: &mut Context<Self>) {
@@ -215,10 +154,11 @@ impl ConduitApp {
         let archived_tabs: Vec<u64> = self
             .open_tabs
             .iter()
-            .copied()
-            .filter(|tab| self.session(*tab).is_none_or(|session| session.archived))
+            .filter_map(|tab| tab.chat())
+            .filter(|id| self.session(*id).is_none_or(|s| s.archived))
             .collect();
-        self.open_tabs.retain(|tab| !archived_tabs.contains(tab));
+        self.open_tabs
+            .retain(|tab| tab.chat().is_none_or(|id| !archived_tabs.contains(&id)));
         self.select_fallback_session();
         self.persist();
         self.sync_git_workspace(cx);
@@ -535,7 +475,7 @@ impl ConduitApp {
             .unwrap_or(0)
     }
 
-    /// Sampled turn-average output speed, provider consumption, and latest
+    /// Sampled session-average output speed, provider consumption, and latest
     /// reported context. Unknown context never falls back to cumulative usage.
     pub(super) fn usage_status_parts(&self) -> Option<Vec<AnyElement>> {
         let usage = self
@@ -547,7 +487,10 @@ impl ConduitApp {
                     .or_else(|| self.session(id).map(|session| session.usage))
             })
             .unwrap_or_default();
-        if usage.total_tokens == 0 && usage.context_tokens.is_none() {
+        if usage.total_tokens == 0
+            && usage.context_tokens.is_none()
+            && usage.session_elapsed_ms == 0
+        {
             return None;
         }
         let tokens_per_second = usage.average_output_speed();
@@ -576,14 +519,14 @@ impl ConduitApp {
         let speed_label = tokens_per_second
             .map(|speed| format!("均速 {speed} tok/s"))
             .unwrap_or_else(|| "均速 —".into());
-        let speed_tooltip = match (usage.turn_output_tokens, usage.turn_elapsed_ms) {
-            (Some(output), Some(elapsed)) => format!(
-                "本轮平均输出速度：{output} 输出 token / {:.2} 秒。包含启动、工具及审批等待；仅在 CLI 上报用量时更新，不是实时生成速度。",
-                elapsed as f64 / 1_000.0
-            ),
-            _ => {
-                "CLI 尚未提供可靠的本轮输出统计；不使用输入、缓存或历史累计 token 估算速度。".into()
-            }
+        let speed_tooltip = if usage.session_elapsed_ms > 0 {
+            format!(
+                "会话平均输出速度：{} 输出 token / {:.2} 秒。按有效轮次总输出 / 总耗时计算，包含启动、工具及审批等待，不含轮次之间的空闲时间；缺少可靠统计的轮次不计入。",
+                usage.session_output_tokens,
+                usage.session_elapsed_ms as f64 / 1_000.0
+            )
+        } else {
+            "此会话尚无可靠的输出速度统计；不使用输入、缓存或历史累计 token 估算速度。".into()
         };
         parts.push(
             h_flex()
@@ -767,6 +710,7 @@ impl ConduitApp {
         let removed = self.store.workspaces.remove(index);
         self.history_loading.remove(&removed.path);
         self.workspace_drafts.remove(&removed.path);
+        self.selected_git_files.remove(&removed.path);
         self.composer_files
             .retain(|target, _| target.workspace != removed.path);
         self.expanded_workspaces.clear();
@@ -779,7 +723,9 @@ impl ConduitApp {
             self.tool_scrolls.retain(|(id, _), _| *id != session.id);
         }
         let removed_ids: Vec<u64> = removed.sessions.iter().map(|session| session.id).collect();
-        self.open_tabs.retain(|tab| !removed_ids.contains(tab));
+        self.open_tabs
+            .retain(|tab| tab.chat().is_none_or(|id| !removed_ids.contains(&id)));
+        self.forget_workspace_files(&removed.path);
         if self.selected_workspace == Some(index) || self.selected_session.is_none() {
             self.selected_workspace = None;
             self.selected_session = None;
@@ -879,46 +825,6 @@ impl ConduitApp {
             }))
     }
 
-    /// Close a session tab. Closing the active tab reveals the next most
-    /// recent one; the conversation itself is kept in the sidebar.
-    pub(super) fn close_tab(&mut self, id: u64, cx: &mut Context<Self>) {
-        if self.selected_session == Some(id) {
-            self.drafts
-                .insert(id, self.input.read(cx).value().to_string());
-            self.remove_tab(id);
-            if let Some(next) = self
-                .open_tabs
-                .last()
-                .copied()
-                .filter(|next| self.session(*next).is_some())
-            {
-                let window = cx
-                    .windows()
-                    .into_iter()
-                    .find_map(|handle| handle.downcast::<Self>());
-                if let Some(window) = window {
-                    let _ = window.update(cx, |_, window, cx| {
-                        if let Some(workspace) =
-                            self.store.workspaces.iter().position(|workspace| {
-                                workspace.sessions.iter().any(|s| s.id == next)
-                            })
-                        {
-                            self.switch(workspace, Some(next), window, cx);
-                        }
-                    });
-                }
-            } else {
-                self.selected_session = None;
-                self.detail_text = None;
-                self.message = None;
-                cx.notify();
-            }
-        } else {
-            self.remove_tab(id);
-            cx.notify();
-        }
-    }
-
     pub(super) fn clear_workspace_selection(
         &mut self,
         window: &mut Window,
@@ -931,6 +837,8 @@ impl ConduitApp {
             self.workspace_drafts
                 .insert(target.workspace, self.input.read(cx).value().to_string());
         }
+        self.active_file = None;
+        self.active_diff = None;
         self.selected_workspace = None;
         self.selected_session = None;
         self.detail_text = None;
@@ -944,165 +852,25 @@ impl ConduitApp {
         cx.notify();
     }
 
-    /// Conversation tab strip: one Folder tab per open session, horizontally
-    /// scrollable, with a fixed-width action area pinned to the right. The tabs
-    /// sit flush with the content below, so the selected tab's curves meet the
-    /// conversation without a dividing border.
     pub(super) fn session_tab_bar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let app_entity = cx.entity();
-        let open: Vec<u64> = self
-            .open_tabs
-            .iter()
-            .copied()
-            .filter(|id| self.session(*id).is_some())
-            .collect();
-        let selected_index = self
-            .selected_session
-            .and_then(|id| open.iter().position(|tab| *tab == id));
-        let mut bar = TabBar::new("session-tabs")
-            .folder()
-            .with_size(Size::Medium)
-            // Folder tabs are 32 high with a 4px top gap; the bar holds exactly
-            // that so the selected tab meets the conversation at its bottom.
-            .h(px(36.))
-            .when_some(selected_index, |bar, index| bar.selected_index(index));
-        for id in open.iter().copied() {
-            let session = self.session(id).expect("filtered above");
-            let running = self.runs.contains_key(&id);
-            let unread = self.unread_completed.contains(&id);
-            let title = if session.title.is_empty() {
-                "新会话".to_string()
-            } else {
-                session.title.clone()
-            };
-            let title = single_line_title(&title);
-            let tab_group = SharedString::from(format!("session-tab-{id}"));
-            bar = bar.child(
-                Tab::new()
-                    .debug_selector(move || format!("session-tab-{id}"))
-                    .aria_label(title.clone())
-                    .group(tab_group.clone())
-                    .cursor_pointer()
-                    .on_hover(cx.listener(move |this, hovered, _, _| {
-                        if *hovered {
-                            this.tab_menu_target = Some(id);
-                        } else if this.tab_menu_target == Some(id) {
-                            this.tab_menu_target = None;
-                        }
-                    }))
-                    .prefix(provider_icon(session.provider))
-                    .child(
-                        div()
-                            .max_w(px(180.))
-                            .truncate()
-                            .line_height(px(16.))
-                            .whitespace_nowrap()
-                            .text_size(px(12.))
-                            .child(title),
-                    )
-                    .when(running || unread, |tab| {
-                        tab.child(div().ml(px(2.)).flex_shrink_0().child(session_activity_dot(
-                            "tab-activity",
-                            id,
-                            running,
-                        )))
-                    })
-                    .suffix(
-                        Button::new(("session-tab-close", id))
-                            .debug_selector(move || format!("session-tab-close-{id}"))
-                            .ghost()
-                            .small()
-                            .compact()
-                            .icon(gpui_kit::assets::IconName::X)
-                            .opacity(0.)
-                            .group_hover(tab_group, |style| style.opacity(1.))
-                            .focus_visible(|style| style.opacity(1.))
-                            .cursor_pointer()
-                            .tooltip(if running {
-                                "停止并关闭会话"
-                            } else {
-                                "关闭会话"
-                            })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.close_tab(id, cx);
-                                cx.stop_propagation();
-                            })),
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if let Some(workspace) = this
-                            .store
-                            .workspaces
-                            .iter()
-                            .position(|workspace| workspace.sessions.iter().any(|s| s.id == id))
-                        {
-                            this.switch(workspace, Some(id), window, cx);
-                        }
-                    })),
-            );
-        }
-        if open.is_empty() {
-            bar = bar.prefix(
-                div()
-                    .h(px(32.))
-                    .pl(px(12.))
-                    .flex()
-                    .items_center()
-                    .text_size(px(12.))
-                    .text_color(rgb(palette().faint))
-                    .child("未选择工作区"),
-            );
-        }
-        let context_app = app_entity;
-        div()
-            .h(px(36.))
-            .child(
-                bar.suffix(
-                    h_flex()
-                        .h_full()
-                        .items_center()
-                        .gap_1()
-                        .pr(px(12.))
-                        .child(div().w(px(1.)).h(px(18.)).mx_1().bg(rgb(palette().border)))
-                        .child(self.detail_toggle(cx)),
-                ),
-            )
-            .context_menu(move |menu, _, cx| {
-                let Some(id) = context_app.read(cx).tab_menu_target else {
-                    return menu;
-                };
-                let left_app = context_app.clone();
-                let right_app = context_app.clone();
-                let all_app = context_app.clone();
-                menu.min_w(px(170.))
-                    .item(
-                        PopupMenuItem::new("关闭右侧会话")
-                            .icon(IconName::ChevronRight)
-                            .on_click(move |_, _, cx| {
-                                right_app.update(cx, |this, cx| this.close_tabs_right(id, cx));
-                            }),
-                    )
-                    .item(
-                        PopupMenuItem::new("关闭左侧会话")
-                            .icon(IconName::ChevronLeft)
-                            .on_click(move |_, _, cx| {
-                                left_app.update(cx, |this, cx| this.close_tabs_left(id, cx));
-                            }),
-                    )
-                    .item(
-                        PopupMenuItem::new("全部关闭")
-                            .icon(IconName::Delete)
-                            .on_click(move |_, _, cx| {
-                                all_app.update(cx, |this, cx| this.close_all_tabs(cx));
-                            }),
-                    )
-            })
-            .into_any_element()
+        self.document_tab_bar(cx)
     }
 
     pub(super) fn switch(
         &mut self,
         workspace: usize,
         session: Option<u64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.switch_context(workspace, session, true, window, cx);
+    }
+
+    pub(super) fn switch_context(
+        &mut self,
+        workspace: usize,
+        session: Option<u64>,
+        activate_chat: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1113,10 +881,12 @@ impl ConduitApp {
             self.workspace_drafts
                 .insert(target.workspace, self.input.read(cx).value().to_string());
         }
+        self.active_file = None;
+        self.active_diff = None;
         self.selected_workspace = Some(workspace);
         self.selected_session = session;
         self.pending_model_selection = None;
-        if let Some(id) = session {
+        if activate_chat && let Some(id) = session {
             self.unread_completed.remove(&id);
             self.push_tab(id);
         }
@@ -1136,15 +906,16 @@ impl ConduitApp {
             .update(cx, |input, cx| input.set_value(draft, window, cx));
         // The recalled-prompt rank belongs to the conversation we just left.
         self.prompt_history = None;
-        if session.is_some() {
+        if activate_chat && session.is_some() {
             self.input.read(cx).focus_handle(cx).focus(window, cx);
         }
         self.timeline_session = None;
         // A newly selected conversation opens at its latest message.
         self.at_bottom = true;
-        if let Some(provider) = session
-            .and_then(|id| self.session(id))
-            .map(|session| session.provider)
+        if activate_chat
+            && let Some(provider) = session
+                .and_then(|id| self.session(id))
+                .map(|session| session.provider)
         {
             self.new_session_provider = provider;
             self.remember_provider(provider);
@@ -1403,6 +1174,8 @@ impl ConduitApp {
             },
         );
         self.selected_workspace = Some(index);
+        self.active_file = None;
+        self.active_diff = None;
         self.selected_session = Some(id);
         if self
             .pending_model_selection

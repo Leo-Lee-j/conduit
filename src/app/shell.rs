@@ -162,74 +162,96 @@ impl Render for ConduitApp {
             .sidebar_view
             .clone()
             .cached(StyleRefinement::default().size_full());
-        let mut messages = div()
-            .v_flex()
-            .id("messages")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .min_w_0()
-            .px_2()
-            .py_1()
-            .gap_5();
-        if let Some(session) = &selected {
-            if session.message_count == 0 {
-                messages = messages.child(
-                    v_flex()
+        let mut conversation = if self.active_diff.is_some() {
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .child(self.session_tab_bar(cx))
+                .child(self.render_diff_document(cx))
+        } else if self.active_file.is_some() {
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .child(self.session_tab_bar(cx))
+                .child(
+                    self.file_view
+                        .clone()
+                        .cached(StyleRefinement::default().w_full().flex_1().min_h_0()),
+                )
+        } else {
+            let mut messages = div()
+                .v_flex()
+                .id("messages")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .min_w_0()
+                .px_2()
+                .py_1()
+                .gap_5();
+            if let Some(session) = &selected {
+                if session.message_count == 0 {
+                    messages = messages.child(
+                        v_flex()
+                            .flex_1()
+                            .justify_center()
+                            .items_center()
+                            .gap_3()
+                            .py_20()
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(provider_icon(session.provider))
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .text_color(rgb(palette().faint))
+                                            .child(format!(
+                                                "{} · 已就绪",
+                                                session.provider.label()
+                                            )),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(30.))
+                                    .font_bold()
+                                    .text_color(rgb(palette().text))
+                                    .child("今天想完成什么？"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(14.))
+                                    .text_color(rgb(palette().muted))
+                                    .child(format!("在 {} 中开始你的任务", directory)),
+                            ),
+                    );
+                }
+                if session.message_count > 0 {
+                    messages = div()
+                        .id("messages")
                         .flex_1()
-                        .justify_center()
-                        .items_center()
-                        .gap_3()
-                        .py_20()
-                        .child(
-                            h_flex()
-                                .items_center()
-                                .gap_2()
-                                .child(provider_icon(session.provider))
-                                .child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .text_color(rgb(palette().faint))
-                                        .child(format!("{} · 已就绪", session.provider.label())),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(30.))
-                                .font_bold()
-                                .text_color(rgb(palette().text))
-                                .child("今天想完成什么？"),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(14.))
-                                .text_color(rgb(palette().muted))
-                                .child(format!("在 {} 中开始你的任务", directory)),
-                        ),
-                );
-            }
-            if session.message_count > 0 {
-                messages = div()
-                    .id("messages")
-                    .flex_1()
-                    .min_h_0()
-                    .min_w_0()
-                    .track_focus(&self.chat_focus)
-                    .on_mouse_up(MouseButton::Left, {
-                        let focus = self.chat_focus.clone();
-                        move |_, window, cx| {
-                            // The composer holds keyboard focus, so a finished chat
-                            // selection would never see Ctrl+C. Move focus onto the
-                            // conversation, inside the window root's key context.
-                            if !TextSelection::selected_text(window, cx).trim().is_empty() {
-                                focus.focus(window, cx);
+                        .min_h_0()
+                        .min_w_0()
+                        .track_focus(&self.chat_focus)
+                        .on_mouse_up(MouseButton::Left, {
+                            let focus = self.chat_focus.clone();
+                            move |_, window, cx| {
+                                // The composer holds keyboard focus, so a finished chat
+                                // selection would never see Ctrl+C. Move focus onto the
+                                // conversation, inside the window root's key context.
+                                if !TextSelection::selected_text(window, cx).trim().is_empty() {
+                                    focus.focus(window, cx);
+                                }
                             }
-                        }
-                    })
-                    .child(self.timeline.clone());
-            }
-        } else if has_workspace {
-            messages = messages.child(
+                        })
+                        .child(self.timeline.clone());
+                }
+            } else if has_workspace {
+                messages = messages.child(
                 v_flex()
                     .flex_1()
                     .items_center()
@@ -270,225 +292,237 @@ impl Render for ConduitApp {
                             )),
                     ),
             );
-        } else {
-            messages = messages.child(self.session_heatmap(13));
-        }
+            } else {
+                messages = messages.child(self.session_heatmap(13));
+            }
 
-        let mut conversation = v_flex().flex_1().min_w_0().h_full();
-        conversation = conversation.child(self.session_tab_bar(cx));
-        // Keep the outline attached to the centered message column instead of
-        // the window edge. It stays outside the scrolling list, while the
-        // rail itself is vertically centered in the chat viewport.
-        let mut message_area = h_flex().flex_1().min_h_0().min_w_0().items_stretch();
-        if !self.outline.entries.is_empty() {
-            message_area = message_area.child(
-                h_flex()
-                    .w_full()
-                    .when(!self.store.ui.full_width_content, |row| {
-                        row.max_w(px(952.)).mx_auto()
-                    })
-                    .h_full()
-                    .min_h_0()
-                    .min_w_0()
-                    .items_stretch()
-                    .child(self.message_outline(cx))
-                    .child(messages)
-                    // Balance the rail so messages stay aligned with the composer.
-                    .child(div().w(px(32.)).flex_shrink_0()),
-            );
-        } else {
-            message_area = message_area.child(messages);
-        }
-        conversation = conversation.child(message_area);
-        let approval_count = self
-            .selected_session
-            .and_then(|id| self.runs.get(&id))
-            .map(|r| r.approvals.len())
-            .unwrap_or(0);
-        let approvals = self
-            .selected_session
-            .and_then(|id| self.runs.get(&id))
-            .and_then(|r| r.approvals.front().cloned());
-        for (index, approval) in approvals.into_iter().enumerate() {
-            let submitted = self
+            let mut conversation = v_flex().flex_1().min_w_0().h_full();
+            conversation = conversation.child(self.session_tab_bar(cx));
+            // Keep the outline attached to the centered message column instead of
+            // the window edge. It stays outside the scrolling list, while the
+            // rail itself is vertically centered in the chat viewport.
+            let mut message_area = h_flex().flex_1().min_h_0().min_w_0().items_stretch();
+            if !self.outline.entries.is_empty() {
+                message_area = message_area.child(
+                    h_flex()
+                        .w_full()
+                        .when(!self.store.ui.full_width_content, |row| {
+                            row.max_w(px(952.)).mx_auto()
+                        })
+                        .h_full()
+                        .min_h_0()
+                        .min_w_0()
+                        .items_stretch()
+                        .child(self.message_outline(cx))
+                        .child(messages)
+                        // Balance the rail so messages stay aligned with the composer.
+                        .child(div().w(px(32.)).flex_shrink_0()),
+                );
+            } else {
+                message_area = message_area.child(messages);
+            }
+            conversation = conversation.child(message_area);
+            let approval_count = self
                 .selected_session
                 .and_then(|id| self.runs.get(&id))
-                .is_some_and(|r| r.approvals.is_submitted(&approval.id));
-            let id = self.selected_session.unwrap();
-            let allow_id = approval.id.clone();
-            let deny_id = approval.id;
-            let toggle_id = deny_id.clone();
-            let expanded = self
-                .runs
-                .get(&id)
-                .is_some_and(|run| run.expanded_approvals.contains(&deny_id));
-            let queue_label = if approval_count > 1 {
-                format!("第 {} / {} 项", index + 1, approval_count)
-            } else {
-                String::new()
-            };
-            conversation = conversation.child(
-                div().w_full().px_6().mb_4().child(
-                    v_flex()
-                        .w_full()
-                        .when(!self.store.ui.full_width_content, |card| {
-                            card.max_w(px(840.)).mx_auto()
-                        })
-                        .p_4()
-                        .gap_3()
-                        .rounded(px(14.))
-                        .border_1()
-                        .border_color(rgb(palette().warning_border))
-                        .bg(rgb(palette().warning_bg))
-                        .child(
-                            h_flex()
-                                .items_start()
-                                .gap_3()
-                                .child(
-                                    h_flex()
-                                        .w(px(28.))
-                                        .h(px(28.))
-                                        .flex_shrink_0()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded(px(8.))
-                                        .bg(rgb(palette().warning_icon_bg))
-                                        .child(
-                                            Icon::new(IconName::TriangleAlert)
-                                                .small()
-                                                .text_color(rgb(palette().warning_text)),
-                                        ),
-                                )
-                                .child(
-                                    v_flex()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .gap_1()
-                                        .child(
-                                            h_flex()
-                                                .items_center()
-                                                .gap_2()
-                                                .child(
-                                                    div()
-                                                        .text_size(px(13.))
-                                                        .font_semibold()
-                                                        .text_color(rgb(palette().highlight_text))
-                                                        .child(approval.title.clone()),
-                                                )
-                                                .when(!queue_label.is_empty(), |row| {
-                                                    row.child(
-                                                        h_flex()
-                                                            .h(px(18.))
-                                                            .px_2()
-                                                            .items_center()
-                                                            .rounded_full()
-                                                            .bg(rgb(palette().warning_chip_bg))
-                                                            .text_size(px(10.))
-                                                            .text_color(rgb(
-                                                                palette().warning_chip_text
-                                                            ))
-                                                            .child(queue_label.clone()),
-                                                    )
-                                                }),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(px(11.))
-                                                .line_height(relative(1.4))
-                                                .text_color(rgb(palette().warning_muted))
-                                                .child("CLI 请求授权，仅对本次操作生效。"),
-                                        ),
-                                )
-                                .child(
-                                    Button::new(("approval-toggle", index))
-                                        .label(if expanded { "收起" } else { "展开详情" })
-                                        .small()
-                                        .ghost()
-                                        .cursor_pointer()
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.toggle_approval_detail(id, toggle_id.clone(), cx)
-                                        })),
-                                ),
-                        )
-                        .when(expanded, |column| {
-                            column.child(
-                                div()
-                                    .id(("approval-detail", index))
-                                    .max_h(px((f32::from(window.viewport_size().height) * 0.4)
-                                        .clamp(120., 360.)))
-                                    .overflow_y_scroll()
-                                    .p_3()
-                                    .rounded(px(10.))
-                                    .border_1()
-                                    .border_color(rgb(palette().warning_inner_border))
-                                    .bg(rgb(palette().warning_code_bg))
-                                    .text_xs()
-                                    .line_height(relative(1.5))
-                                    .text_color(rgb(palette().warning_code_text))
-                                    .child(approval.detail.clone()),
-                            )
-                        })
-                        .child(
-                            h_flex()
-                                .items_center()
-                                .gap_2()
-                                .when(!approval.allow_once, |row| {
-                                    row.child(
-                                        div()
-                                            .flex_1()
-                                            .text_size(px(11.))
-                                            .text_color(rgb(palette().warning_accent))
-                                            .child("CLI 未提供「允许本次」选项，此请求只能拒绝。"),
+                .map(|r| r.approvals.len())
+                .unwrap_or(0);
+            let approvals = self
+                .selected_session
+                .and_then(|id| self.runs.get(&id))
+                .and_then(|r| r.approvals.front().cloned());
+            for (index, approval) in approvals.into_iter().enumerate() {
+                let submitted = self
+                    .selected_session
+                    .and_then(|id| self.runs.get(&id))
+                    .is_some_and(|r| r.approvals.is_submitted(&approval.id));
+                let id = self.selected_session.unwrap();
+                let allow_id = approval.id.clone();
+                let deny_id = approval.id;
+                let toggle_id = deny_id.clone();
+                let expanded = self
+                    .runs
+                    .get(&id)
+                    .is_some_and(|run| run.expanded_approvals.contains(&deny_id));
+                let queue_label = if approval_count > 1 {
+                    format!("第 {} / {} 项", index + 1, approval_count)
+                } else {
+                    String::new()
+                };
+                conversation = conversation.child(
+                    div().w_full().px_6().mb_4().child(
+                        v_flex()
+                            .w_full()
+                            .when(!self.store.ui.full_width_content, |card| {
+                                card.max_w(px(840.)).mx_auto()
+                            })
+                            .p_4()
+                            .gap_3()
+                            .rounded(px(14.))
+                            .border_1()
+                            .border_color(rgb(palette().warning_border))
+                            .bg(rgb(palette().warning_bg))
+                            .child(
+                                h_flex()
+                                    .items_start()
+                                    .gap_3()
+                                    .child(
+                                        h_flex()
+                                            .w(px(28.))
+                                            .h(px(28.))
+                                            .flex_shrink_0()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded(px(8.))
+                                            .bg(rgb(palette().warning_icon_bg))
+                                            .child(
+                                                Icon::new(IconName::TriangleAlert)
+                                                    .small()
+                                                    .text_color(rgb(palette().warning_text)),
+                                            ),
                                     )
-                                })
-                                .when(approval.allow_once, |row| row.child(div().flex_1()))
-                                .child(
-                                    Button::new(("deny", index))
-                                        .label("拒绝")
-                                        .small()
-                                        .ghost()
-                                        .disabled(self.closing || submitted)
-                                        .when(!self.closing && !submitted, |button| {
-                                            button.cursor_pointer()
-                                        })
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.decide(id, deny_id.clone(), false, window, cx)
-                                        })),
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .gap_1()
+                                            .child(
+                                                h_flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(13.))
+                                                            .font_semibold()
+                                                            .text_color(rgb(
+                                                                palette().highlight_text
+                                                            ))
+                                                            .child(approval.title.clone()),
+                                                    )
+                                                    .when(!queue_label.is_empty(), |row| {
+                                                        row.child(
+                                                            h_flex()
+                                                                .h(px(18.))
+                                                                .px_2()
+                                                                .items_center()
+                                                                .rounded_full()
+                                                                .bg(rgb(palette().warning_chip_bg))
+                                                                .text_size(px(10.))
+                                                                .text_color(rgb(
+                                                                    palette().warning_chip_text
+                                                                ))
+                                                                .child(queue_label.clone()),
+                                                        )
+                                                    }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(11.))
+                                                    .line_height(relative(1.4))
+                                                    .text_color(rgb(palette().warning_muted))
+                                                    .child("CLI 请求授权，仅对本次操作生效。"),
+                                            ),
+                                    )
+                                    .child(
+                                        Button::new(("approval-toggle", index))
+                                            .label(if expanded { "收起" } else { "展开详情" })
+                                            .small()
+                                            .ghost()
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.toggle_approval_detail(
+                                                    id,
+                                                    toggle_id.clone(),
+                                                    cx,
+                                                )
+                                            })),
+                                    ),
+                            )
+                            .when(expanded, |column| {
+                                column.child(
+                                    div()
+                                        .id(("approval-detail", index))
+                                        .max_h(px((f32::from(window.viewport_size().height) * 0.4)
+                                            .clamp(120., 360.)))
+                                        .overflow_y_scroll()
+                                        .p_3()
+                                        .rounded(px(10.))
+                                        .border_1()
+                                        .border_color(rgb(palette().warning_inner_border))
+                                        .bg(rgb(palette().warning_code_bg))
+                                        .text_xs()
+                                        .line_height(relative(1.5))
+                                        .text_color(rgb(palette().warning_code_text))
+                                        .child(approval.detail.clone()),
                                 )
-                                .child(
-                                    Button::new(("allow", index))
-                                        .label("允许本次")
-                                        .small()
-                                        .primary()
-                                        .disabled(self.closing || submitted || !approval.allow_once)
-                                        .when(
-                                            !self.closing && !submitted && approval.allow_once,
-                                            |button| button.cursor_pointer(),
+                            })
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .when(!approval.allow_once, |row| {
+                                        row.child(
+                                            div()
+                                                .flex_1()
+                                                .text_size(px(11.))
+                                                .text_color(rgb(palette().warning_accent))
+                                                .child(
+                                                    "CLI 未提供「允许本次」选项，此请求只能拒绝。",
+                                                ),
                                         )
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.decide(id, allow_id.clone(), true, window, cx)
-                                        })),
-                                ),
-                        ),
-                ),
-            );
-        }
-        if let Some(message) = &self.message {
-            conversation = conversation.child(
-                div()
-                    .mx_6()
-                    .mb_3()
-                    .p_3()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(rgb(palette().danger_border))
-                    .bg(rgb(palette().danger_bg))
-                    .text_sm()
-                    .text_color(rgb(palette().danger_text))
-                    .child(message.clone()),
-            );
-        }
-        conversation = conversation.child(self.render_composer(selected.as_ref(), window, cx));
+                                    })
+                                    .when(approval.allow_once, |row| row.child(div().flex_1()))
+                                    .child(
+                                        Button::new(("deny", index))
+                                            .label("拒绝")
+                                            .small()
+                                            .ghost()
+                                            .disabled(self.closing || submitted)
+                                            .when(!self.closing && !submitted, |button| {
+                                                button.cursor_pointer()
+                                            })
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.decide(id, deny_id.clone(), false, window, cx)
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new(("allow", index))
+                                            .label("允许本次")
+                                            .small()
+                                            .primary()
+                                            .disabled(
+                                                self.closing || submitted || !approval.allow_once,
+                                            )
+                                            .when(
+                                                !self.closing && !submitted && approval.allow_once,
+                                                |button| button.cursor_pointer(),
+                                            )
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.decide(id, allow_id.clone(), true, window, cx)
+                                            })),
+                                    ),
+                            ),
+                    ),
+                );
+            }
+            if let Some(message) = &self.message {
+                conversation = conversation.child(
+                    div()
+                        .mx_6()
+                        .mb_3()
+                        .p_3()
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(rgb(palette().danger_border))
+                        .bg(rgb(palette().danger_bg))
+                        .text_sm()
+                        .text_color(rgb(palette().danger_text))
+                        .child(message.clone()),
+                );
+            }
+            conversation = conversation.child(self.render_composer(selected.as_ref(), window, cx));
+            conversation
+        };
         let toolbar = self.render_toolbar(cx);
         let title_bar = TitleBar::new()
             .bg(rgb(palette().canvas))
@@ -527,16 +561,25 @@ impl Render for ConduitApp {
             .map(|width| f32::from(*width))
             .filter(|width| *width > 0.)
             .unwrap_or(248.);
+        let measured_sidebar = if self.files.sidebar_collapsed {
+            38.
+        } else {
+            measured_sidebar
+        };
         self.sidebar_width = measured_sidebar;
         let content_width = (viewport_width - measured_sidebar - 6.).max(320.);
         let max_detail_width = (content_width * 0.5).max(260.);
         self.detail_width = self.detail_width.clamp(260., max_detail_width);
         let detail_width = self.detail_width;
 
-        let mut body = h_resizable("body").with_state(&sidebar_state).child(
+        let body = h_resizable("body").with_state(&sidebar_state).child(
             resizable_panel()
                 .size(px(248.))
-                .size_range(px(200.)..px(420.))
+                .size_range(if self.git_navigation_open() {
+                    px(280.)..px(480.)
+                } else {
+                    px(200.)..px(420.)
+                })
                 .flex_none()
                 .child(sidebar),
         );
@@ -580,7 +623,22 @@ impl Render for ConduitApp {
             }
             None => conversation.into_any_element(),
         };
-        body = body.child(resizable_panel().child(conversation_area));
+        let body = if self.files.sidebar_collapsed {
+            h_flex()
+                .size_full()
+                .child(
+                    div().w(px(38.)).h_full().flex_shrink_0().child(
+                        self.sidebar_view
+                            .clone()
+                            .cached(StyleRefinement::default().size_full()),
+                    ),
+                )
+                .child(conversation_area)
+                .into_any_element()
+        } else {
+            body.child(resizable_panel().child(conversation_area))
+                .into_any_element()
+        };
 
         let drag_app = app_entity.clone();
         let mut main_area = div()

@@ -143,25 +143,18 @@ impl ConduitApp {
                     .compact()
                     .icon(gpui_kit::assets::IconName::GitFork)
                     .cursor_pointer()
-                    .tooltip(if self.details && self.detail_view == DetailView::Git {
+                    .tooltip(if self.git_navigation_open() {
                         "收起 Git 变更"
                     } else {
                         "打开 Git 变更"
                     })
-                    .when(
-                        self.details && self.detail_view == DetailView::Git,
-                        |button| {
-                            button
-                                .bg(rgb(palette().surface_hover))
-                                .text_color(rgb(palette().text))
-                        },
-                    )
+                    .when(self.git_navigation_open(), |button| {
+                        button
+                            .bg(rgb(palette().surface_hover))
+                            .text_color(rgb(palette().text))
+                    })
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.details = !(this.details && this.detail_view == DetailView::Git);
-                        this.detail_view = DetailView::Git;
-                        if this.details {
-                            this.refresh_git(cx);
-                        }
+                        this.toggle_git_navigation(cx);
                         cx.notify();
                     })),
             )

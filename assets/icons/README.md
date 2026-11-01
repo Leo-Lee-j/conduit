@@ -28,11 +28,14 @@ implemented engines are offered as CLI engines.
 
 ## Rendering and model recognition
 
-Use GPUI `ImageFormat::Svg` / `img` for full-color rendering. The `Icon` / `svg`
-path paints a single-color alpha mask and discards SVG fills and gradients.
-Images are shared and cached for both themes. At cache construction, `1em`
-intrinsic dimensions are resolved to 64 px for crisp high-DPI rendering, and
-`currentColor` becomes the theme's foreground. Fixed colors are preserved.
+Parse the original full-color SVG with GPUI's `SvgRenderer` and rasterize it at
+its actual on-screen device-pixel dimensions. A pixel-aligned canvas displays
+that cached image without downscaling a fixed large bitmap, keeping fine strokes
+crisp at fractional Windows DPI scales. The `Icon` / `svg` mask path is not used
+because it discards SVG fills and gradients. Parsed SVGs and size-specific images
+are shared across both themes. `1em` intrinsic dimensions are resolved to 24 px,
+and `currentColor` becomes the theme's foreground; paths, aspect ratios, gradients
+and fixed brand colors remain unchanged.
 OpenAI, OpenCode and Grok publish monochrome marks, so those retain their
 authentic monochrome appearance with light/dark foreground adaptation.
 

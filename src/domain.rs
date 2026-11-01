@@ -97,6 +97,11 @@ pub struct Usage {
     pub turn_elapsed_ms: Option<u64>,
     #[serde(default)]
     pub context_window_estimated: bool,
+    /// Output and wall time from reliably measured turns in this session.
+    #[serde(default)]
+    pub session_output_tokens: u64,
+    #[serde(default)]
+    pub session_elapsed_ms: u64,
 }
 
 impl Usage {
@@ -115,10 +120,24 @@ impl Usage {
             .map(|tokens| (tokens as f64 / self.context_window as f64).clamp(0.0, 1.0))
     }
 
-    /// A sampled wall-clock turn average, NOT a live model generation rate.
+    /// Rebuild the session sample from completed turns plus the current turn.
+    /// Repeated usage events replace the current sample rather than adding it twice.
+    pub fn with_session_speed(mut self, completed: Usage) -> Self {
+        self.session_output_tokens = completed.session_output_tokens;
+        self.session_elapsed_ms = completed.session_elapsed_ms;
+        if let (Some(output), Some(elapsed)) = (self.turn_output_tokens, self.turn_elapsed_ms) {
+            if elapsed > 0 {
+                self.session_output_tokens = self.session_output_tokens.saturating_add(output);
+                self.session_elapsed_ms = self.session_elapsed_ms.saturating_add(elapsed);
+            }
+        }
+        self
+    }
+
+    /// Weighted session wall-clock average, NOT a live model generation rate.
     pub fn average_output_speed(&self) -> Option<u64> {
-        let output = self.turn_output_tokens?;
-        let elapsed = self.turn_elapsed_ms?;
+        let output = self.session_output_tokens;
+        let elapsed = self.session_elapsed_ms;
         (output > 0 && elapsed > 0)
             .then(|| (output as f64 * 1_000.0 / elapsed as f64).round() as u64)
     }
@@ -152,13 +171,13 @@ pub struct SessionRecord {
     /// Permission level applied to the next turn of this session.
     #[serde(default)]
     pub permission: PermissionLevel,
-    /// Last reported token usage; transient, not used for restore.
+    /// Last reported usage and persisted session speed samples.
     #[serde(default, skip_serializing_if = "crate::domain::usage_is_zero")]
     pub usage: Usage,
 }
 
 fn usage_is_zero(usage: &Usage) -> bool {
-    usage.total_tokens == 0
+    *usage == Usage::default()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -353,7 +372,8 @@ mod usage_tests {
             total_tokens: 110_000,
             ..Default::default()
         }
-        .sample_turn(Some(9_000), 10_000);
+        .sample_turn(Some(9_000), 10_000)
+        .with_session_speed(Usage::default());
         assert_eq!(usage.turn_output_tokens, Some(1_000));
         assert_eq!(usage.average_output_speed(), Some(100));
     }
@@ -381,10 +401,79 @@ mod usage_tests {
             turn_output_tokens: Some(500),
             ..Default::default()
         }
-        .sample_turn(Some(10_000), 10_000);
+        .sample_turn(Some(10_000), 10_000)
+        .with_session_speed(Usage::default());
         assert_eq!(usage.average_output_speed(), Some(50));
         // An event sample stays fixed while tools or approvals are pending.
         assert_eq!(usage.average_output_speed(), Some(50));
+    }
+
+    #[test]
+    fn session_speed_is_weighted_across_turns_and_replaces_stream_updates() {
+        let first = Usage {
+            turn_output_tokens: Some(100),
+            ..Default::default()
+        }
+        .sample_turn(None, 1_000)
+        .with_session_speed(Usage::default());
+        let interim = Usage {
+            turn_output_tokens: Some(300),
+            ..Default::default()
+        }
+        .sample_turn(None, 3_000)
+        .with_session_speed(first);
+        assert_eq!(interim.session_output_tokens, 400);
+        let final_sample = Usage {
+            turn_output_tokens: Some(900),
+            ..Default::default()
+        }
+        .sample_turn(None, 9_000)
+        .with_session_speed(first);
+        assert_eq!(final_sample.session_output_tokens, 1_000);
+        assert_eq!(final_sample.session_elapsed_ms, 10_000);
+        assert_eq!(final_sample.average_output_speed(), Some(100));
+        let third = Usage {
+            turn_output_tokens: Some(100),
+            ..Default::default()
+        }
+        .sample_turn(None, 10_000)
+        .with_session_speed(final_sample);
+        assert_eq!(third.average_output_speed(), Some(55));
+        let missing = Usage::default()
+            .sample_turn(None, 90_000)
+            .with_session_speed(third);
+        assert_eq!(missing.average_output_speed(), Some(55));
+        assert_eq!(missing.session_elapsed_ms, 20_000);
+        let restored: Usage =
+            serde_json::from_str(&serde_json::to_string(&missing).unwrap()).unwrap();
+        assert_eq!(restored.average_output_speed(), Some(55));
+    }
+
+    #[test]
+    fn known_zero_output_turn_counts_time_but_unknown_and_zero_time_do_not() {
+        let base = Usage {
+            session_output_tokens: 100,
+            session_elapsed_ms: 1_000,
+            ..Default::default()
+        };
+        let zero = Usage {
+            turn_output_tokens: Some(0),
+            ..Default::default()
+        }
+        .sample_turn(None, 1_000)
+        .with_session_speed(base);
+        assert_eq!(zero.average_output_speed(), Some(50));
+        let unknown = Usage::default()
+            .sample_turn(None, 9_000)
+            .with_session_speed(base);
+        assert_eq!(unknown.average_output_speed(), Some(100));
+        let untimed = Usage {
+            turn_output_tokens: Some(1_000),
+            ..Default::default()
+        }
+        .sample_turn(None, 0)
+        .with_session_speed(base);
+        assert_eq!(untimed.average_output_speed(), Some(100));
     }
 
     #[test]

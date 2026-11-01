@@ -2,75 +2,10 @@
 
 use super::*;
 
-/// Whether a failure notice repeats text an earlier assistant/tool message
-/// already shows. CLI wrappers often echo the same provider error in both the
-/// assistant output and the task result, and showing it twice reads as a
-/// duplicated reply.
-/// Turn a raw CLI failure blob into a one-line banner summary. The runtime
-/// reports some failures as pretty-printed JSON (e.g. a Codex `turn.error`
-/// object); those get parsed so the banner shows the cause, not the payload.
-pub(super) fn friendly_failure(error: &str) -> String {
-    let trimmed = error.trim();
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) else {
-        return trimmed.to_string();
-    };
-    let get = |keys: &[&str]| -> Option<String> {
-        keys.iter().find_map(|key| {
-            json.get(*key)
-                .and_then(|value| value.as_str())
-                .map(str::to_string)
-                .filter(|value| !value.is_empty())
-        })
-    };
-    let message = get(&["message", "error"]);
-    let detail = json
-        .get("codexErrorInfo")
-        .and_then(|info| info.get("responseStreamDisconnected"))
-        .map(|disconnected| {
-            let status = disconnected["httpStatusCode"].as_i64();
-            let detail = disconnected["additionalDetails"].as_str().unwrap_or("");
-            let brief = detail.split(['\n', ';']).next().unwrap_or(detail).trim();
-            let brief = if brief.chars().count() > 120 {
-                format!("{}…", brief.chars().take(120).collect::<String>())
-            } else {
-                brief.to_string()
-            };
-            match (status, brief.is_empty()) {
-                (Some(code), false) => format!("连接中断（HTTP {code}）：{brief}"),
-                (Some(code), true) => format!("连接中断（HTTP {code}）"),
-                (None, false) => format!("连接中断：{brief}"),
-                (None, true) => "连接中断".to_string(),
-            }
-        });
-    detail.or(message).unwrap_or_else(|| trimmed.to_string())
-}
-pub(super) fn same_failure(message: &str, error: &str) -> bool {
-    let message = message.trim();
-    let error = error.trim();
-    if message.is_empty() || error.is_empty() {
-        return false;
-    }
-    message == error || message.contains(error) || error.contains(message)
-}
-
-/// Keep long diagnostics out of the transcript's default reading flow.
-pub(super) fn failure_summary(error: &str) -> String {
-    let error = error
-        .trim()
-        .strip_prefix("执行失败：")
-        .unwrap_or(error.trim());
-    let friendly = friendly_failure(error);
-    let line = friendly
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or("CLI 执行失败，请查看详情。");
-    if line.chars().count() > 160 {
-        format!("{}…", line.chars().take(160).collect::<String>())
-    } else {
-        line.to_string()
-    }
-}
+pub(super) use crate::failure::{
+    failure_guidance, failure_repeats, failure_summary, failure_title, same_failure,
+};
+use crate::failure::{is_engine_error_text, record_failure};
 
 pub(super) fn finish_tool_cards(session: &mut SessionRecord, prefix: &str, status: &str) {
     let prefix = format!("{prefix}-");
@@ -205,6 +140,22 @@ pub(super) fn apply_event_indexed(
             });
         }
         return Some(session.messages.len() - 1);
+    }
+    if let Event::ErrorBanner(error) = &event {
+        return Some(record_failure(session, prefix, error, false));
+    }
+    if let Event::Text { key, text } = &event {
+        if is_engine_error_text(text) {
+            let full_key = format!("{prefix}-{key}");
+            if let Some(position) = index.find(&session.messages, &full_key) {
+                let item = &mut session.messages[position];
+                item.kind = ItemKind::Error;
+                item.text = text.clone();
+                item.detail = text.clone();
+                return Some(position);
+            }
+            return Some(record_failure(session, prefix, text, false));
+        }
     }
     let (key, kind, text, detail, status, delta) = match event {
         Event::Delta { key, text } => (

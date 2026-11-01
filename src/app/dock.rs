@@ -1,4 +1,4 @@
-//! Tool and Git detail docks in wide and narrow windows.
+//! Tool details dock in wide and narrow windows; Git lives in left navigation.
 
 use super::*;
 
@@ -9,7 +9,6 @@ impl ConduitApp {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> (Option<AnyElement>, Option<AnyElement>) {
-        let app_entity = cx.entity();
         let narrow = window.viewport_size().width < px(1100.);
         let mut detail_panel: Option<AnyElement> = None;
         let mut overlay: Option<AnyElement> = None;
@@ -77,16 +76,7 @@ impl ConduitApp {
                         .child(tool_content),
                 )
                 .into_any_element();
-            let body = match self.detail_view {
-                DetailView::Tool => tool_body,
-                DetailView::Git => v_flex()
-                    .flex_1()
-                    .min_h_0()
-                    .gap_3()
-                    .child(self.git_panel(app_entity.clone()))
-                    .child(self.commit_editor(app_entity.clone(), cx))
-                    .into_any_element(),
-            };
+            let body = tool_body;
             let panel = v_flex()
                 .h_full()
                 .w_full()
@@ -110,21 +100,11 @@ impl ConduitApp {
                         .items_center()
                         .gap_1()
                         .child(
-                            Icon::new(if self.detail_view == DetailView::Git {
-                                gpui_kit::assets::IconName::GitFork
-                            } else {
-                                gpui_kit::assets::IconName::PanelRight
-                            })
-                            .small()
-                            .text_color(rgb(palette().muted)),
+                            Icon::new(gpui_kit::assets::IconName::PanelRight)
+                                .small()
+                                .text_color(rgb(palette().muted)),
                         )
-                        .child(div().text_size(px(12.)).font_semibold().child(
-                            if self.detail_view == DetailView::Git {
-                                "Git 变更"
-                            } else {
-                                "工具详情"
-                            },
-                        ))
+                        .child(div().text_size(px(12.)).font_semibold().child("工具详情"))
                         .child(div().flex_1())
                         .child(
                             Button::new("close-details")

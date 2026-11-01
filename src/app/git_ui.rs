@@ -1,6 +1,7 @@
 //! Git sidebar, branch status, commit generation, and operations.
 
 use super::*;
+use gpui_kit::component::checkbox::Checkbox;
 
 impl ConduitApp {
     pub(super) fn selected_workspace_path(&self) -> Option<PathBuf> {
@@ -47,6 +48,121 @@ impl ConduitApp {
             },
         );
         cx.notify();
+    }
+
+    pub(super) fn can_stage_files(&self) -> bool {
+        self.writable
+            && !self.closing
+            && self.git_operation.is_none()
+            && self.commit_generation.is_none()
+            && self.git_probe.is_none()
+            && self.git_snapshot.is_some()
+            && self
+                .selected_workspace_path()
+                .is_some_and(|path| !self.worktree_has_runs(&path))
+    }
+
+    pub(super) fn stage_git_files(&mut self, selected: Vec<String>, cx: &mut Context<Self>) {
+        if !self.can_stage_files() {
+            return;
+        }
+        let Some(path) = self.selected_workspace_path() else {
+            return;
+        };
+        let Some(snapshot) = &self.git_snapshot else {
+            return;
+        };
+        let mut files = vec![];
+        for file in &snapshot.files {
+            if selected.contains(&file.path) && (file.unstaged() || file.untracked()) {
+                files.push(file.path.clone());
+                if matches!(file.worktree, 'R' | 'C')
+                    && let Some(original) = &file.original
+                {
+                    files.push(original.clone());
+                }
+            }
+        }
+        files.sort();
+        files.dedup();
+        if files.is_empty() {
+            self.git_feedback(path, "所选文件没有未暂存的修改。", true, cx);
+            return;
+        }
+        let operation = git::Operation::Stage {
+            files,
+            target: snapshot.target.clone(),
+        };
+        self.git_operation = Some(GitOperation {
+            worktree: git::worktree_root(&path),
+            probe: git::OperationProbe::start(path.clone(), operation),
+            draft: String::new(),
+        });
+        self.git_feedback(path, "正在暂存所选文件…", false, cx);
+    }
+
+    fn git_staging_actions(&self, snapshot: &git::Snapshot, view: Entity<Self>) -> AnyElement {
+        let path = self.selected_workspace_path().unwrap_or_default();
+        let available: Vec<String> = snapshot
+            .files
+            .iter()
+            .filter(|f| f.unstaged() || f.untracked())
+            .map(|f| f.path.clone())
+            .collect();
+        let selected: Vec<String> = available
+            .iter()
+            .filter(|p| {
+                self.selected_git_files
+                    .get(&path)
+                    .is_some_and(|set| set.contains(*p))
+            })
+            .cloned()
+            .collect();
+        let select_app = view.clone();
+        let selected_app = view.clone();
+        let all_app = view;
+        let all_for_select = available.clone();
+        let all = available.clone();
+        h_flex()
+            .w_full()
+            .gap_1()
+            .flex_wrap()
+            .child(
+                Button::new("git-select-unstaged")
+                    .ghost()
+                    .small()
+                    .label("全选未暂存")
+                    .disabled(available.is_empty())
+                    .on_click(move |_, _, cx| {
+                        select_app.update(cx, |this, cx| {
+                            this.selected_git_files
+                                .insert(path.clone(), all_for_select.iter().cloned().collect());
+                            cx.notify();
+                        });
+                    }),
+            )
+            .child(
+                Button::new("git-stage-selected")
+                    .ghost()
+                    .small()
+                    .label(format!("暂存选中 ({})", selected.len()))
+                    .disabled(!self.can_stage_files() || selected.is_empty())
+                    .on_click(move |_, _, cx| {
+                        selected_app
+                            .update(cx, |this, cx| this.stage_git_files(selected.clone(), cx));
+                    }),
+            )
+            .child(
+                Button::new("git-stage-all")
+                    .ghost()
+                    .small()
+                    .label(format!("全部暂存 ({})", all.len()))
+                    .disabled(!self.can_stage_files() || all.is_empty())
+                    .on_click(move |_, _, cx| {
+                        all_app.update(cx, |this, cx| this.stage_git_files(all.clone(), cx));
+                    }),
+            )
+            .into_any_element()
     }
 
     pub(super) fn start_commit(&mut self, cx: &mut Context<Self>) {
@@ -125,9 +241,7 @@ impl ConduitApp {
             return;
         };
         let Some(upstream) = repository.upstream.clone() else {
-            self.details = true;
-            self.detail_view = DetailView::Git;
-            self.refresh_git(cx);
+            self.show_git_navigation(cx);
             self.git_feedback(
                 path,
                 "当前分支没有有效上游。请打开分支菜单，选择 Push 设置远程目标，或在 Tracked Branch 中选择上游。",
@@ -209,31 +323,35 @@ impl ConduitApp {
         {
             return;
         }
-        let Some(snapshot) = self
-            .git_snapshot
-            .as_ref()
-            .filter(|snapshot| !snapshot.target.staged.is_empty())
-        else {
+        if self.git_probe.is_some() {
+            self.git_feedback(path, "正在刷新 Git 状态，请稍后再生成。", true, cx);
+            return;
+        }
+        let Some(snapshot) = self.git_snapshot.as_ref() else {
+            self.git_feedback(path, "请先刷新工作区 Git 状态。", true, cx);
             return;
         };
-        // Git settings can pin the generation CLI & model; by default both
+        if snapshot.target.staged.is_empty() {
+            self.git_feedback(
+                path,
+                "请先选择修改文件并加入暂存区，再生成 Commit Message。",
+                true,
+                cx,
+            );
+            return;
+        }
+        // Git settings independently pin engine, provider and model; otherwise
         // follow the currently selected session.
-        let provider = self
-            .store
-            .git
-            .generation_provider
-            .or_else(|| {
-                self.selected_session
-                    .and_then(|id| self.session(id))
-                    .map(|session| session.provider)
-            })
-            .unwrap_or(self.new_session_provider);
-        let model = self.store.git.generation_model.clone().or_else(|| {
-            self.selected_session
-                .and_then(|id| self.session(id))
-                .filter(|session| session.provider == provider)
-                .and_then(|session| session.model.clone())
-        });
+        let (provider, model, route) = match self.generation_request(
+            super::generation::GenerationKind::Git,
+            self.selected_session,
+        ) {
+            Ok(selection) => selection,
+            Err(error) => {
+                self.git_feedback(path, format!("生成 Provider 不可用：{error:#}"), true, cx);
+                return;
+            }
+        };
         let executable = match cli::resolve(provider, &self.store.cli) {
             Ok(cli) => cli.path,
             Err(error) => {
@@ -243,20 +361,6 @@ impl ConduitApp {
                     true,
                     cx,
                 );
-                return;
-            }
-        };
-        let route = match self
-            .selected_session
-            .filter(|id| self.session(*id).is_some_and(|s| s.provider == provider))
-        {
-            Some(id) => self.session_route(id),
-            None => Ok(RuntimeRoute::default()),
-        };
-        let route = match route {
-            Ok(route) => route,
-            Err(error) => {
-                self.git_feedback(path, format!("生成 Provider 不可用：{error:#}"), true, cx);
                 return;
             }
         };
@@ -277,9 +381,17 @@ impl ConduitApp {
             .generation_prompt(&files, &snapshot.staged_diff);
         self.commit_generation = Some(CommitGeneration {
             path: path.clone(),
-            runtime: ChatRuntime::start_text_with_route(provider, executable, prompt, model, route),
+            runtime: ChatRuntime::start_text_with_route_in(
+                provider,
+                executable,
+                prompt,
+                model,
+                route,
+                path.clone(),
+            ),
             started: Instant::now(),
             original,
+            last_diagnostic: None,
             parts: vec![],
             error: None,
         });
@@ -323,8 +435,7 @@ impl ConduitApp {
                     if result.error.is_some()
                         && self.selected_workspace_path().as_ref() == Some(&path)
                     {
-                        self.details = true;
-                        self.detail_view = DetailView::Git;
+                        self.show_git_navigation(cx);
                     }
                     if result.committed
                         && let Some(draft) = self.commit_drafts.get(&path)
@@ -360,7 +471,13 @@ impl ConduitApp {
                     Ok(event) => event,
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        generation_result = Some(Some("AI 工作线程已退出，请重试。".into()));
+                        generation_result = Some(Some(
+                            generation
+                                .error
+                                .clone()
+                                .or_else(|| generation.last_diagnostic.clone())
+                                .unwrap_or_else(|| "AI 工作线程已退出，请重试。".into()),
+                        ));
                         break;
                     }
                 };
@@ -370,6 +487,10 @@ impl ConduitApp {
                     }
                     Event::Delta { key, text } => {
                         update_commit_text(&mut generation.parts, key, text, false)
+                    }
+                    Event::ErrorBanner(error) => {
+                        // A later successful reply may recover from this diagnostic.
+                        generation.last_diagnostic = Some(error);
                     }
                     Event::Approval(approval) => {
                         generation.runtime.decide(approval.id, false);
@@ -413,12 +534,24 @@ impl ConduitApp {
                 .map(|(_, text)| text)
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            if let Some(error) = error {
-                self.git_feedback(generation.path, error, true, cx);
+            let text = normalize_commit_message(&text);
+            if error.as_deref() == Some("已取消生成。") {
+                self.git_feedback(generation.path, "已取消生成，草稿未修改。", false, cx);
+            } else if let Some(error) = error {
+                self.git_feedback(
+                    generation.path,
+                    format!(
+                        "生成失败：{}。{}",
+                        failure_summary(&error),
+                        failure_guidance(&error)
+                    ),
+                    true,
+                    cx,
+                );
             } else if text.trim().is_empty() {
                 self.git_feedback(
                     generation.path,
-                    "AI 没有返回 Commit Message，请重试。",
+                    generation.last_diagnostic.map(|error| format!("生成失败：{}。{}", failure_summary(&error), failure_guidance(&error))).unwrap_or_else(|| "AI 没有返回 Commit Message，请检查生成引擎、Provider 和模型配置后重试。".into()),
                     true,
                     cx,
                 );
@@ -484,6 +617,15 @@ impl ConduitApp {
             || !staged;
         let can_commit = !disabled && !draft.input.read(cx).value().trim().is_empty();
         let can_generate = !disabled;
+        let generate_tip = if !staged {
+            "请先将需要提交的修改加入暂存区"
+        } else if self.worktree_has_runs(&path) {
+            "请等待此工作区的 CLI 任务结束"
+        } else if busy {
+            "Git 操作或 AI 生成正在进行"
+        } else {
+            "使用设置中的引擎、Provider 和模型生成 Commit Message"
+        };
         let generate_app = view.clone();
         let commit_app = view.clone();
         let cancel_app = view.clone();
@@ -578,7 +720,7 @@ impl ConduitApp {
                             .small()
                             .compact()
                             .icon(gpui_kit::assets::IconName::Sparkles)
-                            .tooltip("Generate Commit Message（使用当前引擎和模型）")
+                            .tooltip(generate_tip)
                             .disabled(!can_generate)
                             .loading(generating)
                             .when(can_generate, |button| button.cursor_pointer())
@@ -712,7 +854,7 @@ impl ConduitApp {
         self.git_snapshot = None;
         self.git_error = None;
         self.refresh_branches();
-        if self.details && self.detail_view == DetailView::Git {
+        if self.git_navigation_open() {
             self.refresh_git(cx);
         }
         cx.notify();
@@ -743,11 +885,7 @@ impl ConduitApp {
                         .as_ref()
                         .map(|repo| (&repo.current, repo.detached));
                 self.git_repository = repository;
-                if head_changed
-                    && self.details
-                    && self.detail_view == DetailView::Git
-                    && self.git_probe.is_none()
-                {
+                if head_changed && self.git_navigation_open() && self.git_probe.is_none() {
                     self.refresh_git(cx);
                 }
                 cx.notify();
@@ -1063,34 +1201,7 @@ impl ConduitApp {
             cx.notify();
             return;
         };
-        let view = cx.new(|cx| GitDiffDialog::new(workspace, file, window, cx));
-        window.open_dialog(cx, move |dialog, window, _| {
-            let view = view.clone();
-            let viewport = window.viewport_size();
-            let width = (f32::from(viewport.width) - 96.).clamp(720., 1180.);
-            let height = (f32::from(viewport.height) - 96.).clamp(420., 820.);
-            let margin_top = ((f32::from(viewport.height) - height) * 0.5).max(24.);
-            dialog
-                .entrance(gpui_kit::component::dialog::DialogEntrance::Fade)
-                .w(px(width))
-                .margin_top(px(margin_top))
-                .p_0()
-                .gap(px(0.))
-                .rounded(px(16.))
-                .bg(rgb(palette().surface))
-                .border_color(rgb(palette().border))
-                .close_button(false)
-                .overlay_closable(true)
-                .content(move |content, _, _| {
-                    content.child(
-                        div()
-                            .key_context("GitDiffDialog")
-                            .w_full()
-                            .h(px(height))
-                            .child(view.clone()),
-                    )
-                })
-        });
+        self.open_diff_document(workspace, file, window, cx);
     }
 
     /// Start a background read-only Git snapshot for the selected workspace.
@@ -1098,8 +1209,8 @@ impl ConduitApp {
         if self.last_branch_check.elapsed() >= Duration::from_secs(1) {
             self.refresh_branches();
         }
+        self.mark_git_refresh();
         self.git_probe = None;
-        self.git_snapshot = None;
         let Some(path) = self.selected_workspace_path() else {
             self.git_error = Some("未选择工作区".into());
             cx.notify();
@@ -1112,7 +1223,7 @@ impl ConduitApp {
 
     /// Collect a finished Git probe; stale snapshots for another workspace are
     /// dropped so switching sessions cannot show the previous directory's diff.
-    pub(super) fn poll_git(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn poll_git(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let update = self
             .git_probe
             .as_ref()
@@ -1133,6 +1244,15 @@ impl ConduitApp {
         }
         match result {
             Ok(snapshot) => {
+                if let Some(selected) = self.selected_git_files.get_mut(&path) {
+                    selected.retain(|p| {
+                        snapshot
+                            .files
+                            .iter()
+                            .any(|f| f.path == *p && (f.unstaged() || f.untracked()))
+                    });
+                }
+                self.refresh_diff_documents(&path, &snapshot, window, cx);
                 self.git_snapshot = Some(snapshot);
                 self.git_error = None;
             }
@@ -1144,7 +1264,7 @@ impl ConduitApp {
         cx.notify();
     }
 
-    /// Read-only Git view for the right-side detail panel.
+    /// Git status and staging list in the contextual left navigation.
     pub(super) fn git_panel(&self, view: Entity<Self>) -> AnyElement {
         let refresh_icon = |id: &'static str| -> AnyElement {
             let app = view.clone();
@@ -1179,7 +1299,7 @@ impl ConduitApp {
             .min_h_0()
             .overflow_y_scroll()
             .gap_3();
-        if self.git_probe.is_some() {
+        if self.git_probe.is_some() && self.git_snapshot.is_none() {
             return body
                 .child(
                     h_flex()
@@ -1279,6 +1399,9 @@ impl ConduitApp {
         );
         if let Some(banner) = self.git_integration_banner(view.clone()) {
             body = body.child(banner);
+        }
+        if !snapshot.is_clean() {
+            body = body.child(self.git_staging_actions(snapshot, view.clone()));
         }
         if snapshot.is_clean() {
             body = body.child(
@@ -1393,11 +1516,28 @@ impl ConduitApp {
                     for file in files {
                         let app = view.clone();
                         let target = file.clone();
+                        let can_stage =
+                            self.can_stage_files() && (file.unstaged() || file.untracked());
+                        let workspace = self.selected_workspace_path().unwrap_or_default();
+                        let checked = self
+                            .selected_git_files
+                            .get(&workspace)
+                            .is_some_and(|set| set.contains(&file.path));
+                        let select_app = view.clone();
+                        let select_path = file.path.clone();
+                        let menu_app = view.clone();
+                        let menu_file = file.clone();
+                        let menu_workspace = workspace.clone();
+                        let diff_workspace = workspace.clone();
                         rows = rows.child(
                             h_flex()
                                 .id(SharedString::from(format!("git-file-{}", file.path)))
                                 .role(Role::Button)
-                                .aria_label(format!("{}，查看只读差异", file.path))
+                                .debug_selector({
+                                    let path = file.path.clone();
+                                    move || format!("git-change-file-{path}")
+                                })
+                                .aria_label(format!("{}，双击查看差异标签，右键暂存", file.path))
                                 .w_full()
                                 .min_w_0()
                                 .gap_2()
@@ -1409,10 +1549,91 @@ impl ConduitApp {
                                 .hover(|style| style.bg(rgb(palette().surface_hover)))
                                 .on_double_click(move |_, window, cx| {
                                     let target = target.clone();
+                                    let workspace = diff_workspace.clone();
                                     app.update(cx, |this, cx| {
-                                        this.open_git_diff(target, window, cx);
+                                        if this.selected_workspace_path().as_ref()
+                                            == Some(&workspace)
+                                        {
+                                            this.open_git_diff(target, window, cx);
+                                        }
                                     });
                                 })
+                                .context_menu(move |menu, _, cx| {
+                                    let single_app = menu_app.clone();
+                                    let single = menu_file.path.clone();
+                                    let single_workspace = menu_workspace.clone();
+                                    let batch_workspace = menu_workspace.clone();
+                                    let batch_app = menu_app.clone();
+                                    let batch: Vec<String> = menu_app
+                                        .read(cx)
+                                        .selected_git_files
+                                        .get(&menu_workspace)
+                                        .map(|set| set.iter().cloned().collect())
+                                        .unwrap_or_default();
+                                    let disabled = !can_stage;
+                                    menu.item(
+                                        PopupMenuItem::new("加入暂存区")
+                                            .disabled(disabled)
+                                            .on_click(move |_, _, cx| {
+                                                single_app.update(cx, |this, cx| {
+                                                    if this.selected_workspace_path().as_ref()
+                                                        == Some(&single_workspace)
+                                                    {
+                                                        this.stage_git_files(
+                                                            vec![single.clone()],
+                                                            cx,
+                                                        );
+                                                    }
+                                                });
+                                            }),
+                                    )
+                                    .item(
+                                        PopupMenuItem::new(format!(
+                                            "暂存选中文件 ({})",
+                                            batch.len()
+                                        ))
+                                        .disabled(
+                                            batch.is_empty()
+                                                || !menu_app.read(cx).can_stage_files(),
+                                        )
+                                        .on_click(
+                                            move |_, _, cx| {
+                                                batch_app.update(cx, |this, cx| {
+                                                    if this.selected_workspace_path().as_ref()
+                                                        == Some(&batch_workspace)
+                                                    {
+                                                        this.stage_git_files(batch.clone(), cx);
+                                                    }
+                                                });
+                                            },
+                                        ),
+                                    )
+                                })
+                                .child(
+                                    Checkbox::new(SharedString::from(format!(
+                                        "git-select-{}",
+                                        file.path
+                                    )))
+                                    .checked(checked)
+                                    .disabled(!(file.unstaged() || file.untracked()))
+                                    .accessibility_label(format!("选择暂存 {}", file.path))
+                                    .on_click(
+                                        move |checked, _, cx| {
+                                            select_app.update(cx, |this, cx| {
+                                                let set = this
+                                                    .selected_git_files
+                                                    .entry(workspace.clone())
+                                                    .or_default();
+                                                if *checked {
+                                                    set.insert(select_path.clone());
+                                                } else {
+                                                    set.remove(&select_path);
+                                                }
+                                                cx.notify();
+                                            });
+                                        },
+                                    ),
+                                )
                                 .child(
                                     Icon::new(file_ref::icon_for(Path::new(&file.path)))
                                         .size(px(14.))
@@ -1427,6 +1648,15 @@ impl ConduitApp {
                                         .text_color(rgb(palette().text))
                                         .child(file.path.clone()),
                                 )
+                                .when(file.staged(), |row| {
+                                    row.child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .text_size(px(10.))
+                                            .text_color(rgb(palette().highlight_text))
+                                            .child("已暂存"),
+                                    )
+                                })
                                 .when_some(file.original.clone(), |row, original| {
                                     row.child(
                                         div()
@@ -1459,4 +1689,16 @@ impl ConduitApp {
         }
         body.into_any_element()
     }
+}
+
+pub(super) fn normalize_commit_message(text: &str) -> String {
+    let text = text.trim();
+    let text = if text.starts_with("```") && text.ends_with("```") {
+        text.split_once('\n')
+            .map(|(_, body)| body.strip_suffix("```").unwrap_or(body).trim())
+            .unwrap_or(text)
+    } else {
+        text
+    };
+    text.to_string()
 }

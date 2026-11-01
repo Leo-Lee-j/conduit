@@ -251,6 +251,8 @@ pub(super) struct ActiveRun {
     pub(super) usage: Usage,
     /// None for imported/legacy usage without a trustworthy output baseline.
     pub(super) output_tokens_at_start: Option<u64>,
+    /// Fixed session speed baseline; usage events must never accumulate each other.
+    pub(super) completed_usage: Usage,
     /// The model/channel window captured when the turn starts. Picker changes
     /// must not reinterpret the context of an already-running request.
     pub(super) context_window_fallback: u64,
@@ -269,6 +271,7 @@ impl ActiveRun {
     ) -> Self {
         let now = Instant::now();
         let output_tokens_at_start = usage.context_tokens.map(|_| usage.output_tokens);
+        let completed_usage = usage;
         let mut usage = usage;
         usage.turn_output_tokens = None;
         usage.turn_elapsed_ms = None;
@@ -286,6 +289,7 @@ impl ActiveRun {
             message_index: MessageIndex::default(),
             usage,
             output_tokens_at_start,
+            completed_usage,
             context_window_fallback: 0,
             turn_started: now,
         }
@@ -331,6 +335,7 @@ pub(super) struct CommitGeneration {
     pub(super) runtime: ChatRuntime,
     pub(super) started: Instant,
     pub(super) original: String,
+    pub(super) last_diagnostic: Option<String>,
     pub(super) parts: Vec<(String, String)>,
     pub(super) error: Option<String>,
 }
@@ -379,7 +384,6 @@ pub(super) fn update_commit_text(
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum DetailView {
     Tool,
-    Git,
 }
 
 /// Drag payload (and invisible drag preview) for the right-sidebar edge.

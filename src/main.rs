@@ -6,6 +6,7 @@ mod chat_runtime;
 mod child;
 mod cli;
 mod domain;
+mod failure;
 mod file_ref;
 mod file_search;
 mod git;
@@ -15,6 +16,7 @@ mod performance;
 mod protocol;
 mod providers;
 mod store;
+mod workspace_files;
 
 use app::ConduitApp;
 use gpui_kit::component::TitleBar;

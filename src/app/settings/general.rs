@@ -123,6 +123,12 @@ impl ConduitApp {
                 .read(cx)
                 .naming_provider_picker(provider_view.clone(), disabled)
         });
+        let channel_view = view.clone();
+        let channel = SettingField::render(move |_, _, cx| {
+            channel_view
+                .read(cx)
+                .naming_channel_picker(channel_view.clone(), disabled)
+        });
         let model_view = view.clone();
         let model = SettingField::render(move |_, _, cx| {
             model_view
@@ -147,8 +153,11 @@ impl ConduitApp {
                     SettingItem::new("命名引擎", provider)
                         .description("生成会话标题使用的引擎；默认跟随当前会话")
                         .disabled(disabled),
+                    SettingItem::new("命名 Provider", channel)
+                        .description("独立选择 CLI 默认、CCS 或自定义 Provider；OpenCode 使用原生 Provider")
+                        .disabled(disabled),
                     SettingItem::new("命名模型", model)
-                        .description("指定引擎后可固定模型；默认跟随当前会话的模型")
+                        .description("模型列表随 Provider 切换；全部默认时跟随当前会话")
                         .disabled(disabled),
                     SettingItem::new("触发方式", mode)
                         .description("选择标题跟随最新对话自动更新，或只按第一条消息生成一次")
@@ -170,6 +179,12 @@ impl ConduitApp {
             provider_view
                 .read(cx)
                 .git_provider_picker(provider_view.clone(), disabled)
+        });
+        let channel_view = view.clone();
+        let channel = SettingField::render(move |_, _, cx| {
+            channel_view
+                .read(cx)
+                .git_channel_picker(channel_view.clone(), disabled)
         });
         let model_view = view.clone();
         let model = SettingField::render(move |_, _, cx| {
@@ -216,11 +231,14 @@ impl ConduitApp {
         });
         settings_page("Git", FullIconName::GitFork).groups(vec![
             settings_section("生成引擎").items(vec![
-                SettingItem::new("生成 CLI", provider)
+                SettingItem::new("生成引擎", provider)
                     .description("用于生成 Commit Message 的 CLI；默认跟随当前会话")
                     .disabled(disabled),
+                SettingItem::new("生成 Provider", channel)
+                    .description("独立选择 CLI 默认、CCS 或自定义 Provider；OpenCode 使用原生 Provider")
+                    .disabled(disabled),
                 SettingItem::new("生成模型", model)
-                    .description("指定 CLI 后可固定模型；默认跟随当前会话（或 CLI 默认）")
+                    .description("模型列表随 Provider 切换；全部默认时跟随当前会话")
                     .disabled(disabled),
             ]),
             settings_section("Commit Message 提示词").items(vec![

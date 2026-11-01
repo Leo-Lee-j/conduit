@@ -1,5 +1,6 @@
 //! Provider, permission, and model selection controls.
 
+use super::generation::GenerationKind;
 use super::*;
 
 // Keep notifications local. Observing the parent ConduitApp here creates a
@@ -1099,23 +1100,32 @@ impl ConduitApp {
         let s = self
             .session(id)
             .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
-        match &s.channel {
-            ModelChannel::Cli => Ok(RuntimeRoute {
-                opencode_variant: s.opencode.variant.clone(),
-                ..Default::default()
-            }),
+        let mut route = self.channel_route(s.provider, &s.channel)?;
+        if s.channel == ModelChannel::Cli {
+            route.opencode_variant = s.opencode.variant.clone();
+        }
+        Ok(route)
+    }
+
+    pub(super) fn channel_route(
+        &self,
+        engine: Provider,
+        channel: &ModelChannel,
+    ) -> anyhow::Result<RuntimeRoute> {
+        match channel {
+            ModelChannel::Cli => Ok(RuntimeRoute::default()),
             ModelChannel::Ccs(id) => self
                 .store
                 .providers
                 .iter()
-                .find(|p| p.id == ModelProvider::ccs_id(s.provider, id))
+                .find(|p| p.id == ModelProvider::ccs_id(engine, id) && p.engine == engine)
                 .ok_or_else(|| anyhow::anyhow!("Provider 未同步，请刷新模型配置"))?
                 .runtime_route(&self.ccs.database_path),
             ModelChannel::Provider(id) => self
                 .store
                 .providers
                 .iter()
-                .find(|p| p.id == *id && p.engine == s.provider)
+                .find(|p| p.id == *id && p.engine == engine)
                 .ok_or_else(|| anyhow::anyhow!("Provider 已移除，请重新选择"))?
                 .runtime_route(&self.ccs.database_path),
         }
@@ -1208,10 +1218,8 @@ impl ConduitApp {
                                         return;
                                     }
                                     this.store.ui.naming_provider = option;
-                                    // A model picked for another engine no longer applies.
-                                    if option.is_some() {
-                                        this.store.ui.naming_model = None;
-                                    }
+                                    this.store.ui.naming_channel = None;
+                                    this.store.ui.naming_model = None;
                                     this.persist();
                                     cx.notify();
                                 });
@@ -1376,7 +1384,7 @@ impl ConduitApp {
 
     /// Picker for the model used to auto-name sessions.
     pub(super) fn naming_model_picker(&self, view: Entity<Self>, disabled: bool) -> AnyElement {
-        let follow_session = self.store.ui.naming_provider.is_none();
+        let (default_label, allow_default) = self.generation_model_defaults(GenerationKind::Naming);
         let provider = self
             .store
             .ui
@@ -1387,18 +1395,12 @@ impl ConduitApp {
                     .map(|session| session.provider)
             })
             .unwrap_or(self.new_session_provider);
-        let merged = self.git_generation_catalog(provider);
+        let merged = self.generation_catalog(GenerationKind::Naming);
         let selected_model = self.store.ui.naming_model.clone();
         let trigger_label = selected_model
             .as_deref()
             .map(|id| merged.label(id))
-            .unwrap_or_else(|| {
-                if follow_session {
-                    "跟随当前会话".to_string()
-                } else {
-                    "CLI 默认".to_string()
-                }
-            });
+            .unwrap_or_else(|| default_label.to_string());
         let models = merged.models;
         let provider_label = provider.label();
         let trigger = Button::new("naming-model-trigger")
@@ -1445,21 +1447,17 @@ impl ConduitApp {
                     .gap(px(1.))
                     .max_h(px(320.))
                     .overflow_y_scroll();
-                let default_label = if follow_session {
-                    "跟随当前会话"
-                } else {
-                    "CLI 默认"
-                };
-                let options: Vec<(Option<String>, String, String)> =
-                    std::iter::once((None, default_label.to_string(), String::new()))
-                        .chain(models.iter().map(|model| {
-                            (
-                                Some(model.id.clone()),
-                                model.label.clone(),
-                                model.note.clone(),
-                            )
-                        }))
-                        .collect();
+                let options: Vec<(Option<String>, String, String)> = allow_default
+                    .then(|| (None, default_label.to_string(), String::new()))
+                    .into_iter()
+                    .chain(models.iter().map(|model| {
+                        (
+                            Some(model.id.clone()),
+                            model.label.clone(),
+                            model.note.clone(),
+                        )
+                    }))
+                    .collect();
                 for (index, (id, label, note)) in options.into_iter().enumerate() {
                     let view = view.clone();
                     let popover = popover.clone();
@@ -1481,7 +1479,7 @@ impl ConduitApp {
                                     if !this.writable || this.closing {
                                         return;
                                     }
-                                    this.store.ui.naming_model = id;
+                                    this.set_generation_model(GenerationKind::Naming, id);
                                     this.persist();
                                     cx.notify();
                                 });
@@ -1612,10 +1610,8 @@ impl ConduitApp {
                                         return;
                                     }
                                     this.store.git.generation_provider = option;
-                                    // A model picked for another engine no longer applies.
-                                    if option.is_some() {
-                                        this.store.git.generation_model = None;
-                                    }
+                                    this.store.git.generation_channel = None;
+                                    this.store.git.generation_model = None;
                                     this.persist();
                                     cx.notify();
                                 });
@@ -1659,6 +1655,7 @@ impl ConduitApp {
 
     /// Settings picker for the model used to generate commit messages.
     pub(super) fn git_model_picker(&self, view: Entity<Self>, disabled: bool) -> AnyElement {
+        let (default_label, allow_default) = self.generation_model_defaults(GenerationKind::Git);
         let provider = self
             .store
             .git
@@ -1669,19 +1666,12 @@ impl ConduitApp {
                     .map(|session| session.provider)
             })
             .unwrap_or(self.new_session_provider);
-        let merged = self.git_generation_catalog(provider);
+        let merged = self.generation_catalog(GenerationKind::Git);
         let selected_model = self.store.git.generation_model.clone();
-        let follow_session = self.store.git.generation_provider.is_none();
         let trigger_label = selected_model
             .as_deref()
             .map(|id| merged.label(id))
-            .unwrap_or_else(|| {
-                if follow_session {
-                    "跟随当前会话".to_string()
-                } else {
-                    "CLI 默认".to_string()
-                }
-            });
+            .unwrap_or_else(|| default_label.to_string());
         let models = merged.models;
         let provider_label = provider.label();
         let trigger = Button::new("git-model-trigger")
@@ -1728,21 +1718,17 @@ impl ConduitApp {
                     .gap(px(1.))
                     .max_h(px(320.))
                     .overflow_y_scroll();
-                let default_label = if follow_session {
-                    "跟随当前会话"
-                } else {
-                    "CLI 默认"
-                };
-                let options: Vec<(Option<String>, String, String)> =
-                    std::iter::once((None, default_label.to_string(), String::new()))
-                        .chain(models.iter().map(|model| {
-                            (
-                                Some(model.id.clone()),
-                                model.label.clone(),
-                                model.note.clone(),
-                            )
-                        }))
-                        .collect();
+                let options: Vec<(Option<String>, String, String)> = allow_default
+                    .then(|| (None, default_label.to_string(), String::new()))
+                    .into_iter()
+                    .chain(models.iter().map(|model| {
+                        (
+                            Some(model.id.clone()),
+                            model.label.clone(),
+                            model.note.clone(),
+                        )
+                    }))
+                    .collect();
                 for (index, (id, label, note)) in options.into_iter().enumerate() {
                     let view = view.clone();
                     let popover = popover.clone();
@@ -1764,7 +1750,7 @@ impl ConduitApp {
                                     if !this.writable || this.closing {
                                         return;
                                     }
-                                    this.store.git.generation_model = id;
+                                    this.set_generation_model(GenerationKind::Git, id);
                                     this.persist();
                                     cx.notify();
                                 });

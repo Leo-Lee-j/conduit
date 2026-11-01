@@ -303,12 +303,13 @@ impl ConduitApp {
         let rows: Vec<_> = providers
             .iter()
             .map(|provider| {
-                let in_use = self
-                    .store
-                    .workspaces
-                    .iter()
-                    .flat_map(|w| &w.sessions)
-                    .any(|s| s.channel == ModelChannel::Provider(provider.id.clone()));
+                let in_use = self.generation_uses_provider(&provider.id)
+                    || self
+                        .store
+                        .workspaces
+                        .iter()
+                        .flat_map(|w| &w.sessions)
+                        .any(|s| s.channel == ModelChannel::Provider(provider.id.clone()));
                 (
                     provider.clone(),
                     matches!(provider.source, ProviderSource::Ccs { .. }),
@@ -434,7 +435,7 @@ impl ConduitApp {
                                 .tooltip(if imported {
                                     "此 Provider 的配置由 CCS 同步管理"
                                 } else if in_use {
-                                    "请先将使用此 Provider 的会话切换到其他渠道"
+                                    "请先更改使用此 Provider 的会话、命名或 Git 配置"
                                 } else {
                                     "删除 Provider"
                                 })
@@ -442,6 +443,7 @@ impl ConduitApp {
                                     delete_view.update(cx, |app, cx| {
                                         if !app.writable
                                             || app.closing
+                                            || app.generation_uses_provider(&id)
                                             || app
                                                 .store
                                                 .workspaces

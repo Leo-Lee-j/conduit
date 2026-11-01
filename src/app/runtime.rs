@@ -362,7 +362,6 @@ impl ConduitApp {
             || session.messages[index + 1..]
                 .iter()
                 .any(|item| matches!(item.kind, ItemKind::User | ItemKind::Assistant))
-            || session.native_id.is_none()
         {
             return;
         }
@@ -434,6 +433,8 @@ impl ConduitApp {
     }
 
     pub(super) fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.poll_files(cx);
+        self.poll_git_navigation(cx);
         // Release the startup page once the initial history import merged
         // and its minimum display passed -- or when the timeout gives up on
         // a stalled scan -- so the first main-layout frame is complete.
@@ -502,7 +503,7 @@ impl ConduitApp {
             cx.notify();
         }
         self.poll_branches(cx);
-        self.poll_git(cx);
+        self.poll_git(window, cx);
         self.poll_git_actions(window, cx);
         self.poll_session_namings(cx);
         if self
@@ -596,7 +597,9 @@ impl ConduitApp {
                         }
                         let elapsed =
                             run.turn_started.elapsed().as_millis().min(u64::MAX as u128) as u64;
-                        usage = usage.sample_turn(run.output_tokens_at_start, elapsed);
+                        usage = usage
+                            .sample_turn(run.output_tokens_at_start, elapsed)
+                            .with_session_speed(run.completed_usage);
                         if usage.context_window == 0 && run.context_window_fallback > 0 {
                             usage.context_window = run.context_window_fallback;
                             usage.context_window_estimated = true;
@@ -689,13 +692,21 @@ impl ConduitApp {
                         .map(|run| {
                             let mut usage = run.usage;
                             usage.turn_elapsed_ms = elapsed_ms;
-                            usage
+                            usage.with_session_speed(run.completed_usage)
                         });
                     self.unread_completed.remove(&id);
                     terminal = true;
+                    if (self.active_file.is_some() || self.active_diff.is_some())
+                        && error.is_some()
+                        && !cancelled
+                    {
+                        self.unread_completed.insert(id);
+                    }
                     if error.is_none() && !cancelled {
                         completed_turns.push(id);
-                        if self.selected_session != Some(id) {
+                        if self.selected_session != Some(id)
+                            || (self.active_file.is_some() || self.active_diff.is_some())
+                        {
                             self.unread_completed.insert(id);
                         }
                     }
@@ -737,25 +748,23 @@ impl ConduitApp {
                                 .take(5)
                                 .any(|item| same_failure(&item.text, error))
                         });
-                        if cancelled || (error.is_some() && !already_shown) {
-                            let failed = error.is_some();
+                        if !cancelled && let Some(error) = &error {
+                            if !already_shown
+                                || session.messages.iter().any(|item| {
+                                    item.kind == ItemKind::Error
+                                        && item.key.starts_with(&format!("{prefix}-"))
+                                })
+                            {
+                                crate::failure::record_failure(session, &prefix, error, true);
+                            }
+                        }
+                        if cancelled {
                             session.messages.push(ChatItem {
                                 elapsed_ms: None,
                                 key: format!("{prefix}-finish"),
                                 created_at: unix_now(),
-                                kind: if failed {
-                                    ItemKind::Error
-                                } else {
-                                    ItemKind::Notice
-                                },
-                                text: if cancelled {
-                                    "已取消；不会自动重试。".into()
-                                } else {
-                                    format!(
-                                        "执行失败：{}",
-                                        friendly_failure(error.as_deref().unwrap_or_default())
-                                    )
-                                },
+                                kind: ItemKind::Notice,
+                                text: "已取消；不会自动重试。".into(),
                                 input: String::new(),
                                 detail: error.clone().unwrap_or_default(),
                                 status: String::new(),
@@ -892,7 +901,9 @@ impl ConduitApp {
             // panel current without requiring the user to press 刷新.
             if terminal {
                 self.refresh_branches();
-                if self.details && self.detail_view == DetailView::Git && self.git_probe.is_none() {
+                if (self.git_navigation_open() || self.active_diff.is_some())
+                    && self.git_probe.is_none()
+                {
                     self.refresh_git(cx);
                 }
             }

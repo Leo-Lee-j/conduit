@@ -10,17 +10,16 @@ impl ConduitApp {
             return;
         }
         self.naming_errors.remove(&id);
-        let provider = self
-            .store
-            .ui
-            .naming_provider
-            .or_else(|| self.session(id).map(|session| session.provider))
-            .unwrap_or(self.new_session_provider);
-        let model = self.store.ui.naming_model.clone().or_else(|| {
-            self.session(id)
-                .filter(|s| s.provider == provider)
-                .and_then(|session| session.model.clone())
-        });
+        let (provider, model, route) =
+            match self.generation_request(super::generation::GenerationKind::Naming, Some(id)) {
+                Ok(selection) => selection,
+                Err(error) => {
+                    self.naming_errors
+                        .insert(id, format!("命名 Provider 不可用：{error:#}"));
+                    cx.notify();
+                    return;
+                }
+            };
         let executable = match cli::resolve(provider, &self.store.cli) {
             Ok(cli) => cli.path,
             Err(error) => {
@@ -30,19 +29,13 @@ impl ConduitApp {
                 return;
             }
         };
-        let route = match self.session(id).filter(|s| s.provider == provider) {
-            Some(_) => self.session_route(id),
-            None => Ok(RuntimeRoute::default()),
-        };
-        let route = match route {
-            Ok(route) => route,
-            Err(error) => {
-                self.naming_errors
-                    .insert(id, format!("命名 Provider 不可用：{error:#}"));
-                cx.notify();
-                return;
-            }
-        };
+        let cwd = self
+            .store
+            .workspaces
+            .iter()
+            .find(|w| w.sessions.iter().any(|s| s.id == id))
+            .map(|w| w.path.clone())
+            .unwrap_or_else(std::env::temp_dir);
         let snippet: String = content.chars().take(1200).collect();
         let naming_prompt = format!(
             "请根据以下对话内容为这段对话起一个简短的标题（不超过 12 个字，与内容使用相同语言，不带标点、引号或换行）。只返回标题本身。\n\n<content>\n{snippet}\n</content>"
@@ -51,12 +44,13 @@ impl ConduitApp {
             id,
             SessionNaming {
                 automatic: true,
-                runtime: ChatRuntime::start_text_with_route(
+                runtime: ChatRuntime::start_text_with_route_in(
                     provider,
                     executable,
                     naming_prompt,
                     model,
                     route,
+                    cwd,
                 ),
                 started: Instant::now(),
                 parts: vec![],

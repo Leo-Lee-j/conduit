@@ -62,6 +62,8 @@ mod components;
 mod composer;
 mod dock;
 mod events;
+mod files;
+mod generation;
 mod git_branches;
 mod git_compare;
 mod git_diff;
@@ -88,6 +90,7 @@ mod typography;
 use components::*;
 use composer::*;
 use events::*;
+use files::DocumentTab;
 use git_diff::*;
 use outline::*;
 #[cfg(test)]
@@ -114,7 +117,8 @@ actions!(
         PreviousFileMention,
         NextFileMention,
         AcceptFileMention,
-        DismissFileMention
+        DismissFileMention,
+        CloseDocument
     ]
 );
 
@@ -123,12 +127,15 @@ pub struct ConduitApp {
     writable: bool,
     selected_workspace: Option<usize>,
     selected_session: Option<u64>,
-    /// Open session tabs, ordered left to right by when they were opened.
+    /// Open chat and read-only file documents, ordered left to right.
     /// Selecting a tab keeps its position; only new tabs append at the end.
-    open_tabs: Vec<u64>,
+    open_tabs: Vec<DocumentTab>,
+    active_file: Option<u64>,
+    active_diff: Option<u64>,
+    files: files::FileBrowser,
     /// The open tab under the pointer, so the strip's right-click menu knows
     /// which tab it was opened on.
-    tab_menu_target: Option<u64>,
+    tab_menu_target: Option<DocumentTab>,
     input: Entity<TextareaState>,
     drafts: HashMap<u64, String>,
     workspace_drafts: HashMap<PathBuf, String>,
@@ -186,6 +193,7 @@ pub struct ConduitApp {
     git_feedback: HashMap<PathBuf, GitFeedback>,
     /// Git sidebar groups the user collapsed; empty means all expanded.
     collapsed_git_groups: HashSet<git::ChangeKind>,
+    selected_git_files: HashMap<PathBuf, HashSet<String>>,
     commit_and_push: bool,
     /// Workspaces whose session list was expanded past the configured limit.
     expanded_workspaces: HashSet<usize>,
@@ -212,6 +220,7 @@ pub struct ConduitApp {
     scroll: gpui_kit::ListState,
     timeline: Entity<shell::ChatTimeline>,
     sidebar_view: Entity<sidebar::SidebarView>,
+    file_view: Entity<files::FileDocumentView>,
     /// Focus target for the conversation, so a finished selection drag leaves the
     /// composer and Ctrl+C reaches the window root's copy handler.
     chat_focus: FocusHandle,
@@ -291,6 +300,8 @@ impl ConduitApp {
             KeyBinding::new("down", NextFileMention, Some("FileMention > Input")),
             KeyBinding::new("tab", AcceptFileMention, Some("FileMention > Input")),
             KeyBinding::new("escape", DismissFileMention, Some("FileMention > Input")),
+            KeyBinding::new("escape", CloseDocument, Some("GitDiffDocument")),
+            KeyBinding::new("ctrl-w", CloseDocument, Some("GitDiffDocument")),
             // JetBrains' diff navigation shortcuts, scoped to the diff window.
             KeyBinding::new("f7", NextDiff, Some("GitDiffDialog")),
             KeyBinding::new("shift-f7", PreviousDiff, Some("GitDiffDialog")),
@@ -540,13 +551,20 @@ impl ConduitApp {
         let scroll = gpui_kit::ListState::new(0, ListAlignment::Bottom, px(240.));
         let app = cx.entity().downgrade();
         let timeline = cx.new(|_| shell::ChatTimeline::new(app.clone(), scroll.clone()));
-        let sidebar_view = cx.new(|cx| sidebar::SidebarView::new(app, cx));
+        let sidebar_view = cx.new(|cx| sidebar::SidebarView::new(app.clone(), cx));
+        let file_view = cx.new(|cx| files::FileDocumentView::new(app, cx));
         let mut app = Self {
             store,
             writable,
             selected_workspace,
             selected_session,
-            open_tabs: selected_session.into_iter().collect(),
+            open_tabs: selected_session
+                .map(DocumentTab::Chat)
+                .into_iter()
+                .collect(),
+            active_file: None,
+            active_diff: None,
+            files: files::FileBrowser::default(),
             tab_menu_target: None,
             input,
             drafts: HashMap::new(),
@@ -572,12 +590,8 @@ impl ConduitApp {
             default_mono_font,
             next_id,
             closing: false,
-            details: start_in_git,
-            detail_view: if start_in_git {
-                DetailView::Git
-            } else {
-                DetailView::Tool
-            },
+            details: false,
+            detail_view: DetailView::Tool,
             detail_text: None,
             detail_width: 340.,
             detail_drag: None,
@@ -596,6 +610,7 @@ impl ConduitApp {
             git_operation: None,
             git_feedback: HashMap::new(),
             collapsed_git_groups: HashSet::new(),
+            selected_git_files: HashMap::new(),
             commit_and_push: false,
             expanded_workspaces: HashSet::new(),
             history_loading: HashSet::new(),
@@ -624,6 +639,7 @@ impl ConduitApp {
             scroll,
             timeline,
             sidebar_view,
+            file_view,
             chat_focus: cx.focus_handle(),
             timeline_session: None,
             outline: MessageOutlineCache::default(),
@@ -645,6 +661,9 @@ impl ConduitApp {
         };
         // Drafts are memory-only, so leftover clipboard files from a previous
         // exit or crash can be collected once the store has loaded successfully.
+        if start_in_git {
+            app.show_git_navigation(cx);
+        }
         app.cleanup_attachments();
         app
     }

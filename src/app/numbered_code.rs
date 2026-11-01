@@ -204,6 +204,45 @@ pub(super) fn code_actions(
         )
 }
 
+/// Standalone read-only source viewer, sharing theme colors and real multi-line selection.
+pub(super) fn file_code(
+    id: u64,
+    revision: u64,
+    code: SharedString,
+    names: &[(Range<usize>, &'static str)],
+    wrap: bool,
+    cx: &mut App,
+) -> AnyElement {
+    let theme = Theme::global(cx);
+    let highlights: Vec<_> = names
+        .iter()
+        .filter_map(|(range, name)| {
+            theme
+                .highlight_theme
+                .style
+                .syntax
+                .style(name)
+                .map(|style| (range.clone(), style))
+        })
+        .collect();
+    div()
+        .id("file-source-view")
+        .debug_selector(|| "file-source-view".into())
+        .flex_shrink_0()
+        .h_auto()
+        .min_w_full()
+        .when(wrap, |d| d.w_full())
+        .when(!wrap, |d| d.whitespace_nowrap())
+        .child(NumberedCode {
+            id: SharedString::from(format!("file-source-{id}-{revision}")).into(),
+            text: StyledText::new(code.clone()).with_highlights(highlights),
+            code,
+            top: px(8.),
+            selectable: true,
+        })
+        .into_any_element()
+}
+
 /// The code text plus its gutter. One element owns the whole block so the
 /// gutter and the text share the same measured line positions, and so the
 /// block's selection participant covers exactly the code it paints.

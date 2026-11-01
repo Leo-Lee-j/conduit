@@ -605,8 +605,7 @@ impl ConduitApp {
             cx.notify();
             return false;
         }
-        self.details = true;
-        self.detail_view = DetailView::Git;
+        self.show_git_navigation(cx);
         self.git_operation = Some(GitOperation {
             worktree: git::worktree_root(&path),
             probe: git::OperationProbe::start(
