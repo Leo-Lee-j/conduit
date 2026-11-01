@@ -888,7 +888,9 @@ impl ConduitApp {
                         .border_color(rgb(palette().border))
                         .text_size(px(10.))
                         .text_color(rgb(palette().faint))
-                        .child("下一条消息生效；正在执行的任务保持原权限"),
+                        .child(
+                            "完全权限会立即自动处理当前审批；沙箱及其他权限改动从下一条消息生效",
+                        ),
                 )
             })
             .into_any_element()
@@ -903,17 +905,23 @@ impl ConduitApp {
         if !self.writable || self.closing {
             return;
         }
-        if let Some(id) = self.send_target(true)
+        let target = self.send_target(true);
+        if let Some(id) = target
             && let Some(session) = self.session_mut(id)
             && session.permission != permission
         {
             session.permission = permission;
             self.persist();
-        } else if self.send_target(true).is_none() {
+        } else if target.is_none() {
             self.pending_permission = permission;
         }
-        // Permission applies to the next turn; while a run is active the
-        // current process keeps its existing sandbox.
+        if permission == PermissionLevel::FullAccess
+            && let Some(run) = target.and_then(|id| self.runs.get(&id))
+        {
+            run.runtime.enable_full_access();
+        }
+        // Sandbox changes apply to the next turn. Explicit full access also
+        // resolves the active turn's approval gates, without restarting it.
         if self
             .selected_session
             .is_none_or(|id| !self.runs.contains_key(&id))

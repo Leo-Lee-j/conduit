@@ -326,3 +326,56 @@ fn opencode_context_uses_reported_used_not_prompt_total() {
     assert_eq!(usage.context_ratio(), Some(0.2));
     assert_eq!(usage.turn_output_tokens, Some(10_000));
 }
+
+#[test]
+fn full_access_opencode_permission_never_requires_a_ui_gate() {
+    for (options, allowed, expected) in [
+        (
+            json!([{"kind":"allow_always","optionId":"permanent"},
+            {"kind":"allow_once","optionId":"yes"}]),
+            true,
+            json!({"outcome":"selected","optionId":"yes"}),
+        ),
+        (
+            json!([{"kind":"allow_always","optionId":"permanent"},
+            {"kind":"reject_once","optionId":"no"}]),
+            true,
+            json!({"outcome":"selected","optionId":"permanent"}),
+        ),
+        (
+            json!([{"kind":"reject_once","optionId":"no"}]),
+            false,
+            json!({"outcome":"selected","optionId":"no"}),
+        ),
+        (
+            json!([{"kind":"allow_once"}]),
+            false,
+            json!({"outcome":"cancelled"}),
+        ),
+    ] {
+        let (protocol, _) = connected(Some("ses_test"), true, None);
+        let mut full = protocol.with_permission(PermissionLevel::FullAccess);
+        let mut request = permission("ses_test");
+        request["params"]["options"] = options;
+        let step = full.accept(request);
+        let Event::Approval(approval) = &step.events[0] else {
+            panic!("missing approval")
+        };
+        assert_eq!(full.automatic_approval(approval), Some(allowed));
+        assert_eq!(
+            full.approval_response(approval, allowed)["result"]["outcome"],
+            expected
+        );
+        // A user-facing "allow once" action may never become a permanent grant.
+        let normal = Protocol::new(Provider::OpenCode, "C:/work".into(), "hello".into(), None);
+        assert_eq!(normal.automatic_approval(approval), None);
+        if !approval.allow_once {
+            assert_eq!(
+                normal.approval_response(approval, true)["result"]["outcome"]["outcome"],
+                "cancelled"
+            );
+        }
+        let readonly = full.with_permission(PermissionLevel::ReadOnly);
+        assert_eq!(readonly.automatic_approval(approval), Some(false));
+    }
+}

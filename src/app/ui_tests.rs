@@ -2613,7 +2613,7 @@ fn check_assistant_drag_selection(
             if selected.is_empty() {
                 continue;
             }
-            if selectable_text.contains(&selected) {
+            if selected.len() > 3 && selectable_text.contains(&selected) {
                 line = Some((px(x as f32), px(y as f32), selected));
                 break 'probe;
             }
@@ -4653,6 +4653,181 @@ fn commit_generation_recovers_from_transient_errors_and_preserves_edited_drafts(
                 assert_eq!(text, "feat: staged changes\n\nDetailed body");
                 assert!(!feedback.error);
             }
+        });
+    }
+}
+
+#[gpui_kit::test]
+fn navigation_modes_share_default_and_retained_width_without_duplicate_git(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut session = super::tests::session();
+            session.messages.push(
+                serde_json::from_value(serde_json::json!({
+                    "key":"outline-tooltip", "kind":"User", "text":"消息大纲提示".repeat(20)
+                }))
+                .unwrap(),
+            );
+            let store = crate::store::Store {
+                workspaces: vec![crate::domain::Workspace {
+                    path: std::env::temp_dir(),
+                    sessions: vec![session],
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.startup = None;
+            app.selected_workspace = Some(0);
+            app.selected_session = Some(1);
+            app.open_tabs = vec![super::DocumentTab::Chat(1)];
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.simulate_resize(gpui_kit::size(px(1200.), px(800.)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert_eq!(
+        cx.debug_bounds("navigation-panel").unwrap().size.width,
+        px(super::shell::NAVIGATION_DEFAULT_WIDTH)
+    );
+    for width in [super::shell::NAVIGATION_DEFAULT_WIDTH, 375., 420., 200.] {
+        let panel = cx.debug_bounds("navigation-panel").unwrap();
+        let start = point(panel.right() - px(2.), panel.center().y);
+        let end = point(panel.left() + px(width), panel.center().y);
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(
+            point(start.x + px(12.), start.y),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+        cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+        for mode in ["nav-workspaces", "nav-files", "nav-git"] {
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            let button = cx.debug_bounds(mode).unwrap().center();
+            cx.simulate_mouse_down(button, MouseButton::Left, Modifiers::default());
+            cx.simulate_mouse_up(button, MouseButton::Left, Modifiers::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            let bounds = cx.debug_bounds("navigation-panel").unwrap();
+            assert!(
+                (f32::from(bounds.size.width) - width).abs() < 1.,
+                "{mode}: {bounds:?} / {width}"
+            );
+            cx.update(|window, _| {
+                assert!(
+                    gpui_kit::base::test_support::find(window, &[], &"toggle-git".into()).is_none()
+                );
+                assert!(
+                    gpui_kit::base::test_support::find(window, &[], &"nav-git".into()).is_some()
+                );
+            });
+        }
+    }
+    cx.simulate_resize(gpui_kit::size(px(850.), px(500.)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert_eq!(
+        cx.debug_bounds("navigation-panel").unwrap().size.width,
+        px(200.)
+    );
+    cx.update(|_, cx| assert_eq!(app.read(cx).sidebar_width, 200.));
+    // The longest tooltip must stay on the right in the narrowest window,
+    // even with the navigation panel at its maximum width.
+    let panel = cx.debug_bounds("navigation-panel").unwrap();
+    let start = point(panel.right() - px(2.), panel.center().y);
+    let end = point(
+        panel.left() + px(super::shell::NAVIGATION_MAX_WIDTH),
+        panel.center().y,
+    );
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(
+        point(start.x + px(12.), start.y),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let marker = cx.update(|window, _| {
+        gpui_kit::base::test_support::find(window, &[], &"outline-1-outline-tooltip".into())
+            .unwrap()
+            .bounds()
+    });
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    cx.simulate_mouse_move(marker.center(), None, Modifiers::default());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        use gpui_kit::component::ActiveTheme as _;
+        let fill: gpui_kit::Background = cx.theme().tokens.popover.into();
+        let scale = window.scale_factor();
+        // Tooltips are uninstrumented Base surfaces; inspect their painted
+        // background rather than looking for a semantic control registration.
+        let popup = window
+            .painted_quads()
+            .into_iter()
+            .filter(|quad| quad.background == fill)
+            .map(|quad| quad.bounds.map(|value| px(value.0 / scale)))
+            .find(|bounds| {
+                bounds.size.height < px(60.)
+                    && bounds.size.width > px(100.)
+                    && (bounds.center().y - marker.center().y).abs() < px(60.)
+            })
+            .expect("outline tooltip background");
+        assert!(
+            popup.left() >= marker.right(),
+            "tooltip must stay right: {popup:?} / {marker:?}"
+        );
+        assert!(
+            popup.right() <= px(850.),
+            "tooltip must fit in the window: {popup:?}"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn checkbox_theme_pairs_remain_contrasting_when_switching_appearance(cx: &mut TestAppContext) {
+    use gpui_kit::component::{ActiveTheme as _, Colorize as _, Theme, ThemeMode};
+    cx.update(gpui_kit::init);
+    cx.update(super::install_theme_packs);
+    for (mode, fill) in [
+        (ThemeMode::Light, "#2563eb"),
+        (ThemeMode::Dark, "#3b82f6"),
+        (ThemeMode::Light, "#2563eb"),
+    ] {
+        cx.update(|cx| {
+            Theme::change(mode, None, cx);
+            let theme = cx.theme();
+            let expected_fill = gpui_kit::Hsla::parse_hex(fill).unwrap();
+            let expected_mark = gpui_kit::Hsla::parse_hex("#ffffff").unwrap();
+            assert_eq!(theme.primary, expected_fill);
+            assert_eq!(theme.tokens.primary.color, expected_fill);
+            assert_eq!(theme.primary_foreground, expected_mark);
+            assert_ne!(theme.primary, theme.primary_foreground);
         });
     }
 }

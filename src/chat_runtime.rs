@@ -24,6 +24,7 @@ mod opencode_tests;
 
 enum Control {
     Decision { id: String, allow: bool },
+    EnableFullAccess,
 }
 #[derive(Default)]
 struct ApprovalBroker {
@@ -225,6 +226,11 @@ impl ChatRuntime {
     pub fn decide(&self, id: String, allow: bool) {
         let _ = self.controls.send(Control::Decision { id, allow });
     }
+    pub fn enable_full_access(&self) {
+        if !self.is_cancelled() {
+            let _ = self.controls.send(Control::EnableFullAccess);
+        }
+    }
 }
 impl Drop for ChatRuntime {
     fn drop(&mut self) {
@@ -419,14 +425,37 @@ fn execute(
             }
             // Observe queued revocations before submitting UI decisions. Local
             // tickets prevent a delayed click from granting a reused wire ID.
-            while let Ok(Control::Decision { id, allow }) = controls.try_recv() {
+            while let Ok(control) = controls.try_recv() {
                 if cancel.load(Ordering::Acquire) {
                     break;
                 }
-                if let Some(approval) = approvals.take(&id) {
-                    let allow = allow && approval.allow_once;
-                    send(&writer, protocol.approval_response(&approval, allow))?;
-                    let _ = events.send(Event::ApprovalResolved { id, allow });
+                match control {
+                    Control::Decision { id, allow } => {
+                        if let Some(approval) = approvals.take(&id) {
+                            let allow = allow && approval.allow_once;
+                            send(&writer, protocol.approval_response(&approval, allow))?;
+                            let _ = events.send(Event::ApprovalResolved { id, allow });
+                        }
+                    }
+                    Control::EnableFullAccess => {
+                        protocol.enable_full_access();
+                        // Resolve the exact tickets already shown, as well as
+                        // automatically handling subsequent requests. Revoked
+                        // tickets were removed above and cannot be granted.
+                        let pending: Vec<_> = approvals.pending.values().cloned().collect();
+                        for approval in pending {
+                            if cancel.load(Ordering::Acquire) {
+                                break;
+                            }
+                            if let Some(allow) = protocol.automatic_approval(&approval) {
+                                let id = approval.id.clone();
+                                if let Some(approval) = approvals.take(&id) {
+                                    send(&writer, protocol.approval_response(&approval, allow))?;
+                                    let _ = events.send(Event::ApprovalResolved { id, allow });
+                                }
+                            }
+                        }
+                    }
                 }
             }
             if let Ok(count) = available(&pipes.stderr)
@@ -782,6 +811,85 @@ mod tests {
     }
 
     #[test]
+    fn selecting_full_access_resolves_pending_and_future_approvals_in_the_active_turn() {
+        let log = std::env::temp_dir().join(format!(
+            "conduit-live-full-access-{}.jsonl",
+            std::process::id()
+        ));
+        let command = r#"
+            [Console]::WriteLine('{"id":62,"method":"item/commandExecution/requestApproval","params":{"itemId":"first","availableDecisions":["acceptForSession","decline"]}}')
+            $lines = @([Console]::ReadLine(), [Console]::ReadLine())
+            [Console]::WriteLine('{"id":63,"method":"item/fileChange/requestApproval","params":{"itemId":"second"}}')
+            $lines += [Console]::ReadLine()
+            Set-Content -LiteralPath '__LOG__' -Value $lines -Encoding utf8
+            [Console]::WriteLine('{"method":"turn/completed","params":{"turn":{"status":"completed"}}}')
+            Start-Sleep -Seconds 5
+        "#.replace("__LOG__", &log.display().to_string());
+        let protocol = Protocol::new(
+            Provider::Codex,
+            std::env::temp_dir().to_string_lossy().into_owned(),
+            "fixture".into(),
+            None,
+        );
+        let executable = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        let runtime = ChatRuntime::start_command(
+            protocol,
+            executable,
+            ["-NoProfile", "-NonInteractive", "-Command", &command]
+                .map(String::from)
+                .into(),
+            std::env::temp_dir(),
+        );
+        let mut pending = None;
+        let mut resolved = false;
+        loop {
+            match runtime
+                .events
+                .recv_timeout(Duration::from_secs(15))
+                .unwrap()
+            {
+                Event::Approval(approval) => {
+                    assert!(
+                        pending.is_none(),
+                        "future requests must not open another gate"
+                    );
+                    pending = Some(approval.id);
+                    runtime.enable_full_access();
+                }
+                Event::ApprovalResolved { id, allow } => {
+                    assert_eq!(Some(id), pending);
+                    assert!(allow);
+                    resolved = true;
+                }
+                Event::Finished { error, cancelled } => {
+                    assert!(error.is_none(), "{error:?}");
+                    assert!(!cancelled);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(resolved);
+        let values: Vec<Value> = std::fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        assert!(
+            values
+                .iter()
+                .any(|v| v["id"] == 62 && v["result"]["decision"] == "acceptForSession")
+        );
+        assert!(
+            values
+                .iter()
+                .any(|v| v["id"] == 63 && v["result"]["decision"] == "accept")
+        );
+        std::fs::remove_file(log).unwrap();
+    }
+
+    #[test]
     fn full_access_answers_tool_permission_without_showing_an_approval() {
         let log =
             std::env::temp_dir().join(format!("conduit-full-access-{}.jsonl", std::process::id()));
@@ -1051,14 +1159,20 @@ mod tests {
     #[test]
     #[ignore = "requires installed CLIs; handshake only, no model request"]
     fn installed_cli_protocol_handshakes() {
-        for provider in [Provider::Claude, Provider::Codex] {
+        for (provider, permission) in [
+            (Provider::Claude, PermissionLevel::WorkspaceWrite),
+            (Provider::Claude, PermissionLevel::FullAccess),
+            (Provider::Codex, PermissionLevel::WorkspaceWrite),
+            (Provider::Codex, PermissionLevel::FullAccess),
+        ] {
             let executable = provider.executable().expect("CLI not installed");
             let protocol = Protocol::new(
                 provider,
                 std::env::temp_dir().to_string_lossy().into_owned(),
                 "unused".into(),
                 None,
-            );
+            )
+            .with_permission(permission);
             let (program, args) = crate::cli::command_for(&executable, &protocol.args());
             let (child, mut pipes) = Child::spawn(&program, &args, &std::env::temp_dir()).unwrap();
             writeln!(pipes.stdin, "{}", protocol.initialize()).unwrap();
@@ -1095,7 +1209,7 @@ mod tests {
                 thread::sleep(Duration::from_millis(10));
             }
             assert!(initialized, "{provider:?} handshake timed out");
-            println!("{provider:?} structured handshake OK");
+            println!("{provider:?} {permission:?} structured handshake OK");
         }
     }
     fn real_turn(

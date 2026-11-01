@@ -595,7 +595,7 @@ impl ConduitApp {
             detail_text: None,
             detail_width: 340.,
             detail_drag: None,
-            sidebar_width: 248.,
+            sidebar_width: shell::NAVIGATION_DEFAULT_WIDTH,
             git_probe: None,
             git_snapshot: None,
             git_error: None,

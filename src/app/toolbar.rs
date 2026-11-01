@@ -136,28 +136,6 @@ impl ConduitApp {
                         }),
                 )
             })
-            .right(
-                Button::new("toggle-git")
-                    .ghost()
-                    .small()
-                    .compact()
-                    .icon(gpui_kit::assets::IconName::GitFork)
-                    .cursor_pointer()
-                    .tooltip(if self.git_navigation_open() {
-                        "收起 Git 变更"
-                    } else {
-                        "打开 Git 变更"
-                    })
-                    .when(self.git_navigation_open(), |button| {
-                        button
-                            .bg(rgb(palette().surface_hover))
-                            .text_color(rgb(palette().text))
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.toggle_git_navigation(cx);
-                        cx.notify();
-                    })),
-            )
             .when_some(self.push_button(app_entity.clone()), |bar, button| {
                 bar.right(button)
             })

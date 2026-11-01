@@ -433,8 +433,11 @@ impl Protocol {
     fn acp_permission(&mut self, value: Value, step: &mut Step) {
         let params = &value["params"];
         let options = params["options"].as_array();
-        let allow_once =
-            options.is_some_and(|items| items.iter().any(|o| o["kind"] == "allow_once"));
+        let allow_once = options.is_some_and(|items| {
+            items
+                .iter()
+                .any(|o| o["kind"] == "allow_once" && o["optionId"].is_string())
+        });
         let approval = Approval {
             id: format!("acp:{}", id_text(&value["id"])),
             title: params["toolCall"]["title"].as_str().unwrap_or("请求执行 OpenCode 工具").into(),
@@ -536,12 +539,36 @@ impl Protocol {
     }
 }
 
-pub(super) fn approval_response(approval: &Approval, allow: bool) -> Value {
-    let kind = if allow { "allow_once" } else { "reject_once" };
-    let option = approval.input["options"]
+pub(super) fn permission_option<'a>(approval: &'a Approval, kind: &str) -> Option<&'a str> {
+    approval.input["options"]
         .as_array()
-        .and_then(|items| items.iter().find(|v| v["kind"] == kind))
-        .and_then(|v| v["optionId"].as_str());
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|v| v["kind"] == kind && v["optionId"].is_string())
+        })
+        .and_then(|v| v["optionId"].as_str())
+}
+
+pub(super) fn approval_response(approval: &Approval, allow: bool) -> Value {
+    approval_response_with_fallback(approval, allow, false)
+}
+
+pub(super) fn approval_response_with_fallback(
+    approval: &Approval,
+    allow: bool,
+    full_access: bool,
+) -> Value {
+    let kind = if allow { "allow_once" } else { "reject_once" };
+    // Prefer a one-shot choice. Only an explicitly full-access run may choose
+    // a persistent grant when the server provides no one-shot option.
+    let option = permission_option(approval, kind).or_else(|| {
+        if allow && full_access {
+            permission_option(approval, "allow_always")
+        } else {
+            None
+        }
+    });
     let outcome = match option {
         Some(id) => json!({"outcome":"selected","optionId":id}),
         None => json!({"outcome":"cancelled"}),

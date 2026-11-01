@@ -992,7 +992,10 @@ impl ConduitApp {
                     .debug_selector(move || format!("reply-model-{index}"))
                     .min_w_0()
                     .max_w(px(240.))
-                    .flex_shrink_0()
+                    // Share the remaining row with fixed hit targets and time
+                    // labels; a wider navigation panel must truncate the model
+                    // name rather than wrap it back underneath the buttons.
+                    .flex_1()
                     .items_center()
                     .gap_1()
                     .opacity(0.)

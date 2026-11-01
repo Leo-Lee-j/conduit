@@ -299,11 +299,38 @@ impl Protocol {
     pub fn environment(&self) -> &std::collections::BTreeMap<String, String> {
         &self.route.env
     }
+    /// An explicit full-access selection may also authorize the current turn's
+    /// approval gates. It does not pretend to reconfigure a running CLI sandbox.
+    pub fn enable_full_access(&mut self) {
+        if !self.text_only {
+            self.permission = PermissionLevel::FullAccess;
+        }
+    }
     pub fn automatic_approval(&self, approval: &Approval) -> Option<bool> {
         if self.text_only || self.permission == PermissionLevel::ReadOnly {
             Some(false)
-        } else if self.permission == PermissionLevel::FullAccess && approval.allow_once {
-            Some(true)
+        } else if self.permission == PermissionLevel::FullAccess {
+            // Fully authorized runs never fall back to a UI permission gate.
+            // Some CLI versions offer only a session/permanent allow option;
+            // if no recognized grant is offered, safely decline instead.
+            Some(
+                approval.allow_once
+                    || match approval.kind {
+                        ApprovalKind::Command | ApprovalKind::FileChange => {
+                            approval.input["availableDecisions"]
+                                .as_array()
+                                .is_some_and(|items| {
+                                    items
+                                        .iter()
+                                        .any(|item| item.as_str() == Some("acceptForSession"))
+                                })
+                        }
+                        ApprovalKind::OpenCodeTool => {
+                            opencode::permission_option(approval, "allow_always").is_some()
+                        }
+                        ApprovalKind::Permissions | ApprovalKind::ClaudeTool => false,
+                    },
+            )
         } else {
             None
         }
@@ -1059,10 +1086,25 @@ impl Protocol {
 
     pub fn approval_response(&self, approval: &Approval, allow: bool) -> Value {
         match self.provider {
-            Provider::OpenCode => opencode::approval_response(approval, allow),
+            Provider::OpenCode => opencode::approval_response_with_fallback(
+                approval,
+                allow,
+                self.permission == PermissionLevel::FullAccess && !self.text_only,
+            ),
             Provider::Codex => match approval.kind {
                 ApprovalKind::Command | ApprovalKind::FileChange => {
-                    json!({"id":approval.wire_id,"result":{"decision":if allow { "accept" } else { "decline" }}})
+                    let decision = if !allow {
+                        "decline"
+                    } else if approval.allow_once {
+                        "accept"
+                    } else if self.permission == PermissionLevel::FullAccess
+                        && self.automatic_approval(approval) == Some(true)
+                    {
+                        "acceptForSession"
+                    } else {
+                        "decline"
+                    };
+                    json!({"id":approval.wire_id,"result":{"decision":decision}})
                 }
                 ApprovalKind::Permissions => {
                     // Grant nothing on denial: the response schema has no deny
@@ -1176,7 +1218,75 @@ mod tests {
         let mut denied = approval.clone();
         denied.allow_once = false;
         let full = normal.with_permission(PermissionLevel::FullAccess);
-        assert_eq!(full.automatic_approval(&denied), None);
+        assert_eq!(full.automatic_approval(&denied), Some(false));
+    }
+
+    #[test]
+    fn full_access_handles_session_only_and_deny_only_codex_decisions() {
+        for method in [
+            "item/commandExecution/requestApproval",
+            "item/fileChange/requestApproval",
+        ] {
+            for (decisions, allowed, expected) in [
+                (
+                    json!(["accept", "acceptForSession", "decline"]),
+                    true,
+                    "accept",
+                ),
+                (
+                    json!(["acceptForSession", "decline"]),
+                    true,
+                    "acceptForSession",
+                ),
+                (json!(["decline", "cancel"]), false, "decline"),
+            ] {
+                let mut full =
+                    Protocol::new(Provider::Codex, "C:/work".into(), "hello".into(), None)
+                        .with_permission(PermissionLevel::FullAccess);
+                let step = full.accept(json!({"id":"request-1", "method":method,
+                    "params":{"itemId":"tool", "availableDecisions":decisions}}));
+                let Event::Approval(approval) = &step.events[0] else {
+                    panic!("missing approval")
+                };
+                assert_eq!(full.automatic_approval(approval), Some(allowed));
+                let response = full.approval_response(approval, allowed);
+                assert_eq!(response["id"], "request-1");
+                assert_eq!(response["result"]["decision"], expected);
+                let normal = Protocol::new(Provider::Codex, "C:/work".into(), "hello".into(), None);
+                assert_eq!(normal.automatic_approval(approval), None);
+                assert_eq!(
+                    normal.approval_response(approval, true)["result"]["decision"],
+                    if approval.allow_once {
+                        "accept"
+                    } else {
+                        "decline"
+                    }
+                );
+                assert_eq!(full.text_only().automatic_approval(approval), Some(false));
+            }
+        }
+    }
+
+    #[test]
+    fn full_access_claude_tool_requests_are_automatic_even_when_resumed() {
+        for native in [None, Some("resumed-session".into())] {
+            let mut full =
+                Protocol::new(Provider::Claude, "C:/work".into(), "hello".into(), native)
+                    .with_permission(PermissionLevel::FullAccess);
+            let step = full.accept(json!({"type":"control_request","request_id":"tool-permission",
+                "request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"echo hello"}}}));
+            let Event::Approval(approval) = &step.events[0] else {
+                panic!("missing approval")
+            };
+            assert_eq!(full.automatic_approval(approval), Some(true));
+            assert_eq!(
+                full.approval_response(approval, true)["response"]["response"]["behavior"],
+                "allow"
+            );
+            let readonly = Protocol::new(Provider::Claude, "C:/work".into(), "hello".into(), None)
+                .with_permission(PermissionLevel::ReadOnly);
+            assert_eq!(readonly.automatic_approval(approval), Some(false));
+        }
     }
 
     #[test]

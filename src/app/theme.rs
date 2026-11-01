@@ -216,6 +216,9 @@ mod tests {
         assert_eq!(dark.name.as_ref(), "Conduit Dark");
         assert_eq!(light.name.as_ref(), "Conduit Light");
         for pack in [dark, light] {
+            assert!(pack.colors.primary.is_some());
+            assert_eq!(pack.colors.primary_foreground.as_deref(), Some("#ffffff"));
+            assert_ne!(pack.colors.primary, pack.colors.primary_foreground);
             assert!(pack.colors.tab.is_some());
             assert!(pack.colors.tab_active.is_some());
             assert!(pack.colors.tab_active_foreground.is_some());

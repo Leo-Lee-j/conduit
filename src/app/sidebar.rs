@@ -6,6 +6,7 @@ use gpui_kit::component::status_bar::StatusBar;
 #[derive(Clone)]
 struct WorkspaceDrag {
     path: PathBuf,
+    index: usize,
 }
 struct WorkspaceDragPreview {
     name: String,
@@ -13,16 +14,30 @@ struct WorkspaceDragPreview {
 impl Render for WorkspaceDragPreview {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         h_flex()
+            .w(px(248.))
+            .h(px(42.))
             .gap_2()
             .items_center()
             .px_3()
-            .py_2()
-            .rounded(px(8.))
-            .bg(rgb(palette().surface))
+            .rounded(px(10.))
+            .bg(rgb(palette().surface_strong))
             .border_1()
-            .border_color(rgb(palette().highlight_text))
-            .child(Icon::new(IconName::Folder).small())
-            .child(self.name.clone())
+            .border_color(rgb(palette().border))
+            .shadow_sm()
+            .text_size(px(13.))
+            .text_color(rgb(palette().text))
+            .child(
+                Icon::new(IconName::Folder)
+                    .small()
+                    .text_color(rgb(palette().highlight_text)),
+            )
+            .child(div().flex_1().min_w_0().truncate().child(self.name.clone()))
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(rgb(palette().faint))
+                    .child("移动"),
+            )
     }
 }
 
@@ -256,6 +271,7 @@ impl ConduitApp {
             let importing = self.history_loading.contains(&workspace.path);
             let drag_path = workspace.path.clone();
             let drop_path = workspace.path.clone();
+            let hover_path = workspace.path.clone();
             let drag_name = workspace
                 .path
                 .file_name()
@@ -269,6 +285,7 @@ impl ConduitApp {
                         .id(("workspace", index))
                         .debug_selector(move || format!("workspace-item-{index}"))
                         .group("workspace-row")
+                        .relative()
                         .h(px(30.))
                         .flex_shrink_0()
                         .px_2()
@@ -285,16 +302,34 @@ impl ConduitApp {
                         .cursor_pointer()
                         .hover(|style| style.bg(rgb(palette().surface_hover)))
                         .when(can_edit, |row| {
-                            row.on_drag(WorkspaceDrag { path: drag_path }, move |_, _, _, cx| {
-                                cx.stop_propagation();
-                                cx.new(|_| WorkspaceDragPreview {
-                                    name: drag_name.clone(),
-                                })
-                            })
-                            .drag_over::<WorkspaceDrag>(|row, _, _, _| {
-                                row.bg(rgb(palette().surface_hover))
-                                    .border_1()
-                                    .border_color(rgb(palette().highlight_text))
+                            row.on_drag(
+                                WorkspaceDrag {
+                                    path: drag_path,
+                                    index,
+                                },
+                                move |_, _, _, cx| {
+                                    cx.stop_propagation();
+                                    cx.new(|_| WorkspaceDragPreview {
+                                        name: drag_name.clone(),
+                                    })
+                                },
+                            )
+                            .drag_over::<WorkspaceDrag>(move |row, dragged, _, _| {
+                                if dragged.path == hover_path {
+                                    return row.opacity(0.5);
+                                }
+                                // Moving down inserts after the target; moving
+                                // up inserts before it. Match reorder_workspace.
+                                let moving_down = dragged.index < index;
+                                // A zero-blur edge shadow is an insertion
+                                // marker without changing the row's box layout.
+                                row.bg(rgb(palette().highlight_bg)).shadow(vec![BoxShadow {
+                                    color: rgb(palette().highlight_text).into(),
+                                    offset: point(px(0.), px(if moving_down { -2. } else { 2. })),
+                                    blur_radius: px(0.),
+                                    spread_radius: px(0.),
+                                    inset: true,
+                                }])
                             })
                             .on_drop(cx.listener(
                                 move |this, dragged: &WorkspaceDrag, _, cx| {

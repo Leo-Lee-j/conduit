@@ -6,6 +6,8 @@
       "name": "Conduit Dark",
       "mode": "dark",
       "colors": {
+        "primary.background": "#3b82f6",
+        "primary.foreground": "#ffffff",
         "tab.background": "#0e0e10",
         "tab.active.background": "#0e0e10",
         "tab.active.foreground": "#f3f3f4",
@@ -126,6 +128,8 @@
       "name": "Conduit Light",
       "mode": "light",
       "colors": {
+        "primary.background": "#2563eb",
+        "primary.foreground": "#ffffff",
         "tab.background": "#f7f7f8",
         "tab.active.background": "#f7f7f8",
         "tab.active.foreground": "#1c1c20",

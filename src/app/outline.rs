@@ -45,10 +45,12 @@ impl MessageOutlineCache {
 }
 
 /// Tooltip text for an outline marker: long prompts are ellipsized so the
-/// popup stays narrow and never has to flip to the right side of the rail.
+/// popup fits to the right even at the minimum window width with a maximized
+/// navigation panel. Placement preferences otherwise flip when the popup is
+/// wider than the available space.
 pub(super) fn outline_tooltip(label: &str) -> SharedString {
-    let mut preview: String = label.chars().take(40).collect();
-    if label.chars().count() > 40 {
+    let mut preview: String = label.chars().take(20).collect();
+    if label.chars().count() > 20 {
         preview.push('…');
     }
     SharedString::from(preview)
@@ -152,11 +154,10 @@ impl ConduitApp {
                                 .p_0()
                                 .flex_shrink_0()
                                 .cursor_pointer()
-                                // A short, fixed-length tooltip keeps the
-                                // popup narrow enough to always fit on the
-                                // left; longer text would flip to the right.
+                                // Always open toward the message area, not
+                                // over the workspace navigation on the left.
                                 .tooltip(outline_tooltip(&entry.label))
-                                .tooltip_placement(Placement::Left)
+                                .tooltip_placement(Placement::Right)
                                 .accessibility_label(format!(
                                     "跳转到用户消息 {}：{}",
                                     ordinal + 1,

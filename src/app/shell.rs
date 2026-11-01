@@ -2,6 +2,11 @@
 
 use super::*;
 
+// All navigation modes share one range and one retained resize state.
+pub(super) const NAVIGATION_MIN_WIDTH: f32 = 200.;
+pub(super) const NAVIGATION_MAX_WIDTH: f32 = 420.;
+pub(super) const NAVIGATION_DEFAULT_WIDTH: f32 = NAVIGATION_MAX_WIDTH * 0.75;
+
 /// Keep wheel-driven invalidation inside the transcript. The list notifies its
 /// owning view on every wheel event, even when no surrounding controls change.
 pub(super) struct ChatTimeline {
@@ -560,7 +565,7 @@ impl Render for ConduitApp {
             .first()
             .map(|width| f32::from(*width))
             .filter(|width| *width > 0.)
-            .unwrap_or(248.);
+            .unwrap_or(NAVIGATION_DEFAULT_WIDTH);
         let measured_sidebar = if self.files.sidebar_collapsed {
             38.
         } else {
@@ -574,13 +579,9 @@ impl Render for ConduitApp {
 
         let body = h_resizable("body").with_state(&sidebar_state).child(
             resizable_panel()
-                .size(px(248.))
-                .size_range(if self.git_navigation_open() {
-                    px(280.)..px(480.)
-                } else {
-                    px(200.)..px(420.)
-                })
-                .flex_none()
+                .size(px(NAVIGATION_DEFAULT_WIDTH))
+                .size_range(px(NAVIGATION_MIN_WIDTH)..px(NAVIGATION_MAX_WIDTH))
+                .fixed()
                 .child(sidebar),
         );
         let conversation_area: AnyElement = match detail_panel {

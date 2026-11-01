@@ -768,6 +768,8 @@ impl ConduitApp {
             Navigation::Git => self.render_git_navigation(cx),
         };
         h_flex()
+            .id("navigation-panel")
+            .debug_selector(|| "navigation-panel".into())
             .size_full()
             .child(rail)
             .child(div().flex_1().min_w_0().h_full().child(pane))
@@ -1574,15 +1576,6 @@ impl ConduitApp {
         self.files.sidebar_collapsed = false;
         self.refresh_git(cx);
         cx.notify();
-    }
-
-    pub(super) fn toggle_git_navigation(&mut self, cx: &mut Context<Self>) {
-        if self.git_navigation_open() {
-            self.files.mode = Navigation::Workspaces;
-            cx.notify();
-        } else {
-            self.show_git_navigation(cx);
-        }
     }
 
     fn navigation_workspace_picker(
