@@ -48,7 +48,7 @@ $env:CONDUIT_UPDATE_PUBLIC_KEY = '<Base64 公钥>'
 4. CI 自动生成 Release notes，签名清单，再将安装包、SHA-256、`update.json`、`update.json.sig` 上传到 draft Release。
 5. 所有资产上传并通过大小校验后，才发布并设置 Latest。失败保留 draft；可手动指定同一标签重跑。已经发布的版本不能被此 workflow 覆盖，修复请使用新版本。
 
-Release notes 根据 `.github/release.yml` 的 PR 标签分类。预发布标签目前会被拒绝；首版只支持稳定版，不做 beta 通道或差分包。仓库必须允许 Actions 发布 Release，并为 `release` Environment 配置所需权限。若配置了 Environment 审批，GitHub 会在发布 job 前等待维护者审批。
+Release notes 根据 `.github/release.yml` 的 PR 标签分类。没有 PR 记录时，首版使用 README 功能简介，后续版本使用两次标签之间的提交记录。预发布标签目前会被拒绝；首版只支持稳定版，不做 beta 通道或差分包。仓库必须允许 Actions 发布 Release，并为 `release` Environment 配置所需权限。若配置了 Environment 审批，GitHub 会在发布 job 前等待维护者审批。
 
 下载地址固定为 `Leo-Lee-j/conduit`。Fork 必须同步修改协议仓库常量和发布校验。客户端使用匿名 GitHub API，请使用可公开读取的 Release；私有仓库需要额外设计更新源授权，不能在客户端打包 PAT。
 

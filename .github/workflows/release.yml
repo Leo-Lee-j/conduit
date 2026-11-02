@@ -67,6 +67,22 @@ jobs:
           [IO.File]::WriteAllText('target/notes-request.json', $payload)
           $notes = gh api --method POST "repos/$env:GITHUB_REPOSITORY/releases/generate-notes" --input target/notes-request.json | ConvertFrom-Json
           if ($LASTEXITCODE) { throw 'Release note generation failed.' }
+          # GitHub's generated notes list PRs; direct-commit releases need a fallback.
+          if ($notes.body -notmatch '(?m)^[-*]\s') {
+            $previous = @(git tag --merged $env:RELEASE_TAG --sort=-version:refname | Where-Object {
+              $_ -match '^v\d+\.\d+\.\d+$' -and [version]$_.Substring(1) -lt [version]$env:RELEASE_TAG.Substring(1)
+            } | Select-Object -First 1)
+            if ($LASTEXITCODE) { throw 'Cannot inspect release history.' }
+            if ($previous.Count -eq 0) {
+              $readme = Get-Content -LiteralPath README.md -Raw
+              $features = [regex]::Match($readme, '(?s)## 功能\s*(.*?)\s*## ').Groups[1].Value.Trim()
+              $notes.body = "Conduit 首个公开版本，支持 Windows x64。`n`n## 功能`n`n$features`n`n$($notes.body)"
+            } else {
+              $commits = @(git log --no-merges --format='- %s (%h)' "$($previous[0])..$env:RELEASE_TAG")
+              if ($LASTEXITCODE) { throw 'Cannot generate commit changelog.' }
+              $notes.body = "## 更新内容`n`n$($commits -join "`n")`n`n$($notes.body)"
+            }
+          }
           [IO.File]::WriteAllText('target/dist/release-notes.md', $notes.body)
           $installer = "target/dist/Conduit-$($env:RELEASE_TAG.Substring(1))-windows-x64-setup.exe"
           cargo run --locked --release --bin release-manifest -- $installer target/dist/release-notes.md
