@@ -893,15 +893,13 @@ mod tests {
             }
         "#;
         let runtime = fixture(command);
-        let approval = loop {
-            match runtime
-                .events
-                .recv_timeout(Duration::from_secs(10))
-                .unwrap()
-            {
-                Event::Approval(approval) => break approval,
-                other => panic!("unexpected event: {other:?}"),
-            }
+        let approval = match runtime
+            .events
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+        {
+            Event::Approval(approval) => approval,
+            other => panic!("unexpected event: {other:?}"),
         };
         assert!(approval.is_user_input());
         runtime.enable_full_access();

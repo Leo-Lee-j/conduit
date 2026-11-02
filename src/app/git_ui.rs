@@ -131,7 +131,7 @@ impl ConduitApp {
                 Button::new("git-select-unstaged")
                     .ghost()
                     .small()
-                    .label("全选未暂存")
+                    .label("全选")
                     .disabled(available.is_empty())
                     .on_click(move |_, _, cx| {
                         select_app.update(cx, |this, cx| {
@@ -145,7 +145,7 @@ impl ConduitApp {
                 Button::new("git-stage-selected")
                     .ghost()
                     .small()
-                    .label(format!("暂存选中 ({})", selected.len()))
+                    .label(format!("暂存选中 {}", selected.len()))
                     .disabled(!self.can_stage_files() || selected.is_empty())
                     .on_click(move |_, _, cx| {
                         selected_app
@@ -156,7 +156,7 @@ impl ConduitApp {
                 Button::new("git-stage-all")
                     .ghost()
                     .small()
-                    .label(format!("全部暂存 ({})", all.len()))
+                    .label(format!("全部暂存 {}", all.len()))
                     .disabled(!self.can_stage_files() || all.is_empty())
                     .on_click(move |_, _, cx| {
                         all_app.update(cx, |this, cx| this.stage_git_files(all.clone(), cx));
@@ -720,6 +720,7 @@ impl ConduitApp {
                             .small()
                             .compact()
                             .icon(gpui_kit::assets::IconName::Sparkles)
+                            .accessibility_label("AI 生成提交信息")
                             .tooltip(generate_tip)
                             .disabled(!can_generate)
                             .loading(generating)
@@ -735,6 +736,7 @@ impl ConduitApp {
                                 .small()
                                 .compact()
                                 .icon(gpui_kit::assets::IconName::X)
+                                .accessibility_label("取消生成提交信息")
                                 .tooltip("取消生成")
                                 .cursor_pointer()
                                 .on_click(move |_, _, cx| {
@@ -1359,7 +1361,12 @@ impl ConduitApp {
         body = body.child(
             v_flex()
                 .w_full()
+                .p_3()
                 .gap_1()
+                .rounded(px(10.))
+                .border_1()
+                .border_color(rgb(palette().border))
+                .bg(rgb(palette().surface))
                 .child(
                     h_flex()
                         .w_full()
@@ -1499,20 +1506,23 @@ impl ConduitApp {
                                     div()
                                         .text_size(px(12.))
                                         .font_semibold()
-                                        .text_color(rgb(color))
+                                        .text_color(rgb(palette().text))
                                         .child(kind.label()),
                                 )
                                 .child(div().flex_1())
                                 .child(
                                     div()
+                                        .px_2()
+                                        .rounded_full()
+                                        .bg(rgb(palette().surface_strong))
                                         .text_size(px(10.))
-                                        .text_color(rgb(palette().faint))
+                                        .text_color(rgb(palette().muted))
                                         .child(files.len().to_string()),
                                 ),
                         ),
                 );
                 if !collapsed {
-                    let mut rows = v_flex().w_full().gap(px(1.)).pl(px(32.));
+                    let mut rows = v_flex().w_full().gap(px(1.)).pl(px(16.));
                     for file in files {
                         let app = view.clone();
                         let target = file.clone();

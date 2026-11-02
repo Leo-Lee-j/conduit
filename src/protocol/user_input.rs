@@ -13,6 +13,17 @@ pub struct UserQuestion {
     pub secret: bool,
 }
 
+impl Approval {
+    pub fn is_user_input(&self) -> bool {
+        matches!(
+            self.kind,
+            ApprovalKind::CodexUserInput
+                | ApprovalKind::ClaudeUserInput
+                | ApprovalKind::OpenCodeUserInput
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,15 +138,6 @@ mod tests {
 }
 
 impl Approval {
-    pub fn is_user_input(&self) -> bool {
-        matches!(
-            self.kind,
-            ApprovalKind::CodexUserInput
-                | ApprovalKind::ClaudeUserInput
-                | ApprovalKind::OpenCodeUserInput
-        )
-    }
-
     pub fn questions(&self) -> Vec<UserQuestion> {
         if !self.is_user_input() {
             return vec![];

@@ -10,11 +10,14 @@ pub(super) struct QuestionDraft {
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests {
-    use super::*;
+    use super::{ActiveRun, ChatRuntime, ConduitApp};
     use crate::{
         domain::{SessionRecord, Workspace},
         protocol::{Event, Protocol},
         store::Store,
+    };
+    use gpui_kit::{
+        AppContext as _, Modifiers, MouseButton, TestAppContext, VisualTestContext, px, size,
     };
 
     #[gpui_kit::test]
@@ -31,7 +34,7 @@ mod tests {
                         path: std::env::temp_dir(),
                         sessions: vec![SessionRecord {
                             id: 1,
-                            provider: Provider::Codex,
+                            provider: crate::domain::Provider::Codex,
                             title: "Question test".into(),
                             native_id: None,
                             created_at: 0,
@@ -43,7 +46,7 @@ mod tests {
                             channel: Default::default(),
                             reasoning_effort: Default::default(),
                             opencode: Default::default(),
-                            permission: PermissionLevel::FullAccess,
+                            permission: crate::domain::PermissionLevel::FullAccess,
                             usage: Default::default(),
                         }],
                     }],
@@ -59,7 +62,12 @@ mod tests {
             gpui_kit::component::Root::new(app, window, cx)
         });
         let app = slot.borrow().as_ref().unwrap().clone();
-        let mut protocol = Protocol::new(Provider::Codex, "C:/work".into(), "test".into(), None);
+        let mut protocol = Protocol::new(
+            crate::domain::Provider::Codex,
+            "C:/work".into(),
+            "test".into(),
+            None,
+        );
         let step = protocol.accept(serde_json::json!({"id":"question-1","method":"item/tool/requestUserInput","params":{"questions":[
             {"id":"choice","header":"方案","question":"选择方案？","isOther":false,"options":[{"label":"A","description":"第一项"},{"label":"B","description":"第二项"}]},
             {"id":"name","header":"名称","question":"项目名称？","isOther":true,"options":null}
@@ -96,15 +104,15 @@ mod tests {
             let _ = window.draw(cx);
         });
         assert!(cx.debug_bounds("cli-user-input").is_some());
-        let click = |cx: &mut VisualTestContext, selector: &str| {
+        let click = |cx: &mut VisualTestContext, selector: &'static str| {
             let center = cx.debug_bounds(selector).unwrap().center();
             cx.simulate_mouse_down(center, MouseButton::Left, Modifiers::default());
             cx.simulate_mouse_up(center, MouseButton::Left, Modifiers::default());
             cx.run_until_parked();
         };
-        click(&mut cx, "cli-question-submit");
+        click(cx, "cli-question-submit");
         cx.update(|_, cx| assert!(!app.read(cx).runs[&1].approvals.is_submitted("question-1")));
-        click(&mut cx, "cli-option-0-1");
+        click(cx, "cli-option-0-1");
         cx.update(|window, cx| {
             app.update(cx, |this, cx| {
                 let draft = &this.runs[&1].question_drafts["question-1"][0];
@@ -119,7 +127,7 @@ mod tests {
         cx.update(|window, cx| {
             let _ = window.draw(cx);
         });
-        click(&mut cx, "cli-question-submit");
+        click(cx, "cli-question-submit");
         cx.update(|window, cx| {
             app.update(cx, |this, cx| {
                 assert!(this.runs[&1].approvals.is_submitted("question-1"));
