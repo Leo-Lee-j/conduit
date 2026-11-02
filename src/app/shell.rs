@@ -693,7 +693,22 @@ impl Render for ConduitApp {
                 monitor.record_render(render_started.elapsed());
             });
         }
-        view.on_action(cx.listener(|this, _: &RecentSessions, window, cx| {
+        view.capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, _| {
+            if event.keystroke.key != "shift" {
+                this.double_shift.cancel();
+            }
+        }))
+        .capture_any_mouse_down(cx.listener(|this, _, _, _| {
+            this.double_shift.cancel();
+        }))
+        .on_modifiers_changed(
+            cx.listener(|this, event: &ModifiersChangedEvent, window, cx| {
+                if this.double_shift.update(event.modifiers, Instant::now()) {
+                    this.open_file_search(window, cx);
+                }
+            }),
+        )
+        .on_action(cx.listener(|this, _: &RecentSessions, window, cx| {
             this.open_recent_sessions(window, cx);
         }))
         .on_action(cx.listener(|this, _: &OpenSessionSearch, window, cx| {

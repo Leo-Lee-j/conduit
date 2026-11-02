@@ -142,6 +142,10 @@ fn score(path: &str, query: &str) -> Option<(u8, usize)> {
 }
 
 pub fn search(index: &FileIndex, query: &str) -> Vec<String> {
+    search_with_limit(index, query, RESULT_LIMIT)
+}
+
+pub fn search_with_limit(index: &FileIndex, query: &str, limit: usize) -> Vec<String> {
     let query = query.replace('\\', "/").to_lowercase();
     let mut results = index
         .paths
@@ -155,7 +159,7 @@ pub fn search(index: &FileIndex, query: &str) -> Vec<String> {
     });
     results
         .into_iter()
-        .take(RESULT_LIMIT)
+        .take(limit)
         .map(|(_, path)| path.clone())
         .collect()
 }
@@ -206,6 +210,20 @@ mod tests {
         assert_eq!(search(&index, "cmp")[0], "src/app/composer.rs");
         assert_eq!(search(&index, "资料")[0], "docs/资料 说明.md");
         assert!(search(&index, "unfindable").is_empty());
+    }
+
+    #[test]
+    fn picker_limit_does_not_change_mention_limit_or_ranking() {
+        let index = FileIndex {
+            paths: (0..80).map(|i| format!("src/file{i:02}.rs")).collect(),
+            ..Default::default()
+        };
+        let mentions = search(&index, "file");
+        let picker = search_with_limit(&index, "file", 50);
+        assert_eq!(mentions.len(), RESULT_LIMIT);
+        assert_eq!(picker.len(), 50);
+        assert_eq!(mentions, picker[..RESULT_LIMIT]);
+        assert!(search_with_limit(&index, "file", 0).is_empty());
     }
 
     #[test]

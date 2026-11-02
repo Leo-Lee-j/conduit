@@ -563,7 +563,7 @@ impl ConduitApp {
             ("搜索会话", "ctrl-p"),
             ("打开终端（暂未实现）", "ctrl-`"),
             ("打开设置", "ctrl-m"),
-            ("文件名搜索（暂未实现）Shift ×2", "shift"),
+            ("文件名搜索 Shift ×2", "shift"),
             ("切换 Git 侧栏", "ctrl-k"),
         ];
         let items: Vec<_> = rows

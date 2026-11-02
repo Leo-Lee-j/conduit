@@ -63,6 +63,7 @@ mod composer;
 mod dock;
 mod events;
 mod file_links;
+mod file_picker;
 mod files;
 mod generation;
 mod git_branches;
@@ -217,6 +218,7 @@ pub struct ConduitApp {
     /// Sidebar session search filter.
     search: Entity<InputState>,
     search_query: String,
+    double_shift: file_picker::DoubleShift,
     show_archived: bool,
     /// Engine used by the sidebar + button and the search dialog's empty state.
     new_session_provider: Provider,
@@ -470,6 +472,9 @@ impl ConduitApp {
         let mention_subscription = cx.observe(&input, |this, _, cx| {
             this.refresh_file_mentions(cx);
         });
+        let shift_subscription = cx.observe_window_activation(window, |this, _, _| {
+            this.double_shift = file_picker::DoubleShift::default();
+        });
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索会话"));
         let search_subscription = cx.subscribe(&search, |this, search, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
@@ -643,6 +648,7 @@ impl ConduitApp {
             startup: None,
             search,
             search_query: String::new(),
+            double_shift: file_picker::DoubleShift::default(),
             show_archived: false,
             new_session_provider,
             pending_model_selection: None,
@@ -655,6 +661,7 @@ impl ConduitApp {
                 input_subscription,
                 mention_subscription,
                 search_subscription,
+                shift_subscription,
                 git_prompt_subscription,
                 appearance_subscription,
                 chat_font_subscription,
