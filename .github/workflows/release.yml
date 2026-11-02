@@ -69,16 +69,18 @@ jobs:
           if ($LASTEXITCODE) { throw 'Release note generation failed.' }
           # GitHub's generated notes list PRs; direct-commit releases need a fallback.
           if ($notes.body -notmatch '(?m)^[-*]\s') {
-            $previous = @(git tag --merged $env:RELEASE_TAG --sort=-version:refname | Where-Object {
-              $_ -match '^v\d+\.\d+\.\d+$' -and [version]$_.Substring(1) -lt [version]$env:RELEASE_TAG.Substring(1)
-            } | Select-Object -First 1)
-            if ($LASTEXITCODE) { throw 'Cannot inspect release history.' }
+            $published = gh release list --json tagName,isDraft --limit 100 | ConvertFrom-Json
+            if ($LASTEXITCODE) { throw 'Cannot inspect published releases.' }
+            $previous = @($published | Where-Object {
+              -not $_.isDraft -and $_.tagName -match '^v\d+\.\d+\.\d+$' -and
+              [version]$_.tagName.Substring(1) -lt [version]$env:RELEASE_TAG.Substring(1)
+            } | Sort-Object { [version]$_.tagName.Substring(1) } -Descending | Select-Object -First 1)
             if ($previous.Count -eq 0) {
               $readme = Get-Content -LiteralPath README.md -Raw
               $features = [regex]::Match($readme, '(?s)## 功能\s*(.*?)\s*## ').Groups[1].Value.Trim()
               $notes.body = "Conduit 首个公开版本，支持 Windows x64。`n`n## 功能`n`n$features`n`n$($notes.body)"
             } else {
-              $commits = @(git log --no-merges --format='- %s (%h)' "$($previous[0])..$env:RELEASE_TAG")
+              $commits = @(git log --no-merges --format='- %s (%h)' "$($previous[0].tagName)..$env:RELEASE_TAG")
               if ($LASTEXITCODE) { throw 'Cannot generate commit changelog.' }
               $notes.body = "## 更新内容`n`n$($commits -join "`n")`n`n$($notes.body)"
             }
