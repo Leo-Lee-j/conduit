@@ -62,6 +62,7 @@ mod components;
 mod composer;
 mod dock;
 mod events;
+mod file_links;
 mod files;
 mod generation;
 mod git_branches;
@@ -86,6 +87,7 @@ mod theme;
 mod toolbar;
 mod tools;
 mod typography;
+mod user_input;
 
 use components::*;
 use composer::*;
@@ -118,7 +120,11 @@ actions!(
         NextFileMention,
         AcceptFileMention,
         DismissFileMention,
-        CloseDocument
+        CloseDocument,
+        RecentSessions,
+        OpenSessionSearch,
+        OpenSettingsShortcut,
+        ToggleGitNavigation
     ]
 );
 
@@ -167,6 +173,7 @@ pub struct ConduitApp {
     details: bool,
     detail_view: DetailView,
     detail_text: Option<String>,
+    detail_scrolls: HashMap<(u64, String), ScrollHandle>,
     /// Width of the right sidebar.
     detail_width: f32,
     /// Drag origin `(pointer x, width at drag start)` for the right sidebar edge.
@@ -307,6 +314,10 @@ impl ConduitApp {
             KeyBinding::new("shift-f7", PreviousDiff, Some("GitDiffDialog")),
             KeyBinding::new("f7", NextDiff, Some("Diff")),
             KeyBinding::new("shift-f7", PreviousDiff, Some("Diff")),
+            KeyBinding::new("ctrl-e", RecentSessions, None),
+            KeyBinding::new("ctrl-p", OpenSessionSearch, None),
+            KeyBinding::new("ctrl-m", OpenSettingsShortcut, None),
+            KeyBinding::new("ctrl-k", ToggleGitNavigation, None),
         ]);
         let (mut store, message, writable) = match loaded {
             Ok(store) => (store, None, true),
@@ -593,6 +604,7 @@ impl ConduitApp {
             details: false,
             detail_view: DetailView::Tool,
             detail_text: None,
+            detail_scrolls: HashMap::new(),
             detail_width: 340.,
             detail_drag: None,
             sidebar_width: shell::NAVIGATION_DEFAULT_WIDTH,

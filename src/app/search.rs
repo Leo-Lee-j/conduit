@@ -95,6 +95,69 @@ pub(super) fn highlighted_text(text: &str, query: &str, size: f32, color: u32) -
 }
 
 impl ConduitApp {
+    pub(super) fn open_recent_sessions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let sessions: Vec<_> = self
+            .store
+            .ui
+            .recent_sessions
+            .iter()
+            .filter_map(|id| {
+                self.store
+                    .workspaces
+                    .iter()
+                    .enumerate()
+                    .find_map(|(workspace, item)| {
+                        item.sessions
+                            .iter()
+                            .find(|session| session.id == *id && !session.archived)
+                            .map(|session| {
+                                (workspace, session.id, item.name(), session.title.clone())
+                            })
+                    })
+            })
+            .take(10)
+            .collect();
+        let view = cx.entity();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let view = view.clone();
+            let sessions = sessions.clone();
+            dialog
+                .w(px(560.))
+                .title("最近会话")
+                .content(move |content, _, _| {
+                    let mut body = v_flex().w_full().gap_1();
+                    for (workspace, id, workspace_name, title) in &sessions {
+                        let app = view.clone();
+                        let workspace = *workspace;
+                        let id = *id;
+                        body = body.child(
+                            div()
+                                .id(("recent-session", id))
+                                .px_2()
+                                .py_2()
+                                .rounded(px(6.))
+                                .cursor_pointer()
+                                .hover(|style| style.bg(rgb(palette().surface_hover)))
+                                .on_click(move |_, window, cx| {
+                                    app.update(cx, |this, cx| {
+                                        this.switch(workspace, Some(id), window, cx)
+                                    });
+                                    window.close_dialog(cx);
+                                })
+                                .child(
+                                    h_flex().justify_between().child(title.clone()).child(
+                                        div()
+                                            .text_color(rgb(palette().faint))
+                                            .child(workspace_name.clone()),
+                                    ),
+                                ),
+                        );
+                    }
+                    content.child(body)
+                })
+        });
+    }
+
     pub(super) fn collect_search_results(&self, query: &str) -> Vec<SearchHit> {
         let mut hits = Vec::new();
         'outer: for (workspace_index, workspace) in self.store.workspaces.iter().enumerate() {

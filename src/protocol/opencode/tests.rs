@@ -232,6 +232,11 @@ fn opencode_managed_agents_override_inherited_rules_and_helpers_have_private_sto
             serde_json::from_str(&protocol.environment()["OPENCODE_CONFIG_CONTENT"]).unwrap();
         assert!(config["provider"].get("keep").is_some());
         let agent = &config["agent"][&protocol.acp.agent];
+        assert_eq!(agent["permission"]["question"], "allow");
+        assert_eq!(
+            protocol.environment()["OPENCODE_ENABLE_QUESTION_TOOL"],
+            "true"
+        );
         assert_eq!(
             agent["permission"]["*"],
             match permission {
@@ -279,6 +284,43 @@ fn opencode_managed_agents_override_inherited_rules_and_helpers_have_private_sto
     );
     drop(helper);
     assert!(!path.exists());
+}
+
+#[test]
+fn opencode_user_input_answers_preserve_order_and_wait_in_full_access() {
+    let (mut protocol, _) = connected(None, true, None);
+    protocol.enable_full_access();
+    let input = json!({"id":"que_test","sessionID":"ses_test","questions":[
+        {"header":"功能","question":"需要哪些功能？","multiple":true,"custom":false,"options":[
+            {"label":"A","description":"功能 A"},{"label":"B","description":"功能 B"}]},
+        {"header":"名称","question":"项目叫什么？","options":[]}
+    ]});
+    let step = protocol.accept(json!({"id":"que_test","method":"conduit/question","params":input}));
+    assert!(step.writes.is_empty());
+    let Event::Approval(approval) = &step.events[0] else {
+        panic!("question not queued");
+    };
+    assert_eq!(protocol.automatic_approval(approval), None);
+    let answers = std::collections::BTreeMap::from([
+        ("0".into(), vec!["A".into(), "B".into()]),
+        ("1".into(), vec!["中文项目".into()]),
+    ]);
+    assert_eq!(
+        protocol.user_input_response(approval, &answers).unwrap(),
+        json!({"answers":[["A","B"],["中文项目"]]})
+    );
+    assert_eq!(
+        protocol.approval_response(approval, false),
+        json!({"reject":true})
+    );
+    assert!(
+        protocol
+            .accept(
+                json!({"id":"other","method":"conduit/question","params":{"sessionID":"other"}})
+            )
+            .events
+            .is_empty()
+    );
 }
 
 #[test]

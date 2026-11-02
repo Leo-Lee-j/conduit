@@ -28,6 +28,9 @@ pub enum NamingMode {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UiSettings {
+    /// Session ids ordered by most recently opened.
+    #[serde(default)]
+    pub recent_sessions: Vec<u64>,
     /// How many recent sessions a workspace shows before "show more".
     #[serde(default = "default_sessions_per_workspace")]
     pub sessions_per_workspace: usize,
@@ -40,8 +43,8 @@ pub struct UiSettings {
     /// Follow the system appearance or force one of the bundled palettes.
     #[serde(default)]
     pub appearance: AppearanceMode,
-    /// Fill the whole right content area instead of a centered 840px column.
-    #[serde(default)]
+    /// Fill the available chat area instead of a centered 840px column.
+    #[serde(default = "default_full_width_content")]
     pub full_width_content: bool,
     /// What automatic titling reacts to.
     #[serde(default)]
@@ -100,6 +103,10 @@ fn default_sessions_per_workspace() -> usize {
     5
 }
 
+fn default_full_width_content() -> bool {
+    true
+}
+
 fn default_chat_font_size() -> f32 {
     15.0
 }
@@ -138,11 +145,12 @@ fn default_max_tabs() -> usize {
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
+            recent_sessions: Vec::new(),
             sessions_per_workspace: default_sessions_per_workspace(),
             last_provider: None,
             performance_monitor: default_performance_monitor(),
             appearance: AppearanceMode::default(),
-            full_width_content: false,
+            full_width_content: default_full_width_content(),
             max_tabs: default_max_tabs(),
             naming_mode: NamingMode::default(),
             auto_rename: true,
@@ -782,7 +790,7 @@ mod tests {
         assert!(store.ui.performance_monitor);
         assert_eq!(store.ui.appearance, AppearanceMode::Dark);
         assert_eq!(store.ui.max_tabs, 8);
-        assert!(!store.ui.full_width_content);
+        assert!(store.ui.full_width_content);
         assert_eq!(store.ui.naming_mode, NamingMode::FirstMessage);
         assert_eq!(store.ui.chat_font_family, None);
         assert_eq!(store.ui.chat_font_size, 15.0);
@@ -798,6 +806,7 @@ mod tests {
         store.ui.performance_monitor = false;
         store.ui.appearance = AppearanceMode::System;
         store.ui.max_tabs = 12;
+        store.ui.full_width_content = false;
         store.ui.naming_mode = NamingMode::Latest;
         store.ui.chat_font_family = Some("Segoe UI".into());
         store.ui.chat_font_size = 17.0;
@@ -823,6 +832,7 @@ mod tests {
         assert!(!reloaded.ui.performance_monitor);
         assert_eq!(reloaded.ui.appearance, AppearanceMode::System);
         assert_eq!(reloaded.ui.max_tabs, 12);
+        assert!(!reloaded.ui.full_width_content);
         assert_eq!(reloaded.ui.naming_mode, NamingMode::Latest);
         assert_eq!(reloaded.ui.chat_font_family.as_deref(), Some("Segoe UI"));
         assert_eq!(reloaded.ui.chat_font_size, 17.0);

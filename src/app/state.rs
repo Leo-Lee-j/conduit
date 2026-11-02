@@ -237,6 +237,7 @@ pub(super) struct ActiveRun {
     pub(super) worktree: PathBuf,
     pub(super) approvals: ApprovalQueue,
     pub(super) expanded_approvals: HashSet<String>,
+    pub(super) question_drafts: HashMap<String, Vec<super::user_input::QuestionDraft>>,
     pub(super) prefix: String,
     pub(super) status: String,
     /// What the engine is doing right now, shown above the composer while
@@ -261,6 +262,13 @@ pub(super) struct ActiveRun {
 }
 
 impl ActiveRun {
+    pub(super) fn waiting_status(&self) -> &'static str {
+        if self.approvals.front().is_some_and(|a| a.is_user_input()) {
+            "等待你的回答"
+        } else {
+            "等待你的审批"
+        }
+    }
     pub(super) fn new(
         runtime: ChatRuntime,
         worktree: PathBuf,
@@ -280,6 +288,7 @@ impl ActiveRun {
             worktree,
             approvals: ApprovalQueue::default(),
             expanded_approvals: HashSet::new(),
+            question_drafts: HashMap::new(),
             prefix,
             status: "正在连接 CLI…".into(),
             activity: "正在启动 CLI…".into(),
@@ -299,6 +308,7 @@ impl ActiveRun {
         self.runtime.cancel();
         self.approvals.clear();
         self.expanded_approvals.clear();
+        self.question_drafts.clear();
         self.status = "正在停止…".into();
         self.activity = "正在停止…".into();
     }

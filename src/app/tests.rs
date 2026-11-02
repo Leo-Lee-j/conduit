@@ -8,6 +8,125 @@ use crate::{
 };
 
 #[test]
+fn error_retry_preserves_partial_output_across_repeated_failures_and_restore() {
+    let mut s = session();
+    let user = ChatItem {
+        elapsed_ms: None,
+        key: "turn-0-user".into(),
+        created_at: 0,
+        kind: ItemKind::User,
+        text: "检查项目并说明结果".into(),
+        input: String::new(),
+        detail: String::new(),
+        status: String::new(),
+        approval: None,
+        model: None,
+    };
+    s.messages.push(user);
+    apply_event(
+        &mut s,
+        "turn-0",
+        Event::Delta {
+            key: "reply".into(),
+            text: "已经检查了配置。".into(),
+        },
+    );
+    apply_event(
+        &mut s,
+        "turn-0",
+        Event::Tool {
+            key: "tool".into(),
+            title: "读取文件".into(),
+            detail: "配置内容".into(),
+            status: "已完成".into(),
+        },
+    );
+    apply_event(
+        &mut s,
+        "turn-0",
+        Event::ErrorBanner("API Error: 503 unavailable".into()),
+    );
+    let original = serde_json::to_value(&s.messages).unwrap();
+    assert_eq!(
+        super::runtime::error_retry_prompt(&s, 3),
+        Some("检查项目并说明结果")
+    );
+    assert_eq!(serde_json::to_value(&s.messages).unwrap(), original);
+
+    // Retry output uses a new turn prefix, even when the CLI reuses its item keys.
+    let prefix = format!("turn-{}", s.messages.len());
+    apply_event(
+        &mut s,
+        &prefix,
+        Event::Delta {
+            key: "reply".into(),
+            text: "接着检查代码。".into(),
+        },
+    );
+    apply_event(
+        &mut s,
+        &prefix,
+        Event::ErrorBanner("API Error: 503 unavailable".into()),
+    );
+    assert_eq!(serde_json::to_value(&s.messages[..4]).unwrap(), original);
+    assert_eq!(
+        super::runtime::error_retry_prompt(&s, 5),
+        Some("检查项目并说明结果")
+    );
+    assert_eq!(super::runtime::error_retry_prompt(&s, 3), None);
+
+    let mut restored: SessionRecord =
+        serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+    let prefix = format!("turn-{}", restored.messages.len());
+    apply_event(
+        &mut restored,
+        &prefix,
+        Event::Delta {
+            key: "reply".into(),
+            text: "检查完成。".into(),
+        },
+    );
+    assert_eq!(
+        serde_json::to_value(&restored.messages[..4]).unwrap(),
+        original
+    );
+    assert_eq!(restored.messages[4].text, "接着检查代码。");
+    assert_eq!(restored.messages[6].text, "检查完成。");
+    assert_eq!(
+        restored
+            .messages
+            .iter()
+            .filter(|m| m.kind == ItemKind::User)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn error_retry_only_targets_a_failure_in_the_latest_exchange() {
+    let mut s = session();
+    apply_event(
+        &mut s,
+        "turn-0",
+        Event::ErrorBanner("API Error: 503".into()),
+    );
+    assert_eq!(super::runtime::error_retry_prompt(&s, 0), None);
+    assert_eq!(super::runtime::error_retry_prompt(&s, usize::MAX), None);
+    for (kind, text) in [
+        (ItemKind::User, "新提问"),
+        (ItemKind::Error, "API Error: 503"),
+    ] {
+        let mut item = s.messages[0].clone();
+        item.kind = kind;
+        item.text = text.into();
+        s.messages.push(item);
+    }
+    assert_eq!(super::runtime::error_retry_prompt(&s, 0), None);
+    assert_eq!(super::runtime::error_retry_prompt(&s, 1), None);
+    assert_eq!(super::runtime::error_retry_prompt(&s, 2), Some("新提问"));
+}
+
+#[test]
 fn opencode_diff_content_is_classified_and_bounded_for_the_existing_edit_view() {
     let mut s = session();
     apply_event(&mut s, "turn-0", Event::Tool {

@@ -7,6 +7,65 @@ use gpui_kit::{
 };
 
 #[gpui_kit::test]
+fn error_retry_keeps_partial_output_when_context_validation_fails(cx: &mut TestAppContext) {
+    use crate::{domain::Workspace, protocol::Event, store::Store};
+    use gpui_kit::AppContext as _;
+
+    cx.update(gpui_kit::init);
+    cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut session = super::tests::session();
+            // A missing native context must remain visible to send validation;
+            // removing partial replies used to hide it and attempt a fresh turn.
+            let user: ChatItem = serde_json::from_value(serde_json::json!({
+                "key": "turn-0-user", "kind": "User", "text": "检查项目"
+            }))
+            .unwrap();
+            session.messages.push(user);
+            super::apply_event(
+                &mut session,
+                "turn-0",
+                Event::Delta {
+                    key: "reply".into(),
+                    text: "已检查部分文件。".into(),
+                },
+            );
+            super::apply_event(
+                &mut session,
+                "turn-0",
+                Event::ErrorBanner("API Error: 503 unavailable".into()),
+            );
+            let before = serde_json::to_value(&session.messages).unwrap();
+            let store = Store {
+                workspaces: vec![Workspace {
+                    path: std::env::temp_dir(),
+                    sessions: vec![session],
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.selected_workspace = Some(0);
+            app.selected_session = Some(1);
+            app.retry_error(2, window, cx);
+            assert_eq!(
+                serde_json::to_value(&app.session(1).unwrap().messages).unwrap(),
+                before
+            );
+            assert!(app.runs.is_empty());
+            assert!(
+                app.message
+                    .as_deref()
+                    .unwrap()
+                    .contains("缺少可靠的 CLI 会话标识")
+            );
+            app.writable = false;
+            app
+        });
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+}
+
+#[gpui_kit::test]
 fn settings_dismisses_on_outside_click_and_keeps_inside_clicks(cx: &mut TestAppContext) {
     use gpui_kit::{AppContext as _, Modifiers, MouseButton};
     cx.update(gpui_kit::init);
@@ -2398,6 +2457,106 @@ struct ToolScrollFixture {
     sibling: ScrollHandle,
     item: ChatItem,
     typography: ChatTypography,
+}
+
+#[gpui_kit::test]
+fn tool_dock_keeps_header_visible_and_scrolls_independently_in_both_layouts(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut session = super::tests::session();
+            session.messages = vec![serde_json::from_value(serde_json::json!({
+                "key":"dock-tool", "kind":"Tool", "text":"Bash", "input":"{\"command\":\"cargo test\"}",
+                "detail":(0..200).map(|i| format!("第 {i} 行：工具输出与中文路径\n")).collect::<String>(),
+                "status":"完成"
+            })).unwrap()];
+            let store = crate::store::Store {
+                workspaces:vec![crate::domain::Workspace {path:std::env::temp_dir(), sessions:vec![session]}],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.writable = false;
+            app.startup = None;
+            app.selected_workspace = Some(0);
+            app.selected_session = Some(1);
+            app.open_tabs = vec![super::DocumentTab::Chat(1)];
+            app.details = true;
+            app.detail_text = Some("dock-tool".into());
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    for (width, height, mode) in [
+        (1280., 800., gpui_kit::component::ThemeMode::Dark),
+        (850., 500., gpui_kit::component::ThemeMode::Light),
+    ] {
+        cx.simulate_resize(gpui_kit::size(px(width), px(height)));
+        cx.update(|window, cx| {
+            super::set_palette(mode);
+            gpui_kit::component::Theme::change(mode, Some(window), cx);
+            app.update(cx, |_, cx| cx.notify());
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let panel = cx.debug_bounds("detail-panel").expect("detail panel");
+        let header = cx
+            .debug_bounds("detail-header")
+            .expect("fixed detail header");
+        let viewport = cx
+            .debug_bounds("detail-content")
+            .expect("scrollable detail body");
+        assert!(panel.right() <= px(width) && panel.left() >= px(0.));
+        assert_eq!(header.size.height, px(48.));
+        assert!(viewport.top() >= header.bottom());
+        assert!(viewport.bottom() <= panel.bottom());
+        let scroll =
+            cx.update(|_, cx| app.read(cx).detail_scrolls[&(1, "dock-tool".into())].clone());
+        assert!(scroll.max_offset().y > px(1000.));
+        let chat_before = cx.update(|_, cx| app.read(cx).scroll.logical_scroll_top());
+        cx.simulate_event(ScrollWheelEvent {
+            position: viewport.center(),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-160.))),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(scroll.offset().y < px(0.));
+        assert_eq!(cx.debug_bounds("detail-header").unwrap(), header);
+        let chat_after = cx.update(|_, cx| app.read(cx).scroll.logical_scroll_top());
+        assert_eq!(chat_after.item_ix, chat_before.item_ix);
+        assert_eq!(chat_after.offset_in_item, chat_before.offset_in_item);
+        let close = cx.update(|window, _| {
+            gpui_kit::base::test_support::find(window, &[], &"close-details".into())
+                .unwrap()
+                .bounds()
+        });
+        assert!(
+            close.left() >= header.left() && close.right() <= header.right(),
+            "close button stays in header at {width}: {close:?}, {header:?}"
+        );
+        cx.simulate_mouse_move(close.center(), None, Modifiers::default());
+        cx.simulate_mouse_down(close.center(), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(close.center(), MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|_, cx| assert!(!app.read(cx).details, "close details at {width}"));
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.details = true;
+                cx.notify();
+            })
+        });
+    }
 }
 
 impl Render for ToolScrollFixture {

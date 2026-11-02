@@ -19,11 +19,19 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod opencode_questions;
 #[cfg(test)]
 mod opencode_tests;
 
 enum Control {
-    Decision { id: String, allow: bool },
+    Decision {
+        id: String,
+        allow: bool,
+    },
+    Answer {
+        id: String,
+        answers: std::collections::BTreeMap<String, Vec<String>>,
+    },
     EnableFullAccess,
 }
 #[derive(Default)]
@@ -52,6 +60,9 @@ impl ApprovalBroker {
     fn take(&mut self, ticket: &str) -> Option<Approval> {
         let source = self.tickets.remove(ticket)?;
         self.pending.remove(&source)
+    }
+    fn get(&self, ticket: &str) -> Option<&Approval> {
+        self.pending.get(self.tickets.get(ticket)?)
     }
 }
 pub struct ChatRuntime {
@@ -226,6 +237,9 @@ impl ChatRuntime {
     pub fn decide(&self, id: String, allow: bool) {
         let _ = self.controls.send(Control::Decision { id, allow });
     }
+    pub fn answer(&self, id: String, answers: std::collections::BTreeMap<String, Vec<String>>) {
+        let _ = self.controls.send(Control::Answer { id, answers });
+    }
     pub fn enable_full_access(&self) {
         if !self.is_cancelled() {
             let _ = self.controls.send(Control::EnableFullAccess);
@@ -306,13 +320,21 @@ fn send(writer: &SyncSender<Vec<u8>>, value: Value) -> Result<()> {
 fn execute(
     mut protocol: Protocol,
     executable: PathBuf,
-    args: Vec<String>,
+    mut args: Vec<String>,
     cwd: PathBuf,
     cancel: Arc<AtomicBool>,
     controls: Receiver<Control>,
     events: &Sender<Event>,
 ) -> Result<()> {
     protocol.prepare()?;
+    let mut question_bridge = protocol
+        .opencode_question_connection()
+        .map(|(port, password)| {
+            if let Some(index) = args.iter().position(|arg| arg == "--port") {
+                args[index + 1] = port.to_string();
+            }
+            opencode_questions::QuestionBridge::new(port, password, &cwd)
+        });
     let text_run = protocol.opencode_text_run();
     let text_input = protocol.opencode_text_input();
     let (program, full_args) = crate::cli::command_for(&executable, &args);
@@ -357,6 +379,7 @@ fn execute(
         let mut initialized = false;
         let mut exited_at = None;
         let mut cancel_started: Option<Instant> = None;
+        let mut question_poll = Instant::now();
         loop {
             if cancel.load(Ordering::Acquire) {
                 if cancel_started.is_none() {
@@ -376,7 +399,15 @@ fn execute(
             if let Ok(error) = failures.try_recv() {
                 bail!("CLI 标准输入错误：{error}");
             }
-            let messages = lines.poll(&mut pipes.stdout)?;
+            let mut messages = lines.poll(&mut pipes.stdout)?;
+            if !cancel.load(Ordering::Acquire)
+                && question_poll.elapsed() >= Duration::from_millis(300)
+                && let Some(session) = protocol.opencode_question_session()
+                && let Some(bridge) = question_bridge.as_mut()
+            {
+                messages.extend(bridge.poll(session)?);
+                question_poll = Instant::now();
+            }
             for message in messages {
                 last_message = Instant::now();
                 if message.get("result").is_some()
@@ -396,14 +427,24 @@ fn execute(
                     let event = match event {
                         Event::Approval(approval) => {
                             if cancel.load(Ordering::Acquire) {
-                                send(&writer, protocol.approval_response(&approval, false))?;
+                                opencode_questions::respond(
+                                    &writer,
+                                    question_bridge.as_ref(),
+                                    &approval,
+                                    protocol.approval_response(&approval, false),
+                                )?;
                                 continue;
                             }
                             let decision = protocol.automatic_approval(&approval);
                             let approval = approvals.issue(approval)?;
                             if let Some(allow) = decision {
                                 let pending = approvals.take(&approval.id).unwrap();
-                                send(&writer, protocol.approval_response(&pending, allow))?;
+                                opencode_questions::respond(
+                                    &writer,
+                                    question_bridge.as_ref(),
+                                    &pending,
+                                    protocol.approval_response(&pending, allow),
+                                )?;
                                 continue;
                             }
                             Event::Approval(approval)
@@ -431,10 +472,33 @@ fn execute(
                 }
                 match control {
                     Control::Decision { id, allow } => {
+                        if allow && approvals.get(&id).is_some_and(Approval::is_user_input) {
+                            continue;
+                        }
                         if let Some(approval) = approvals.take(&id) {
                             let allow = allow && approval.allow_once;
-                            send(&writer, protocol.approval_response(&approval, allow))?;
+                            opencode_questions::respond(
+                                &writer,
+                                question_bridge.as_ref(),
+                                &approval,
+                                protocol.approval_response(&approval, allow),
+                            )?;
                             let _ = events.send(Event::ApprovalResolved { id, allow });
+                        }
+                    }
+                    Control::Answer { id, answers } => {
+                        if let Some(response) = approvals
+                            .get(&id)
+                            .and_then(|approval| protocol.user_input_response(approval, &answers))
+                        {
+                            let approval = approvals.take(&id).unwrap();
+                            opencode_questions::respond(
+                                &writer,
+                                question_bridge.as_ref(),
+                                &approval,
+                                response,
+                            )?;
+                            let _ = events.send(Event::ApprovalResolved { id, allow: true });
                         }
                     }
                     Control::EnableFullAccess => {
@@ -450,7 +514,12 @@ fn execute(
                             if let Some(allow) = protocol.automatic_approval(&approval) {
                                 let id = approval.id.clone();
                                 if let Some(approval) = approvals.take(&id) {
-                                    send(&writer, protocol.approval_response(&approval, allow))?;
+                                    opencode_questions::respond(
+                                        &writer,
+                                        question_bridge.as_ref(),
+                                        &approval,
+                                        protocol.approval_response(&approval, allow),
+                                    )?;
                                     let _ = events.send(Event::ApprovalResolved { id, allow });
                                 }
                             }
@@ -808,6 +877,65 @@ mod tests {
         assert_eq!(response(41)["result"]["decision"], "accept");
         assert_eq!(response(42)["result"]["decision"], "decline");
         std::fs::remove_file(log).unwrap();
+    }
+
+    #[test]
+    fn runtime_user_input_waits_for_complete_answers_even_after_enabling_full_access() {
+        let command = r#"
+            [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding
+            [Console]::WriteLine('{"id":72,"method":"item/tool/requestUserInput","params":{"questions":[{"id":"choice","header":"Choice","question":"Which?","options":[{"label":"A","description":"First"},{"label":"B","description":"Second"}]}]}}')
+            $null = [Console]::ReadLine()
+            $response = [Console]::ReadLine() | ConvertFrom-Json
+            if ($response.id -ne 72 -or $response.result.answers.choice.answers[0] -ne 'B') {
+                [Console]::WriteLine('{"method":"turn/completed","params":{"turn":{"status":"failed","error":"wrong question response"}}}')
+            } else {
+                [Console]::WriteLine('{"method":"turn/completed","params":{"turn":{"status":"completed"}}}')
+            }
+        "#;
+        let runtime = fixture(command);
+        let approval = loop {
+            match runtime
+                .events
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap()
+            {
+                Event::Approval(approval) => break approval,
+                other => panic!("unexpected event: {other:?}"),
+            }
+        };
+        assert!(approval.is_user_input());
+        runtime.enable_full_access();
+        runtime.decide(approval.id.clone(), true);
+        runtime.answer(approval.id.clone(), Default::default());
+        assert!(matches!(
+            runtime.events.recv_timeout(Duration::from_millis(150)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        runtime.answer(
+            approval.id.clone(),
+            std::collections::BTreeMap::from([("choice".into(), vec!["B".into()])]),
+        );
+        runtime.answer(
+            approval.id.clone(),
+            std::collections::BTreeMap::from([("choice".into(), vec!["A".into()])]),
+        );
+        assert!(matches!(
+            runtime
+                .events
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap(),
+            Event::ApprovalResolved { allow: true, .. }
+        ));
+        assert!(matches!(
+            runtime
+                .events
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap(),
+            Event::Finished {
+                error: None,
+                cancelled: false
+            }
+        ));
     }
 
     #[test]

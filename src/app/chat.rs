@@ -767,6 +767,7 @@ impl ConduitApp {
                     .gap_1()
                     .children(references.iter().enumerate().map(|(file_index, mention)| {
                         let path = Path::new(mention);
+                        let link = mention.to_string();
                         let name = path
                             .file_name()
                             .unwrap_or_default()
@@ -795,6 +796,11 @@ impl ConduitApp {
                             .border_1()
                             .border_color(rgb(palette().border))
                             .bg(rgb(palette().surface_strong))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgb(palette().surface_hover)))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_chat_file(session_id, &link, window, cx);
+                            }))
                             .tooltip(move |window, cx| {
                                 gpui_kit::component::tooltip::Tooltip::new(full_path.clone())
                                     .build(window, cx)
@@ -913,6 +919,7 @@ impl ConduitApp {
                     .into_any_element()
             }
             ItemKind::Assistant => {
+                let link_app = cx.entity().downgrade();
                 let reply_range = assistant_reply_range(session, index);
                 let reply_in_progress = reply_range.end == session.messages.len()
                     && (self.runs.contains_key(&session_id) || session.interrupted);
@@ -1052,13 +1059,31 @@ impl ConduitApp {
                     .w_full()
                     .gap_1()
                     .group(message_group)
-                    .child(chat_markdown_view(
-                        SharedString::from(format!("reply-{}-{}", session_id, item.key)),
-                        item.text.clone(),
-                        &typography,
-                        &format!("code-copy-{}-{}", session_id, item.key),
-                        true,
-                    ))
+                    .child(
+                        chat_markdown_view(
+                            SharedString::from(format!("reply-{}-{}", session_id, item.key)),
+                            item.text.clone(),
+                            &typography,
+                            &format!("code-copy-{}-{}", session_id, item.key),
+                            true,
+                        )
+                        .on_link_click(move |url, event, window, cx| {
+                            let activate = match event {
+                                ClickEvent::Mouse(click) => matches!(
+                                    click.up.button,
+                                    MouseButton::Left | MouseButton::Middle
+                                ),
+                                ClickEvent::Keyboard(_) => true,
+                                ClickEvent::Touch(click) => !click.long_press,
+                            };
+                            if !activate {
+                                return;
+                            }
+                            let _ = link_app.update(cx, |this, cx| {
+                                this.open_chat_link(session_id, url, window, cx);
+                            });
+                        }),
+                    )
                     .when(show_actions, |message| message.child(actions))
                     .into_any_element()
             }
@@ -1302,13 +1327,8 @@ impl ConduitApp {
                 let copied = self.copied_action.as_ref() == Some(&copy_id);
                 let can_retry = self.writable
                     && !self.closing
-                    && !self.runs.contains_key(&session_id)
-                    && session.messages[..index]
-                        .iter()
-                        .any(|message| message.kind == ItemKind::User)
-                    && !session.messages[index + 1..].iter().any(|message| {
-                        matches!(message.kind, ItemKind::User | ItemKind::Assistant)
-                    });
+                    && !self.session_busy(session_id)
+                    && super::runtime::error_retry_prompt(session, index).is_some();
                 let mut actions = h_flex().flex_shrink_0().items_center().gap(px(4.));
                 actions = actions.child(
                     message_action_button(

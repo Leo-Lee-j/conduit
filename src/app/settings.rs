@@ -473,6 +473,7 @@ impl ConduitApp {
                 self.settings_git_page(disabled, view.clone()),
                 self.settings_cli_page(disabled, view.clone()),
                 self.settings_models_page(disabled, view.clone()),
+                self.settings_shortcuts_page(),
             ]);
         let modal_height = settings_modal_height(window);
         v_flex()
@@ -555,5 +556,30 @@ impl ConduitApp {
                     }),
             )
             .into_any_element()
+    }
+
+    fn settings_shortcuts_page(&self) -> SettingPage {
+        let rows = [
+            ("最近会话", "ctrl-e"),
+            ("搜索会话", "ctrl-p"),
+            ("打开终端（暂未实现）", "ctrl-`"),
+            ("打开设置", "ctrl-m"),
+            ("文件名搜索（暂未实现）Shift ×2", "shift"),
+            ("切换 Git 侧栏", "ctrl-k"),
+        ];
+        let items: Vec<_> = rows
+            .into_iter()
+            .map(|(label, keys)| {
+                let field = SettingField::render(move |_, _, _| {
+                    gpui_kit::component::kbd::Kbd::new(
+                        Keystroke::parse(keys).expect("static shortcut is valid"),
+                    )
+                    .outline()
+                });
+                SettingItem::new(label, field)
+            })
+            .collect();
+        settings_page("快捷键", FullIconName::Keyboard)
+            .group(settings_section("全局快捷键").items(items))
     }
 }

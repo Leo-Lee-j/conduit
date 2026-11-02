@@ -337,6 +337,11 @@ impl Render for ConduitApp {
                 .and_then(|id| self.runs.get(&id))
                 .and_then(|r| r.approvals.front().cloned());
             for (index, approval) in approvals.into_iter().enumerate() {
+                if approval.is_user_input() {
+                    conversation =
+                        conversation.child(self.render_user_input(&approval, window, cx));
+                    continue;
+                }
                 let submitted = self
                     .selected_session
                     .and_then(|id| self.runs.get(&id))
@@ -678,6 +683,23 @@ impl Render for ConduitApp {
                 monitor.record_render(render_started.elapsed());
             });
         }
-        view.into_any_element()
+        view.on_action(cx.listener(|this, _: &RecentSessions, window, cx| {
+            this.open_recent_sessions(window, cx);
+        }))
+        .on_action(cx.listener(|this, _: &OpenSessionSearch, window, cx| {
+            this.open_search_dialog(window, cx);
+        }))
+        .on_action(cx.listener(|this, _: &OpenSettingsShortcut, window, cx| {
+            this.open_settings(window, cx);
+        }))
+        .on_action(cx.listener(|this, _: &ToggleGitNavigation, _, cx| {
+            if this.git_navigation_open() {
+                this.files.sidebar_collapsed = true;
+            } else {
+                this.show_git_navigation(cx);
+            }
+            cx.notify();
+        }))
+        .into_any_element()
     }
 }

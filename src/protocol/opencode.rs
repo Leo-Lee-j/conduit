@@ -78,6 +78,7 @@ fn push_model(models: &mut Vec<crate::models::ModelOption>, option: &Value) {
 
 #[derive(Default)]
 pub(super) struct State {
+    question_port: u16,
     pub session_id: Option<String>,
     agent: String,
     stage: Stage,
@@ -138,6 +139,14 @@ impl Protocol {
         }
         let secret: String = random.iter().map(|b| format!("{b:02x}")).collect();
         self.acp.agent = format!("conduit-{}", &secret[..16]);
+        if !self.text_only {
+            self.acp.question_port = std::net::TcpListener::bind("127.0.0.1:0")?
+                .local_addr()?
+                .port();
+            self.route
+                .env
+                .insert("OPENCODE_ENABLE_QUESTION_TOOL".into(), "true".into());
+        }
         let inherited = self
             .route
             .env
@@ -160,14 +169,14 @@ impl Protocol {
         let permission = if self.text_only {
             json!({"*":"deny","external_directory":"deny"})
         } else if self.permission == PermissionLevel::ReadOnly {
-            json!({"*":"deny","read":"allow","glob":"allow","grep":"allow","list":"allow","external_directory":"ask"})
+            json!({"*":"deny","read":"allow","glob":"allow","grep":"allow","list":"allow","external_directory":"ask","question":"allow"})
         } else {
             let action = if self.permission == PermissionLevel::FullAccess {
                 "allow"
             } else {
                 "ask"
             };
-            json!({"*":action,"read":"allow","glob":"allow","grep":"allow","list":"allow","external_directory":action,"question":"deny","plan_enter":"deny","plan_exit":"deny","task":"deny"})
+            json!({"*":action,"read":"allow","glob":"allow","grep":"allow","list":"allow","external_directory":action,"question":"allow","plan_enter":"deny","plan_exit":"deny","task":"deny"})
         };
         agents.insert(self.acp.agent.clone(), json!({"mode":"primary","description":"Conduit managed permissions","permission":permission}));
         if self.text_only {
@@ -235,6 +244,24 @@ impl Protocol {
                 }
                 _ => {}
             }
+            return step;
+        }
+        if value["method"] == "conduit/question" {
+            if value["params"]["sessionID"].as_str() == self.acp.session_id.as_deref()
+                && self.acp.stage == Stage::Prompt
+            {
+                self.accept_user_input(
+                    &value["id"],
+                    value["params"].clone(),
+                    ApprovalKind::OpenCodeUserInput,
+                    &mut step,
+                );
+            }
+            return step;
+        }
+        if value["method"] == "conduit/questionCancelled" {
+            step.events
+                .push(Event::ApprovalCancelled(id_text(&value["params"]["id"])));
             return step;
         }
         if value["method"] == "session/request_permission" && value.get("id").is_some() {
@@ -356,6 +383,22 @@ impl Protocol {
             Stage::Done => {}
         }
         step
+    }
+
+    pub fn opencode_question_connection(&self) -> Option<(u16, &str)> {
+        if self.provider != Provider::OpenCode || self.text_only || self.acp.question_port == 0 {
+            return None;
+        }
+        Some((
+            self.acp.question_port,
+            self.route.env.get("OPENCODE_SERVER_PASSWORD")?,
+        ))
+    }
+
+    pub fn opencode_question_session(&self) -> Option<&str> {
+        (self.provider == Provider::OpenCode && self.acp.stage == Stage::Prompt)
+            .then_some(self.acp.session_id.as_deref())
+            .flatten()
     }
 
     fn acp_request(&mut self, method: &str, params: Value, step: &mut Step) {

@@ -405,6 +405,7 @@ impl ConduitApp {
         self.expanded_reasoning
             .retain(|(session, _)| *session != id);
         self.tool_scrolls.retain(|(session, _), _| *session != id);
+        self.detail_scrolls.retain(|(session, _), _| *session != id);
         self.remove_tab(id);
         self.detail_text = None;
         self.select_fallback_session();
@@ -721,6 +722,7 @@ impl ConduitApp {
             self.expanded_tools.retain(|(id, _)| *id != session.id);
             self.expanded_reasoning.retain(|(id, _)| *id != session.id);
             self.tool_scrolls.retain(|(id, _), _| *id != session.id);
+            self.detail_scrolls.retain(|(id, _), _| *id != session.id);
         }
         let removed_ids: Vec<u64> = removed.sessions.iter().map(|session| session.id).collect();
         self.open_tabs
@@ -885,6 +887,12 @@ impl ConduitApp {
         self.active_diff = None;
         self.selected_workspace = Some(workspace);
         self.selected_session = session;
+        if activate_chat && let Some(id) = session {
+            self.store.ui.recent_sessions.retain(|recent| *recent != id);
+            self.store.ui.recent_sessions.insert(0, id);
+            self.store.ui.recent_sessions.truncate(10);
+            self.dirty = true;
+        }
         self.pending_model_selection = None;
         if activate_chat && let Some(id) = session {
             self.unread_completed.remove(&id);

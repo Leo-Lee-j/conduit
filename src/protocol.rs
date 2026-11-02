@@ -2,7 +2,9 @@
 use crate::domain::{PermissionLevel, Provider, Usage};
 use serde_json::{Value, json};
 mod opencode;
+mod user_input;
 pub use opencode::OpenCodeSettings;
+pub use user_input::UserQuestion;
 
 /// Which wire request an approval answers. The response shape differs per
 /// request type, so the decision must not be inferred from the ticket text.
@@ -13,6 +15,9 @@ pub enum ApprovalKind {
     Permissions,
     ClaudeTool,
     OpenCodeTool,
+    CodexUserInput,
+    ClaudeUserInput,
+    OpenCodeUserInput,
 }
 #[derive(Clone, Debug)]
 pub struct Approval {
@@ -307,6 +312,9 @@ impl Protocol {
         }
     }
     pub fn automatic_approval(&self, approval: &Approval) -> Option<bool> {
+        if approval.is_user_input() {
+            return self.text_only.then_some(false);
+        }
         if self.text_only || self.permission == PermissionLevel::ReadOnly {
             Some(false)
         } else if self.permission == PermissionLevel::FullAccess {
@@ -329,6 +337,9 @@ impl Protocol {
                             opencode::permission_option(approval, "allow_always").is_some()
                         }
                         ApprovalKind::Permissions | ApprovalKind::ClaudeTool => false,
+                        ApprovalKind::CodexUserInput
+                        | ApprovalKind::ClaudeUserInput
+                        | ApprovalKind::OpenCodeUserInput => false,
                     },
             )
         } else {
@@ -395,7 +406,7 @@ impl Protocol {
                     args.extend(
                         [
                             "--tools",
-                            "Read,Glob,Grep",
+                            "Read,Glob,Grep,AskUserQuestion",
                             "--strict-mcp-config",
                             "--disable-slash-commands",
                             "--settings",
@@ -468,7 +479,7 @@ impl Protocol {
                 json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientInfo":{"name":"conduit","version":"0.1.0"},"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}})
             }
             Provider::Codex => {
-                json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"conduit","title":"Conduit","version":"0.1.0"},"capabilities":{"experimentalApi":false}}})
+                json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"conduit","title":"Conduit","version":"0.1.0"},"capabilities":{"experimentalApi":true}}})
             }
             Provider::Claude => {
                 json!({"type":"control_request","request_id":"conduit-init","request":{"subtype":"initialize","hooks":{}}})
@@ -792,6 +803,14 @@ impl Protocol {
                     },
                 }));
             }
+            "item/tool/requestUserInput" => {
+                self.accept_user_input(
+                    &v["id"],
+                    p.clone(),
+                    ApprovalKind::CodexUserInput,
+                    &mut step,
+                );
+            }
             "item/permissions/requestApproval" => {
                 if !v
                     .get("id")
@@ -991,6 +1010,15 @@ impl Protocol {
                         step.error = Some("Claude 审批请求缺少有效 ID，已停止".into());
                         return step;
                     }
+                    if text(request, "tool_name") == "AskUserQuestion" {
+                        self.accept_user_input(
+                            &json!(id),
+                            request["input"].clone(),
+                            ApprovalKind::ClaudeUserInput,
+                            &mut step,
+                        );
+                        return step;
+                    }
                     step.events.push(Event::Approval(Approval {
                         id: id.into(),
                         wire_id: json!(id),
@@ -1085,6 +1113,10 @@ impl Protocol {
     }
 
     pub fn approval_response(&self, approval: &Approval, allow: bool) -> Value {
+        if approval.is_user_input() {
+            // A permission click cannot supply an answer to a question.
+            return self.user_input_cancel_response(approval);
+        }
         match self.provider {
             Provider::OpenCode => opencode::approval_response_with_fallback(
                 approval,
@@ -1120,7 +1152,11 @@ impl Protocol {
                     };
                     json!({"id":approval.wire_id,"result":{"permissions":permissions,"scope":"turn"}})
                 }
-                ApprovalKind::OpenCodeTool | ApprovalKind::ClaudeTool => {
+                ApprovalKind::OpenCodeTool
+                | ApprovalKind::ClaudeTool
+                | ApprovalKind::CodexUserInput
+                | ApprovalKind::ClaudeUserInput
+                | ApprovalKind::OpenCodeUserInput => {
                     unreachable!("Claude approvals are handled below")
                 }
             },

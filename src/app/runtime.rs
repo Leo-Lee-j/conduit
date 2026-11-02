@@ -2,6 +2,21 @@
 
 use super::*;
 
+/// A retry reuses the prompt without removing any output from the failed turn.
+pub(super) fn error_retry_prompt(session: &SessionRecord, index: usize) -> Option<&str> {
+    if session.messages.get(index)?.kind != ItemKind::Error
+        || session.messages[index + 1..]
+            .iter()
+            .any(|item| matches!(item.kind, ItemKind::User | ItemKind::Assistant))
+    {
+        return None;
+    }
+    session.messages[..index]
+        .iter()
+        .rfind(|item| item.kind == ItemKind::User)
+        .map(|item| item.text.as_str())
+}
+
 impl ConduitApp {
     pub(super) fn workspace_busy(&self, index: usize) -> bool {
         self.git_operation.as_ref().is_some_and(|operation| {
@@ -338,7 +353,7 @@ impl ConduitApp {
         true
     }
 
-    /// Retry the failed exchange in place, preserving the original user prompt.
+    /// Retry with the original prompt and append output after the failed attempt.
     pub(super) fn retry_error(
         &mut self,
         index: usize,
@@ -354,34 +369,13 @@ impl ConduitApp {
         let Some(session) = self.session(id) else {
             return;
         };
-        if self.runs.contains_key(&id)
-            || session
-                .messages
-                .get(index)
-                .is_none_or(|item| item.kind != ItemKind::Error)
-            || session.messages[index + 1..]
-                .iter()
-                .any(|item| matches!(item.kind, ItemKind::User | ItemKind::Assistant))
-        {
+        if self.session_busy(id) {
             return;
         }
-        let Some(user_index) = session.messages[..index]
-            .iter()
-            .rposition(|item| item.kind == ItemKind::User)
-        else {
+        let Some(prompt) = error_retry_prompt(session, index).map(str::to_owned) else {
             return;
         };
-        let prompt = session.messages[user_index].text.clone();
-        let removed = self
-            .session_mut(id)
-            .map(|session| session.messages.split_off(user_index + 1))
-            .unwrap_or_default();
-        if !self.send_text(prompt, false, window, cx)
-            && let Some(session) = self.session_mut(id)
-        {
-            session.messages.extend(removed);
-            cx.notify();
-        }
+        self.send_text(prompt, false, window, cx);
     }
 
     /// Re-runs the latest exchange: keeps its user message, drops everything
@@ -618,6 +612,25 @@ impl ConduitApp {
                     if !accepted {
                         continue;
                     }
+                    let questions = approval.questions();
+                    let drafts = questions
+                        .iter()
+                        .map(|q| {
+                            let input = cx.new(|cx| {
+                                InputState::new(window, cx)
+                                    .placeholder("输入你的回答")
+                                    .masked(q.secret)
+                            });
+                            let subscription =
+                                cx.subscribe(&input, |_, _, _: &InputEvent, cx| cx.notify());
+                            super::user_input::QuestionDraft {
+                                selected: Default::default(),
+                                custom: input,
+                                _subscription: subscription,
+                                question: q.clone(),
+                            }
+                        })
+                        .collect();
                     if let Some(session) = self.session_mut(id) {
                         session.record_tool_approval(
                             &prefix,
@@ -628,19 +641,26 @@ impl ConduitApp {
                         );
                     }
                     if let Some(run) = self.runs.get_mut(&id) {
-                        run.status = "等待你的审批".into();
-                        run.activity = "等待你的审批".into();
+                        if approval.is_user_input() {
+                            run.question_drafts.insert(approval.id.clone(), drafts);
+                        }
                         run.approvals.push(approval);
+                        run.status = run.waiting_status().into();
+                        run.activity = run.status.clone();
                     }
                 }
                 Event::ApprovalCancelled(request) => {
                     let mut approval = None;
                     if let Some(run) = self.runs.get_mut(&id) {
                         run.expanded_approvals.remove(&request);
+                        run.question_drafts.remove(&request);
                         approval = run.approvals.remove(&request);
                         if run.approvals.is_empty() && !run.runtime.is_cancelled() {
                             run.status = "正在执行…".into();
                             run.activity = "正在继续处理…".into();
+                        } else if !run.runtime.is_cancelled() {
+                            run.status = run.waiting_status().into();
+                            run.activity = run.status.clone();
                         }
                     }
                     if let (Some(approval), Some(session)) = (approval, self.session_mut(id)) {
@@ -656,17 +676,18 @@ impl ConduitApp {
                 Event::ApprovalResolved { id: request, allow } => {
                     let approval = self.runs.get_mut(&id).and_then(|run| {
                         run.expanded_approvals.remove(&request);
+                        run.question_drafts.remove(&request);
                         let approval = run.approvals.remove(&request);
                         run.status = if run.approvals.is_empty() {
                             "正在执行…"
                         } else {
-                            "等待你的审批"
+                            run.waiting_status()
                         }
                         .into();
                         run.activity = if run.approvals.is_empty() {
                             "正在继续处理…"
                         } else {
-                            "等待你的审批"
+                            run.waiting_status()
                         }
                         .into();
                         approval
@@ -677,7 +698,13 @@ impl ConduitApp {
                             &request,
                             &approval.title,
                             &approval.detail,
-                            if allow { "已允许" } else { "已拒绝" },
+                            if approval.is_user_input() {
+                                if allow { "已回答" } else { "已跳过" }
+                            } else if allow {
+                                "已允许"
+                            } else {
+                                "已拒绝"
+                            },
                         );
                     }
                 }

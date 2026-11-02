@@ -1971,6 +1971,103 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn transcript_links_open_preview_and_preserve_chat_context(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let fixture = Fixture::new();
+        let mut store = fixture.store();
+        std::fs::write(fixture.0.join("alpha/notes 100%#1.md"), "附件预览").unwrap();
+        store.workspaces[0].sessions[0].messages = vec![
+            serde_json::from_value(serde_json::json!({
+                "key":"link-user", "kind":"User", "text":"查看文件\n\n引用文件：\n- notes 100%#1.md\n"
+            })).unwrap(),
+            serde_json::from_value(serde_json::json!({
+                "key":"link-reply", "kind":"Assistant", "text":"[打开源文件](src/main.rs#L2)"
+            }))
+            .unwrap(),
+        ];
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
+                app.writable = false;
+                app.startup = None;
+                app.selected_workspace = Some(0);
+                app.selected_session = Some(1);
+                app.open_tabs = vec![DocumentTab::Chat(1)];
+                app.input
+                    .update(cx, |input, cx| input.set_value("保留草稿", window, cx));
+                app
+            });
+            *output.borrow_mut() = Some(app.clone());
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        let app = slot.borrow().as_ref().unwrap().clone();
+        cx.simulate_resize(gpui_kit::size(px(1600.), px(800.)));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let reply = cx
+            .debug_bounds("assistant-message-1")
+            .expect("painted reply");
+        assert!(
+            reply.size.width > px(840.),
+            "chat fills the available width by default"
+        );
+        let click = gpui_kit::point(reply.left() + px(24.), reply.top() + px(10.));
+        cx.simulate_mouse_move(click, None, Modifiers::default());
+        cx.simulate_mouse_down(click, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(click, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let id = app.active_file.expect("link click opens in-app preview");
+                assert_eq!(
+                    app.files.documents[&id].key,
+                    fixture.key("alpha", "src/main.rs")
+                );
+                assert_eq!(app.files.preview, Some(id));
+                assert!(app.open_tabs.contains(&DocumentTab::Chat(1)));
+                assert_eq!(app.selected_session, Some(1));
+                assert_eq!(app.input.read(cx).value(), "保留草稿");
+                app.select_document(DocumentTab::Chat(1), window, cx);
+                assert_eq!(app.input.read(cx).value(), "保留草稿");
+                app.open_chat_link(1, "./src/main.rs:2:1", window, cx);
+                assert_eq!(app.active_file, Some(id), "same file reuses preview");
+                app.open_chat_link(1, "../outside.rs", window, cx);
+                assert_eq!(app.active_file, Some(id));
+                assert!(app.message.as_ref().unwrap().contains("工作区外部"));
+            });
+        });
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.select_document(DocumentTab::Chat(1), window, cx)
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let attachment = cx
+            .debug_bounds("user-file-0-0")
+            .expect("file attachment")
+            .center();
+        cx.simulate_mouse_move(attachment, None, Modifiers::default());
+        cx.simulate_mouse_down(attachment, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(attachment, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let app = app.read(cx);
+            assert_eq!(
+                app.files.documents[&app.active_file.unwrap()].key,
+                fixture.key("alpha", "notes 100%#1.md")
+            );
+            assert_eq!(app.input.read(cx).value(), "保留草稿");
+        });
+    }
+
+    #[gpui_kit::test]
     fn file_navigation_preview_pin_close_and_workspace_context(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         let fixture = Fixture::new();

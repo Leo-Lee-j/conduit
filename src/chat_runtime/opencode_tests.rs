@@ -52,10 +52,18 @@ impl MockModel {
                             let has_write = body["tools"].as_array().is_some_and(|tools| {
                                 tools.iter().any(|v| v["function"]["name"] == "write")
                             });
-                            let delta = if latest.contains("CONDUIT_TOOL")
-                                && has_write
+                            let has_question = body["tools"].as_array().is_some_and(|tools| {
+                                tools.iter().any(|v| v["function"]["name"] == "question")
+                            });
+                            let delta = if latest.contains("CONDUIT_QUESTION")
+                                && has_question
                                 && !tool_result
                             {
+                                json!({"role":"assistant","tool_calls":[{"index":0,"id":"call_conduit_question","type":"function","function":{"name":"question","arguments":json!({"questions":[
+                                    {"header":"方案","question":"选择方案？","options":[{"label":"方案 A","description":"第一个方案"},{"label":"方案 B","description":"第二个方案"}]},
+                                    {"header":"名称","question":"项目叫什么？","options":[{"label":"默认名称","description":"使用默认名称"}]}
+                                ]}).to_string()}}]})
+                            } else if latest.contains("CONDUIT_TOOL") && has_write && !tool_result {
                                 json!({"role":"assistant","tool_calls":[{"index":0,"id":"call_conduit_write","type":"function","function":{"name":"write","arguments":json!({"filePath":file,"content":"APPROVED_WRITE"}).to_string()}}]})
                             } else {
                                 let text = if latest.contains("CONDUIT_RESUME") {
@@ -114,6 +122,76 @@ impl MockModel {
             requests,
         }
     }
+}
+
+#[test]
+#[ignore = "runs installed OpenCode against a local mock; no model account is used"]
+fn installed_opencode_user_input_answer_skip_and_cancel() {
+    let root =
+        std::env::temp_dir().join(format!("conduit-opencode-questions-{}", std::process::id()));
+    assert!(!root.exists());
+    std::fs::create_dir_all(root.join("workspace")).unwrap();
+    let server = MockModel::start(root.join("unused.txt"));
+    for (permission, action) in [
+        (PermissionLevel::FullAccess, 0),
+        (PermissionLevel::ReadOnly, 1),
+        (PermissionLevel::WorkspaceWrite, 2),
+    ] {
+        let runtime = run(&root, &server, "CONDUIT_QUESTION", None, permission);
+        let deadline = Instant::now() + Duration::from_secs(40);
+        let mut seen = false;
+        let mut resolved = false;
+        loop {
+            assert!(Instant::now() < deadline, "OpenCode question timed out");
+            match runtime.events.recv_timeout(Duration::from_secs(2)) {
+                Ok(Event::Approval(approval)) => {
+                    assert!(!seen, "question must be queued once");
+                    seen = true;
+                    assert!(approval.is_user_input());
+                    assert_eq!(approval.questions().len(), 2);
+                    runtime.enable_full_access();
+                    match action {
+                        0 => runtime.answer(
+                            approval.id,
+                            std::collections::BTreeMap::from([
+                                ("0".into(), vec!["方案 B".into()]),
+                                ("1".into(), vec!["中文项目".into()]),
+                            ]),
+                        ),
+                        1 => runtime.decide(approval.id, false),
+                        _ => runtime.cancel(),
+                    }
+                }
+                Ok(Event::ApprovalResolved { allow, .. }) => {
+                    resolved = true;
+                    assert_eq!(allow, action == 0);
+                }
+                Ok(Event::Finished { error, cancelled }) => {
+                    assert!(error.is_none(), "{error:?}");
+                    assert_eq!(cancelled, action == 2);
+                    assert!(seen, "the CLI must expose its question tool");
+                    assert_eq!(resolved, action != 2);
+                    break;
+                }
+                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(error) => panic!("{error}"),
+            }
+        }
+    }
+    let requests = server.requests.lock().unwrap();
+    assert!(
+        requests.iter().any(|r| r["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["role"] == "tool"
+                && m.to_string().contains("方案 B")
+                && m.to_string().contains("中文项目"))),
+        "answers must reach the actual CLI tool result"
+    );
+    drop(requests);
+    drop(server);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 impl Drop for MockModel {
