@@ -761,6 +761,16 @@ mod tests {
     }
     #[test]
     fn cancelling_one_runtime_leaves_another_running() {
+        let directory = std::env::temp_dir().join(format!(
+            "conduit-cancel-isolation-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let signal = directory.join("finish-second");
         let first = fixture(
             r#"
             [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding
@@ -769,28 +779,31 @@ mod tests {
             Start-Sleep -Seconds 60
         "#,
         );
-        let second = fixture(
+        let second_script =
             r#"
             [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding
             $item = @{method='item/started';params=@{item=@{id='second-tool';type='commandExecution';command='second'}}} | ConvertTo-Json -Compress -Depth 5
             [Console]::WriteLine($item)
-            Start-Sleep -Milliseconds 800
+            while (-not (Test-Path -LiteralPath '$RELEASE_SIGNAL')) { Start-Sleep -Milliseconds 50 }
             [Console]::WriteLine('{"method":"turn/completed","params":{"turn":{"status":"completed"}}}')
-        "#,
-        );
+        "#.replace("$RELEASE_SIGNAL", &signal.to_string_lossy().replace('\'', "''"));
+        let second = fixture(&second_script);
         for (runtime, expected) in [(&first, "first"), (&second, "second")] {
-            let deadline = Instant::now() + Duration::from_secs(10);
+            // Windows PowerShell can cold-start slowly on hosted runners.
+            // Short receive polls must respect the overall startup deadline.
+            let deadline = Instant::now() + Duration::from_secs(30);
             loop {
                 assert!(
                     Instant::now() < deadline,
                     "{expected} fixture did not start"
                 );
-                match runtime.events.recv_timeout(Duration::from_secs(3)) {
+                match runtime.events.recv_timeout(Duration::from_millis(100)) {
                     Ok(Event::Tool { title, .. }) => {
                         assert_eq!(title, expected);
                         break;
                     }
                     Ok(Event::ToolInput { .. }) => {}
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
                     Ok(other) => panic!("unexpected {expected} event: {other:?}"),
                     Err(error) => panic!("{expected} fixture failed: {error}"),
                 }
@@ -804,6 +817,16 @@ mod tests {
         };
         assert!(cancelled);
         assert!(error.is_none(), "{error:?}");
+        // Keep the second child blocked until the first Job has exited, so
+        // this verifies isolation rather than racing an 800 ms sleep.
+        while let Ok(event) = second.events.try_recv() {
+            assert!(
+                matches!(event, Event::ToolInput { .. }),
+                "second runtime finished before release: {event:?}"
+            );
+        }
+        assert!(!second.is_cancelled());
+        std::fs::write(&signal, b"finish").unwrap();
         let Event::Finished { cancelled, error } =
             second.events.recv_timeout(Duration::from_secs(10)).unwrap()
         else {
@@ -811,6 +834,8 @@ mod tests {
         };
         assert!(!cancelled);
         assert!(error.is_none(), "{error:?}");
+        std::fs::remove_file(signal).unwrap();
+        cleanup_temp_dir(&directory);
     }
     #[test]
     fn runtime_queues_multiple_approvals_and_answers_each_once() {
