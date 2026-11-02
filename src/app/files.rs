@@ -1056,6 +1056,16 @@ impl ConduitApp {
             .map(|p| p.to_string_lossy().into_owned())
             .collect();
         let file_name = parts.pop().unwrap_or_default();
+        let markdown = matches!(
+            document
+                .key
+                .relative
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .map(str::to_ascii_lowercase)
+                .as_deref(),
+            Some("md" | "markdown" | "mdx")
+        );
         let parent_label = parts.join(" / ");
         let text = document.text.clone();
         let copy = text.clone();
@@ -1280,17 +1290,36 @@ impl ConduitApp {
                         let focus = self.chat_focus.clone();
                         move |_, window, cx| focus.focus(window, cx)
                     })
-                    .font_family(theme.mono_font_family.clone())
-                    .text_size(theme.mono_font_size)
-                    .line_height(px(20.))
-                    .child(super::numbered_code::file_code(
-                        id,
-                        document.revision,
-                        text,
-                        &document.highlights,
-                        wrap,
-                        cx,
-                    ))
+                    .when(!markdown, |area| {
+                        area.font_family(theme.mono_font_family.clone())
+                            .text_size(theme.mono_font_size)
+                            .line_height(px(20.))
+                    })
+                    .when(markdown, |area| area.p(px(10.)))
+                    .child(if markdown {
+                        let mut typography = self.chat_typography();
+                        if typography.body_font.is_none() {
+                            typography.body_font = Some(theme.font_family.clone());
+                        }
+                        chat_markdown_view(
+                            SharedString::from(format!("file-markdown-{id}-{}", document.revision)),
+                            text,
+                            &typography,
+                            &format!("file-markdown-{id}"),
+                            true,
+                        )
+                        .into_any_element()
+                    } else {
+                        super::numbered_code::file_code(
+                            id,
+                            document.revision,
+                            text,
+                            &document.highlights,
+                            wrap,
+                            cx,
+                        )
+                        .into_any_element()
+                    })
                     .vertical_scrollbar(&document.scroll)
                     .when(!wrap, |area| area.horizontal_scrollbar(&document.scroll)),
             );

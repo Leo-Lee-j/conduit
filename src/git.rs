@@ -169,6 +169,10 @@ pub enum Operation {
         files: Vec<String>,
         target: CommitTarget,
     },
+    Unstage {
+        files: Vec<String>,
+        target: CommitTarget,
+    },
     Branch(Box<BranchRequest>),
     Commit {
         message: String,
@@ -732,8 +736,10 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
     let mut committed = false;
     let result = (|| -> Result<String> {
         let git = resolve_git().ok_or_else(|| anyhow!("未找到 git.exe"))?;
-        if !matches!(&operation, Operation::Stage { .. })
-            && let Some(state) = branches::integration_state(&git, workspace, cancel)?
+        if !matches!(
+            &operation,
+            Operation::Stage { .. } | Operation::Unstage { .. }
+        ) && let Some(state) = branches::integration_state(&git, workspace, cancel)?
         {
             bail!("仓库存在进行中的 {}，请先继续或中止", state.label());
         }
@@ -799,6 +805,64 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                 let _ = std::fs::remove_file(&spec);
                 result?;
                 Ok(format!("已暂存 {} 个文件", files.len()))
+            }
+            Operation::Unstage { files, target } => {
+                if files.is_empty() {
+                    bail!("请选择需要移出暂存区的文件");
+                }
+                if commit_target(&git, workspace, cancel)? != target {
+                    bail!("分支、HEAD 或暂存区已变化，请刷新后重新移出暂存");
+                }
+                for file in &files {
+                    if file.is_empty()
+                        || file.contains('\0')
+                        || Path::new(file)
+                            .components()
+                            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+                        || file
+                            .split(['/', '\\'])
+                            .any(|c| c == ".." || c == "." || c.is_empty())
+                        || file.contains(':')
+                    {
+                        bail!("暂存路径必须是仓库内的文件：{file}");
+                    }
+                }
+                let root = run_git(&git, workspace, &["rev-parse", "--show-toplevel"], cancel)?;
+                let root = PathBuf::from(root.trim());
+                let spec = std::env::temp_dir().join(format!(
+                    "conduit-unstage-{}-{}.paths",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)?
+                        .as_nanos()
+                ));
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&spec)?;
+                let result = (|| -> Result<String> {
+                    use std::io::Write as _;
+                    for path in &files {
+                        file.write_all(path.as_bytes())?;
+                        file.write_all(&[0])?;
+                    }
+                    drop(file);
+                    run_git_with_timeout(
+                        &git,
+                        &root,
+                        &[
+                            "restore",
+                            "--staged",
+                            &format!("--pathspec-from-file={}", spec.display()),
+                            "--pathspec-file-nul",
+                        ],
+                        cancel,
+                        Duration::from_secs(120),
+                    )
+                })();
+                let _ = std::fs::remove_file(&spec);
+                result?;
+                Ok(format!("已将 {} 个文件移出暂存区", files.len()))
             }
             Operation::Commit {
                 message,
@@ -1272,6 +1336,37 @@ mod tests {
                 .contains("?? outside.txt")
         );
         assert!(!result.committed);
+    }
+
+    #[test]
+    fn unstage_selected_files_preserves_worktree_and_other_staged_files() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        repo.stage("initial\n");
+        repo.run(&["commit", "-qm", "initial"]);
+        let tracked = repo.run(&["ls-files"]).lines().next().unwrap().to_string();
+        std::fs::write(repo.path.join(&tracked), "staged change\n").unwrap();
+        std::fs::write(repo.path.join("second.txt"), "second\n").unwrap();
+        repo.run(&["add", &tracked, "second.txt"]);
+        std::fs::write(repo.path.join(&tracked), "worktree edit\n").unwrap();
+        let target = load(&repo.path, &AtomicBool::new(false)).unwrap().target;
+        let result = operate(
+            &repo.path,
+            Operation::Unstage {
+                files: vec![tracked.clone()],
+                target,
+            },
+            &AtomicBool::new(false),
+        );
+        assert_eq!(result.error, None, "{result:?}");
+        let status = repo.run(&["status", "--porcelain"]);
+        assert!(status.contains("A  second.txt"), "{status}");
+        assert!(status.contains(&format!(" M {tracked}")), "{status}");
+        assert_eq!(
+            std::fs::read_to_string(repo.path.join(&tracked)).unwrap(),
+            "worktree edit\n"
+        );
     }
     #[test]
     fn staging_rejects_stale_index_and_paths_outside_the_repository() {

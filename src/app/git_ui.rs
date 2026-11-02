@@ -101,6 +101,43 @@ impl ConduitApp {
         self.git_feedback(path, "正在暂存所选文件…", false, cx);
     }
 
+    pub(super) fn unstage_git_files(&mut self, selected: Vec<String>, cx: &mut Context<Self>) {
+        if !self.can_stage_files() {
+            return;
+        }
+        let Some(path) = self.selected_workspace_path() else {
+            return;
+        };
+        let Some(snapshot) = &self.git_snapshot else {
+            return;
+        };
+        let mut files = vec![];
+        for file in &snapshot.files {
+            if selected.contains(&file.path) && file.staged() {
+                files.push(file.path.clone());
+                if let Some(original) = &file.original {
+                    files.push(original.clone());
+                }
+            }
+        }
+        files.sort();
+        files.dedup();
+        if files.is_empty() {
+            self.git_feedback(path, "所选文件没有已暂存的修改。", true, cx);
+            return;
+        }
+        let operation = git::Operation::Unstage {
+            files,
+            target: snapshot.target.clone(),
+        };
+        self.git_operation = Some(GitOperation {
+            worktree: git::worktree_root(&path),
+            probe: git::OperationProbe::start(path.clone(), operation),
+            draft: String::new(),
+        });
+        self.git_feedback(path, "正在将所选文件移出暂存区…", false, cx);
+    }
+
     fn git_staging_actions(&self, snapshot: &git::Snapshot, view: Entity<Self>) -> AnyElement {
         let path = self.selected_workspace_path().unwrap_or_default();
         let available: Vec<String> = snapshot
@@ -118,11 +155,28 @@ impl ConduitApp {
             })
             .cloned()
             .collect();
+        let staged: Vec<String> = snapshot
+            .files
+            .iter()
+            .filter(|file| file.staged())
+            .map(|file| file.path.clone())
+            .collect();
+        let selected_staged: Vec<String> = staged
+            .iter()
+            .filter(|file_path| {
+                self.selected_git_files
+                    .get(&path)
+                    .is_some_and(|set| set.contains(*file_path))
+            })
+            .cloned()
+            .collect();
         let select_app = view.clone();
         let selected_app = view.clone();
+        let unstage_selected_app = view.clone();
         let all_app = view;
         let all_for_select = available.clone();
         let all = available.clone();
+        let selected_for_unstage = selected_staged.clone();
         h_flex()
             .w_full()
             .gap_1()
@@ -150,6 +204,18 @@ impl ConduitApp {
                     .on_click(move |_, _, cx| {
                         selected_app
                             .update(cx, |this, cx| this.stage_git_files(selected.clone(), cx));
+                    }),
+            )
+            .child(
+                Button::new("git-unstage-selected")
+                    .ghost()
+                    .small()
+                    .label(format!("移出暂存区选中 {}", selected_staged.len()))
+                    .disabled(!self.can_stage_files() || selected_staged.is_empty())
+                    .on_click(move |_, _, cx| {
+                        unstage_selected_app.update(cx, |this, cx| {
+                            this.unstage_git_files(selected_for_unstage.clone(), cx)
+                        });
                     }),
             )
             .child(
@@ -1251,7 +1317,7 @@ impl ConduitApp {
                         snapshot
                             .files
                             .iter()
-                            .any(|f| f.path == *p && (f.unstaged() || f.untracked()))
+                            .any(|f| f.path == *p && (f.staged() || f.unstaged() || f.untracked()))
                     });
                 }
                 self.refresh_diff_documents(&path, &snapshot, window, cx);
@@ -1528,6 +1594,7 @@ impl ConduitApp {
                         let target = file.clone();
                         let can_stage =
                             self.can_stage_files() && (file.unstaged() || file.untracked());
+                        let can_unstage = self.can_stage_files() && file.staged();
                         let workspace = self.selected_workspace_path().unwrap_or_default();
                         let checked = self
                             .selected_git_files
@@ -1547,7 +1614,7 @@ impl ConduitApp {
                                     let path = file.path.clone();
                                     move || format!("git-change-file-{path}")
                                 })
-                                .aria_label(format!("{}，双击查看差异标签，右键暂存", file.path))
+                                .aria_label(format!("{}，双击查看差异标签，右键操作", file.path))
                                 .w_full()
                                 .min_w_0()
                                 .gap_2()
@@ -1572,6 +1639,9 @@ impl ConduitApp {
                                     let single_app = menu_app.clone();
                                     let single = menu_file.path.clone();
                                     let single_workspace = menu_workspace.clone();
+                                    let unstage_app = menu_app.clone();
+                                    let unstage = menu_file.path.clone();
+                                    let unstage_workspace = menu_workspace.clone();
                                     let batch_workspace = menu_workspace.clone();
                                     let batch_app = menu_app.clone();
                                     let batch: Vec<String> = menu_app
@@ -1580,6 +1650,23 @@ impl ConduitApp {
                                         .get(&menu_workspace)
                                         .map(|set| set.iter().cloned().collect())
                                         .unwrap_or_default();
+                                    let batch_staged: Vec<String> = menu_app
+                                        .read(cx)
+                                        .git_snapshot
+                                        .as_ref()
+                                        .map(|snapshot| {
+                                            snapshot
+                                                .files
+                                                .iter()
+                                                .filter(|file| {
+                                                    file.staged() && batch.contains(&file.path)
+                                                })
+                                                .map(|file| file.path.clone())
+                                                .collect()
+                                        })
+                                        .unwrap_or_default();
+                                    let batch_staged_app = menu_app.clone();
+                                    let batch_staged_workspace = menu_workspace.clone();
                                     let disabled = !can_stage;
                                     menu.item(
                                         PopupMenuItem::new("加入暂存区")
@@ -1618,6 +1705,46 @@ impl ConduitApp {
                                             },
                                         ),
                                     )
+                                    .item(
+                                        PopupMenuItem::new("移出暂存区")
+                                            .disabled(!can_unstage)
+                                            .on_click(move |_, _, cx| {
+                                                unstage_app.update(cx, |this, cx| {
+                                                    if this.selected_workspace_path().as_ref()
+                                                        == Some(&unstage_workspace)
+                                                    {
+                                                        this.unstage_git_files(
+                                                            vec![unstage.clone()],
+                                                            cx,
+                                                        );
+                                                    }
+                                                });
+                                            }),
+                                    )
+                                    .item(
+                                        PopupMenuItem::new(format!(
+                                            "移出暂存区选中 ({})",
+                                            batch_staged.len()
+                                        ))
+                                        .disabled(
+                                            batch_staged.is_empty()
+                                                || !menu_app.read(cx).can_stage_files(),
+                                        )
+                                        .on_click(
+                                            move |_, _, cx| {
+                                                batch_staged_app.update(cx, |this, cx| {
+                                                    if this.selected_workspace_path().as_ref()
+                                                        == Some(&batch_staged_workspace)
+                                                    {
+                                                        this.unstage_git_files(
+                                                            batch_staged.clone(),
+                                                            cx,
+                                                        );
+                                                    }
+                                                });
+                                            },
+                                        ),
+                                    )
                                 })
                                 .child(
                                     Checkbox::new(SharedString::from(format!(
@@ -1625,8 +1752,10 @@ impl ConduitApp {
                                         file.path
                                     )))
                                     .checked(checked)
-                                    .disabled(!(file.unstaged() || file.untracked()))
-                                    .accessibility_label(format!("选择暂存 {}", file.path))
+                                    .disabled(
+                                        !(file.staged() || file.unstaged() || file.untracked()),
+                                    )
+                                    .accessibility_label(format!("选择 {}", file.path))
                                     .on_click(
                                         move |checked, _, cx| {
                                             select_app.update(cx, |this, cx| {
