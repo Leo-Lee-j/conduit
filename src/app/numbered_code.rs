@@ -59,6 +59,9 @@ fn parse_numbered_code(
     let markdown_ast::Node::Code(code) = node else {
         return None;
     };
+    if code.lang.as_deref().is_some_and(super::mermaid::is_mermaid) {
+        return None;
+    }
     let lang = code
         .lang
         .as_deref()

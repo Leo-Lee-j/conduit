@@ -1,6 +1,7 @@
 Unicode true
 !include "MUI2.nsh"
 !include "x64.nsh"
+!include "FileFunc.nsh"
 
 !ifndef APP_VERSION
   !error "Pass /DAPP_VERSION=<version>"
@@ -10,6 +11,9 @@ Unicode true
 !endif
 !ifndef APP_ICON
   !error "Pass /DAPP_ICON=<absolute icon path>"
+!endif
+!ifndef UPDATER_EXE
+  !error "Pass /DUPDATER_EXE=<absolute update helper path>"
 !endif
 !ifndef OUTPUT_FILE
   !error "Pass /DOUTPUT_FILE=<absolute installer path>"
@@ -58,10 +62,13 @@ FunctionEnd
 Section "Conduit" SEC_APP
   SectionIn RO
   SetOutPath "$INSTDIR"
+  ClearErrors
   File /oname=conduit.exe "${APP_EXE}"
+  File /oname=conduit-updater.exe "${UPDATER_EXE}"
   !ifdef RUNTIME_DIR
     File "${RUNTIME_DIR}\*.dll"
   !endif
+  IfErrors install_failed
   WriteUninstaller "$INSTDIR\uninstall.exe"
   CreateDirectory "$SMPROGRAMS\Conduit"
   CreateShortcut "$SMPROGRAMS\Conduit\Conduit.lnk" "$INSTDIR\conduit.exe" "" "$INSTDIR\conduit.exe" 0
@@ -75,6 +82,16 @@ Section "Conduit" SEC_APP
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Conduit" "QuietUninstallString" '$\"$INSTDIR\uninstall.exe$\" /S'
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Conduit" "NoModify" 1
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Conduit" "NoRepair" 1
+  IfErrors install_failed
+  FileOpen $0 "$INSTDIR\conduit.install" w
+  FileWrite $0 "${APP_VERSION}"
+  FileClose $0
+  IfErrors install_failed
+  Goto install_done
+install_failed:
+  SetErrorLevel 1
+  Quit
+install_done:
 SectionEnd
 
 Function un.onInit
@@ -84,6 +101,10 @@ FunctionEnd
 
 Section "Uninstall"
   Delete "$INSTDIR\conduit.exe"
+  Delete "$INSTDIR\conduit-updater.exe"
+  Delete "$INSTDIR\conduit.install"
+  Delete "$INSTDIR\.conduit-running.lock"
+  Delete "$INSTDIR\.conduit-update.lock"
   !ifdef RUNTIME_DIR
     !include "${RUNTIME_UNINSTALL}"
   !endif

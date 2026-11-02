@@ -160,6 +160,113 @@ fn settings_dismisses_on_outside_click_and_keeps_inside_clicks(cx: &mut TestAppC
 }
 
 #[gpui_kit::test]
+fn settings_connections_switch_engines_and_keep_read_only_actions_disabled(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut app = super::ConduitApp::with_store(
+                window,
+                cx,
+                Ok(crate::store::Store::default()),
+                false,
+                false,
+            );
+            app.writable = false;
+            // Keep the fixture independent from local CLI/CCS background reads.
+            app.connection_settings.syncing = true;
+            app.store.providers.clear();
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    for (width, height) in [(850., 500.), (1280., 900.)] {
+        cx.simulate_resize(gpui_kit::size(px(width), px(height)));
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.connection_settings.services = false;
+                app.open_settings(window, cx);
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let navigation = cx.update(|window, _| {
+            gpui_kit::base::test_support::find(window, &[], &"0-4".into())
+                .unwrap()
+                .bounds()
+        });
+        cx.simulate_mouse_down(navigation.center(), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(navigation.center(), MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let body = cx.debug_bounds("settings-modal-body").unwrap();
+        let mut last_right = body.left();
+        for selector in [
+            "settings-engine-0",
+            "settings-engine-1",
+            "settings-engine-2",
+        ] {
+            let bounds = cx.debug_bounds(selector).unwrap();
+            assert!(bounds.left() >= last_right && bounds.right() <= body.right());
+            assert!(bounds.top() >= body.top() && bounds.bottom() <= body.bottom());
+            last_right = bounds.right();
+        }
+        for selector in [
+            "settings-engine-2",
+            "settings-services-tab",
+            "settings-engine-0",
+        ] {
+            let bounds = cx.debug_bounds(selector).unwrap();
+            cx.simulate_mouse_down(bounds.center(), MouseButton::Left, Modifiers::default());
+            cx.simulate_mouse_up(bounds.center(), MouseButton::Left, Modifiers::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            if selector == "settings-services-tab" {
+                cx.update(|_, cx| {
+                    assert_eq!(
+                        app.read(cx).connection_settings.engine,
+                        crate::domain::Provider::OpenCode
+                    );
+                    assert!(app.read(cx).connection_settings.services);
+                });
+                assert!(cx.debug_bounds("settings-add-service").is_none());
+            }
+        }
+        let add = cx
+            .debug_bounds("settings-add-service")
+            .expect("Claude service action");
+        cx.simulate_mouse_down(add.center(), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(add.center(), MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("provider-editor-body").is_none(),
+            "read-only mode does not open an editor"
+        );
+        cx.update(|window, cx| {
+            assert!(app.read(cx).store.providers.is_empty());
+            assert_eq!(
+                app.read(cx).connection_settings.engine,
+                crate::domain::Provider::Claude
+            );
+            assert!(window.has_active_dialog(cx));
+            window.close_dialog(cx);
+        });
+    }
+}
+
+#[gpui_kit::test]
 fn opencode_new_session_keeps_permission_selected_before_sending(cx: &mut TestAppContext) {
     use crate::{
         domain::{PermissionLevel, Provider, Workspace},

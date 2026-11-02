@@ -125,11 +125,11 @@ impl Usage {
     pub fn with_session_speed(mut self, completed: Usage) -> Self {
         self.session_output_tokens = completed.session_output_tokens;
         self.session_elapsed_ms = completed.session_elapsed_ms;
-        if let (Some(output), Some(elapsed)) = (self.turn_output_tokens, self.turn_elapsed_ms) {
-            if elapsed > 0 {
-                self.session_output_tokens = self.session_output_tokens.saturating_add(output);
-                self.session_elapsed_ms = self.session_elapsed_ms.saturating_add(elapsed);
-            }
+        if let (Some(output), Some(elapsed)) = (self.turn_output_tokens, self.turn_elapsed_ms)
+            && elapsed > 0
+        {
+            self.session_output_tokens = self.session_output_tokens.saturating_add(output);
+            self.session_elapsed_ms = self.session_elapsed_ms.saturating_add(elapsed);
         }
         self
     }

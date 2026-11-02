@@ -24,119 +24,6 @@ impl Approval {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn request(protocol: &mut Protocol) -> Approval {
-        let step = if protocol.provider == Provider::Claude {
-            protocol.accept(json!({"type":"control_request","request_id":"question-ticket","request":{
-                "subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[
-                    {"header":"方案","question":"选择方案？","multiSelect":true,"options":[
-                        {"label":"方案 A","description":"第一个方案"},{"label":"方案 B","description":"第二个方案"}]},
-                    {"header":"名称","question":"项目叫什么？","multiSelect":false,"options":[]}
-                ]}}}))
-        } else {
-            protocol.accept(json!({"id":72,"method":"item/tool/requestUserInput","params":{"itemId":"question-tool","questions":[
-                {"id":"choice","header":"方案","question":"选择方案？","isOther":false,"isSecret":false,"options":[
-                    {"label":"方案 A","description":"第一个方案"},{"label":"方案 B","description":"第二个方案"}]},
-                {"id":"name","header":"名称","question":"项目叫什么？","isOther":true,"isSecret":false,"options":[]}
-            ]}}))
-        };
-        assert!(!step.done);
-        assert!(
-            step.writes.is_empty(),
-            "a question must wait for explicit input"
-        );
-        let Event::Approval(approval) = step.events.into_iter().next().unwrap() else {
-            panic!("question not queued");
-        };
-        approval
-    }
-
-    #[test]
-    fn user_input_waits_in_every_permission_mode_and_uses_provider_answer_shapes() {
-        for provider in [Provider::Codex, Provider::Claude] {
-            for permission in [
-                PermissionLevel::ReadOnly,
-                PermissionLevel::WorkspaceWrite,
-                PermissionLevel::FullAccess,
-            ] {
-                let mut protocol = Protocol::new(provider, "C:\\work".into(), "test".into(), None)
-                    .with_permission(permission);
-                let approval = request(&mut protocol);
-                assert_eq!(protocol.automatic_approval(&approval), None);
-                protocol.enable_full_access();
-                assert_eq!(protocol.automatic_approval(&approval), None);
-                let questions = approval.questions();
-                assert_eq!(questions.len(), 2);
-                assert_eq!(questions[0].options[1].1, "第二个方案");
-                assert_eq!(questions[0].multiple, provider == Provider::Claude);
-                let mut answers = BTreeMap::new();
-                answers.insert(
-                    questions[0].id.clone(),
-                    if provider == Provider::Claude {
-                        vec!["方案 A".into(), "方案 B".into()]
-                    } else {
-                        vec!["方案 B".into()]
-                    },
-                );
-                assert!(
-                    protocol.user_input_response(&approval, &answers).is_none(),
-                    "incomplete answers must not consume the request"
-                );
-                answers.insert(questions[1].id.clone(), vec!["中文项目".into()]);
-                let response = protocol.user_input_response(&approval, &answers).unwrap();
-                if provider == Provider::Codex {
-                    assert_eq!(
-                        response,
-                        json!({"id":72,"result":{"answers":{"choice":{"answers":["方案 B"]},"name":{"answers":["中文项目"]}}}})
-                    );
-                    assert_eq!(
-                        protocol.approval_response(&approval, false),
-                        json!({"id":72,"result":{"answers":{}}})
-                    );
-                    answers.get_mut("choice").unwrap().push("方案 A".into());
-                    assert!(protocol.user_input_response(&approval, &answers).is_none());
-                    answers.insert("choice".into(), vec!["没有提供的选项".into()]);
-                    assert!(protocol.user_input_response(&approval, &answers).is_none());
-                } else {
-                    assert_eq!(response["response"]["request_id"], "question-ticket");
-                    assert_eq!(response["response"]["response"]["behavior"], "allow");
-                    let input = &response["response"]["response"]["updatedInput"];
-                    assert_eq!(input["questions"], approval.input["questions"]);
-                    assert_eq!(
-                        input["answers"],
-                        json!({"选择方案？":"方案 A, 方案 B","项目叫什么？":"中文项目"})
-                    );
-                    assert_eq!(
-                        protocol.approval_response(&approval, false)["response"]["response"]["behavior"],
-                        "deny"
-                    );
-                }
-                let protocol = protocol.text_only();
-                assert_eq!(protocol.automatic_approval(&approval), Some(false));
-            }
-        }
-    }
-
-    #[test]
-    fn malformed_user_input_stops_instead_of_silently_skipping() {
-        let mut protocol = Protocol::new(Provider::Codex, "C:\\work".into(), "test".into(), None);
-        for params in [
-            json!({"questions":[]}),
-            json!({"questions":[{"id":"x","question":"?"},{"id":"x","question":"?"}]}),
-            json!({"questions":[{"id":"x"}]}),
-        ] {
-            let step = protocol
-                .accept(json!({"id":9,"method":"item/tool/requestUserInput","params":params}));
-            assert!(step.done);
-            assert!(step.error.is_some());
-            assert!(step.writes.is_empty());
-        }
-    }
-}
-
 impl Approval {
     pub fn questions(&self) -> Vec<UserQuestion> {
         if !self.is_user_input() {
@@ -276,6 +163,119 @@ impl Protocol {
                 "response":{"behavior":"deny","message":"用户跳过了本次问题"}}})
             }
             _ => unreachable!(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(protocol: &mut Protocol) -> Approval {
+        let step = if protocol.provider == Provider::Claude {
+            protocol.accept(json!({"type":"control_request","request_id":"question-ticket","request":{
+                "subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[
+                    {"header":"方案","question":"选择方案？","multiSelect":true,"options":[
+                        {"label":"方案 A","description":"第一个方案"},{"label":"方案 B","description":"第二个方案"}]},
+                    {"header":"名称","question":"项目叫什么？","multiSelect":false,"options":[]}
+                ]}}}))
+        } else {
+            protocol.accept(json!({"id":72,"method":"item/tool/requestUserInput","params":{"itemId":"question-tool","questions":[
+                {"id":"choice","header":"方案","question":"选择方案？","isOther":false,"isSecret":false,"options":[
+                    {"label":"方案 A","description":"第一个方案"},{"label":"方案 B","description":"第二个方案"}]},
+                {"id":"name","header":"名称","question":"项目叫什么？","isOther":true,"isSecret":false,"options":[]}
+            ]}}))
+        };
+        assert!(!step.done);
+        assert!(
+            step.writes.is_empty(),
+            "a question must wait for explicit input"
+        );
+        let Event::Approval(approval) = step.events.into_iter().next().unwrap() else {
+            panic!("question not queued");
+        };
+        approval
+    }
+
+    #[test]
+    fn user_input_waits_in_every_permission_mode_and_uses_provider_answer_shapes() {
+        for provider in [Provider::Codex, Provider::Claude] {
+            for permission in [
+                PermissionLevel::ReadOnly,
+                PermissionLevel::WorkspaceWrite,
+                PermissionLevel::FullAccess,
+            ] {
+                let mut protocol = Protocol::new(provider, "C:\\work".into(), "test".into(), None)
+                    .with_permission(permission);
+                let approval = request(&mut protocol);
+                assert_eq!(protocol.automatic_approval(&approval), None);
+                protocol.enable_full_access();
+                assert_eq!(protocol.automatic_approval(&approval), None);
+                let questions = approval.questions();
+                assert_eq!(questions.len(), 2);
+                assert_eq!(questions[0].options[1].1, "第二个方案");
+                assert_eq!(questions[0].multiple, provider == Provider::Claude);
+                let mut answers = BTreeMap::new();
+                answers.insert(
+                    questions[0].id.clone(),
+                    if provider == Provider::Claude {
+                        vec!["方案 A".into(), "方案 B".into()]
+                    } else {
+                        vec!["方案 B".into()]
+                    },
+                );
+                assert!(
+                    protocol.user_input_response(&approval, &answers).is_none(),
+                    "incomplete answers must not consume the request"
+                );
+                answers.insert(questions[1].id.clone(), vec!["中文项目".into()]);
+                let response = protocol.user_input_response(&approval, &answers).unwrap();
+                if provider == Provider::Codex {
+                    assert_eq!(
+                        response,
+                        json!({"id":72,"result":{"answers":{"choice":{"answers":["方案 B"]},"name":{"answers":["中文项目"]}}}})
+                    );
+                    assert_eq!(
+                        protocol.approval_response(&approval, false),
+                        json!({"id":72,"result":{"answers":{}}})
+                    );
+                    answers.get_mut("choice").unwrap().push("方案 A".into());
+                    assert!(protocol.user_input_response(&approval, &answers).is_none());
+                    answers.insert("choice".into(), vec!["没有提供的选项".into()]);
+                    assert!(protocol.user_input_response(&approval, &answers).is_none());
+                } else {
+                    assert_eq!(response["response"]["request_id"], "question-ticket");
+                    assert_eq!(response["response"]["response"]["behavior"], "allow");
+                    let input = &response["response"]["response"]["updatedInput"];
+                    assert_eq!(input["questions"], approval.input["questions"]);
+                    assert_eq!(
+                        input["answers"],
+                        json!({"选择方案？":"方案 A, 方案 B","项目叫什么？":"中文项目"})
+                    );
+                    assert_eq!(
+                        protocol.approval_response(&approval, false)["response"]["response"]["behavior"],
+                        "deny"
+                    );
+                }
+                let protocol = protocol.text_only();
+                assert_eq!(protocol.automatic_approval(&approval), Some(false));
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_user_input_stops_instead_of_silently_skipping() {
+        let mut protocol = Protocol::new(Provider::Codex, "C:\\work".into(), "test".into(), None);
+        for params in [
+            json!({"questions":[]}),
+            json!({"questions":[{"id":"x","question":"?"},{"id":"x","question":"?"}]}),
+            json!({"questions":[{"id":"x"}]}),
+        ] {
+            let step = protocol
+                .accept(json!({"id":9,"method":"item/tool/requestUserInput","params":params}));
+            assert!(step.done);
+            assert!(step.error.is_some());
+            assert!(step.writes.is_empty());
         }
     }
 }

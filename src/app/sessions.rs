@@ -846,7 +846,7 @@ impl ConduitApp {
         self.detail_text = None;
         self.message = None;
         self.message_focus = None;
-        self.pending_message_jump = false;
+        self.pending_message_jump = None;
         self.timeline_session = None;
         self.input
             .update(cx, |input, cx| input.set_value(String::new(), window, cx));
@@ -899,7 +899,7 @@ impl ConduitApp {
             self.push_tab(id);
         }
         self.message_focus = None;
-        self.pending_message_jump = false;
+        self.pending_message_jump = None;
         self.detail_text = None;
         self.message = None;
         let draft = match session {

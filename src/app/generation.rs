@@ -125,13 +125,12 @@ impl ConduitApp {
         } else {
             self.channel_models(engine, &channel)
         };
-        if engine == Provider::OpenCode {
-            if let Some(native) = model
+        if engine == Provider::OpenCode
+            && let Some(native) = model
                 .as_deref()
                 .and_then(|id| id.split_once('/').map(|(p, _)| p))
-            {
-                models.retain(|m| m.id.split_once('/').is_some_and(|(p, _)| p == native));
-            }
+        {
+            models.retain(|m| m.id.split_once('/').is_some_and(|(p, _)| p == native));
         }
         ModelCatalog {
             models,

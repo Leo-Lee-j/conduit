@@ -39,7 +39,11 @@ impl ConduitApp {
     /// A deduplicated image can be shared by drafts and sent messages across
     /// workspaces. Rebuild reachability only when attachments are discarded.
     pub(super) fn cleanup_attachments(&mut self) {
-        if !self.writable {
+        if !self.writable
+            || Store::path()
+                .with_file_name("update-recovery.json")
+                .exists()
+        {
             return;
         }
         let mut referenced = self
@@ -761,7 +765,7 @@ impl ConduitApp {
                                         this.scroll_to_end();
                                         this.at_bottom = true;
                                         this.message_focus = None;
-                                        this.pending_message_jump = false;
+                                        this.pending_message_jump = None;
                                         cx.notify();
                                     }))
                                     .child(

@@ -1082,10 +1082,10 @@ impl Protocol {
     }
 
     fn claude_usage_model(&mut self, id: &str, message: &Value) {
-        if let Some(usage) = self.claude_usage.get_mut(id) {
-            if let Some(model) = message["model"].as_str() {
-                usage.model = Some(model.into());
-            }
+        if let Some(usage) = self.claude_usage.get_mut(id)
+            && let Some(model) = message["model"].as_str()
+        {
+            usage.model = Some(model.into());
         }
     }
 

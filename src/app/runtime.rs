@@ -427,6 +427,10 @@ impl ConduitApp {
     }
 
     pub(super) fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.poll_updates(window, cx);
+        if self.updater.exiting || self.updater.preparing() {
+            return;
+        }
         self.poll_files(cx);
         self.poll_git_navigation(cx);
         // Release the startup page once the initial history import merged
@@ -508,7 +512,7 @@ impl ConduitApp {
             self.message_focus = None;
             cx.notify();
         }
-        let navigating = std::mem::take(&mut self.pending_message_jump);
+        let navigating = self.pending_message_jump.is_some();
         let follow = self.scroll.is_scrolled_to_end().unwrap_or_else(|| {
             self.scroll.logical_scroll_top().item_ix >= self.scroll.item_count()
         });
@@ -775,15 +779,15 @@ impl ConduitApp {
                                 .take(5)
                                 .any(|item| same_failure(&item.text, error))
                         });
-                        if !cancelled && let Some(error) = &error {
-                            if !already_shown
+                        if !cancelled
+                            && let Some(error) = &error
+                            && (!already_shown
                                 || session.messages.iter().any(|item| {
                                     item.kind == ItemKind::Error
                                         && item.key.starts_with(&format!("{prefix}-"))
-                                })
-                            {
-                                crate::failure::record_failure(session, &prefix, error, true);
-                            }
+                                }))
+                        {
+                            crate::failure::record_failure(session, &prefix, error, true);
                         }
                         if cancelled {
                             session.messages.push(ChatItem {
@@ -936,11 +940,13 @@ impl ConduitApp {
             }
         }
         if self.closing
+            && !self.updater.preparing()
             && self.runs.is_empty()
             && self.probes.is_empty()
             && self.opencode_model_probes.is_empty()
             && self.git_operation.is_none()
             && self.commit_generation.is_none()
+            && self.session_namings.is_empty()
         {
             self.discard_composer_attachments();
             window.remove_window();

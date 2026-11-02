@@ -144,18 +144,18 @@ pub(super) fn apply_event_indexed(
     if let Event::ErrorBanner(error) = &event {
         return Some(record_failure(session, prefix, error, false));
     }
-    if let Event::Text { key, text } = &event {
-        if is_engine_error_text(text) {
-            let full_key = format!("{prefix}-{key}");
-            if let Some(position) = index.find(&session.messages, &full_key) {
-                let item = &mut session.messages[position];
-                item.kind = ItemKind::Error;
-                item.text = text.clone();
-                item.detail = text.clone();
-                return Some(position);
-            }
-            return Some(record_failure(session, prefix, text, false));
+    if let Event::Text { key, text } = &event
+        && is_engine_error_text(text)
+    {
+        let full_key = format!("{prefix}-{key}");
+        if let Some(position) = index.find(&session.messages, &full_key) {
+            let item = &mut session.messages[position];
+            item.kind = ItemKind::Error;
+            item.text = text.clone();
+            item.detail = text.clone();
+            return Some(position);
         }
+        return Some(record_failure(session, prefix, text, false));
     }
     let (key, kind, text, detail, status, delta) = match event {
         Event::Delta { key, text } => (

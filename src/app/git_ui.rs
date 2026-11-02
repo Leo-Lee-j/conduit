@@ -1,6 +1,40 @@
 //! Git sidebar, branch status, commit generation, and operations.
 
 use super::*;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) enum GitChangeGroup {
+    Changes,
+    Untracked,
+    Added,
+    Modified,
+    Deleted,
+}
+
+impl GitChangeGroup {
+    const ALL: [Self; 2] = [Self::Changes, Self::Untracked];
+    const STATUS: [Self; 3] = [Self::Added, Self::Modified, Self::Deleted];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Changes => "Changes",
+            Self::Untracked => "Unversioned Files",
+            Self::Added => "新增",
+            Self::Modified => "修改",
+            Self::Deleted => "删除",
+        }
+    }
+
+    fn contains(self, file: &git::ChangedFile) -> bool {
+        match self {
+            Self::Changes => !file.untracked(),
+            Self::Untracked => file.untracked(),
+            Self::Added => file.kind() == git::ChangeKind::Added,
+            Self::Modified => file.kind() == git::ChangeKind::Modified,
+            Self::Deleted => file.kind() == git::ChangeKind::Deleted,
+        }
+    }
+}
 use gpui_kit::component::checkbox::Checkbox;
 
 impl ConduitApp {
@@ -174,32 +208,58 @@ impl ConduitApp {
         let selected_app = view.clone();
         let unstage_selected_app = view.clone();
         let all_app = view;
-        let all_for_select = available.clone();
+        let all_for_select: Vec<_> = snapshot
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect();
+        let all_selected = all_for_select.iter().all(|file| {
+            self.selected_git_files
+                .get(&path)
+                .is_some_and(|set| set.contains(file))
+        });
         let all = available.clone();
         let selected_for_unstage = selected_staged.clone();
         h_flex()
             .w_full()
             .gap_1()
-            .flex_wrap()
+            .items_center()
+            .h(px(30.))
             .child(
                 Button::new("git-select-unstaged")
+                    .debug_selector(|| "git-select-unstaged".into())
                     .ghost()
                     .small()
-                    .label("全选")
-                    .disabled(available.is_empty())
+                    .compact()
+                    .icon(IconName::Check)
+                    .accessibility_label("全选变更文件")
+                    .tooltip(if all_selected {
+                        "取消全选"
+                    } else {
+                        "全选变更文件"
+                    })
+                    .disabled(snapshot.is_clean())
                     .on_click(move |_, _, cx| {
                         select_app.update(cx, |this, cx| {
-                            this.selected_git_files
-                                .insert(path.clone(), all_for_select.iter().cloned().collect());
+                            let set = this.selected_git_files.entry(path.clone()).or_default();
+                            if all_selected {
+                                set.clear();
+                            } else {
+                                set.extend(all_for_select.iter().cloned());
+                            }
                             cx.notify();
                         });
                     }),
             )
             .child(
                 Button::new("git-stage-selected")
+                    .debug_selector(|| "git-stage-selected".into())
                     .ghost()
                     .small()
-                    .label(format!("暂存选中 {}", selected.len()))
+                    .compact()
+                    .icon(IconName::Plus)
+                    .accessibility_label("暂存选中文件")
+                    .tooltip(format!("暂存选中文件 ({})", selected.len()))
                     .disabled(!self.can_stage_files() || selected.is_empty())
                     .on_click(move |_, _, cx| {
                         selected_app
@@ -208,9 +268,13 @@ impl ConduitApp {
             )
             .child(
                 Button::new("git-unstage-selected")
+                    .debug_selector(|| "git-unstage-selected".into())
                     .ghost()
                     .small()
-                    .label(format!("移出暂存区选中 {}", selected_staged.len()))
+                    .compact()
+                    .icon(IconName::Minus)
+                    .accessibility_label("移出暂存区选中文件")
+                    .tooltip(format!("移出暂存区选中文件 ({})", selected_staged.len()))
                     .disabled(!self.can_stage_files() || selected_staged.is_empty())
                     .on_click(move |_, _, cx| {
                         unstage_selected_app.update(cx, |this, cx| {
@@ -220,9 +284,13 @@ impl ConduitApp {
             )
             .child(
                 Button::new("git-stage-all")
+                    .debug_selector(|| "git-stage-all".into())
                     .ghost()
                     .small()
-                    .label(format!("全部暂存 {}", all.len()))
+                    .compact()
+                    .icon(gpui_kit::assets::IconName::ArrowUpFromLine)
+                    .accessibility_label("全部暂存")
+                    .tooltip(format!("全部暂存 ({})", all.len()))
                     .disabled(!self.can_stage_files() || all.is_empty())
                     .on_click(move |_, _, cx| {
                         all_app.update(cx, |this, cx| this.stage_git_files(all.clone(), cx));
@@ -705,6 +773,7 @@ impl ConduitApp {
             .offset(px(6.))
             .trigger(
                 Button::new("git-commit-mode-trigger")
+                    .debug_selector(|| "git-commit-mode-trigger".into())
                     .ghost()
                     .small()
                     .compact()
@@ -725,6 +794,13 @@ impl ConduitApp {
                             "git-mode-commit-push"
                         } else {
                             "git-mode-commit"
+                        })
+                        .debug_selector(move || {
+                            if push {
+                                "git-mode-commit-push".into()
+                            } else {
+                                "git-mode-commit".into()
+                            }
                         })
                         .accessibility_label(if push { "Commit and Push" } else { "Commit" })
                         .small()
@@ -750,14 +826,18 @@ impl ConduitApp {
                 list
             });
         let mut editor = v_flex()
+            .debug_selector(|| "git-commit-editor".into())
             .w_full()
-            .flex_shrink_0()
-            .pt_3()
+            .h_full()
+            .min_h_0()
+            .min_w_0()
+            .px_2()
+            .pb_2()
             .gap_2()
-            .border_t_1()
-            .border_color(rgb(palette().border))
             .child(
                 h_flex()
+                    .h(px(28.))
+                    .flex_shrink_0()
                     .items_center()
                     .gap_2()
                     .child(
@@ -773,9 +853,7 @@ impl ConduitApp {
                                 .h(px(18.))
                                 .px_2()
                                 .items_center()
-                                .rounded_full()
-                                .bg(rgb(palette().surface_strong))
-                                .text_size(px(10.))
+                                .text_size(px(11.))
                                 .text_color(rgb(palette().muted))
                                 .child(format!("已暂存 {staged_count}")),
                         )
@@ -818,18 +896,22 @@ impl ConduitApp {
             )
             .child(
                 v_flex()
+                    .debug_selector(|| "git-commit-input".into())
+                    .flex_1()
+                    .min_h(px(48.))
+                    .min_w_0()
+                    .overflow_hidden()
                     .p_2()
-                    .gap_1()
-                    .rounded(px(14.))
+                    .rounded(px(4.))
                     .bg(rgb(palette().surface))
                     .border_1()
                     .border_color(rgb(palette().border))
                     .child(
-                        div().px_1().child(
+                        div().size_full().min_h_0().child(
                             Textarea::new(&draft.input)
                                 .appearance(false)
                                 .bordered(false)
-                                .h(px(96.))
+                                .h(relative(1.))
                                 .text_size(px(13.))
                                 .aria_label("Git Commit Message")
                                 .disabled(
@@ -842,34 +924,11 @@ impl ConduitApp {
                                             .is_some_and(|operation| operation.probe.path == path),
                                 ),
                         ),
-                    )
-                    .child(
-                        h_flex()
-                            .px_1()
-                            .justify_end()
-                            .gap_1()
-                            .child(
-                                Button::new("git-commit")
-                                    .label(action_label)
-                                    .primary()
-                                    .small()
-                                    .h(px(26.))
-                                    .disabled(!can_commit)
-                                    .loading(
-                                        self.git_operation
-                                            .as_ref()
-                                            .is_some_and(|operation| operation.probe.path == path),
-                                    )
-                                    .when(can_commit, |button| button.cursor_pointer())
-                                    .on_click(move |_, _, cx| {
-                                        commit_app.update(cx, |this, cx| this.start_commit(cx))
-                                    }),
-                            )
-                            .child(dropdown),
                     ),
             )
             .child(
                 div()
+                    .flex_shrink_0()
                     .text_size(px(11.))
                     .line_height(relative(1.4))
                     .text_color(rgb(palette().faint))
@@ -886,7 +945,7 @@ impl ConduitApp {
                         .as_ref()
                         .is_some_and(|snapshot| snapshot.target.staged.is_empty())
                     {
-                        "没有已暂存变更，请先暂存后刷新"
+                        "勾选文件后点击 + 暂存，再提交"
                     } else {
                         "仅提交已暂存变更"
                     }),
@@ -895,7 +954,10 @@ impl ConduitApp {
             editor = editor.child(
                 div()
                     .id("git-action-feedback")
-                    .max_h(px(60.))
+                    .max_h(px(48.))
+                    .min_h(px(16.))
+                    .flex_shrink_1()
+                    .debug_selector(|| "git-action-feedback".into())
                     .overflow_y_scroll()
                     .text_size(px(11.))
                     .line_height(relative(1.4))
@@ -907,7 +969,34 @@ impl ConduitApp {
                     .child(feedback.text.clone()),
             );
         }
-        editor.into_any_element()
+        editor
+            .child(
+                h_flex()
+                    .debug_selector(|| "git-commit-actions".into())
+                    .h(px(30.))
+                    .flex_shrink_0()
+                    .gap_1()
+                    .child(
+                        Button::new("git-commit")
+                            .debug_selector(|| "git-commit".into())
+                            .label(action_label)
+                            .primary()
+                            .small()
+                            .h(px(30.))
+                            .disabled(!can_commit)
+                            .loading(
+                                self.git_operation
+                                    .as_ref()
+                                    .is_some_and(|operation| operation.probe.path == path),
+                            )
+                            .when(can_commit, |button| button.cursor_pointer())
+                            .on_click(move |_, _, cx| {
+                                commit_app.update(cx, |this, cx| this.start_commit(cx))
+                            }),
+                    )
+                    .child(dropdown),
+            )
+            .into_any_element()
     }
 
     pub(super) fn sync_git_workspace(&mut self, cx: &mut Context<Self>) {
@@ -1366,7 +1455,10 @@ impl ConduitApp {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
-            .gap_3();
+            .min_w_0()
+            .gap_2()
+            .px_1()
+            .pb_2();
         if self.git_probe.is_some() && self.git_snapshot.is_none() {
             return body
                 .child(
@@ -1424,57 +1516,8 @@ impl ConduitApp {
                 )
                 .into_any_element();
         };
-        body = body.child(
-            v_flex()
-                .w_full()
-                .p_3()
-                .gap_1()
-                .rounded(px(10.))
-                .border_1()
-                .border_color(rgb(palette().border))
-                .bg(rgb(palette().surface))
-                .child(
-                    h_flex()
-                        .w_full()
-                        .gap_2()
-                        .items_center()
-                        .child(
-                            Icon::new(gpui_kit::assets::IconName::GitBranch)
-                                .small()
-                                .text_color(rgb(palette().faint)),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(px(12.))
-                                .font_semibold()
-                                .text_color(rgb(palette().text))
-                                .child(snapshot.branch.clone()),
-                        )
-                        .child(refresh_icon("git-refresh")),
-                )
-                .when(!snapshot.is_clean(), |column| {
-                    column.child(
-                        div()
-                            .pl(px(22.))
-                            .text_size(px(11.))
-                            .text_color(rgb(palette().muted))
-                            .child(format!(
-                                "暂存 {} · 未暂存 {} · 未跟踪 {}",
-                                snapshot.staged_count(),
-                                snapshot.unstaged_count(),
-                                snapshot.untracked_count()
-                            )),
-                    )
-                }),
-        );
         if let Some(banner) = self.git_integration_banner(view.clone()) {
             body = body.child(banner);
-        }
-        if !snapshot.is_clean() {
-            body = body.child(self.git_staging_actions(snapshot, view.clone()));
         }
         if snapshot.is_clean() {
             body = body.child(
@@ -1504,86 +1547,159 @@ impl ConduitApp {
                     ),
             );
         } else {
-            let mut groups = v_flex().w_full().gap_2();
-            for kind in git::ChangeKind::ALL {
+            let mut groups = v_flex().w_full().gap_1();
+            for kind in if self.git_group_by_status {
+                GitChangeGroup::STATUS.to_vec()
+            } else {
+                GitChangeGroup::ALL.to_vec()
+            } {
                 let files: Vec<_> = snapshot
                     .files
                     .iter()
-                    .filter(|file| file.kind() == kind)
+                    .filter(|file| kind.contains(file))
                     .collect();
                 if files.is_empty() {
                     continue;
                 }
-                let color = git_change_color(kind);
                 let collapsed = self.collapsed_git_groups.contains(&kind);
                 let toggle_kind = kind;
                 let app = view.clone();
-                let mut group = v_flex().w_full().gap_1().child(
-                    Button::new(SharedString::from(format!("git-group-{kind:?}")))
-                        .ghost()
-                        .small()
-                        .compact()
+                let workspace = self.selected_workspace_path().unwrap_or_default();
+                let selected_count = files
+                    .iter()
+                    .filter(|file| {
+                        self.selected_git_files
+                            .get(&workspace)
+                            .is_some_and(|set| set.contains(&file.path))
+                    })
+                    .count();
+                let group_files: Vec<_> = files.iter().map(|file| file.path.clone()).collect();
+                let select_group_app = view.clone();
+                let group_checked = selected_count == files.len();
+                let label_app = view.clone();
+                let mut group = v_flex().w_full().child(
+                    h_flex()
                         .w_full()
+                        .min_w_0()
                         .h(px(28.))
-                        .px_1()
-                        .cursor_pointer()
-                        .tooltip(format!(
-                            "点击{}变更",
-                            if collapsed { "展开" } else { "收起" }
-                        ))
-                        .accessibility_label(format!(
-                            "{}变更 {} 个，点击{}",
-                            kind.label(),
-                            files.len(),
-                            if collapsed { "展开" } else { "收起" }
-                        ))
-                        .on_click(move |_, _, cx| {
-                            app.update(cx, |this, cx| {
-                                if !this.collapsed_git_groups.remove(&toggle_kind) {
-                                    this.collapsed_git_groups.insert(toggle_kind);
-                                }
-                                cx.notify();
-                            })
-                        })
+                        .items_center()
+                        .bg(rgb(palette().surface_strong))
+                        .rounded(px(3.))
                         .child(
-                            h_flex()
-                                .w_full()
-                                .min_w_0()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    Icon::new(if collapsed {
-                                        IconName::ChevronRight
-                                    } else {
-                                        IconName::ChevronDown
+                            Button::new(SharedString::from(format!("git-group-{kind:?}")))
+                                .debug_selector(move || format!("git-group-{kind:?}"))
+                                .ghost()
+                                .small()
+                                .compact()
+                                .w(px(24.))
+                                .h(px(28.))
+                                .px_1()
+                                .cursor_pointer()
+                                .tooltip(format!(
+                                    "点击{}变更",
+                                    if collapsed { "展开" } else { "收起" }
+                                ))
+                                .accessibility_label(format!(
+                                    "{}变更 {} 个，点击{}",
+                                    kind.label(),
+                                    files.len(),
+                                    if collapsed { "展开" } else { "收起" }
+                                ))
+                                .on_click(move |_, _, cx| {
+                                    app.update(cx, |this, cx| {
+                                        if !this.collapsed_git_groups.remove(&toggle_kind) {
+                                            this.collapsed_git_groups.insert(toggle_kind);
+                                        }
+                                        cx.notify();
                                     })
-                                    .small()
-                                    .text_color(rgb(palette().faint)),
-                                )
+                                })
+                                .icon(if collapsed {
+                                    IconName::ChevronRight
+                                } else {
+                                    IconName::ChevronDown
+                                }),
+                        )
+                        .child(
+                            Checkbox::new(SharedString::from(format!("git-select-group-{kind:?}")))
+                                .debug_selector(move || format!("git-select-group-{kind:?}"))
+                                .checked(group_checked)
+                                .accessibility_label(format!("选择整组 {}", kind.label()))
+                                .tooltip(format!(
+                                    "已选择 {selected_count} / {} 个文件；勾选仅用于批量操作",
+                                    files.len()
+                                ))
+                                .on_click(move |checked, _, cx| {
+                                    select_group_app.update(cx, |this, cx| {
+                                        if this.selected_workspace_path().as_ref()
+                                            != Some(&workspace)
+                                        {
+                                            return;
+                                        }
+                                        let selected = this
+                                            .selected_git_files
+                                            .entry(workspace.clone())
+                                            .or_default();
+                                        for file in &group_files {
+                                            if *checked {
+                                                selected.insert(file.clone());
+                                            } else {
+                                                selected.remove(file);
+                                            }
+                                        }
+                                        cx.notify();
+                                    });
+                                }),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!("git-group-label-{kind:?}")))
+                                .ghost()
+                                .small()
+                                .compact()
+                                .flex_1()
+                                .min_w_0()
+                                .px_2()
+                                .accessibility_label(format!(
+                                    "{}，{} 个文件，点击{}",
+                                    kind.label(),
+                                    files.len(),
+                                    if collapsed { "展开" } else { "收起" }
+                                ))
+                                .on_click(move |_, _, cx| {
+                                    label_app.update(cx, |this, cx| {
+                                        if !this.collapsed_git_groups.remove(&kind) {
+                                            this.collapsed_git_groups.insert(kind);
+                                        }
+                                        cx.notify();
+                                    });
+                                })
                                 .child(
-                                    div()
-                                        .w(px(6.))
-                                        .h(px(6.))
-                                        .flex_shrink_0()
-                                        .rounded_full()
-                                        .bg(rgb(color)),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .font_semibold()
-                                        .text_color(rgb(palette().text))
-                                        .child(kind.label()),
-                                )
-                                .child(div().flex_1())
-                                .child(
-                                    div()
-                                        .px_2()
-                                        .rounded_full()
-                                        .bg(rgb(palette().surface_strong))
-                                        .text_size(px(10.))
-                                        .text_color(rgb(palette().muted))
-                                        .child(files.len().to_string()),
+                                    h_flex()
+                                        .w_full()
+                                        .min_w_0()
+                                        .gap_2()
+                                        .items_center()
+                                        .child(
+                                            div()
+                                                .text_size(px(12.))
+                                                .font_semibold()
+                                                .child(kind.label()),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_size(px(11.))
+                                                .text_color(rgb(palette().muted))
+                                                .child(if selected_count > 0 {
+                                                    format!(
+                                                        "{} files · 已选 {selected_count}",
+                                                        files.len()
+                                                    )
+                                                } else {
+                                                    format!("{} files", files.len())
+                                                }),
+                                        ),
                                 ),
                         ),
                 );
@@ -1606,6 +1722,16 @@ impl ConduitApp {
                         let menu_file = file.clone();
                         let menu_workspace = workspace.clone();
                         let diff_workspace = workspace.clone();
+                        let file_path = Path::new(&file.path);
+                        let filename = file_path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned();
+                        let parent = file_path
+                            .parent()
+                            .map(|path| path.to_string_lossy().into_owned())
+                            .unwrap_or_default();
                         rows = rows.child(
                             h_flex()
                                 .id(SharedString::from(format!("git-file-{}", file.path)))
@@ -1617,12 +1743,26 @@ impl ConduitApp {
                                 .aria_label(format!("{}，双击查看差异标签，右键操作", file.path))
                                 .w_full()
                                 .min_w_0()
-                                .gap_2()
+                                .gap(px(6.))
                                 .items_center()
                                 .h(px(28.))
                                 .px_2()
-                                .rounded(px(6.))
+                                .rounded(px(3.))
+                                .when(checked, |row| row.bg(rgb(palette().surface_hover)))
                                 .cursor_pointer()
+                                .tooltip({
+                                    let tooltip = format!(
+                                        "{}\n{} · index: {} / worktree: {}",
+                                        file.path,
+                                        file.kind().label(),
+                                        file.index,
+                                        file.worktree
+                                    );
+                                    move |window, cx| {
+                                        gpui_kit::component::tooltip::Tooltip::new(tooltip.clone())
+                                            .build(window, cx)
+                                    }
+                                })
                                 .hover(|style| style.bg(rgb(palette().surface_hover)))
                                 .on_double_click(move |_, window, cx| {
                                     let target = target.clone();
@@ -1751,6 +1891,10 @@ impl ConduitApp {
                                         "git-select-{}",
                                         file.path
                                     )))
+                                    .debug_selector({
+                                        let path = file.path.clone();
+                                        move || format!("git-select-{path}")
+                                    })
                                     .checked(checked)
                                     .disabled(
                                         !(file.staged() || file.unstaged() || file.untracked()),
@@ -1780,12 +1924,34 @@ impl ConduitApp {
                                 )
                                 .child(
                                     div()
+                                        .min_w_0()
+                                        .flex_shrink_1()
+                                        .truncate()
+                                        .text_size(px(13.))
+                                        .text_color(rgb(git_change_color(file.kind())))
+                                        .child(filename),
+                                )
+                                .child(
+                                    div()
                                         .flex_1()
                                         .min_w_0()
                                         .truncate()
-                                        .text_size(px(13.))
-                                        .text_color(rgb(palette().text))
-                                        .child(file.path.clone()),
+                                        .text_size(px(11.))
+                                        .text_color(rgb(palette().muted))
+                                        .child(parent),
+                                )
+                                .child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .text_size(px(11.))
+                                        .text_color(rgb(git_change_color(file.kind())))
+                                        .child(if file.untracked() {
+                                            "?".to_string()
+                                        } else if file.worktree != ' ' {
+                                            file.worktree.to_string()
+                                        } else {
+                                            file.index.to_string()
+                                        }),
                                 )
                                 .when(file.staged(), |row| {
                                     row.child(
@@ -1793,7 +1959,11 @@ impl ConduitApp {
                                             .flex_shrink_0()
                                             .text_size(px(10.))
                                             .text_color(rgb(palette().highlight_text))
-                                            .child("已暂存"),
+                                            .child(if file.unstaged() {
+                                                "部分暂存"
+                                            } else {
+                                                "已暂存"
+                                            }),
                                     )
                                 })
                                 .when_some(file.original.clone(), |row, original| {
@@ -1826,7 +1996,123 @@ impl ConduitApp {
                 ));
             }
         }
-        body.into_any_element()
+        let collapse_app = view.clone();
+        let active_groups = if self.git_group_by_status {
+            GitChangeGroup::STATUS.to_vec()
+        } else {
+            GitChangeGroup::ALL.to_vec()
+        };
+        let collapsed = active_groups
+            .iter()
+            .all(|kind| self.collapsed_git_groups.contains(kind));
+        let options_app = view.clone();
+        let group_by_status = self.git_group_by_status;
+        v_flex()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .child(
+                h_flex()
+                    .h(px(32.))
+                    .flex_shrink_0()
+                    .items_center()
+                    .px_1()
+                    .gap_1()
+                    .child(refresh_icon("git-refresh"))
+                    .child(self.git_staging_actions(snapshot, view))
+                    .child(
+                        Button::new("git-collapse-all")
+                            .debug_selector(|| "git-collapse-all".into())
+                            .ghost()
+                            .small()
+                            .compact()
+                            .icon(if collapsed {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .accessibility_label(if collapsed {
+                                "展开所有变更组"
+                            } else {
+                                "折叠所有变更组"
+                            })
+                            .tooltip(if collapsed {
+                                "展开所有变更组"
+                            } else {
+                                "折叠所有变更组"
+                            })
+                            .on_click(move |_, _, cx| {
+                                collapse_app.update(cx, |this, cx| {
+                                    if collapsed {
+                                        this.collapsed_git_groups.clear();
+                                    } else {
+                                        this.collapsed_git_groups
+                                            .extend(active_groups.iter().copied());
+                                    }
+                                    cx.notify();
+                                });
+                            }),
+                    )
+                    .child(
+                        Button::new("git-group-options")
+                            .debug_selector(|| "git-group-options".into())
+                            .ghost()
+                            .small()
+                            .compact()
+                            .icon(IconName::Ellipsis)
+                            .accessibility_label("变更分组方式")
+                            .tooltip("变更分组方式")
+                            .dropdown_menu(move |mut menu, _, _| {
+                                for (status, label) in [
+                                    (false, "按版本控制分组"),
+                                    (true, "按新增 / 修改 / 删除分组"),
+                                ] {
+                                    let app = options_app.clone();
+                                    menu = menu.item(
+                                        PopupMenuItem::new(label)
+                                            .checked(group_by_status == status)
+                                            .on_click(move |_, _, cx| {
+                                                app.update(cx, |this, cx| {
+                                                    this.git_group_by_status = status;
+                                                    cx.notify();
+                                                });
+                                            }),
+                                    );
+                                }
+                                menu
+                            }),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .h(px(26.))
+                    .flex_shrink_0()
+                    .min_w_0()
+                    .px_2()
+                    .gap_1()
+                    .items_center()
+                    .text_size(px(11.))
+                    .text_color(rgb(palette().muted))
+                    .child(Icon::new(gpui_kit::assets::IconName::GitBranch).size(px(13.)))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .truncate()
+                            .child(snapshot.branch.clone()),
+                    )
+                    .child(format!(
+                        "暂存 {} · 未暂存 {} · 未跟踪 {}",
+                        snapshot.staged_count(),
+                        snapshot.unstaged_count(),
+                        snapshot.untracked_count()
+                    ))
+                    .when(self.git_probe.is_some(), |row| {
+                        row.child(Spinner::new().small())
+                    }),
+            )
+            .child(body)
+            .into_any_element()
     }
 }
 

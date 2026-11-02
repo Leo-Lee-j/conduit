@@ -192,16 +192,16 @@ pub(crate) fn record_failure(
         .iter()
         .enumerate()
         .rev()
-        .skip_while(|(_, item)| retry_notice(item))
-        .next();
-    if let Some((index, previous)) = candidate {
-        if previous.kind == ItemKind::Error && fingerprint(&previous.text) == fingerprint(error) {
-            let count = failure_repeats(previous).saturating_add(u64::from(!terminal));
-            let item = &mut session.messages[index];
-            item.status = format!("repeats:{count}");
-            item.detail = error.to_string();
-            return index;
-        }
+        .find(|(_, item)| !retry_notice(item));
+    if let Some((index, previous)) = candidate
+        && previous.kind == ItemKind::Error
+        && fingerprint(&previous.text) == fingerprint(error)
+    {
+        let count = failure_repeats(previous).saturating_add(u64::from(!terminal));
+        let item = &mut session.messages[index];
+        item.status = format!("repeats:{count}");
+        item.detail = error.to_string();
+        return index;
     }
     let key = format!("{prefix}-error-{}", session.messages.len());
     let created_at = std::time::SystemTime::now()
@@ -226,23 +226,21 @@ pub(crate) fn record_failure(
 pub(crate) fn coalesce_restored_failures(session: &mut SessionRecord) {
     let mut kept: Vec<ChatItem> = Vec::with_capacity(session.messages.len());
     for item in session.messages.drain(..) {
-        if item.kind == ItemKind::Error {
-            if let Some(previous) = kept.iter_mut().rev().find(|item| !retry_notice(item)) {
-                if previous.kind == ItemKind::Error
-                    && fingerprint(&previous.text) == fingerprint(&item.text)
-                {
-                    previous.status = format!(
-                        "repeats:{}",
-                        failure_repeats(previous).saturating_add(failure_repeats(&item))
-                    );
-                    previous.detail = if item.detail.is_empty() {
-                        item.text
-                    } else {
-                        item.detail
-                    };
-                    continue;
-                }
-            }
+        if item.kind == ItemKind::Error
+            && let Some(previous) = kept.iter_mut().rev().find(|item| !retry_notice(item))
+            && previous.kind == ItemKind::Error
+            && fingerprint(&previous.text) == fingerprint(&item.text)
+        {
+            previous.status = format!(
+                "repeats:{}",
+                failure_repeats(previous).saturating_add(failure_repeats(&item))
+            );
+            previous.detail = if item.detail.is_empty() {
+                item.text
+            } else {
+                item.detail
+            };
+            continue;
         }
         kept.push(item);
     }

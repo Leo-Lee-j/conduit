@@ -41,10 +41,18 @@ impl ProviderEditor {
                     .default_value(values[i].clone())
             })
         });
+        let engine = provider.as_ref().map(|p| p.engine).unwrap_or_else(|| {
+            let engine = app.read(cx).connection_settings.engine;
+            if engine == Provider::OpenCode {
+                Provider::Codex
+            } else {
+                engine
+            }
+        });
         Self {
             app,
             id: provider.as_ref().map(|p| p.id.clone()),
-            engine: provider.map(|p| p.engine).unwrap_or(Provider::Codex),
+            engine,
             fields,
             error: None,
         }
@@ -247,9 +255,9 @@ impl ConduitApp {
             return;
         }
         let title = if provider.is_some() {
-            "编辑 Provider"
+            "编辑模型服务"
         } else {
-            "添加 Provider"
+            "添加模型服务"
         };
         let app = cx.entity();
         let editor = cx.new(|cx| ProviderEditor::new(app, provider, window, cx));
@@ -268,7 +276,12 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.closing || self.connection_settings.syncing {
+            return;
+        }
+        self.connection_settings.syncing = true;
         self.ensure_opencode_models(refresh, cx);
+        cx.notify();
         // Reading the CLI config files and the cc-switch SQLite database must
         // not block the first frame of the settings dialog (or the UI thread at
         // all); publish the result when the background read finishes.
@@ -284,6 +297,7 @@ impl ConduitApp {
                 })
                 .await;
             let _ = this.update_in(cx, |this, _, cx| {
+                this.connection_settings.syncing = false;
                 this.catalogs.insert(Provider::Claude, loaded.0);
                 this.catalogs.insert(Provider::Codex, loaded.1);
                 this.ccs = loaded.2;
@@ -298,8 +312,19 @@ impl ConduitApp {
         .detach();
     }
 
-    fn providers_group(&self, disabled: bool, view: Entity<Self>) -> SettingGroup {
-        let providers = self.store.providers.clone();
+    pub(super) fn providers_group(
+        &self,
+        engine: Provider,
+        disabled: bool,
+        view: Entity<Self>,
+    ) -> SettingGroup {
+        let providers: Vec<_> = self
+            .store
+            .providers
+            .iter()
+            .filter(|p| p.engine == engine)
+            .cloned()
+            .collect();
         let rows: Vec<_> = providers
             .iter()
             .map(|provider| {
@@ -318,11 +343,14 @@ impl ConduitApp {
             })
             .collect();
         let empty = rows.is_empty();
+        let service_count = rows.len();
         let keywords: Vec<SharedString> = providers
             .iter()
             .map(|provider| provider.name.clone().into())
             .collect();
         let add_view = view.clone();
+        let closing = self.closing;
+        let syncing = self.connection_settings.syncing;
         let add = SettingItem::render(move |_, _, _| {
             let add_view = add_view.clone();
             h_flex()
@@ -333,16 +361,38 @@ impl ConduitApp {
                 .child(
                     div()
                         .flex_1()
-                        .text_size(px(11.))
+                        .text_size(px(13.))
+                        .font_semibold()
                         .line_height(relative(1.5))
-                        .text_color(rgb(palette().faint))
-                        .child("添加 API 端点、模型列表和凭证环境变量，即可在聊天模型面板中选择。"),
+                        .text_color(rgb(palette().text))
+                        .child(format!("{service_count} 个模型服务")),
+                )
+                .child(
+                    Button::new("settings-models-refresh")
+                        .small()
+                        .ghost()
+                        .label(if syncing {
+                            "正在同步…"
+                        } else {
+                            "同步配置"
+                        })
+                        .disabled(closing || syncing)
+                        .when(!closing && !syncing, |button| button.cursor_pointer())
+                        .on_click({
+                            let refresh_view = add_view.clone();
+                            move |_, window, cx| {
+                                refresh_view.update(cx, |app, cx| {
+                                    app.reload_all_models_async(true, window, cx)
+                                })
+                            }
+                        }),
                 )
                 .child(
                     Button::new("add-custom-provider")
+                        .debug_selector(|| "settings-add-service".into())
                         .small()
-                        .ghost()
-                        .label("添加 Provider")
+                        .primary()
+                        .label("添加服务")
                         .disabled(disabled)
                         .when(!disabled, |button| button.cursor_pointer())
                         .on_click(move |_, window, cx| {
@@ -351,16 +401,17 @@ impl ConduitApp {
                         }),
                 )
         })
-        .keywords(["添加", "自定义"]);
+        .keywords(["模型服务", "Provider", "添加", "自定义"]);
         let list_view = view;
         let list = SettingItem::render(move |_, _, _| {
-            let mut list = v_flex().w_full().gap_3();
+            let mut list = v_flex().w_full();
             if empty {
                 list = list.child(
                     div()
-                        .text_size(px(11.))
-                        .text_color(rgb(palette().faint))
-                        .child("尚未添加 Provider。"),
+                        .text_size(px(12.))
+                        .line_height(relative(1.6))
+                        .text_color(rgb(palette().muted))
+                        .child("还没有模型服务。添加端点和模型，或从 cc-switch 同步；也可以直接使用下方的 CLI 默认配置。"),
                 );
             }
             for (index, (provider, imported, in_use)) in rows.iter().enumerate() {
@@ -373,7 +424,11 @@ impl ConduitApp {
                 list = list.child(
                     h_flex()
                         .w_full()
-                        .gap_2()
+                        .px_2()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(rgb(palette().border))
+                        .gap_3()
                         .items_center()
                         .child(provider_icon(provider.engine))
                         .child(
@@ -381,27 +436,26 @@ impl ConduitApp {
                                 .flex_1()
                                 .min_w_0()
                                 .child(
-                                    div()
-                                        .truncate()
-                                        .text_size(px(12.))
-                                        .text_color(rgb(palette().text))
-                                        .child(provider.name.clone()),
+                                    h_flex().gap_2().flex_wrap()
+                                        .child(div().text_size(px(13.)).font_semibold().text_color(rgb(palette().text)).child(provider.name.clone()))
+                                        .child(div().text_size(px(11.)).text_color(rgb(palette().muted)).child(if imported { "来自 CCS" } else { "自定义" }))
+                                        .when(in_use, |row| row.child(div().text_size(px(11.)).text_color(rgb(palette().muted)).child("使用中"))),
                                 )
                                 .child(
                                     div()
+                                        .id(("settings-provider-endpoint", index))
                                         .truncate()
-                                        .text_size(px(10.))
-                                        .text_color(rgb(palette().faint))
-                                        .child(format!(
-                                            "{} · {} 个模型 · {} · {}",
-                                            provider.engine.label(),
-                                            provider.models.len(),
-                                            provider.base_url,
-                                            if imported { "来自 CCS" } else { "自定义" }
-                                        )),
-                                ),
+                                        .tooltip({
+                                            let endpoint = provider.base_url.clone();
+                                            move |window, cx| gpui_kit::component::tooltip::Tooltip::new(endpoint.clone()).build(window, cx)
+                                        })
+                                        .text_size(px(12.))
+                                        .text_color(rgb(palette().muted))
+                                        .child(provider.base_url.clone()),
+                                )
+                                .child(div().text_size(px(11.)).text_color(rgb(palette().muted)).child(format!("{} 个模型{}", provider.models.len(), if imported { " · 在 cc-switch 中编辑" } else { "" }))),
                         )
-                        .child(
+                        .when(!imported, |row| row.child(
                             Button::new(("edit-custom-provider", index))
                                 .small()
                                 .ghost()
@@ -422,8 +476,8 @@ impl ConduitApp {
                                         )
                                     })
                                 }),
-                        )
-                        .child(
+                        ))
+                        .when(!imported, |row| row.child(
                             Button::new(("delete-custom-provider", index))
                                 .small()
                                 .ghost()
@@ -460,25 +514,20 @@ impl ConduitApp {
                                         cx.notify();
                                     })
                                 }),
-                        ),
+                        )),
                 );
             }
             list
         })
         .keywords(keywords);
-        settings_section("Provider 列表").items(vec![add, list])
+        SettingGroup::new().items(vec![add, list])
     }
 
-    fn models_source_group(&self, view: Entity<Self>) -> SettingGroup {
-        let closing = self.closing;
-        let claude_path = self
+    pub(super) fn models_source_group(&self, engine: Provider, view: Entity<Self>) -> SettingGroup {
+        let expanded = self.connection_settings.sources_expanded;
+        let config_path = self
             .catalogs
-            .get(&Provider::Claude)
-            .map(|catalog| display_path(&catalog.config_path))
-            .unwrap_or_else(|| "—".into());
-        let codex_path = self
-            .catalogs
-            .get(&Provider::Codex)
+            .get(&engine)
             .map(|catalog| display_path(&catalog.config_path))
             .unwrap_or_else(|| "—".into());
         let ccs_model_count: usize = self
@@ -492,50 +541,57 @@ impl ConduitApp {
             self.ccs.providers.len(),
             ccs_model_count
         );
-        let refresh_view = view;
-        let refresh = SettingField::render(move |_, _, _| {
-            let refresh_view = refresh_view.clone();
-            Button::new("settings-models-refresh")
-                .label("同步配置")
+        let toggle = SettingItem::render(move |_, _, _| {
+            let toggle_view = view.clone();
+            Button::new("settings-models-sources")
+                .label(if expanded {
+                    "收起配置来源"
+                } else {
+                    "查看配置来源"
+                })
                 .small()
                 .ghost()
-                .disabled(closing)
-                .when(!closing, |button| button.cursor_pointer())
-                .on_click(move |_, window, cx| {
-                    refresh_view.update(cx, |this, cx| {
-                        this.reload_all_models_async(true, window, cx);
+                .cursor_pointer()
+                .on_click(move |_, _, cx| {
+                    toggle_view.update(cx, |this, cx| {
+                        this.connection_settings.sources_expanded = !expanded;
+                        cx.notify();
                     });
                 })
-        });
-        let mut items = vec![
-            value_item("Claude Code", claude_path),
-            value_item("Codex", codex_path),
-            value_item("cc-switch", display_path(&self.ccs.database_path)),
-            SettingItem::new("同步", refresh)
-                .description(ccs_summary)
-                .disabled(closing),
-        ];
+        })
+        .keywords(["配置来源", "CCS", "cc-switch"]);
+        let mut items = vec![toggle];
+        if expanded {
+            items.extend(vec![
+                value_item(engine.label(), config_path),
+                value_item("cc-switch", display_path(&self.ccs.database_path)),
+                value_item("已读取", ccs_summary),
+            ]);
+        }
         if let Some(error) = self.ccs.error.clone() {
             items.push(
                 SettingItem::new("读取失败", error_field(error))
                     .layout(Axis::Vertical)
                     .keywords(["错误"]),
             );
-        } else if let Some(note) = self.ccs.note.clone() {
+        } else if let Some(note) = self.ccs.note.clone().filter(|_| expanded) {
             items.push(
                 SettingItem::new("说明", paragraph_field(note))
                     .layout(Axis::Vertical)
                     .keywords(["说明"]),
             );
         }
-        settings_section("模型来源")
+        SettingGroup::new()
+            .variant(GroupBoxVariant::Normal)
             .items(items)
-            .footer(|_, _| {
-                "CCS 中的 Provider 配置会自动同步到 Provider 列表，与自定义 Provider 一起供聊天选择。同步不会切换 cc-switch 当前 Provider。"
-            })
+            .footer(|_, _| "同步从 CLI 和 cc-switch 读取，不会更改它们的配置或切换默认服务。")
     }
 
-    fn models_provider_group(&self, provider: Provider) -> SettingGroup {
+    pub(super) fn models_provider_group(
+        &self,
+        provider: Provider,
+        view: Entity<Self>,
+    ) -> SettingGroup {
         let catalog = self.engine_catalog(provider);
         let current = catalog
             .and_then(|catalog| catalog.current.clone())
@@ -561,21 +617,77 @@ impl ConduitApp {
             .unwrap_or_default();
         let error = catalog.and_then(|catalog| catalog.error.clone());
         let note = catalog.and_then(|catalog| catalog.note.clone());
-        let mut items = vec![value_item("配置", config_path)];
-        if let Some(path) = catalog.and_then(|catalog| catalog.catalog_path.as_deref()) {
-            items.push(value_item("模型目录", display_path(path)));
+        let expanded = self.connection_settings.models_expanded;
+        let closing = self.closing;
+        let summary = SettingItem::render(move |_, _, _| {
+            let toggle_view = view.clone();
+            let refresh_view = view.clone();
+            h_flex()
+                .w_full()
+                .justify_between()
+                .gap_2()
+                .flex_wrap()
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(palette().muted))
+                        .child(format!("{model_count} 个可用模型")),
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .when(provider == Provider::OpenCode, |row| {
+                            row.child(
+                                Button::new("settings-opencode-refresh")
+                                    .ghost()
+                                    .small()
+                                    .label("刷新模型")
+                                    .disabled(closing)
+                                    .cursor_pointer()
+                                    .on_click(move |_, _, cx| {
+                                        refresh_view.update(cx, |app, cx| {
+                                            app.ensure_opencode_models(true, cx)
+                                        })
+                                    }),
+                            )
+                        })
+                        .child(
+                            Button::new("settings-models-expand")
+                                .ghost()
+                                .small()
+                                .label(if expanded {
+                                    "收起模型目录"
+                                } else {
+                                    "查看模型目录"
+                                })
+                                .cursor_pointer()
+                                .on_click(move |_, _, cx| {
+                                    toggle_view.update(cx, |app, cx| {
+                                        app.connection_settings.models_expanded = !expanded;
+                                        cx.notify();
+                                    })
+                                }),
+                        ),
+                )
+        })
+        .keywords(["模型列表", "默认", "目录"]);
+        let mut items = vec![value_item("默认模型", current), summary];
+        if expanded {
+            items.push(value_item("配置文件", config_path));
+            if let Some(path) = catalog.and_then(|catalog| catalog.catalog_path.as_deref()) {
+                items.push(value_item("模型目录", display_path(path)));
+            }
+            if let Some(endpoint) = catalog.and_then(|catalog| catalog.endpoint.clone()) {
+                items.push(value_item("接口", endpoint));
+            }
+            if let Some(detail) = catalog.and_then(|catalog| catalog.detail.clone()) {
+                items.push(value_item("附加配置", detail));
+            }
+            items.extend(vec![
+                SettingItem::new("模型列表", model_list_field(provider, rows))
+                    .layout(Axis::Vertical),
+            ]);
         }
-        if let Some(endpoint) = catalog.and_then(|catalog| catalog.endpoint.clone()) {
-            items.push(value_item("接口", endpoint));
-        }
-        if let Some(detail) = catalog.and_then(|catalog| catalog.detail.clone()) {
-            items.push(value_item("附加配置", detail));
-        }
-        items.extend(vec![
-            value_item("当前默认", current),
-            value_item("可用模型", format!("{model_count} 个")),
-            SettingItem::new("模型列表", model_list_field(provider, rows)).layout(Axis::Vertical),
-        ]);
         if let Some(error) = error {
             items.push(
                 SettingItem::new("读取失败", error_field(error))
@@ -583,26 +695,17 @@ impl ConduitApp {
                     .keywords(["错误"]),
             );
         }
-        let group = settings_section(provider.label()).items(items);
+        let group = settings_section(if provider == Provider::OpenCode {
+            "OpenCode 原生模型"
+        } else {
+            "CLI 默认配置"
+        })
+        .items(items);
         if let Some(note) = note {
             group.footer(move |_, _| note.clone())
         } else {
             group
         }
-    }
-
-    pub(in crate::app) fn settings_models_page(
-        &self,
-        disabled: bool,
-        view: Entity<Self>,
-    ) -> SettingPage {
-        settings_page("模型与服务", FullIconName::Layers).groups(vec![
-            self.providers_group(disabled, view.clone()),
-            self.models_source_group(view),
-            self.models_provider_group(Provider::Claude),
-            self.models_provider_group(Provider::Codex),
-            self.models_provider_group(Provider::OpenCode),
-        ])
     }
 }
 

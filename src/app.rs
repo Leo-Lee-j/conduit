@@ -70,6 +70,7 @@ mod git_compare;
 mod git_diff;
 mod git_ui;
 mod mentions;
+mod mermaid;
 mod model_picker;
 mod naming;
 mod numbered_code;
@@ -87,6 +88,7 @@ mod theme;
 mod toolbar;
 mod tools;
 mod typography;
+mod update;
 mod user_input;
 
 use components::*;
@@ -130,6 +132,8 @@ actions!(
 
 pub struct ConduitApp {
     store: Store,
+    updater: update::UpdateUi,
+    connection_settings: settings::ConnectionsUi,
     writable: bool,
     selected_workspace: Option<usize>,
     selected_session: Option<u64>,
@@ -198,8 +202,9 @@ pub struct ConduitApp {
     naming_errors: HashMap<u64, String>,
     git_operation: Option<GitOperation>,
     git_feedback: HashMap<PathBuf, GitFeedback>,
-    /// Git sidebar groups the user collapsed; empty means all expanded.
-    collapsed_git_groups: HashSet<git::ChangeKind>,
+    /// Git sidebar groups the user collapsed; untracked files start collapsed.
+    collapsed_git_groups: HashSet<git_ui::GitChangeGroup>,
+    git_group_by_status: bool,
     selected_git_files: HashMap<PathBuf, HashSet<String>>,
     commit_and_push: bool,
     /// Workspaces whose session list was expanded past the configured limit.
@@ -250,7 +255,7 @@ pub struct ConduitApp {
     /// Parsed diff viewers for expanded edit cards, keyed like `tool_scrolls`.
     tool_diffs: HashMap<(u64, String), CachedDiff>,
     message_focus: Option<(u64, String, Instant)>,
-    pending_message_jump: bool,
+    pending_message_jump: Option<usize>,
     performance: Entity<PerformanceMonitor>,
     performance_open: bool,
     /// Message action currently showing its "copied" check mark, keyed by id.
@@ -501,6 +506,12 @@ impl ConduitApp {
         let weak = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
             weak.update(cx, |this, cx| {
+                if this.updater.exiting {
+                    return true;
+                }
+                if this.updater.preparing() {
+                    return false;
+                }
                 this.git_probe = None;
                 this.branch_probe = None;
                 if !this.runs.is_empty()
@@ -566,6 +577,8 @@ impl ConduitApp {
         let file_view = cx.new(|cx| files::FileDocumentView::new(app, cx));
         let mut app = Self {
             store,
+            updater: update::UpdateUi::default(),
+            connection_settings: settings::ConnectionsUi::new(new_session_provider),
             writable,
             selected_workspace,
             selected_session,
@@ -621,7 +634,8 @@ impl ConduitApp {
             naming_errors: HashMap::new(),
             git_operation: None,
             git_feedback: HashMap::new(),
-            collapsed_git_groups: HashSet::new(),
+            collapsed_git_groups: HashSet::from([git_ui::GitChangeGroup::Untracked]),
+            git_group_by_status: false,
             selected_git_files: HashMap::new(),
             commit_and_push: false,
             expanded_workspaces: HashSet::new(),
@@ -665,14 +679,14 @@ impl ConduitApp {
             tool_scrolls: HashMap::new(),
             tool_diffs: HashMap::new(),
             message_focus: None,
-            pending_message_jump: false,
+            pending_message_jump: None,
             performance: cx.new(|_| PerformanceMonitor::new()),
             performance_open: false,
             copied_action: None,
             copied_action_seq: 0,
         };
-        // Drafts are memory-only, so leftover clipboard files from a previous
-        // exit or crash can be collected once the store has loaded successfully.
+        app.restore_update_drafts(window, cx);
+        app.show_installed_changelog(window, cx);
         if start_in_git {
             app.show_git_navigation(cx);
         }

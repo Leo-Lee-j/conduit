@@ -119,7 +119,7 @@ impl ConduitApp {
             offset_in_item: px(0.),
         });
         self.at_bottom = false;
-        self.pending_message_jump = true;
+        self.pending_message_jump = Some(index);
         self.message_focus = Some((session, key.into(), Instant::now()));
         cx.notify();
     }

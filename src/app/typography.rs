@@ -90,7 +90,11 @@ pub(super) fn chat_markdown_view(
     if let Some(family) = typography.body_font.clone() {
         view = view.font_family(family);
     }
-    view = view.style(typography.text_view_style());
+    view = super::mermaid::mermaid_blocks(
+        view.style(typography.text_view_style()),
+        copy_scope,
+        selectable,
+    );
     if typography.code_line_numbers {
         // The numbered renderer replaces fenced blocks wholesale, so it draws
         // its own action row and padding; the stock refinement above would

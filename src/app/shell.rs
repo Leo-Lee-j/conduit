@@ -132,12 +132,15 @@ impl Render for ConduitApp {
                 self.scroll.splice(message_count..previous_count, 0);
             }
         }
-        if self.at_bottom {
+        if self.at_bottom && self.pending_message_jump.is_none() {
             self.scroll.scroll_to_end();
         }
         self.scroll
             .set_scroll_handler(cx.listener(|this, event: &ListScrollEvent, _, cx| {
-                let at_bottom = !event.is_scrolled;
+                // The jump is a one-time anchor. Once the user wheels the
+                // transcript, let their list position become authoritative.
+                let navigating = this.pending_message_jump.take().is_some();
+                let at_bottom = !navigating && !event.is_scrolled;
                 let outline = this.outline.active_for_item(event.visible_range.start);
                 // The list redraws itself. Rebuild the surrounding UI only when
                 // the jump-to-latest control or active outline marker changes.
@@ -195,7 +198,13 @@ impl Render for ConduitApp {
                 .min_w_0()
                 .px_2()
                 .py_1()
-                .gap_5();
+                .gap_5()
+                .on_scroll_wheel(cx.listener(|this, _: &ScrollWheelEvent, _, cx| {
+                    if this.pending_message_jump.take().is_some() {
+                        this.at_bottom = false;
+                        cx.notify();
+                    }
+                }));
             if let Some(session) = &selected {
                 if session.message_count == 0 {
                     messages = messages.child(
@@ -533,6 +542,7 @@ impl Render for ConduitApp {
             conversation = conversation.child(self.render_composer(selected.as_ref(), window, cx));
             conversation
         };
+        conversation = conversation.child(self.update_notice(cx));
         let toolbar = self.render_toolbar(cx);
         let title_bar = TitleBar::new()
             .bg(rgb(palette().canvas))

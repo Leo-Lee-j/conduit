@@ -13,8 +13,7 @@ fn settings_page(title: &'static str, icon: FullIconName) -> SettingPage {
         "外观" => "选择主题，调整聊天文字与代码的阅读体验。",
         "会话" => "设置会话标题的生成方式与使用的模型。",
         "Git" => "自定义提交说明的生成模型与提示词。",
-        "CLI" => "管理引擎路径，检查本机 CLI 是否可用。",
-        "模型与服务" => "管理 Provider，查看和同步 CLI 中的模型配置。",
+        "CLI & 模型服务" => "选择引擎，配置启动路径与聊天使用的模型服务。",
         _ => "",
     };
     SettingPage::new(title)
@@ -359,9 +358,12 @@ fn typography_stepper(
 mod appearance;
 #[path = "settings/cli.rs"]
 mod cli_settings;
+#[path = "settings/connections.rs"]
+mod connections;
 mod general;
 #[path = "settings/models.rs"]
 mod model_sync;
+pub(super) use connections::ConnectionsUi;
 
 impl ConduitApp {
     pub(super) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -397,14 +399,21 @@ impl ConduitApp {
     }
 
     pub(super) fn open_about_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        window.open_dialog(cx, move |dialog, _, _| {
+        let view = cx.entity();
+        window.open_dialog(cx, move |dialog, window, _| {
+            let view = view.clone();
+            let width = (f32::from(window.viewport_size().width) - 48.).clamp(0., 560.);
+            let height = (f32::from(window.viewport_size().height) - 180.).max(100.);
             dialog
-                .w(px(440.))
-                .margin_top(px(120.))
+                .w(px(width))
+                .margin_top(px(48.))
                 .title("关于")
-                .content(move |content, _, _| {
+                .content(move |content, _, cx| {
                     content.child(
                         v_flex()
+                            .id("about-update-body")
+                            .max_h(px(height))
+                            .overflow_y_scroll()
                             .gap_4()
                             .child(
                                 h_flex()
@@ -442,16 +451,7 @@ impl ConduitApp {
                                         "Conduit 是本地 CLI 会话工作台：把 Claude Code、Codex 与 OpenCode 的对话、工作区和 Git 变更收进一个界面。所有文件与历史都保留在你自己的机器上，不上传云端。",
                                     ),
                             )
-                            .child(
-                                h_flex().justify_end().child(
-                                    Button::new("about-check-update")
-                                        .label("检查更新")
-                                        .small()
-                                        .secondary()
-                                        .cursor_pointer()
-                                        .tooltip("更新检查暂未开放"),
-                                ),
-                            ),
+                            .child(view.read(cx).update_content(view.clone())),
                     )
                 })
         });
@@ -471,8 +471,7 @@ impl ConduitApp {
                 self.settings_appearance_page(disabled, view.clone()),
                 self.settings_session_page(disabled, view.clone()),
                 self.settings_git_page(disabled, view.clone()),
-                self.settings_cli_page(disabled, view.clone()),
-                self.settings_models_page(disabled, view.clone()),
+                self.settings_connections_page(disabled, view.clone()),
                 self.settings_shortcuts_page(),
             ]);
         let modal_height = settings_modal_height(window);

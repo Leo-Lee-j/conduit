@@ -1,193 +1,44 @@
 # Conduit
 
-Windows 本地 AI 编程 Chat 工作台，使用 **Rust + GPUI + GPUI Kit**，底层运行 Claude Code CLI / Codex CLI / OpenCode CLI。
+Windows 原生 AI 编程工作台，将 Claude Code、Codex 和 OpenCode 的对话、工作区与 Git 操作放在同一个界面中。
 
-当前是 **Chat M0 原型**：工作区、会话历史、流式回复、工具卡片、审批映射、取消、原生对话续接、会话级模型选择和 Git 变更/手动提交推送面板已接通，Git 文件列表支持双击打开主内容区只读 Diff 标签。两款 CLI 的真实对话与续接测试已通过；审批协议层的允许、拒绝和待审批取消回归已通过，已完成七轮 UI 自动预验并修复设置弹窗窄窗裁切；界面输入、审批弹窗交互与长时间使用仍需验收。不是完整的 Codex 桌面端复刻。
+使用 Rust、GPUI 和 GPUI Kit 构建。目前支持 Windows x64，持续开发中。
 
-## OpenCode CLI
+## 功能
 
-已接入 OpenCode **1.19.2** 的 ACP 接口。在输入区引擎菜单选择 **OpenCode**，也可在“设置 → OpenCode”指定 `.exe` / `.cmd` 路径并检测版本；支持 `CONDUIT_OPENCODE_PATH`。登录和 Provider 仍在 OpenCode CLI 中配置。
+- **多引擎对话**：流式回复、工具审批、取消任务、原生会话续接，以及按会话选择模型与思考强度。
+- **工作区与历史**：多会话并行、搜索、自动命名，以及 Claude / Codex 终端历史导入。
+- **文件与 Git**：文件预览、语法高亮、Diff、暂存、分支操作、提交与推送，支持 AI 生成提交说明。
+- **阅读体验**：Markdown、Mermaid 图表、主题与字体设置。
+- **应用更新**：后台下载、更新日志，以及安装并重启。
 
-支持流式文字、工具卡片、允许本次/拒绝、取消、原生会话续聊，以及按会话选择模型和 OpenCode 原生思考档位。连接会话后读取有效模型目录；切换模型后，新的档位目录在下次连接时更新。普通权限下写入、命令和目录外访问需要审批；只读仅开放读取工具；这些是工具权限规则，不是文件系统沙箱。
+## 安装与使用
 
-首版使用 `--pure`，暂不开放外部插件、问答工具、子代理、OpenCode 终端历史自动导入和 Conduit 自定义 Provider/CCS 桥接。Conduit 内创建的会话可保存并原生续聊。自动命名和 Git 说明生成使用独立临时历史库，并禁用工具。接入边界与验证命令见 [OpenCode 使用说明](docs/opencode-cli.md)。
+在 [Releases](https://github.com/Leo-Lee-j/conduit/releases) 下载 Windows x64 安装包。
 
-## 工作区文件浏览
+1. 安装并登录至少一个受支持的 CLI：Claude Code、Codex 或 OpenCode。
+2. 打开 Conduit，添加本地工作区。
+3. 选择引擎和模型，输入任务开始对话。
 
-左侧窄导航栏可切换「工作区 / 文件 / 变更」，支持收起侧栏。工作区模式保留会话列表与拖动排序；文件模式按需展开当前工作区目录，支持切换工作区、刷新以及显示忽略文件。
+Conduit 复用 CLI 的认证与执行能力，不自带模型服务。详细配置见 [使用指南](docs/usage.md)。
 
-单击文件在主内容区打开预览标签，再点其他文件替换预览；双击文件或标签可固定，也可右键固定。文件页提供只读语法高亮、行号、多行文本选择与复制、自动换行和返回聊天。浏览文件不会取消聊天任务、消耗未读状态或丢失草稿，待审批和后台失败提供返回对应会话的入口。
+## 从源码运行
 
-聊天回复中的本地文件链接和已发送消息的文件引用卡片也可点击打开预览，复用相同文件标签并保留聊天草稿。支持工作区相对路径、Windows 绝对路径与 `file://` 链接，以及带行号后缀的文件链接；网页链接仍由浏览器打开，工作区外路径和不可访问文件显示说明。
-
-文件预览顶部使用单行面包屑与紧凑图标工具栏：返回聊天、自动换行、刷新及复制，悬停显示操作提示；底部仅展示只读、编码和行数。中文与特殊字符路径按原生 Unicode 显示，Windows 扩展路径前缀不出现在路径提示中。文件内容有独立纵向滚动条，不换行时还支持横向滚动；切换聊天与文件保留各文件滚动位置。
-
-文本预览支持 UTF-8 与带 BOM 的 UTF-16；首版上限为 1 MiB / 10,000 行，单行最多 20,000 字节。二进制、超限、编码异常、工作区外链接和不可访问文件显示说明，不修改磁盘内容。可见文件和展开目录约每 2 秒在后台检查变化；文件页缓存独立于聊天流式刷新。文件标签与目录展开状态暂不跨应用重启恢复。
-
-Git「变更」面板复用原有右键暂存、勾选批量暂存、全部暂存、AI 生成提交说明及 Commit / Commit and Push。Diff 与聊天、文件共用顶部标签，按工作区与相对路径去重，不占用会话标签配额。Git 面板打开或当前正在查看 Diff 时约每 10 秒刷新状态，一轮任务结束后也会刷新；内容未变时保留 Diff 的视图模式、折叠与滚动状态。右侧仅保留工具详情，设置入口只保留窄导航栏底部的一处。分支对比分组浏览仍使用独立对话框。
-
-## CLI 历史会话导入
-
-启动时和新增工作区时自动扫描 `~/.claude/projects` 与 `~/.codex/sessions`，把 cwd 匹配已添加工作区的终端 CLI 会话导入侧栏（按 CLI 原生会话 ID 去重并刷新既有记录，不会重复）。新增工作区时扫描在后台进行，侧栏显示加载状态，不阻塞界面。点击导入的会话即可查看历史消息并直接续聊——续聊走与 CLI 相同的原生 resume 路径（Claude `--resume`、Codex `thread/resume`），终端与 Conduit 共享同一份会话文件，任一侧的最新记录都可见。调试可用 `conduit --history [工作区路径]` 在命令行打印发现结果。
-
-## 运行
+需要 Rust MSVC 工具链，以及带 C++ 工具和 Windows SDK 的 Visual Studio Build Tools。
 
 ```powershell
-cargo run --locked
-# 直接打开设置
-cargo run --locked -- --settings
-# 直接打开 Git 侧栏
-cargo run --locked -- --git
-```
-
-也可运行 `target/debug/conduit.exe`。需要 Windows、Rust MSVC 工具链及 Visual Studio C++ Build Tools；本次验证使用 Rust / Cargo 1.99.1。依赖由 Cargo.lock 与 GPUI Kit 精确 revision 固定。
-
-1. 先在官方 CLI 中完成安装和登录。
-2. 点击“添加目录”或在聊天左上角的工作区选择器里添加目录，选择你信任的本地工作区。左侧工作区标题行可拖动调整顺序，排序会自动保存；不会改变当前会话、打开的标签页或运行任务。
-3. 输入区的模型弹窗统一选择 **引擎（Claude Code / Codex / OpenCode）→ Provider → 模型 → 思考强度**，并记住上次使用的引擎。无会话时也可提前选择；首次发送会自动新建会话。切换引擎后的下一条消息会新建对应引擎的会话，保留当前会话。
-4. 模型弹窗支持搜索，配置在下一条消息生效。Claude / Codex 提供默认、低、中、高、极高；OpenCode 使用连接后返回的原生思考档位。CCS 中的 Provider 配置会同步到应用统一的 Provider 列表，与自定义 Provider 一起按会话选择。自定义 Provider 在“设置 → 模型与 Provider”中配置名称、引擎、Base URL、API Key 环境变量名和模型列表。
-5. 输入任务后按 **Enter** 发送；**Ctrl+Enter** 或 **Shift+Enter** 换行，也可点击发送按钮。输入框为空时按 **↑** 回溯当前会话已发送的消息（最新的在先，已去掉发送时附加的文件引用块），**↓** 向新一条前进，越过最新一条后恢复空输入框；输入框有内容时方向键仍只移动光标。
-   输入 **@** 可搜索当前工作区文件（文件名、相对路径或模糊匹配），用 **↑/↓** 选择、**Enter / Tab** 引用、**Esc** 关闭，也可鼠标点击。确认后显示为输入区文件卡片；弹层打开时 Enter 只选择文件，无结果时不会发送。支持继续添加多个文件，与拖入、粘贴和附件按钮共用校验与去重。搜索遵循忽略规则；工作区外或被忽略文件可用附件按钮选择。详情见 [文件引用交互](docs/chat-file-mentions.md)。
-6. 回复以 Markdown 显示；自己发出的消息默认保持纯文本，只有完整的 ``` 围栏代码块会按代码排版渲染（等宽、可选高亮与复制），行内反引号、`#`、`-` 等记号不会被重新解释。聊天文字可像普通文本一样拖拽选中并按 Ctrl+C 复制（选中后焦点会离开输入框，点回去即可继续打字）。工具卡片可打开右侧侧边栏。引擎状态旁实时显示本轮耗时、模型与思考强度；超过 60s 的耗时显示为分秒。本轮回复结束后，悬浮 AI 回复才显示下方的复制、重试按钮及模型、时间、总耗时（按此顺序排列），耗时重启后保留。导入历史优先读取 CLI 轮次耗时；旧记录仅有消息时间戳时显示“耗时约 … s”，时间数据缺失时不显示。CLI 请求审批时，可允许本次或拒绝。
-7. 会话标题右侧的侧边栏图标只打开右侧工具详情；对话底栏右侧的 Git 图标切换左侧「变更」面板，工作区标识放在底栏左侧。左侧栏与对话底栏均使用 GPUI Kit StatusBar；对话底栏中，工作区与分支位于左侧、运行提示居中、Git 与性能入口位于右侧。左侧变更与右侧工具详情可以同时打开，不再互相替换；两侧可拖动边缘调宽，右侧工具详情最大为剩余内容区的一半，窄窗时覆盖显示。
-8. 同一会话再次发送会恢复其原生 CLI 上下文；多个工作区和同一工作区的多个会话均可并行，每个会话同时只运行一轮任务。同一 Provider 的相同原生会话 ID 也不能重复运行。切换会话不会停止后台任务，取消只影响当前会话；同目录并行会话共享磁盘文件，不提供文件写入隔离。应用内提交/推送只与同一 Git worktree 的聊天任务互斥，不阻塞其他仓库的会话；侧栏顶部搜索图标可按标题与消息内容找回会话。每个工作区默认显示最近 5 条会话（可在设置 → 外观 → 侧栏中调整，范围 1–30），超出时可展开。
-9. 取消任务会停止该进程树。关闭窗口会清理所有受管任务，等待进程退出后关闭。
-10. 底栏左侧显示当前工作区分支，下拉向上展开本地/远程分支，只读查看、不切换，无 Git 仓库时隐藏；尚无提交的分支仍显示分支名，分离 HEAD 显示短 hash。分支信息在后台每 10 秒刷新，也可手动刷新；远程分支来自本地记录，不执行 fetch。左侧「变更」图标或底栏右侧 Git 图标打开左侧变更面板，可查看暂存/未暂存/未跟踪数量，以及按新增/修改/删除分组的文件列表（支持折叠、勾选批量暂存与右键「加入暂存区」，列表不内联 diff）。双击文件在主内容区打开可复用的只读 Diff 标签：基线为 `HEAD → 工作区`（含暂存），未跟踪/新增文件按空文件对比；默认并排视图，可切换统一视图，F7 / Shift+F7 跳到下一处/上一处差异，可展开或折叠未变更行，Esc / Ctrl+W 关闭当前 Diff 标签。单文件补丁上限 4 MiB，超出时提示并允许重试；二进制文件显示专门说明，不回退到原始补丁文本。手动刷新、重新打开或一轮任务结束时重读。状态查询为只读。左侧变更面板下方提供可滚动的 Commit Message 输入框，Sparkles 图标按设置中的引擎 / Provider / 模型生成说明（默认跟随当前会话，在工作区目录运行，使用独立临时会话），右下角支持 **Commit / Commit and Push**，只提交已暂存变更；不自动 add。底栏 Git 右侧的推送图标及 badge 显示待推送提交数，点击推送到已配置的 upstream；没有上游需先在终端配置。提交成功而推送失败时会保留待推送状态。
-
-会话 tab 的关闭按钮仅悬浮或键盘聚焦时显示，隐藏时保留占位。工作区会话列表右侧与会话 tab 关闭按钮前共用状态圆点：蓝色呼吸圆点表示执行中；后台成功完成后变为绿色未读呼吸圆点，进入会话即清除，失败或取消不会显示绿色。未读状态仅在本次应用运行期间保留。会话右键删除使用锚定在会话行旁的 Popover 二次确认，支持取消、Esc 与点击外部关闭；无消息且无草稿的空会话仍直接删除。CLI 报错采用紧凑摘要，连续相同错误合并为带重复次数的卡片；认证、限流、上下文和连接异常显示对应恢复建议。原始诊断默认折叠，可展开、选择和复制；最近失败轮次保留手动重试入口，包括尚未建立原生上下文的启动失败。取消不按引擎报错展示。
-
-没有切换已打开会话的引擎、后台保活、自动重试和恢复失败时自动新建上下文。
-
-## 设置、外观、CLI 路径与模型同步
-
-左下角齿轮打开设置弹窗，左侧固定显示通用、外观、会话、Git、CLI、模型与服务六个分类，并支持搜索。弹窗标题、关闭按钮和自动保存提示固定显示，右侧分组内容独立滚动。通用页集中工作台布局（内容宽度、侧栏会话数与标签页上限）、本机数据和诊断设置；外观页提供带预览的跟随系统 / 浅色 / 深色主题卡片以及聊天排版：正文字体与字号（12–20）、行高（1.2–2.0）、代码字体与字号（10–18）、代码块复制按钮和语法高亮，并提供即时预览与一键恢复默认。CLI 页集中展示各引擎的可执行文件路径与版本检测，模型详情统一在「模型与服务」查看。可为各引擎选择本机 `.exe` 或 npm 全局 `.cmd` 启动器、清除应用配置并检测版本。配置保存后用于后续启动。路径优先级为：**环境变量 → 应用配置 → PATH → 常见原生安装位置**；无效显式路径会报错，不会自动改用另一份程序。支持 Windows 原生 `.exe` 与 npm 全局 `.cmd`；Shell 包装脚本、`.ps1` 与 WSL 尚未适配。
-
-会话命名与 Git 提交说明分别支持独立固定 **引擎 / Provider / 模型**，不指定时跟随当前会话；Provider 路由不会修改全局 CLI 或 CCS 配置。
-
-外观主题切换立即生效并保存；选择“跟随系统”时，Windows 明暗变化会自动同步。聊天排版同样即时生效并保存：正文设置作用于对话气泡、Markdown 回答与输入框，代码字体与字号作用于代码块和行内代码；未选择的字体跟随当前主题默认值，字体列表只列出本机已安装字体，已保存但被卸载的字体会在启动时回退。只读数据目录下，主题、排版与会话数控件保持禁用并显示当前值。
-
-聊天内容与输入区默认铺满可用宽度，可在“通用 → 内容铺满”切换回居中布局；已保存的选择继续保留。右侧工具详情采用固定标题工具栏、工具名称与状态、分区输入和输出，支持选择文本、分区复制及复制全部；长输出独立滚动，窄窗口以覆盖侧栏显示。
-
-设置 → **模型与服务** 使用统一的 Provider 列表：
-
-- 自定义 Provider 可配置名称、执行引擎、Base URL、API Key 环境变量名和模型列表。
-- CCS 中每个 Provider 的名称、端点及模型会同步加入同一列表，“来自 CCS”只表示配置来源。点击“同步配置”按稳定 ID 更新；凭证在执行所选 Provider 时读取，不复制进应用状态。
-- CLI 默认仍跟随当前 CLI 配置。聊天输入区通过同一个模型弹窗按 **引擎 → Provider → 模型 → 思考强度** 选择；无会话时同样可提前配置，首次发送后按会话保存。切换引擎会清空待选配置，并在下次发送时新建对应引擎的会话；旧会话保留原有上下文。旧版 CCS 会话选择自动迁移。
-- OpenCode 初次打开模型弹窗即在后台读取 `opencode models --verbose --pure` 的原生模型列表，按 `provider/model` 分组并按工作区缓存，不使用 CCS 默认模型或 CCS Provider；读取失败可刷新重试。思考强度使用连接后返回的原生档位，切换模型后清除旧档位。CLI 引擎及 24 个模型家族使用本地嵌入的品牌 SVG，保留原有颜色与渐变，来源见 `assets/icons/README.md`。
-
-同步不会写回 CLI / cc-switch 配置，也不会切换 cc-switch 当前 Provider。模型目录读取和同步在后台执行；打开聊天模型面板只读取内存中的 Provider 列表。
-
-```powershell
-$env:CONDUIT_CLAUDE_PATH = 'C:\path\to\claude.exe'
-$env:CONDUIT_CODEX_PATH = 'C:\path\to\codex.exe'
+git clone https://github.com/Leo-Lee-j/conduit.git
+cd conduit
 cargo run --locked
 ```
 
-版本检测支持取消，只执行 `--version`，最多等待 10 秒，输出有大小限制；取消或关窗会清理检测进程树。检测不调用模型，也不验证登录或全部协议兼容性。未知版本和预发行版本会标记为尚未回归。
+构建、测试与贡献流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-真实审批回归（2026-10-22）：Codex 命令拒绝、文件修改允许/拒绝、待审批取消均通过；Claude 在测试专用 `manual` 权限模式下通过 Write 工具的 `can_use_tool` 允许/拒绝，拒绝不落盘，允许按批准内容落盘。Claude 回归使用 `CONDUIT_CLAUDE_TEST_MODEL` 指定本机可用模型，因为默认模型别名当前不可用。审批弹窗的点击与视觉仍未人工验收。
+## 文档与反馈
 
-本机实测：Claude Code **2.1.301**、Codex **0.163.0**。这表示验证过的版本，不代表兼容所有旧版本或未来版本。Conduit 不代管登录凭证，不自动安装或升级 CLI。登录失效请在官方 CLI 中处理。
-
-Codex 使用 `app-server --stdio`；Claude 使用 stream-json 与 stdio 控制协议。工具配置、模型执行及凭证仍由 CLI 负责，不直接调用模型 API。Claude 的控制协议适配参考官方 Agent SDK 源码，需要随 CLI 版本回归。
-
-## 本地数据
-
-默认位置：`%LOCALAPPDATA%\Conduit\state.json`。通过 `CONDUIT_DATA_DIR` 可指定独立目录。
-
-- 保存工作区、固定 Provider、消息、工具详情、原生会话 ID、可选模型选择、中断标记和可选 CLI 路径配置；版本为 2，兼容没有配置或模型字段的旧 v2 文件。
-- 模型目录与当前默认值在启动或手动刷新时从 CLI 配置及 cc-switch 模型目录读取，不写入应用状态；应用状态只保存会话选中的模型 ID 与上次使用的引擎（用于新会话默认引擎）。
-- **对话与工具输出以明文保存**，可能包含代码、命令输出或其他敏感内容。使用系统账户文件权限保护。
-- 不额外保存登录凭证，不记录完整原始协议流；CLI 自身的存储与日志由其配置决定。
-- 同目录临时文件刷盘后原子替换；坏文件和未知版本不覆盖，界面进入只读状态。
-- v1 终端原型仅迁移会话元数据，不伪造旧对话上下文。
-- 重启加载历史，不重连进程，不重放任务；未完成运行标记为中断。
-- 加载历史时清理旧版本可能写入的相邻重复助手文本与重复失败通知（协议已修复重复来源，旧数据在下次保存后不再重复）。
-- 草稿按会话隔离，当前只保留在内存。
-- 同一数据目录只允许一个应用实例。
-
-Conduit 的进程监管不是权限沙箱。Codex 请求 `workspace-write` + `on-request`；Claude 使用默认权限模式并保留 CLI 配置。界面只审批 **CLI 实际发出的请求**，不保证所有命令或文件操作都逐次弹窗。未适配的交互请求返回错误，不自动放行。
-
-## 验证
-
-Windows 安装包：运行 `./scripts/package-windows.ps1`（需要 Rust MSVC 工具链、Windows SDK 和 NSIS 3；可用 `-MakeNsis` 指定编译器路径）。输出为 `target/dist/Conduit-0.1.0-windows-x64-setup.exe`，并生成 SHA-256 校验文件。安装程序按当前用户安装到 `%LOCALAPPDATA%\Programs\Conduit`，创建开始菜单快捷方式，并支持从 Windows 设置卸载；卸载保留 `%LOCALAPPDATA%\Conduit` 中的聊天数据。脚本自动从 Visual Studio 查找并打包微软 x64 CRT 可再分发 DLL，也可用 `-RuntimeDir` 指定该目录。应用、窗口、标题栏、关于页和安装程序均使用 `assets/app-icons` 中的圆角图标。
-
-```powershell
-cargo fmt --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked -- --test-threads=1
-cargo build --locked
-# 分别检查 Chat 页、设置页能否启动响应窗口
-./scripts/smoke.ps1 -View chat
-./scripts/smoke.ps1 -View settings
-# 人工验收前的自动预验：隔离数据 + 窗口截图 + UIA 快照（不替代人工签署）
-pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action seed
-pwsh -NoProfile -File scripts/ui-acceptance.ps1 -Action capture -Name chat-markdown -DataDir target/ui-acceptance/data-claude
-```
-
-`ui-acceptance.ps1` 以 UTF-8 BOM 保存。Windows PowerShell 5.1 直接执行时需带执行策略参数（`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\ui-acceptance.ps1 -Action seed`）；PowerShell 7（`pwsh`）无需额外参数。自行编辑脚本时请保留 BOM，否则 5.1 会按系统 ANSI 读取中文而解析失败。
-
-启动冒烟只确认窗口出现并保持响应，不覆盖输入、点击、输入法或 DPI。逐项人工验收步骤见[验证记录的手工 UI 验收清单](docs/m0-validation.md#手工-ui-验收清单)。
-
-可选集成测试：版本检测与握手不调用模型；其余测试会发送少量合成提示或工具调用，消耗所选 CLI 账户额度。不会自动运行或授予工具权限。Claude 审批回归使用测试专用 `manual` 权限模式，可用 `CONDUIT_CLAUDE_TEST_MODEL` 指定本机可用模型。
-
-```powershell
-cargo test --locked installed_clis_report_versions -- --ignored --nocapture --test-threads=1
-cargo test --locked installed_cli_protocol_handshakes -- --ignored --nocapture --test-threads=1
-$env:CONDUIT_CODEX_TEST_MODEL='<available-model>'
-$env:CONDUIT_CLAUDE_TEST_MODEL='<available-model>'
-cargo test --locked real_codex_chat_and_resume -- --ignored --nocapture --test-threads=1
-cargo test --locked real_claude_chat_and_resume -- --ignored --nocapture --test-threads=1
-cargo test --locked real_codex_command_approval_can_be_denied -- --ignored --nocapture --test-threads=1
-cargo test --locked real_codex_file_change_approval_allow_and_deny -- --ignored --nocapture --test-threads=1
-cargo test --locked real_codex_cancel_during_pending_approval -- --ignored --nocapture --test-threads=1
-$env:CONDUIT_CLAUDE_TEST_MODEL='<available-model>'
-cargo test --locked real_claude_tool_approval_allow_and_deny -- --ignored --nocapture --test-threads=1
-cargo test --locked real_claude_cancel_during_pending_approval -- --ignored --nocapture --test-threads=1
-```
-
-## 当前边界
-
-- 界面：使用自绘标题栏（品牌区与窗口控制），不再显示系统原生标题栏；左侧工作区栏可拖动调宽；聊天左上角为工作区选择器，未选择工作区时也可从中选择已有目录或添加新目录；右侧工具详情由会话标题右侧的图标开关，Git 变更由对话内容区底栏右侧图标独立开关，两者按入口切换、没有共用页签或 split；底栏左侧为只读分支下拉（非 Git 工作区隐藏）；右侧停靠区可拖动左边缘调宽、最大为剩余内容区一半，窄窗时覆盖显示；输入区在会话 / 无会话 / 无工作区三种状态下保持同一宽高，无会话时输入并发送会按上次使用的引擎新建会话；审批卡片与对话文字列同宽，请求详情默认折叠、可手动展开；输入区左下角为引擎下拉（向上弹出，切换后同步切换会话与右上角模型选择器），模型选择器右侧不再重复显示引擎标识；会话不在底部时，对话区右下角（输入区右上角上方）自动显示 向下箭头按钮，点击回到最新消息并自动隐藏；Enter 发送、Ctrl/Shift+Enter 换行；侧栏顶部为新建会话/搜索图标行，工作区行的“新建会话”和菜单图标紧凑排列，仅悬浮或键盘聚焦时显示；菜单向右弹出，支持“移除工作区”，会话行“⋯”菜单同样向右弹出并与工作区菜单对齐，图标按钮与菜单项悬浮显示 pointer 光标；工具调用卡片标题左右内边距一致；工作区默认显示最近 N 条会话（设置可调），搜索为弹窗并在结果中高亮命中词；设置弹窗自适应窗口并居中，导航固定为通用 / 外观 / 会话 / Git / CLI / 模型与服务，外观页可切换跟随系统 / 浅色 / 深色主题并调整聊天排版（正文字体、字号、行高、代码字体与字号、代码复制按钮、语法高亮，附带即时预览与恢复默认），CLI 信息不再混在通用页，模型目录与 cc-switch 读取在后台完成，打开时不阻塞首帧。
-- Git：右侧面板上方展示当前分支与按新增/修改/删除分组的文件状态（支持折叠，列表不内联 diff；双击文件打开只读 diff 弹窗，支持并排/统一视图、差异跳转与未变更行折叠），下方固定 Commit Message、AI 生成和 Commit / Commit and Push。只提交已暂存变更，不自动 add；推送使用配置的 upstream，不 force。diff 窗口只读，不提供编辑、暂存或冲突合并；超过 4 MiB 的补丁与二进制内容仅显示说明，不能逐行查看。底栏 badge 显示待推送提交数，成功后刷新。状态读取使用 `--no-optional-locks` 避免抢占 Git 索引锁；输出限长、进程限时并在后台线程读取。不是 Git 仓库或未安装 Git 时显示可重试的提示。若工作区位于某个 Git 仓库的子目录中，面板展示的是该仓库的状态，路径相对仓库根目录。
-- 构建：Debug 构建已对依赖启用优化以改善窗口拖动与动画的流畅度；追求最流畅手感可用 `cargo build --release` 后运行 `target/release/conduit.exe`。
-- 历史整理：会话行菜单支持重命名（对话框）、归档/取消归档（“已归档”切换显示）和删除（二次确认）；搜索弹窗按标题与消息内容匹配。归档状态随本地状态保存，旧数据缺省为未归档。移除工作区只移除应用内路径，不删除磁盘文件与 CLI 历史。
-- Windows 后端已实现；macOS / Linux 尚未实现。
-- 原生会话恢复依赖 CLI 本地记录；历史消息不能替代原生上下文。恢复报错须显式处理。
-- 取消采用结束 Job 的方式，模型服务端请求停止与 CLI 历史完整落盘无法保证；本地消息保留最近一次落盘内容。
-- Codex 命令与文件修改审批、Claude `can_use_tool` 允许/拒绝、Codex 待审批取消、Claude 待审批取消已有真实回归；Codex `item/permissions/requestApproval` 权限扩展映射目前只有单测，真实触发待回归。审批弹窗点击与视觉、真实 CLI 多审批并发排队和中文输入仍待人工验收；多审批排队目前由运行时协议夹具覆盖，不等同真实 CLI 并发。
-- 2026-10-22 已修复：Ctrl+Enter 被输入框换行绑定抢占；切换会话、发送、审批和取消后的输入焦点丢失；后台会话事件拉动当前会话滚动；审批详情过小及只可拒绝时缺少说明；只读存储仍允许输入。新增双运行时取消隔离回归。以上通过编译、单测和启动检查，但实际按键、输入法、复制与弹窗点击仍须按验证记录手工验收。
-- 中文输入法、最小窗口、多屏 DPI、长对话性能、跨工作区并行压力待人工验收。
-- 模型与 Provider：CLI 默认跟随当前 CLI 配置；来自 CCS 的 Provider 执行时只解析所选配置的端点和凭证，不切换 cc-switch 的全局 Provider；自定义 Provider 的 API Key 通过命名环境变量提供，应用只保存变量名。Codex 渠道使用 Responses 协议，Claude Code 渠道使用 Anthropic 协议。Provider 和思考强度随会话保存，后台命名及 Git 说明在跟随会话时使用同一渠道。模型可用性、支持的思考档位和计费仍由服务端决定。
-- 权限：Codex 完全权限同时设置 `danger-full-access` 和 `approvalPolicy=never`，新建、恢复和每轮启动均覆盖旧配置；Claude 完全权限使用 bypass 模式。已识别的工具许可在完全权限下自动允许，普通权限仍保留审批队列。执行中调整权限从下一轮生效。仅可查看在 Codex 中使用只读沙箱，在 Claude 中限制为 Read/Glob/Grep 工具并拒绝权限扩展；Claude 的工作区内修改对应 acceptEdits，不提供 Codex 式的文件系统沙箱。
-- 设置 → 会话的“自动命名”总开关控制首条消息和最新对话两类自动触发；关闭时取消正在运行的自动命名，右键 AI 重命名仍可使用。旧数据默认保持启用。
-- 文件引用：输入区回形针支持多选文件，也支持从资源管理器拖入或 Ctrl+V 粘贴已复制的文件、图片及截图。剪贴板图片保存到应用数据目录下的 attachments 文件夹，以便历史和重试继续读取；重复粘贴同一张图片会去重。移除附件、删除会话、移除工作区或关闭应用时，图片在不再被任何草稿或已发送消息引用后自动删除；启动时也会清理遗留图片。清理仅作用于应用生成的剪贴板图片，原始文件保留；状态保存失败或只读时不执行删除。文件以紧凑的单行标签显示类型图标和文件名，宽度随文件名自适应，长文件名省略，悬浮可查看完整路径，支持逐个移除和跨次去重；较多文件可在卡片区滚动。正文与文件分开编辑，切换会话或工作区会保留对应的待发送文件；尚未创建会话的工作区也保留自己的草稿。只有文件时同样可以发送，发送成功后清空，发送失败则保留正文和文件。发送前会重新校验文件是否仍可引用。目录、图片以外的二进制、不可读与超过 8 MiB 的文件会在输入区内提示文件名及原因。已发送消息只显示正文，附件在用户消息气泡内的正文下方以 mini 标签从右向左排列；只有附件时保留附件气泡，不显示空正文。引用只在发送时合并为路径文本写入历史，由 CLI 读取：工作区内用相对路径，外部文件用绝对路径，均使用正斜杠。图片同样通过文件路径交给 CLI 读取，是否能理解图片取决于所选引擎和模型。Git 面板文件行与引用共用文件类型图标。
-- 不支持任意 CLI 交互、问答型工具请求、终端 TUI 或自动代理协作。
-- 协议处理循环的 panic 会进入同一进程清理屏障后报告失败；启动或清理阶段的未预期 panic 仍会保守保留占用，需重启应用检查。
-
-## 文档与代码
-
-- [产品设计](docs/product-design.md)
+- [使用指南](docs/usage.md)
+- [自动发布与更新](docs/auto-update.md)
 - [技术设计](docs/technical-design.md)
-- [OpenCode CLI 接入评估](docs/opencode-cli-evaluation.md)
-- [Git 界面与 History 候选方案](docs/git-ui-design.md)
-- [验证记录及待验收项](docs/m0-validation.md)
-- [UI 自动预验记录](docs/m0-ui-acceptance-run.md)
-- [人工验收交接单](docs/m0-manual-acceptance-guide.md)
-- `build.rs`：Windows MSVC 可执行文件的主线程栈预留。
-- `scripts/smoke.ps1`：使用隔离数据检查两种启动页面，不调用模型。
-- `scripts/ui-acceptance.ps1`：隔离数据下启动界面、截图与 UIA 证据采集，供人工验收前预验。
-- `src/app.rs`：Chat 界面、草稿、会话并发、事件合并与退出屏障。
-- `src/protocol.rs`：Codex / Claude 各自协议及审批映射。
-- `src/chat_runtime.rs`：每轮任务、管道读写、取消与清理。
-- `src/child.rs`：Windows stdio、句柄白名单与 Job 进程树。
-- `src/cli.rs`：本地路径配置、来源检测与受管版本检测。
-- `src/git.rs`：工作区 Git 快照、独立分支/待推送探测及显式 staged-only commit/upstream push。
-- `src/models.rs`：CLI 模型配置的只读解析与模型目录合并。
-- `src/ccs.rs`：cc-switch 数据库模型字段的只读查询。
-- `src/domain.rs` / `src/store.rs`：数据实体、迁移与原子存储。
-- `src/legacy/`：未编译的旧终端原型，仅保留参考。
+- [完整文档](docs/README.md)
 
-Git 生成提示词可在 **设置 → Git** 中编辑，自动保存并用于下一次 Generate；支持恢复默认。引擎选择器、设置页和会话标识使用本地嵌入的 Claude / OpenAI 官方图标。
-
-聊天内容区左侧、紧贴消息列提供 **用户消息大纲**，整体按聊天区域垂直居中；短线向消息列右侧对齐，并按用户消息长度动态变化且限制最大长度。悬停查看摘要，点击跳转并短暂高亮对应消息。工具调用卡片点击可向下展开 240px 内容区，带独立滚动条并支持纯文本选择、复制，JSON 自动排版；审批结果以“已允许 / 已拒绝”等标签显示在对应工具卡片左侧，旧会话的审批提示也会合并到卡片。
+欢迎通过 [Issues](https://github.com/Leo-Lee-j/conduit/issues) 反馈问题，或提交 Pull Request。

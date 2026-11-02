@@ -1687,11 +1687,30 @@ impl ConduitApp {
         if let Some(i) = self.selected_workspace {
             let workspace = &self.store.workspaces[i];
             pane = pane.child(
-                div()
+                h_flex()
                     .h(px(34.))
                     .flex_shrink_0()
                     .min_w_0()
                     .overflow_hidden()
+                    .items_center()
+                    .px_2()
+                    .gap_2()
+                    .border_b_1()
+                    .border_color(rgb(palette().border))
+                    .child(
+                        div()
+                            .h_full()
+                            .flex_shrink_0()
+                            .px_2()
+                            .flex()
+                            .items_center()
+                            .border_b_2()
+                            .border_color(rgb(palette().activity_running))
+                            .text_size(px(12.))
+                            .font_semibold()
+                            .child("Commit"),
+                    )
+                    .child(div().flex_1())
                     .child(self.navigation_workspace_picker(
                         "git-workspace",
                         workspace.name(),
@@ -1708,26 +1727,23 @@ impl ConduitApp {
                     .child("Git 变更 · 未选择工作区"),
             );
         }
-        // Both children can shrink: tiny windows scroll the editor instead of cutting off Commit.
         pane.child(
             v_flex()
                 .flex_1()
                 .min_h(px(72.))
                 .min_w_0()
-                .px_2()
                 .child(self.git_panel(app.clone())),
         )
         .child(
             div()
                 .id("git-commit-scroll")
-                .max_h(relative(0.5))
-                .min_h_0()
+                .debug_selector(|| "git-commit-section".into())
+                .h(relative(0.42))
+                .min_h(px(200.))
                 .flex_shrink_1()
-                .overflow_y_scroll()
+                .min_w_0()
                 .border_t_1()
                 .border_color(rgb(palette().border))
-                .px_2()
-                .py_2()
                 .child(self.commit_editor(app, cx)),
         )
         .into_any_element()
@@ -2758,21 +2774,37 @@ mod git_navigation_tests {
         draw(cx);
         cx.simulate_resize(gpui_kit::size(gpui_kit::px(850.), gpui_kit::px(500.)));
         draw(cx);
-        let bounds = cx.update(|window, _| window.find_by_label("Commit").bounds());
+        let bounds = cx.debug_bounds("git-commit").unwrap();
         let navigation = cx.debug_bounds("git-navigation").unwrap();
         assert!(
             bounds.left() >= navigation.left()
                 && bounds.right() <= navigation.right() + gpui_kit::px(1.),
             "Commit must fit inside the left panel: {bounds:?} vs {navigation:?}"
         );
+        let input = cx.debug_bounds("git-commit-input").unwrap();
+        let actions = cx.debug_bounds("git-commit-actions").unwrap();
+        assert!(input.bottom() <= actions.top());
+        assert!(actions.bottom() <= navigation.bottom());
+        cx.update(|window, cx| {
+            app.update(cx, |a, cx| {
+                let draft = &a.commit_drafts[&repo.0];
+                draft.input.update(cx, |input, cx| {
+                    input.set_value("long draft\n".repeat(80), window, cx)
+                });
+            });
+        });
+        draw(cx);
+        assert_eq!(actions, cx.debug_bounds("git-commit-actions").unwrap());
         cx.simulate_resize(gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(800.)));
         draw(cx);
-        // File rows stage exactly the reviewed changes and stay in the left panel.
+        assert!(cx.debug_bounds("git-change-file-new file.txt").is_none());
+        click(cx, "git-select-group-Untracked");
         cx.update(|_, cx| {
-            app.update(cx, |a, cx| {
-                a.stage_git_files(vec!["new file.txt".into()], cx)
-            })
+            let selected = &app.read(cx).selected_git_files[&repo.0];
+            assert_eq!(selected.len(), 1);
+            assert!(selected.contains("new file.txt"));
         });
+        click(cx, "git-stage-selected");
         wait_git(cx, &app);
         cx.update(|_, cx| {
             let a = app.read(cx);
@@ -2784,6 +2816,60 @@ mod git_navigation_tests {
                     .any(|f| f.path == "src/main.rs" && f.unstaged())
             );
         });
+        click(cx, "git-unstage-selected");
+        wait_git(cx, &app);
+        cx.update(|_, cx| {
+            assert_eq!(
+                app.read(cx).git_snapshot.as_ref().unwrap().staged_count(),
+                0
+            )
+        });
+        click(cx, "git-stage-selected");
+        wait_git(cx, &app);
+        click(cx, "git-collapse-all");
+        assert!(cx.debug_bounds("git-change-file-src/main.rs").is_none());
+        click(cx, "git-collapse-all");
+        assert!(cx.debug_bounds("git-change-file-src/main.rs").is_some());
+        click(cx, "git-select-unstaged");
+        cx.update(|_, cx| assert_eq!(app.read(cx).selected_git_files[&repo.0].len(), 2));
+        click(cx, "git-select-unstaged");
+        cx.update(|_, cx| assert!(app.read(cx).selected_git_files[&repo.0].is_empty()));
+        click(cx, "git-commit-mode-trigger");
+        click(cx, "git-mode-commit-push");
+        cx.update(|_, cx| assert!(app.read(cx).commit_and_push));
+        click(cx, "git-commit-mode-trigger");
+        click(cx, "git-mode-commit");
+        cx.update(|_, cx| assert!(!app.read(cx).commit_and_push));
+        cx.update(|_, cx| {
+            app.update(cx, |a, cx| {
+                a.git_feedback(
+                    repo.0.clone(),
+                    "检查提交失败的长错误说明\n".repeat(30),
+                    true,
+                    cx,
+                );
+                a.git_group_by_status = true;
+                cx.notify();
+            });
+        });
+        draw(cx);
+        assert!(cx.debug_bounds("git-group-Added").is_some());
+        assert!(cx.debug_bounds("git-group-Modified").is_some());
+        cx.simulate_resize(gpui_kit::size(gpui_kit::px(850.), gpui_kit::px(500.)));
+        draw(cx);
+        let navigation = cx.debug_bounds("git-navigation").unwrap();
+        let actions = cx.debug_bounds("git-commit-actions").unwrap();
+        let feedback = cx.debug_bounds("git-action-feedback").unwrap();
+        assert!(feedback.bottom() <= actions.top());
+        assert!(actions.bottom() <= navigation.bottom());
+        cx.update(|_, cx| {
+            app.update(cx, |a, cx| {
+                a.git_group_by_status = false;
+                cx.notify();
+            })
+        });
+        cx.simulate_resize(gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(800.)));
+        draw(cx);
         let file = cx.update(|_, cx| {
             app.read(cx)
                 .git_snapshot

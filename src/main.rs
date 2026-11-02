@@ -23,6 +23,16 @@ use gpui_kit::component::TitleBar;
 use gpui_kit::*;
 
 fn main() {
+    let _installation_lock = match std::env::current_exe()
+        .map_err(anyhow::Error::from)
+        .and_then(|exe| conduit::update::install::running_lock(&exe))
+    {
+        Ok(lock) => lock,
+        Err(error) => {
+            eprintln!("{error:#}");
+            return;
+        }
+    };
     let start_in_settings = std::env::args_os().any(|arg| arg == "--settings");
     let start_in_git = std::env::args_os().any(|arg| arg == "--git");
     if std::env::args_os().any(|arg| arg == "--history") {

@@ -227,6 +227,8 @@ pub struct Store {
     #[serde(default)]
     pub ui: UiSettings,
     #[serde(default)]
+    pub updates: conduit::update::Preferences,
+    #[serde(default)]
     pub git: GitSettings,
     #[serde(default, alias = "custom_providers")]
     pub providers: Vec<crate::providers::ModelProvider>,
@@ -303,6 +305,7 @@ impl Store {
                 workspaces: vec![],
                 cli: Default::default(),
                 ui: Default::default(),
+                updates: Default::default(),
                 git: Default::default(),
                 providers: vec![],
             });
@@ -647,6 +650,7 @@ mod tests {
             version: 2,
             cli: Default::default(),
             ui: Default::default(),
+            updates: Default::default(),
             git: Default::default(),
             providers: vec![],
             workspaces: vec![Workspace {

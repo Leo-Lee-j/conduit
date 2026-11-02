@@ -106,8 +106,6 @@ pub enum ChangeKind {
 }
 
 impl ChangeKind {
-    pub const ALL: [Self; 3] = [Self::Added, Self::Modified, Self::Deleted];
-
     pub fn label(self) -> &'static str {
         match self {
             Self::Added => "新增",

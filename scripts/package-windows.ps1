@@ -9,10 +9,12 @@ $taskRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Push-Location $taskRoot
 try {
     if (-not $SkipBuild) {
-        & cargo build --release --locked
+        & cargo build --release --locked --bin conduit --bin conduit-updater
         if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
     }
     $taskExe = Join-Path $taskRoot 'target\release\conduit.exe'
+    $taskUpdater = Join-Path $taskRoot 'target\release\conduit-updater.exe'
+    if (-not (Test-Path -LiteralPath $taskUpdater)) { throw "Missing update helper: $taskUpdater" }
     if (-not (Test-Path -LiteralPath $taskExe)) { throw "Missing release executable: $taskExe" }
     $taskImage = [IO.File]::ReadAllBytes($taskExe)
     $taskPeOffset = [BitConverter]::ToInt32($taskImage, 0x3c)
@@ -55,6 +57,7 @@ try {
         '/V3', '/INPUTCHARSET', 'UTF8',
         "/DAPP_VERSION=$taskVersion",
         "/DAPP_EXE=$taskExe",
+        "/DUPDATER_EXE=$taskUpdater",
         "/DAPP_ICON=$(Join-Path $taskRoot 'assets\app-icons\icon.ico')",
         "/DOUTPUT_FILE=$taskOutput"
     )

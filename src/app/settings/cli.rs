@@ -97,50 +97,27 @@ impl ConduitApp {
         cx.notify();
     }
 
-    pub(in crate::app) fn settings_cli_page(
-        &self,
-        disabled: bool,
-        view: Entity<Self>,
-    ) -> SettingPage {
-        settings_page("CLI", FullIconName::SquareTerminal).groups(vec![
-            self.settings_provider_group(Provider::Claude, 0, disabled, view.clone()),
-            self.settings_provider_group(Provider::Codex, 1, disabled, view.clone()),
-            self.settings_provider_group(Provider::OpenCode, 2, disabled, view),
-            settings_section("路径查找顺序")
-                .items(vec![
-                    value_item(
-                        "环境变量",
-                        "CONDUIT_CLAUDE_PATH · CONDUIT_CODEX_PATH · CONDUIT_OPENCODE_PATH".into(),
-                    ),
-                    value_item("应用配置", "在各引擎分组中手动指定".into()),
-                    value_item("PATH", "claude / codex / opencode 的 .exe 或 .cmd".into()),
-                    value_item(
-                        "常见安装位置",
-                        "~/.local/bin · %LOCALAPPDATA%\\Programs\\OpenAI\\Codex".into(),
-                    ),
-                ])
-                .footer(|_, _| "按上面的顺序查找，前者优先。"),
-        ])
-    }
-
-    fn settings_provider_group(
+    pub(super) fn settings_provider_group(
         &self,
         provider: Provider,
-        index: usize,
         disabled: bool,
         view: Entity<Self>,
     ) -> SettingGroup {
+        let index = provider as usize;
         let closing = self.closing;
         let configured = self
             .store
             .cli
             .path(provider)
             .map(display_path)
-            .unwrap_or_else(|| "自动查找（环境变量 / PATH）".into());
+            .unwrap_or_else(|| "自动查找已安装的 CLI".into());
         let has_path = self.store.cli.path(provider).is_some();
-        let effective = match cli::resolve(provider, &self.store.cli) {
-            Ok(cli) => format!("{}：{}", cli.source.label(), display_path(&cli.path)),
-            Err(error) => format!("尚不可用：{error:#}"),
+        let (effective, available) = match cli::resolve(provider, &self.store.cli) {
+            Ok(cli) => (
+                format!("{}：{}", cli.source.label(), display_path(&cli.path)),
+                true,
+            ),
+            Err(error) => (format!("尚不可用：{error:#}"), false),
         };
         let probing = self.probes.contains_key(&provider);
         let diagnostic = self
@@ -150,48 +127,53 @@ impl ConduitApp {
             .unwrap_or_else(|| "尚未检测版本。".into());
         let tested = cli::tested_version(provider);
         let mut cli_footer = format!(
-            "版本检测只运行 --version，不调用模型，也不验证登录状态；请先在官方 CLI 中完成登录。已验证版本 {tested}。"
+            "路径修改对后续启动生效。检测仅运行 --version；登录请在官方 CLI 完成。已验证版本 {tested}。"
         );
         if provider == Provider::OpenCode {
-            cli_footer.push_str(
-                " ACP 接入使用 OpenCode 自身登录与 Provider 配置；外部插件、问答工具与子代理暂未开放。",
-            );
+            cli_footer.push_str(" 模型与服务使用 OpenCode 的原生配置。");
         }
 
         let choose_view = view.clone();
+        let clear_view = view.clone();
         let choose = SettingField::render(move |_, _, _| {
             let choose_view = choose_view.clone();
-            Button::new(("settings-choose", index))
-                .label("更改")
-                .small()
-                .outline()
-                .disabled(disabled)
-                .when(!disabled, |button| button.cursor_pointer())
-                .on_click(move |_, window, cx| {
-                    choose_view.update(cx, |this, cx| {
-                        this.choose_cli(provider, window, cx);
-                    });
+            let clear_view = clear_view.clone();
+            h_flex()
+                .gap_2()
+                .flex_wrap()
+                .child(
+                    Button::new(("settings-choose", index))
+                        .label("选择文件")
+                        .small()
+                        .outline()
+                        .disabled(disabled)
+                        .when(!disabled, |button| button.cursor_pointer())
+                        .on_click(move |_, window, cx| {
+                            choose_view.update(cx, |this, cx| {
+                                this.choose_cli(provider, window, cx);
+                            });
+                        }),
+                )
+                .when(has_path, |row| {
+                    row.child(
+                        Button::new(("settings-clear", index))
+                            .label("恢复自动查找")
+                            .small()
+                            .ghost()
+                            .disabled(disabled)
+                            .when(!disabled, |button| button.cursor_pointer())
+                            .on_click(move |_, _, cx| {
+                                clear_view
+                                    .update(cx, |this, cx| this.set_cli_path(provider, None, cx));
+                            }),
+                    )
                 })
         });
 
-        let clear_view = view.clone();
         let probe_view = view.clone();
         let cancel_view = view.clone();
         let actions = SettingField::render(move |_, _, _| {
-            let mut row = h_flex().w_full().justify_end().gap_2().child({
-                let clear_view = clear_view.clone();
-                Button::new(("settings-clear", index))
-                    .label("清除配置")
-                    .small()
-                    .ghost()
-                    .disabled(disabled || !has_path)
-                    .when(!disabled && has_path, |button| button.cursor_pointer())
-                    .on_click(move |_, _, cx| {
-                        clear_view.update(cx, |this, cx| {
-                            this.set_cli_path(provider, None, cx);
-                        });
-                    })
-            });
+            let mut row = h_flex().w_full().justify_end().gap_2();
             if probing {
                 let cancel_view = cancel_view.clone();
                 row = row.child(
@@ -231,17 +213,22 @@ impl ConduitApp {
         });
 
         let capabilities = vec![
-            SettingItem::new("可执行文件", choose)
+            SettingItem::new("启动路径", choose)
                 .description(configured)
                 .disabled(disabled),
-            SettingItem::new("实际路径", paragraph_field(effective))
-                .layout(Axis::Vertical)
-                .description("按当前配置解析的路径，更换后对新启动的会话生效。"),
-            SettingItem::new("状态", paragraph_field(diagnostic)).layout(Axis::Vertical),
-            SettingItem::new("操作", actions).layout(Axis::Vertical),
+            SettingItem::new(
+                "实际使用的 CLI",
+                if available {
+                    paragraph_field(effective)
+                } else {
+                    error_field(effective)
+                },
+            )
+            .layout(Axis::Vertical),
+            SettingItem::new("版本检测", actions).description(diagnostic),
         ];
 
-        settings_section(provider.label())
+        settings_section("CLI 路径与版本")
             .items(capabilities)
             .footer(move |_, _| cli_footer.clone())
     }

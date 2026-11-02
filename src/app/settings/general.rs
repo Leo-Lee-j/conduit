@@ -41,6 +41,21 @@ impl ConduitApp {
             |app| app.store.ui.full_width_content,
             |app, value| app.store.ui.full_width_content = value,
         );
+        let auto_check = switch_field(
+            view.clone(),
+            |app| app.store.updates.auto_check,
+            |app, value| app.store.updates.auto_check = value,
+        );
+        let auto_download = switch_field(
+            view.clone(),
+            |app| app.store.updates.auto_download,
+            |app, value| app.store.updates.auto_download = value,
+        );
+        let auto_install = switch_field(
+            view.clone(),
+            |app| app.store.updates.auto_install,
+            |app, value| app.store.updates.auto_install = value,
+        );
         let performance_view = view.clone();
         let performance_read = performance_view.clone();
         let performance = SettingField::switch(
@@ -79,6 +94,17 @@ impl ConduitApp {
                     value_item("配置文件", state_file),
                 ])
                 .footer(|_, _| "配置只保存在本机；外观与诊断设置随本地状态保存。"),
+            settings_section("应用更新").items(vec![
+                SettingItem::new("自动检查更新", auto_check)
+                    .description("启动后及每 6 小时后台检查；也可在关于中手动检查")
+                    .disabled(disabled),
+                SettingItem::new("后台下载更新", auto_download)
+                    .description("发现新版本后下载并验证，不中断当前任务")
+                    .disabled(disabled),
+                SettingItem::new("空闲时安装并重启", auto_install)
+                    .description("任务全部结束后保存草稿，自动安装并重新打开应用")
+                    .disabled(disabled),
+            ]),
             settings_section("诊断").item(
                 SettingItem::new("性能监测", performance)
                     .description("在底部工具栏显示性能入口并采集指标")
