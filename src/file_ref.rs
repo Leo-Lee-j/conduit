@@ -5,6 +5,7 @@
 //! 有效）；工作区外的文件同样可以引用，只能给绝对形式，引擎按绝对路径读取。
 
 use gpui_kit::assets::IconName;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     fs::File,
@@ -44,7 +45,7 @@ pub struct RejectedFile {
 }
 
 /// 一条可以进入 prompt 的文件引用。
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FileReference {
     pub path: PathBuf,
     /// 实际发送的文本：工作区内是相对正斜杠路径，工作区外是绝对正斜杠路径。

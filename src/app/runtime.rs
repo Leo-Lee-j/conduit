@@ -122,7 +122,21 @@ impl ConduitApp {
             }
         }
         let prompt = file_ref::compose_prompt(&text, references);
-        if self.send_text(prompt, true, window, cx) {
+        if let Some(reason) = self.composer_send_blocked() {
+            self.message = Some(reason.into());
+            cx.notify();
+            return;
+        }
+        let accepted = if let Some(id) = self.send_target(true)
+            && self.runs.contains_key(&id)
+        {
+            self.enqueue_message(id, text, references.to_vec(), cx)
+        } else {
+            self.send_text(prompt, true, window, cx)
+        };
+        if accepted {
+            self.input
+                .update(cx, |input, cx| input.set_value("", window, cx));
             // The sent prompt is now the newest history entry; stop any
             // browsing so the next Up recalls it from the top.
             self.prompt_history = None;
@@ -163,7 +177,6 @@ impl ConduitApp {
             cx.notify();
             return false;
         }
-        let worktree = git::worktree_root(&self.store.workspaces[index].path);
         if prompt.trim().is_empty() {
             return false;
         }
@@ -190,49 +203,91 @@ impl ConduitApp {
         } else if self.selected_session.is_none() {
             return false;
         }
-        let provider = match self.selected_session {
-            Some(id) => self.session(id).unwrap().provider,
-            None => self.new_session_provider,
-        };
-        if let Some(id) = self.selected_session {
-            let session = self.session(id).unwrap();
+        let target = self.selected_session;
+        match self.start_turn(
+            index,
+            target,
+            self.new_session_provider,
+            prompt,
+            append_user,
+            cx,
+        ) {
+            Ok(id) => {
+                if append_user {
+                    self.input
+                        .update(cx, |input, cx| input.set_value("", window, cx));
+                    self.drafts.remove(&id);
+                }
+                self.input.read(cx).focus_handle(cx).focus(window, cx);
+                self.message = None;
+                self.scroll_to_end();
+                cx.notify();
+                true
+            }
+            Err(error) => {
+                self.message = Some(error);
+                cx.notify();
+                false
+            }
+        }
+    }
+
+    /// Explicit destination, with no composer, focus, selection or scroll side effects.
+    pub(super) fn start_turn(
+        &mut self,
+        index: usize,
+        target: Option<u64>,
+        provider: Provider,
+        prompt: String,
+        append_user: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<u64, String> {
+        if self.closing || !self.writable {
+            return Err("当前无法发送消息。".into());
+        }
+        if target.is_some_and(|id| self.session_busy(id)) {
+            return Err("该会话已有任务运行，请等待完成或取消后发送。".into());
+        }
+        let cwd = self.store.workspaces[index].path.clone();
+        if self.git_operation.as_ref().is_some_and(|operation| {
+            git::repository_scope(&operation.worktree) == git::repository_scope(&cwd)
+        }) {
+            return Err("该仓库正在执行 Git 操作，请等待完成后发送。".into());
+        }
+        if prompt.trim().is_empty() || prompt.len() > 256 * 1024 {
+            return Err("消息不能为空，且最多 256 KiB。".into());
+        }
+        let provider = if let Some(id) = target {
+            let session = self.session(id).ok_or("会话已不存在。")?;
             if session.native_id.is_none()
                 && session
                     .messages
                     .iter()
                     .any(|m| m.kind == ItemKind::Assistant)
             {
-                self.message =
-                    Some("该会话缺少可靠的 CLI 会话标识，请新建会话，避免丢失上下文。".into());
-                cx.notify();
-                return false;
+                return Err("该会话缺少可靠的 CLI 会话标识，请新建会话，避免丢失上下文。".into());
             }
-        }
-        let executable = match cli::resolve(provider, &self.store.cli) {
-            Ok(cli) => cli.path,
-            Err(error) => {
-                self.message = Some(format!(
+            session.provider
+        } else {
+            provider
+        };
+        let executable = cli::resolve(provider, &self.store.cli)
+            .map_err(|error| {
+                format!(
                     "{}：{error:#}。可在左下角「设置」中检查路径。",
                     provider.label()
-                ));
-                cx.notify();
-                return false;
-            }
-        };
-        let cwd = self.store.workspaces[index].path.clone();
+                )
+            })?
+            .path;
         if !cwd.is_dir() {
-            self.message = Some("工作区目录已移动或不可访问。".into());
-            cx.notify();
-            return false;
+            return Err("工作区目录已移动或不可访问。".into());
         }
-        // Typing in a workspace without a selected session starts one with the
-        // last used engine instead of asking the user to click "新建会话".
-        let id = match self.selected_session {
+        let worktree = git::worktree_root(&cwd);
+        let id = match target {
             Some(id) => id,
-            None => match self.create_session(index, provider, cx) {
-                Some(id) => id,
-                None => return false,
-            },
+            None => self
+                .create_session(index, provider, cx)
+                .ok_or("无法创建会话。")?,
         };
         let native_id = self
             .session(id)
@@ -246,14 +301,9 @@ impl ConduitApp {
             .session(id)
             .map(|s| s.reasoning_effort)
             .unwrap_or_default();
-        let route = match self.session_route(id) {
-            Ok(route) => route,
-            Err(error) => {
-                self.message = Some(format!("无法使用所选 Provider：{error:#}"));
-                cx.notify();
-                return false;
-            }
-        };
+        let route = self
+            .session_route(id)
+            .map_err(|error| format!("无法使用所选 Provider：{error:#}"))?;
         let model = model.or_else(|| route.default_model.clone());
         let session = self.session_mut(id).unwrap();
         let prefix = format!("turn-{}", session.messages.len());
@@ -288,8 +338,10 @@ impl ConduitApp {
                 session.messages.pop();
             }
             session.interrupted = false;
-            cx.notify();
-            return false;
+            return Err(self
+                .message
+                .clone()
+                .unwrap_or_else(|| "保存会话失败，消息未发送。".into()));
         }
         let first_turn = append_user
             && !self.session(id).is_some_and(|session| {
@@ -338,19 +390,10 @@ impl ConduitApp {
                 run.output_tokens_at_start = Some(0);
             }
         }
-        if append_user {
-            self.input
-                .update(cx, |input, cx| input.set_value("", window, cx));
-            self.drafts.remove(&id);
-        }
-        self.input.read(cx).focus_handle(cx).focus(window, cx);
-        self.message = None;
         if let Some(snippet) = naming_snippet {
             self.start_session_naming(id, &snippet, cx);
         }
-        self.scroll_to_end();
-        cx.notify();
-        true
+        Ok(id)
     }
 
     /// Retry with the original prompt and append output after the failed attempt.
@@ -715,6 +758,16 @@ impl ConduitApp {
                 }
                 Event::Finished { error, cancelled } => {
                     let finished_run = self.runs.remove(&id);
+                    if error.is_some() || cancelled {
+                        self.pause_queued_message(
+                            id,
+                            if cancelled {
+                                "当前回复已停止；待发送消息不会自动发送。"
+                            } else {
+                                "当前回复失败；待发送消息不会自动发送。"
+                            },
+                        );
+                    }
                     let elapsed_ms = finished_run.as_ref().map(|run| {
                         run.turn_started.elapsed().as_millis().min(u64::MAX as u128) as u64
                     });
@@ -903,7 +956,7 @@ impl ConduitApp {
             }
         }
         if self.store.ui.auto_rename && self.store.ui.naming_mode == NamingMode::Latest {
-            for id in completed_turns {
+            for &id in &completed_turns {
                 if let Some(excerpt) = self.session(id).and_then(latest_naming_excerpt) {
                     self.start_session_naming(id, &excerpt, cx);
                 }
@@ -939,6 +992,9 @@ impl ConduitApp {
                     self.refresh_git(cx);
                 }
             }
+        }
+        for id in completed_turns {
+            self.dispatch_queued_message(id, cx);
         }
         if self.closing
             && !self.updater.preparing()

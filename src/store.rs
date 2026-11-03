@@ -237,10 +237,20 @@ impl GitSettings {
     }
 }
 
+/// Unsent follow-ups are persisted separately from the sent conversation history.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct QueuedMessage {
+    pub text: String,
+    pub references: Vec<crate::file_ref::FileReference>,
+    pub paused: Option<String>,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 pub struct Store {
     pub version: u32,
     pub workspaces: Vec<Workspace>,
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub queued_messages: std::collections::HashMap<u64, QueuedMessage>,
     #[serde(default)]
     pub cli: crate::cli::CliSettings,
     #[serde(default)]
@@ -322,6 +332,7 @@ impl Store {
             return Ok(Self {
                 version: 2,
                 workspaces: vec![],
+                queued_messages: Default::default(),
                 cli: Default::default(),
                 ui: Default::default(),
                 updates: Default::default(),
@@ -667,6 +678,7 @@ mod tests {
         let path = directory.join("state.json");
         let mut store = Store {
             version: 2,
+            queued_messages: Default::default(),
             cli: Default::default(),
             ui: Default::default(),
             updates: Default::default(),

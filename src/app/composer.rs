@@ -51,6 +51,11 @@ impl ConduitApp {
             .values()
             .flat_map(|files| files.references.iter().map(|file| file.path.clone()))
             .collect::<Vec<_>>();
+        referenced.extend(
+            self.queued_messages
+                .values()
+                .flat_map(|message| message.references.iter().map(|file| file.path.clone())),
+        );
         for workspace in &self.store.workspaces {
             for session in &workspace.sessions {
                 for message in &session.messages {
@@ -479,7 +484,7 @@ impl ConduitApp {
     ) -> AnyElement {
         let app_entity = cx.entity();
         let typography = self.chat_typography();
-        let busy = self.send_blocked(true).is_some();
+        let busy = self.composer_send_blocked().is_some();
         let has_workspace = self.selected_workspace.is_some();
         let can_edit = self.writable && !self.closing;
         let input_focused = self.input.read(cx).focus_handle(cx).is_focused(window);
@@ -587,6 +592,10 @@ impl ConduitApp {
                     .border_color(rgb(palette().focus))
             })
             .when_some(
+                self.render_queued_message(composer_enabled, cx),
+                |composer, card| composer.child(card),
+            )
+            .when_some(
                 self.render_composer_files(composer_enabled, cx),
                 |composer, files| composer.child(files),
             )
@@ -630,6 +639,28 @@ impl ConduitApp {
                             .on_click(cx.listener(Self::pick_files)),
                         )
                     })
+                    .when(composer_active, |row| {
+                        row.child(
+                            Button::new("queue-message")
+                                .debug_selector(|| "queue-message".into())
+                                .small()
+                                .compact()
+                                .ghost()
+                                .label(
+                                    if self
+                                        .send_target(true)
+                                        .is_some_and(|id| self.queued_messages.contains_key(&id))
+                                    {
+                                        "队列已满 1/1"
+                                    } else {
+                                        "加入队列"
+                                    },
+                                )
+                                .tooltip("最多排队 1 条；当前回复完成后自动发送（Enter）")
+                                .disabled(!send_ready)
+                                .on_click(cx.listener(Self::send_message)),
+                        )
+                    })
                     .child(if composer_active {
                         h_flex()
                             .id("stop")
@@ -642,10 +673,14 @@ impl ConduitApp {
                             .cursor_pointer()
                             .hover(|style| style.bg(rgb(palette().control_hover)))
                             .on_click(cx.listener(|this, _, window, cx| {
-                                if let Some(run) =
-                                    this.selected_session.and_then(|id| this.runs.get_mut(&id))
-                                {
-                                    run.cancel();
+                                if let Some(id) = this.selected_session {
+                                    this.pause_queued_message(
+                                        id,
+                                        "当前回复已停止；待发送消息不会自动发送。",
+                                    );
+                                    if let Some(run) = this.runs.get_mut(&id) {
+                                        run.cancel();
+                                    }
                                 }
                                 this.input.read(cx).focus_handle(cx).focus(window, cx);
                                 cx.notify();

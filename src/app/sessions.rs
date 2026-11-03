@@ -395,6 +395,7 @@ impl ConduitApp {
             workspace.sessions.retain(|session| session.id != id);
         }
         self.drafts.remove(&id);
+        self.queued_messages.remove(&id);
         self.unread_completed.remove(&id);
         self.expanded_errors.retain(|(session, _)| *session != id);
         self.composer_files
@@ -718,6 +719,7 @@ impl ConduitApp {
         self.expanded_workspaces.clear();
         for session in &removed.sessions {
             self.drafts.remove(&session.id);
+            self.queued_messages.remove(&session.id);
             self.unread_completed.remove(&session.id);
             self.expanded_errors.retain(|(id, _)| *id != session.id);
             self.expanded_tools.retain(|(id, _)| *id != session.id);

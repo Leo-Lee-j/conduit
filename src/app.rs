@@ -78,6 +78,7 @@ mod numbered_code;
 mod opencode_models;
 mod outline;
 mod performance_view;
+mod queue;
 mod runtime;
 mod search;
 mod sessions;
@@ -158,6 +159,7 @@ pub struct ConduitApp {
     prompt_history: Option<usize>,
     composer_files: HashMap<ComposerTarget, ComposerFiles>,
     file_mentions: mentions::FileMentions,
+    queued_messages: HashMap<u64, queue::QueuedMessage>,
     runs: HashMap<u64, ActiveRun>,
     /// Successful background replies waiting for the user to open the session.
     unread_completed: HashSet<u64>,
@@ -636,6 +638,7 @@ impl ConduitApp {
             prompt_history: None,
             composer_files: HashMap::new(),
             file_mentions: mentions::FileMentions::default(),
+            queued_messages: HashMap::new(),
             runs: HashMap::new(),
             unread_completed: HashSet::new(),
             probes: HashMap::new(),
@@ -734,6 +737,17 @@ impl ConduitApp {
             copied_action: None,
             copied_action_seq: 0,
         };
+        app.queued_messages = std::mem::take(&mut app.store.queued_messages);
+        let session_ids = app
+            .store
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.sessions.iter().map(|session| session.id))
+            .collect::<HashSet<_>>();
+        app.queued_messages.retain(|id, _| session_ids.contains(id));
+        for message in app.queued_messages.values_mut() {
+            message.paused = Some("应用已重新打开；请确认后手动发送。".into());
+        }
         app.restore_update_drafts(window, cx);
         app.show_installed_changelog(window, cx);
         if start_in_git {
@@ -762,6 +776,7 @@ impl ConduitApp {
             return false;
         }
         self.last_save = Instant::now();
+        self.store.queued_messages = self.queued_messages.clone();
         match self.store.save() {
             Ok(()) => {
                 self.dirty = false;
