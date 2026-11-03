@@ -445,6 +445,7 @@ impl ConduitApp {
             cx.notify();
         }
         self.poll_opencode_models(cx);
+        self.poll_extensions(window, cx);
         // Refresh session ages every minute while idle, and running elapsed
         // labels once a second; avoid repainting every 33 ms poll otherwise.
         let label_interval = if self.runs.is_empty() { 60 } else { 1 };

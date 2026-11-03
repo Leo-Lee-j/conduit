@@ -8,12 +8,6 @@ impl ConduitApp {
         disabled: bool,
         view: Entity<Self>,
     ) -> SettingPage {
-        let state_path = Store::path();
-        let data_dir = state_path
-            .parent()
-            .map(display_path)
-            .unwrap_or_else(|| "—".into());
-        let state_file = display_path(&state_path);
         let sessions_limit = count_stepper_field(
             "sessions-limit",
             self.store.ui.sessions_per_workspace.clamp(1, 30),
@@ -41,6 +35,32 @@ impl ConduitApp {
             |app| app.store.ui.full_width_content,
             |app, value| app.store.ui.full_width_content = value,
         );
+        settings_page("通用", FullIconName::Settings).groups(vec![
+            settings_section("工作台布局").items(vec![
+                SettingItem::new("内容铺满", full_width)
+                    .description("开启后聊天内容铺满可用区域，关闭时居中显示")
+                    .disabled(disabled),
+                SettingItem::new("侧栏会话数量", sessions_limit)
+                    .description("每个工作区默认显示的会话数，更多会话可展开查看")
+                    .disabled(disabled),
+                SettingItem::new("标签页上限", max_tabs_limit)
+                    .description("超出上限时自动关闭最早打开的标签页")
+                    .disabled(disabled),
+            ]),
+        ])
+    }
+
+    pub(in crate::app) fn settings_maintenance_page(
+        &self,
+        disabled: bool,
+        view: Entity<Self>,
+    ) -> SettingPage {
+        let state_path = Store::path();
+        let data_dir = state_path
+            .parent()
+            .map(display_path)
+            .unwrap_or_else(|| "—".into());
+        let state_file = display_path(&state_path);
         let auto_check = switch_field(
             view.clone(),
             |app| app.store.updates.auto_check,
@@ -76,38 +96,27 @@ impl ConduitApp {
                 });
             },
         );
-        settings_page("通用", FullIconName::Settings).groups(vec![
-            settings_section("工作台布局").items(vec![
-                SettingItem::new("内容铺满", full_width)
-                    .description("开启后聊天内容铺满可用区域，关闭时居中显示")
-                    .disabled(disabled),
-                SettingItem::new("侧栏会话数量", sessions_limit)
-                    .description("每个工作区默认显示的会话数，更多会话可展开查看")
-                    .disabled(disabled),
-                SettingItem::new("标签页上限", max_tabs_limit)
-                    .description("超出上限时自动关闭最早打开的标签页")
-                    .disabled(disabled),
-            ]),
+        settings_page("数据与更新", FullIconName::Settings).groups(vec![
             settings_section("本机数据")
                 .items(vec![
                     value_item("数据目录", data_dir),
                     value_item("配置文件", state_file),
                 ])
-                .footer(|_, _| "配置只保存在本机；外观与诊断设置随本地状态保存。"),
+                .footer(|_, _| "配置只保存在本机。"),
             settings_section("应用更新").items(vec![
                 SettingItem::new("自动检查更新", auto_check)
-                    .description("启动后及每 6 小时后台检查；也可在关于中手动检查")
+                    .description("启动后及每 6 小时后台检查")
                     .disabled(disabled),
                 SettingItem::new("后台下载更新", auto_download)
-                    .description("发现新版本后下载并验证，不中断当前任务")
+                    .description("发现新版本后下载并验证")
                     .disabled(disabled),
                 SettingItem::new("空闲时安装并重启", auto_install)
-                    .description("任务全部结束后保存草稿，自动安装并重新打开应用")
+                    .description("任务结束后保存草稿，安装并重新打开应用")
                     .disabled(disabled),
             ]),
             settings_section("诊断").item(
                 SettingItem::new("性能监测", performance)
-                    .description("在底部工具栏显示性能入口并采集指标")
+                    .description("在底部工具栏显示性能入口")
                     .disabled(disabled),
             ),
         ])
@@ -168,30 +177,24 @@ impl ConduitApp {
                 .read(cx)
                 .naming_mode_picker(mode_view.clone(), disabled || !auto_rename)
         });
+        let mut items = vec![
+            SettingItem::new("自动命名", auto_rename)
+                .description("关闭后仍可手动使用 AI 重命名")
+                .disabled(disabled),
+            SettingItem::new("触发方式", mode).disabled(disabled),
+            self.generation_disclosure(true, view.clone()),
+        ];
+        if self.settings_ui.naming_expanded {
+            items.extend([
+                SettingItem::new("命名引擎", provider).disabled(disabled),
+                SettingItem::new("命名服务", channel).disabled(disabled),
+                SettingItem::new("命名模型", model).disabled(disabled),
+            ]);
+        }
         settings_page("会话", FullIconName::Sparkles).group(
             settings_section("会话命名")
-                .items(vec![
-                    SettingItem::new("自动命名", auto_rename)
-                        .description(
-                            "自动生成和更新会话标题；关闭后仍可在会话菜单手动使用 AI 重命名",
-                        )
-                        .disabled(disabled),
-                    SettingItem::new("命名引擎", provider)
-                        .description("生成会话标题使用的引擎；默认跟随当前会话")
-                        .disabled(disabled),
-                    SettingItem::new("命名 Provider", channel)
-                        .description("独立选择 CLI 默认、CCS 或自定义 Provider；OpenCode 使用原生 Provider")
-                        .disabled(disabled),
-                    SettingItem::new("命名模型", model)
-                        .description("模型列表随 Provider 切换；全部默认时跟随当前会话")
-                        .disabled(disabled),
-                    SettingItem::new("触发方式", mode)
-                        .description("选择标题跟随最新对话自动更新，或只按第一条消息生成一次")
-                        .disabled(disabled),
-                ])
-                .footer(|_, _| {
-                    "命名在后台进行，失败时保留当前标题；命名完成前手动重命名的会话不会被覆盖。右键会话可随时使用 AI 重命名。"
-                }),
+                .items(items)
+                .footer(|_, _| "命名在后台进行；失败保留当前标题，手动命名不会被覆盖。"),
         )
     }
 
@@ -255,31 +258,67 @@ impl ConduitApp {
                     }
                 })
         });
-        settings_page("Git", FullIconName::GitFork).groups(vec![
-            settings_section("生成引擎").items(vec![
-                SettingItem::new("生成引擎", provider)
-                    .description("用于生成 Commit Message 的 CLI；默认跟随当前会话")
-                    .disabled(disabled),
-                SettingItem::new("生成 Provider", channel)
-                    .description("独立选择 CLI 默认、CCS 或自定义 Provider；OpenCode 使用原生 Provider")
-                    .disabled(disabled),
-                SettingItem::new("生成模型", model)
-                    .description("模型列表随 Provider 切换；全部默认时跟随当前会话")
-                    .disabled(disabled),
-            ]),
-            settings_section("Commit Message 提示词").items(vec![
+        let mut generation = vec![self.generation_disclosure(false, view.clone())];
+        if self.settings_ui.git_expanded {
+            generation.extend([
+                SettingItem::new("生成引擎", provider).disabled(disabled),
+                SettingItem::new("生成服务", channel).disabled(disabled),
+                SettingItem::new("生成模型", model).disabled(disabled),
+            ]);
+        }
+        let expanded = self.settings_ui.prompt_expanded;
+        let preview = if self.store.git.commit_message_prompt.trim().is_empty() {
+            crate::store::DEFAULT_COMMIT_PROMPT
+        } else {
+            &self.store.git.commit_message_prompt
+        }
+        .to_owned();
+        let edit = SettingItem::render(move |_, _, _| {
+            let view = view.clone();
+            v_flex()
+                .w_full()
+                .gap_2()
+                .when(!expanded, |row| {
+                    row.child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(rgb(palette().muted))
+                            .child(preview.clone()),
+                    )
+                })
+                .child(
+                    Button::new("git-prompt-expand")
+                        .debug_selector(|| "git-prompt-expand".into())
+                        .small()
+                        .ghost()
+                        .label(if expanded {
+                            "收起提示词"
+                        } else {
+                            "编辑提示词"
+                        })
+                        .on_click(move |_, _, cx| {
+                            view.update(cx, |app, cx| {
+                                app.settings_ui.prompt_expanded = !expanded;
+                                cx.notify();
+                            });
+                        }),
+                )
+        })
+        .keywords(["提示词", "prompt"]);
+        let mut prompts = vec![edit];
+        if expanded {
+            prompts.extend([
                 SettingItem::new("提示词", prompt)
                     .layout(Axis::Vertical)
-                    .description(
-                        "设置生成说明的语言、格式和风格，应用于 Git 侧栏的 Generate 按钮。已暂存文件名与 diff 会自动附加，无需填写占位符。",
-                    )
                     .disabled(disabled),
-                SettingItem::new("恢复默认", reset)
-                    .description(
-                        "自动保存，适用于所有工作区；留空时使用默认提示词。修改将在下一次生成时生效。",
-                    )
-                    .disabled(disabled),
-            ]),
+                SettingItem::new("恢复默认", reset).disabled(disabled),
+            ]);
+        }
+        settings_page("Git", FullIconName::GitFork).groups([
+            settings_section("生成模型").items(generation),
+            settings_section("Commit Message 提示词")
+                .items(prompts)
+                .footer(|_, _| "修改自动保存，下次生成生效；已暂存文件名和 diff 会自动附加。"),
         ])
     }
 }

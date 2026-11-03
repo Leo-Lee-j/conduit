@@ -117,11 +117,9 @@ fn settings_dismisses_on_outside_click_and_keeps_inside_clicks(cx: &mut TestAppC
         cx.simulate_mouse_down(inside, MouseButton::Left, Modifiers::default());
         cx.simulate_mouse_up(inside, MouseButton::Left, Modifiers::default());
         cx.update(|window, cx| assert!(window.has_active_dialog(cx)));
-        let appearance = cx.update(|window, _| {
-            gpui_kit::base::test_support::find(window, &[], &"0-1".into())
-                .expect("appearance navigation")
-                .bounds()
-        });
+        let appearance = cx
+            .debug_bounds("settings-nav-1")
+            .expect("appearance navigation");
         cx.simulate_mouse_down(appearance.center(), MouseButton::Left, Modifiers::default());
         cx.simulate_mouse_up(appearance.center(), MouseButton::Left, Modifiers::default());
         cx.run_until_parked();
@@ -198,11 +196,9 @@ fn settings_connections_switch_engines_and_keep_read_only_actions_disabled(
         cx.update(|window, cx| {
             let _ = window.draw(cx);
         });
-        let navigation = cx.update(|window, _| {
-            gpui_kit::base::test_support::find(window, &[], &"0-4".into())
-                .unwrap()
-                .bounds()
-        });
+        let navigation = cx
+            .debug_bounds("settings-nav-3")
+            .expect("connections navigation");
         cx.simulate_mouse_down(navigation.center(), MouseButton::Left, Modifiers::default());
         cx.simulate_mouse_up(navigation.center(), MouseButton::Left, Modifiers::default());
         cx.run_until_parked();
@@ -5094,6 +5090,156 @@ fn checkbox_theme_pairs_remain_contrasting_when_switching_appearance(cx: &mut Te
             assert_eq!(theme.tokens.primary.color, expected_fill);
             assert_eq!(theme.primary_foreground, expected_mark);
             assert_ne!(theme.primary, theme.primary_foreground);
+        });
+    }
+}
+
+#[gpui_kit::test]
+fn settings_extensions_lists_search_details_and_context_are_isolated(cx: &mut TestAppContext) {
+    use crate::extensions::{Catalog, Context as ExtensionContext, Entry, Kind};
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut app = super::ConduitApp::with_store(
+                window,
+                cx,
+                Ok(crate::store::Store::default()),
+                false,
+                false,
+            );
+            app.writable = false;
+            app.connection_settings.syncing = true;
+            app.extensions_ui.initialized = true;
+            app.connection_settings.engine = crate::domain::Provider::Codex;
+            let context = ExtensionContext {
+                engine: crate::domain::Provider::Codex,
+                workspace: None,
+                cli_path: crate::cli::resolve(crate::domain::Provider::Codex, &app.store.cli)
+                    .ok()
+                    .map(|c| c.path),
+            };
+            let mut entries = (0..80)
+                .map(|i| Entry {
+                    name: format!("skill-{i:02}"),
+                    description: format!("第 {i} 个定义的简介，用于检查目录搜索和窄窗阅读。"),
+                    path: std::env::temp_dir().join(format!("skills/{i}/SKILL.md")),
+                    scope: "全局".into(),
+                    kind: Kind::Skill,
+                    disabled: false,
+                    transport: String::new(),
+                    target: String::new(),
+                })
+                .collect::<Vec<_>>();
+            entries.push(Entry {
+                name: "demo-mcp".into(),
+                description: String::new(),
+                path: std::env::temp_dir().join("config.toml"),
+                scope: "全局".into(),
+                kind: Kind::Mcp,
+                disabled: true,
+                transport: "stdio".into(),
+                target: "tool.exe".into(),
+            });
+            app.extensions_ui.catalogs.insert(
+                context,
+                Catalog {
+                    entries,
+                    updated: Some(std::time::SystemTime::now()),
+                    ..Default::default()
+                },
+            );
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    for (width, height, light) in [(850., 500., true), (1280., 900., false)] {
+        cx.simulate_resize(gpui_kit::size(px(width), px(height)));
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let mode = if light {
+                    gpui_kit::component::ThemeMode::Light
+                } else {
+                    gpui_kit::component::ThemeMode::Dark
+                };
+                super::set_palette(mode);
+                gpui_kit::component::Theme::change(mode, Some(window), cx);
+                app.settings_ui.page = 4;
+                app.extensions_ui.mcp = false;
+                app.open_settings(window, cx);
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let body = cx.debug_bounds("settings-modal-body").unwrap();
+        let list = cx.debug_bounds("extensions-list").unwrap();
+        assert!(list.size.height >= px(120.));
+        let first = cx.debug_bounds("extension-detail-0").unwrap();
+        let second = cx.debug_bounds("extension-detail-1").unwrap();
+        assert!(first.top() >= list.top() && second.bottom() <= list.bottom());
+        assert!(first.right() <= body.right());
+        assert!(
+            cx.debug_bounds("extension-detail-79").is_none(),
+            "offscreen rows are virtualized"
+        );
+        cx.simulate_mouse_down(first.center(), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(first.center(), MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.update(|_, cx| assert_eq!(app.read(cx).extensions_ui.expanded.len(), 1));
+        assert!(cx.debug_bounds("extension-source-0").is_some());
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.extensions_ui.searches[0]
+                    .update(cx, |input, cx| input.set_value("skill-70", window, cx))
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.update(|_, cx| assert_eq!(app.read(cx).extensions_ui.lists[0].item_count(), 1));
+        let tab = cx.debug_bounds("extensions-mcp-tab").unwrap();
+        cx.simulate_mouse_down(tab.center(), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(tab.center(), MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.update(|_, cx| {
+            assert!(app.read(cx).extensions_ui.mcp);
+            assert_eq!(app.read(cx).extensions_ui.lists[1].item_count(), 1);
+            assert!(app.read(cx).extensions_ui.probe.is_none());
+        });
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let before = app.new_session_provider;
+                let context = app.extensions_ui.context.clone().unwrap();
+                app.connection_settings.engine = crate::domain::Provider::OpenCode;
+                app.ensure_extensions(window, cx, false);
+                assert_eq!(app.new_session_provider, before);
+                assert_ne!(app.extensions_ui.context.as_ref(), Some(&context));
+                assert!(app.extensions_ui.expanded.is_empty());
+                app.extensions_ui.probe = None;
+                app.connection_settings.engine = crate::domain::Provider::Codex;
+                app.ensure_extensions(window, cx, false);
+                app.extensions_ui.searches[0]
+                    .update(cx, |input, cx| input.set_value("", window, cx));
+            })
+        });
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(!window.has_active_dialog(cx));
+            assert!(app.read(cx).extensions_ui.probe.is_none());
         });
     }
 }

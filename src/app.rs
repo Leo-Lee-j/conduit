@@ -134,6 +134,8 @@ pub struct ConduitApp {
     store: Store,
     updater: update::UpdateUi,
     connection_settings: settings::ConnectionsUi,
+    settings_ui: settings::SettingsUi,
+    extensions_ui: settings::ExtensionsUi,
     writable: bool,
     selected_workspace: Option<usize>,
     selected_session: Option<u64>,
@@ -477,6 +479,25 @@ impl ConduitApp {
                 cx.notify();
             }
         });
+        let settings_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索设置…"));
+        let settings_search_subscription =
+            cx.subscribe(&settings_search, |_, _, _: &InputEvent, cx| cx.notify());
+        let skill_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索名称或简介…"));
+        let mcp_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索 MCP 名称…"));
+        let skill_search_subscription =
+            cx.subscribe(&skill_search, |app, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    app.extensions_ui.lists[0].reset(0);
+                    cx.notify();
+                }
+            });
+        let mcp_search_subscription =
+            cx.subscribe(&mcp_search, |app, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    app.extensions_ui.lists[1].reset(0);
+                    cx.notify();
+                }
+            });
         let git_prompt_input = cx.new(|cx| {
             let mut state = TextareaState::new(window, cx)
                 .placeholder("填写 Commit Message 生成提示词…")
@@ -506,6 +527,7 @@ impl ConduitApp {
         let weak = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
             weak.update(cx, |this, cx| {
+                this.extensions_ui.probe = None;
                 if this.updater.exiting {
                     return true;
                 }
@@ -579,6 +601,14 @@ impl ConduitApp {
             store,
             updater: update::UpdateUi::default(),
             connection_settings: settings::ConnectionsUi::new(new_session_provider),
+            settings_ui: settings::SettingsUi {
+                page: 0,
+                search: settings_search,
+                naming_expanded: false,
+                git_expanded: false,
+                prompt_expanded: false,
+            },
+            extensions_ui: settings::ExtensionsUi::new(skill_search, mcp_search),
             writable,
             selected_workspace,
             selected_session,
@@ -652,6 +682,9 @@ impl ConduitApp {
             delete_target: None,
             remove_workspace_target: None,
             _subscriptions: vec![
+                settings_search_subscription,
+                skill_search_subscription,
+                mcp_search_subscription,
                 input_subscription,
                 mention_subscription,
                 search_subscription,

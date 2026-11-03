@@ -42,7 +42,7 @@ impl ConduitApp {
                         .debug_selector(move || format!("settings-engine-{index}"))
                         .flex_1()
                         .min_w_0()
-                        .h(px(44.))
+                        .h(px(32.))
                         .outline()
                         .label(candidate.label())
                         .selected(candidate == engine)
@@ -103,6 +103,22 @@ impl ConduitApp {
             }
         } else {
             groups.push(self.settings_provider_group(engine, disabled, view.clone()));
+            let extensions_view = view.clone();
+            groups.push(
+                SettingGroup::new().variant(GroupBoxVariant::Normal).item(
+                    SettingItem::render(move |_, _, _| {
+                        let view = extensions_view.clone();
+                        Button::new("settings-view-extensions")
+                            .small()
+                            .ghost()
+                            .label("查看 Skills / MCP")
+                            .on_click(move |_, window, cx| {
+                                view.update(cx, |app, cx| app.select_settings_page(4, window, cx));
+                            })
+                    })
+                    .keywords(["Skills", "MCP", "扩展"]),
+                ),
+            );
             let expanded = self.connection_settings.path_help;
             let help = SettingItem::render(move |_, _, _| {
                 let help_view = view.clone();

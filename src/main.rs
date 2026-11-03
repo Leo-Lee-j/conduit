@@ -6,6 +6,7 @@ mod chat_runtime;
 mod child;
 mod cli;
 mod domain;
+mod extensions;
 mod failure;
 mod file_ref;
 mod file_search;

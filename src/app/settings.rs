@@ -9,11 +9,12 @@ use gpui_kit::component::setting::{
 /// Each page keeps its title visible while the settings below it scroll.
 fn settings_page(title: &'static str, icon: FullIconName) -> SettingPage {
     let description = match title {
-        "通用" => "调整工作台布局，管理本机数据与诊断。",
+        "通用" => "调整工作台布局。",
         "外观" => "选择主题，调整聊天文字与代码的阅读体验。",
         "会话" => "设置会话标题的生成方式与使用的模型。",
         "Git" => "自定义提交说明的生成模型与提示词。",
         "CLI & 模型服务" => "选择引擎，配置启动路径与聊天使用的模型服务。",
+        "数据与更新" => "管理本机数据、更新偏好与诊断。",
         _ => "",
     };
     SettingPage::new(title)
@@ -26,20 +27,13 @@ fn settings_page(title: &'static str, icon: FullIconName) -> SettingPage {
 fn page_header_style() -> StyleRefinement {
     StyleRefinement::default()
         .px(px(24.))
-        .py(px(20.))
+        .py(px(10.))
         .gap(px(6.))
         .flex_shrink_0()
         .text_size(px(18.))
         .font_semibold()
         .text_color(rgb(palette().text))
         .bg(rgb(palette().surface))
-        .border_color(rgb(palette().border))
-}
-
-fn sidebar_style() -> StyleRefinement {
-    StyleRefinement::default()
-        .bg(rgb(palette().sidebar_bg))
-        .border_r_1()
         .border_color(rgb(palette().border))
 }
 
@@ -364,13 +358,23 @@ mod general;
 #[path = "settings/models.rs"]
 mod model_sync;
 pub(super) use connections::ConnectionsUi;
+#[path = "settings/extensions.rs"]
+mod extensions_view;
+#[path = "settings/navigation.rs"]
+mod navigation;
+pub(super) use extensions_view::ExtensionsUi;
+pub(super) use navigation::SettingsUi;
 
 impl ConduitApp {
     pub(super) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.reload_all_models_async(false, window, cx);
         let view = cx.entity();
+        if self.settings_ui.page == 4 {
+            self.ensure_extensions(window, cx, false);
+        }
         window.open_dialog(cx, move |dialog, window, _| {
             let view = view.clone();
+            let close_view = view.clone();
             let viewport_height = f32::from(window.viewport_size().height);
             let modal_height = settings_modal_height(window);
             let margin_top = ((viewport_height - modal_height) * 0.5).max(16.);
@@ -390,8 +394,16 @@ impl ConduitApp {
                 .bg(rgb(palette().surface))
                 .border_color(rgb(palette().border))
                 .close_button(false)
+                .on_close(move |_, _, cx| {
+                    close_view.update(cx, |app, cx| {
+                        app.extensions_ui.probe = None;
+                        cx.notify();
+                    });
+                })
                 .content(move |content, window, cx| {
-                    let body = view.read(cx).settings_modal_content(window, view.clone());
+                    let body = view
+                        .read(cx)
+                        .settings_modal_content(window, view.clone(), cx);
                     content.child(body)
                 })
         });
@@ -458,22 +470,14 @@ impl ConduitApp {
         cx.notify();
     }
 
-    pub(super) fn settings_modal_content(&self, window: &Window, view: Entity<Self>) -> AnyElement {
+    pub(super) fn settings_modal_content(
+        &self,
+        window: &Window,
+        view: Entity<Self>,
+        cx: &App,
+    ) -> AnyElement {
         let disabled = !self.writable || self.closing;
-        let settings = Settings::new("conduit-settings")
-            .sidebar_width(px(184.))
-            .sidebar_size_range(px(168.)..px(220.))
-            .with_group_variant(GroupBoxVariant::Outline)
-            .sidebar_style(&sidebar_style())
-            .header_style(&StyleRefinement::default().p(px(16.)))
-            .pages(vec![
-                self.settings_general_page(disabled, view.clone()),
-                self.settings_appearance_page(disabled, view.clone()),
-                self.settings_session_page(disabled, view.clone()),
-                self.settings_git_page(disabled, view.clone()),
-                self.settings_connections_page(disabled, view.clone()),
-                self.settings_shortcuts_page(),
-            ]);
+        let settings = self.settings_body(window, view.clone(), cx);
         let modal_height = settings_modal_height(window);
         v_flex()
             .id("settings-modal")
@@ -550,6 +554,8 @@ impl ConduitApp {
                     )
                     .child(if disabled {
                         "当前为只读模式"
+                    } else if self.settings_ui.page == 4 {
+                        "CLI 扩展只读展示 · 不修改原生配置"
                     } else {
                         "偏好设置修改后自动保存"
                     }),
@@ -561,9 +567,7 @@ impl ConduitApp {
         let rows = [
             ("最近会话", "ctrl-e"),
             ("搜索会话", "ctrl-p"),
-            ("打开终端（暂未实现）", "ctrl-`"),
             ("打开设置", "ctrl-m"),
-            ("文件名搜索（暂未实现）Shift ×2", "shift"),
             ("切换 Git 侧栏", "ctrl-k"),
         ];
         let items: Vec<_> = rows

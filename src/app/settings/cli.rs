@@ -57,6 +57,7 @@ impl ConduitApp {
         let previous = self.store.cli.clone();
         self.store.cli.set(provider, path);
         if self.persist() {
+            self.extensions_ui.invalidate();
             if provider == Provider::OpenCode {
                 self.opencode_model_probes.clear();
                 self.opencode_catalogs.clear();
