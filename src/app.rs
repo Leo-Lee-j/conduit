@@ -205,6 +205,9 @@ pub struct ConduitApp {
     naming_errors: HashMap<u64, String>,
     git_operation: Option<GitOperation>,
     git_feedback: HashMap<PathBuf, GitFeedback>,
+    remote_tags_probe: Option<git::RemoteTagsProbe>,
+    remote_tags: HashMap<PathBuf, git::RemoteTags>,
+    pending_tag_retry: HashMap<PathBuf, git::TagRetry>,
     /// Git sidebar groups the user collapsed; untracked files start collapsed.
     collapsed_git_groups: HashSet<git_ui::GitChangeGroup>,
     git_group_by_status: bool,
@@ -212,6 +215,8 @@ pub struct ConduitApp {
     commit_and_push: bool,
     /// Workspaces whose session list was expanded past the configured limit.
     expanded_workspaces: HashSet<usize>,
+    /// Workspace session lists explicitly collapsed in the sidebar.
+    collapsed_workspaces: HashSet<PathBuf>,
     /// Workspace paths whose CLI history is being imported in the background.
     history_loading: HashSet<PathBuf>,
     /// Startup page state; `Some` from before the first frame until the
@@ -668,12 +673,16 @@ impl ConduitApp {
             session_namings: HashMap::new(),
             naming_errors: HashMap::new(),
             git_operation: None,
+            remote_tags_probe: None,
+            remote_tags: HashMap::new(),
+            pending_tag_retry: HashMap::new(),
             git_feedback: HashMap::new(),
             collapsed_git_groups: HashSet::from([git_ui::GitChangeGroup::Untracked]),
             git_group_by_status: false,
             selected_git_files: HashMap::new(),
             commit_and_push: false,
             expanded_workspaces: HashSet::new(),
+            collapsed_workspaces: HashSet::new(),
             history_loading: HashSet::new(),
             startup: None,
             search,

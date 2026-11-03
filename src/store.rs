@@ -171,8 +171,21 @@ impl Default for UiSettings {
 
 pub const DEFAULT_COMMIT_PROMPT: &str = "根据 Git 已暂存变更生成一条简洁准确的中文提交说明。第一行为 conventional commit 风格的标题；必要时空一行后用简短条目补充原因。不要虚构测试结果。";
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TagIncrement {
+    #[default]
+    Patch,
+    Minor,
+    Major,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GitSettings {
+    #[serde(default = "default_tag_step")]
+    pub tag_step: usize,
+    #[serde(default)]
+    pub tag_increment: TagIncrement,
     #[serde(default = "default_commit_prompt")]
     pub commit_message_prompt: String,
     /// CLI engine used to generate commit messages; `None` follows the
@@ -188,6 +201,10 @@ pub struct GitSettings {
     pub generation_channel: Option<crate::providers::ModelChannel>,
 }
 
+fn default_tag_step() -> usize {
+    1
+}
+
 fn default_commit_prompt() -> String {
     DEFAULT_COMMIT_PROMPT.into()
 }
@@ -195,6 +212,8 @@ fn default_commit_prompt() -> String {
 impl Default for GitSettings {
     fn default() -> Self {
         Self {
+            tag_increment: TagIncrement::default(),
+            tag_step: default_tag_step(),
             commit_message_prompt: default_commit_prompt(),
             generation_provider: None,
             generation_model: None,
@@ -893,6 +912,8 @@ mod tests {
     #[test]
     fn commit_prompt_uses_saved_preferences_and_appends_staged_context() {
         let mut settings = GitSettings {
+            tag_increment: TagIncrement::Patch,
+            tag_step: 1,
             commit_message_prompt: "Use English and include a concise body.".into(),
             generation_provider: None,
             generation_model: None,
@@ -910,6 +931,12 @@ mod tests {
         );
         let restored: GitSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(restored.commit_message_prompt, DEFAULT_COMMIT_PROMPT);
+        assert_eq!(restored.tag_increment, TagIncrement::Patch);
+        assert_eq!(restored.tag_step, 1);
+        settings.tag_step = 10;
+        let roundtrip: GitSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(roundtrip.tag_step, 10);
     }
     #[test]
     fn model_preferences_restore_old_defaults_and_roundtrip_new_routes() {

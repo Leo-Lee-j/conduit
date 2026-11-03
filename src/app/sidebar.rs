@@ -3,6 +3,26 @@
 use super::*;
 use gpui_kit::component::status_bar::StatusBar;
 
+/// Shared frame, toolbar and horizontal gutter for the left navigation pages.
+/// Scrolling and bottom borders remain page-specific rather than being nested
+/// inside a padded frame, so they can extend to the pane edges.
+pub(super) fn navigation_pane() -> Div {
+    v_flex().size_full().min_w_0().bg(rgb(palette().sidebar_bg))
+}
+
+pub(super) fn navigation_header() -> Div {
+    h_flex()
+        .h(px(34.))
+        .flex_shrink_0()
+        .min_w_0()
+        .px_2()
+        .items_center()
+}
+
+pub(super) fn navigation_content() -> Div {
+    v_flex().min_w_0().px_2()
+}
+
 #[derive(Clone)]
 struct WorkspaceDrag {
     path: PathBuf,
@@ -124,22 +144,14 @@ impl ConduitApp {
     pub(super) fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let can_edit = self.writable && !self.closing;
         let app_entity = cx.entity();
-        let mut sidebar = v_flex()
+        let mut sidebar = navigation_pane()
             .id("sidebar")
-            .h_full()
-            .w_full()
-            .bg(rgb(palette().sidebar_bg))
-            // No bottom padding: the bottom bar must sit on the window edge so
-            // its 34px strip lines up with the conversation toolbar.
-            .px_2()
+            .debug_selector(|| "sidebar".into())
+            // No bottom padding: the bottom bar aligns with the conversation toolbar.
             .gap_0()
             .child(
-                h_flex()
-                    .h(px(34.))
-                    .flex_shrink_0()
-                    .px_1()
+                navigation_header()
                     .gap_1()
-                    .items_center()
                     .child(
                         Button::new("sidebar-new-session")
                             .ghost()
@@ -171,7 +183,7 @@ impl ConduitApp {
                     )
                     .child(div().flex_1()),
             );
-        let mut list = v_flex()
+        let mut list = navigation_content()
             .id("workspace-list")
             .flex_1()
             .min_h_0()
@@ -268,6 +280,8 @@ impl ConduitApp {
             let count = sessions.len();
             let limit = self.store.ui.sessions_per_workspace.clamp(1, 30);
             let expanded = self.expanded_workspaces.contains(&index);
+            let collapsed = self.collapsed_workspaces.contains(&workspace.path);
+            let toggle_path = workspace.path.clone();
             let importing = self.history_loading.contains(&workspace.path);
             let drag_path = workspace.path.clone();
             let drop_path = workspace.path.clone();
@@ -341,6 +355,34 @@ impl ConduitApp {
                             this.switch(index, last, window, cx)
                         }))
                         .child(
+                            Button::new(("workspace-collapse", index))
+                                .debug_selector(move || format!("workspace-collapse-{index}"))
+                                .ghost()
+                                .small()
+                                .compact()
+                                .w(px(18.))
+                                .h(px(22.))
+                                .p_0()
+                                .cursor_pointer()
+                                .icon(if collapsed {
+                                    IconName::ChevronRight
+                                } else {
+                                    IconName::ChevronDown
+                                })
+                                .tooltip(if collapsed {
+                                    "展开工作区"
+                                } else {
+                                    "折叠工作区"
+                                })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    if !this.collapsed_workspaces.insert(toggle_path.clone()) {
+                                        this.collapsed_workspaces.remove(&toggle_path);
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
                             Icon::new(IconName::Folder)
                                 .small()
                                 .text_color(rgb(palette().faint)),
@@ -411,6 +453,9 @@ impl ConduitApp {
                                 .child(self.workspace_menu(index, app_entity.clone())),
                         ),
                 );
+            if collapsed {
+                continue;
+            }
             if importing && sessions.is_empty() {
                 list = list.child(
                     h_flex()

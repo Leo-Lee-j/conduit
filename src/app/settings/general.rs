@@ -266,6 +266,53 @@ impl ConduitApp {
                 SettingItem::new("生成模型", model).disabled(disabled),
             ]);
         }
+        let tag_settings_view = view.clone();
+        let tag_increment = self.store.git.tag_increment;
+        let tag_strategy = SettingField::render(move |_, _, _| {
+            let app = tag_settings_view.clone();
+            Button::new("git-tag-strategy")
+                .small()
+                .label(match tag_increment {
+                    crate::store::TagIncrement::Patch => "Patch +1",
+                    crate::store::TagIncrement::Minor => "Minor +1",
+                    crate::store::TagIncrement::Major => "Major +1",
+                })
+                .disabled(disabled)
+                .dropdown_menu(move |mut menu, _, _| {
+                    for (strategy, label) in [
+                        (crate::store::TagIncrement::Patch, "Patch +1"),
+                        (crate::store::TagIncrement::Minor, "Minor +1"),
+                        (crate::store::TagIncrement::Major, "Major +1"),
+                    ] {
+                        let app = app.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(label)
+                                .checked(strategy == tag_increment)
+                                .on_click(move |_, _, cx| {
+                                    app.update(cx, |this, cx| {
+                                        if this.writable && !this.closing {
+                                            this.store.git.tag_increment = strategy;
+                                            this.persist();
+                                            cx.notify();
+                                        }
+                                    });
+                                }),
+                        );
+                    }
+                    menu
+                })
+        });
+        let tag_step = count_stepper_field(
+            "git-tag-step",
+            self.store.git.tag_step.clamp(1, 100),
+            1,
+            100,
+            "减少标签递增步长",
+            "增加标签递增步长",
+            disabled,
+            view.clone(),
+            |app, value| app.store.git.tag_step = value,
+        );
         let expanded = self.settings_ui.prompt_expanded;
         let preview = if self.store.git.commit_message_prompt.trim().is_empty() {
             crate::store::DEFAULT_COMMIT_PROMPT
@@ -315,6 +362,14 @@ impl ConduitApp {
             ]);
         }
         settings_page("Git", FullIconName::GitFork).groups([
+            settings_section("标签生成").items(vec![
+                SettingItem::new("版本递增策略", tag_strategy)
+                    .description("根据已知稳定版标签生成新版本")
+                    .disabled(disabled),
+                SettingItem::new("递增步长", tag_step)
+                    .description("目标段增加指定数值，右侧版本段归零")
+                    .disabled(disabled),
+            ]),
             settings_section("生成模型").items(generation),
             settings_section("Commit Message 提示词")
                 .items(prompts)

@@ -57,10 +57,14 @@ impl ConduitApp {
                 .auto_grow(3, 3)
         });
         let subscription = cx.subscribe(&input, |_, _, _: &InputEvent, cx| cx.notify());
+        let tag = cx.new(|cx| InputState::new(window, cx).placeholder("Tag（可选，例如 v1.2.3）"));
+        let tag_subscription = cx.subscribe(&tag, |_, _, _: &InputEvent, cx| cx.notify());
         self.commit_drafts.insert(
             path,
             CommitDraft {
                 input,
+                tag,
+                _tag_subscription: tag_subscription,
                 _subscription: subscription,
             },
         );
@@ -299,7 +303,7 @@ impl ConduitApp {
             .into_any_element()
     }
 
-    pub(super) fn start_commit(&mut self, cx: &mut Context<Self>) {
+    fn start_commit(&mut self, push: bool, cx: &mut Context<Self>) {
         let Some(path) = self.selected_workspace_path() else {
             return;
         };
@@ -334,10 +338,31 @@ impl ConduitApp {
             self.git_feedback(path, "请填写 Commit Message，或点击 AI 生成。", true, cx);
             return;
         }
+        let tag = self
+            .commit_drafts
+            .get(&path)
+            .map(|draft| draft.tag.read(cx).value().to_string())
+            .filter(|value| !value.is_empty());
+        if let Some(name) = tag.as_deref() {
+            if self.remote_tags.get(&path).is_some_and(|remote| {
+                snapshot.target.branch.as_ref() == Some(&remote.branch)
+                    && remote.names.iter().any(|item| item == name)
+            }) {
+                self.git_feedback(
+                    path,
+                    format!("上次查询显示远程已存在标签 {name}，请选择新标签"),
+                    true,
+                    cx,
+                );
+                return;
+            }
+        }
+        self.remote_tags_probe = None;
         let operation = git::Operation::Commit {
             message: message.clone(),
             target: snapshot.target.clone(),
-            push: self.commit_and_push,
+            push,
+            tag,
         };
         self.git_operation = Some(GitOperation {
             worktree: git::worktree_root(&path),
@@ -346,7 +371,7 @@ impl ConduitApp {
         });
         self.git_feedback(
             path,
-            if self.commit_and_push {
+            if push {
                 "正在提交并推送…"
             } else {
                 "正在提交…"
@@ -354,6 +379,46 @@ impl ConduitApp {
             false,
             cx,
         );
+    }
+
+    fn refresh_remote_tags(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.selected_workspace_path() else {
+            return;
+        };
+        if self.remote_tags_probe.is_some() {
+            self.remote_tags_probe = None;
+            self.git_feedback(path, "已取消远程标签查询", false, cx);
+            return;
+        }
+        if self.closing || self.git_operation.is_some() {
+            return;
+        }
+        self.remote_tags_probe = Some(git::RemoteTagsProbe::start(path.clone()));
+        self.git_feedback(path, "正在读取远程标签…", false, cx);
+    }
+
+    fn retry_tag(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.selected_workspace_path() else {
+            return;
+        };
+        if self.closing
+            || !self.writable
+            || self.git_operation.is_some()
+            || self.commit_generation.is_some()
+            || self.worktree_has_runs(&path)
+        {
+            return;
+        }
+        let Some(retry) = self.pending_tag_retry.get(&path).cloned() else {
+            return;
+        };
+        self.remote_tags_probe = None;
+        self.git_operation = Some(GitOperation {
+            worktree: git::worktree_root(&path),
+            probe: git::OperationProbe::start(path.clone(), git::Operation::RetryTag(retry)),
+            draft: String::new(),
+        });
+        self.git_feedback(path, "正在重试推送标签…", false, cx);
     }
 
     pub(super) fn start_push(&mut self, cx: &mut Context<Self>) {
@@ -539,6 +604,45 @@ impl ConduitApp {
 
     pub(super) fn poll_git_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.ensure_commit_draft(window, cx);
+        let remote_result =
+            self.remote_tags_probe
+                .as_ref()
+                .and_then(|probe| match probe.events.try_recv() {
+                    Ok(result) => Some((probe.path.clone(), result)),
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        Some((probe.path.clone(), Err("远程标签读取线程已退出".into())))
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                });
+        if let Some((path, result)) = remote_result {
+            self.remote_tags_probe = None;
+            if self.selected_workspace_path().as_ref() == Some(&path) {
+                match result {
+                    Ok(tags)
+                        if self
+                            .git_repository
+                            .as_ref()
+                            .is_some_and(|repo| repo.current == tags.branch) =>
+                    {
+                        let count = tags.names.len();
+                        let remote = tags.remote.clone();
+                        self.remote_tags.insert(path.clone(), tags);
+                        self.git_feedback(
+                            path,
+                            format!("已读取 {remote} 的 {count} 个远程标签"),
+                            false,
+                            cx,
+                        );
+                    }
+                    Ok(_) => {
+                        self.git_feedback(path, "分支已变化，已丢弃旧的远程标签结果", true, cx)
+                    }
+                    Err(error) => {
+                        self.git_feedback(path, format!("读取远程标签失败：{error}"), true, cx)
+                    }
+                }
+            }
+        }
         let completed = self.git_operation.as_ref().and_then(|operation| {
             match operation.probe.events.try_recv() {
                 Ok(result) => Some(result),
@@ -553,6 +657,15 @@ impl ConduitApp {
             let path = operation.probe.path.clone();
             match result {
                 Ok(result) => {
+                    if result.committed || result.retry_completed || result.retry_tag.is_some() {
+                        self.remote_tags.remove(&path);
+                    }
+                    if result.retry_completed {
+                        self.pending_tag_retry.remove(&path);
+                    }
+                    if let Some(retry) = result.retry_tag.clone() {
+                        self.pending_tag_retry.insert(path.clone(), retry);
+                    }
                     if let Some(created) = &result.worktree_created
                         && !self
                             .store
@@ -578,6 +691,11 @@ impl ConduitApp {
                         draft
                             .input
                             .update(cx, |input, cx| input.set_value("", window, cx));
+                        if result.error.is_none() {
+                            draft
+                                .tag
+                                .update(cx, |tag, cx| tag.set_value("", window, cx));
+                        }
                     }
                     let text = match &result.error {
                         Some(error) => format!("{}：{}", result.message, error),
@@ -762,12 +880,16 @@ impl ConduitApp {
         };
         let generate_app = view.clone();
         let commit_app = view.clone();
+        let alternate_commit_app = view.clone();
+        let primary_push = self.commit_and_push;
+        let alternate_push = !primary_push;
         let cancel_app = view.clone();
         let action_label = if self.commit_and_push {
             "Commit and Push"
         } else {
             "Commit"
         };
+        let mode_app = view.clone();
         let dropdown = Popover::new("git-commit-mode")
             .anchor(Anchor::BottomRight)
             .offset(px(6.))
@@ -787,7 +909,7 @@ impl ConduitApp {
                 let popover = cx.entity().downgrade();
                 let mut list = v_flex().w(px(180.)).gap_1();
                 for push in [false, true] {
-                    let app = view.clone();
+                    let app = mode_app.clone();
                     let popover = popover.clone();
                     list = list.child(
                         Button::new(if push {
@@ -825,18 +947,159 @@ impl ConduitApp {
                 }
                 list
             });
+        let tag_input = draft.tag.clone();
+        let tag_for_generate = tag_input.clone();
+        let local_tags = self
+            .git_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.tags.clone())
+            .unwrap_or_default();
+        let remote = self.remote_tags.get(&path).filter(|tags| {
+            self.git_repository
+                .as_ref()
+                .is_some_and(|repo| repo.current == tags.branch)
+        });
+        let remote_names = remote.map(|tags| tags.names.clone());
+        let mut tags = local_tags.clone();
+        if let Some(remote) = &remote_names {
+            tags.extend(remote.iter().cloned());
+        }
+        tags.sort();
+        tags.dedup();
+        git::sort_tags(&mut tags);
+        let candidate = git::next_tag(&tags, self.store.git.tag_increment, self.store.git.tag_step);
+        let tag_query = tag_input.read(cx).value().to_lowercase();
+        let local_set: std::collections::HashSet<_> =
+            local_tags.iter().map(String::as_str).collect();
+        let remote_set = remote_names.as_ref().map(|names| {
+            names
+                .iter()
+                .map(String::as_str)
+                .collect::<std::collections::HashSet<_>>()
+        });
+        let filtered_tags: Vec<_> = tags
+            .into_iter()
+            .filter(|tag| tag.to_lowercase().contains(&tag_query))
+            .take(100)
+            .map(|tag| {
+                let local = local_set.contains(tag.as_str());
+                let status = match (&remote_set, local) {
+                    (None, _) => "本地 · 未查询远程",
+                    (Some(remote), true) if remote.contains(tag.as_str()) => "本地 / 远程",
+                    (Some(_), true) => "仅本地",
+                    (Some(_), false) => "仅远程",
+                };
+                (tag, status)
+            })
+            .collect();
+        let refresh_app = view.clone();
+        let refreshing_tags = self.remote_tags_probe.is_some();
+        let tag_menu_input = tag_input.clone();
+        let tag_row = h_flex()
+            .w_full()
+            .min_w_0()
+            .h(px(30.))
+            .flex_shrink_0()
+            .items_center()
+            .gap_1()
+            .child(
+                div().flex_1().min_w_0().child(
+                    Input::new(&tag_input)
+                        .h(px(28.))
+                        .text_size(px(12.))
+                        .aria_label("Git Tag")
+                        .disabled(busy || self.closing || !self.writable),
+                ),
+            )
+            .child(
+                Button::new("git-tag-list")
+                    .debug_selector(|| "git-tag-list".into())
+                    .ghost()
+                    .small()
+                    .compact()
+                    .icon(IconName::ChevronDown)
+                    .tooltip("查看前 100 个匹配标签，可输入关键字筛选；远程状态来自上次查询")
+                    .accessibility_label("查看标签")
+                    .disabled(busy || self.closing || !self.writable)
+                    .dropdown_menu(move |mut menu, window, _| {
+                        menu = menu
+                            .scrollable(true)
+                            .max_h((window.viewport_size().height - px(48.)).min(px(320.)));
+                        for (tag, status) in &filtered_tags {
+                            let input = tag_menu_input.clone();
+                            let selected = tag.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(format!("{tag}  ·  {status}")).on_click(
+                                    move |_, window, cx| {
+                                        input.update(cx, |input, cx| {
+                                            input.set_value(selected.clone(), window, cx)
+                                        });
+                                    },
+                                ),
+                            );
+                        }
+                        menu
+                    }),
+            )
+            .child(
+                Button::new("git-tag-refresh-remote")
+                    .debug_selector(|| "git-tag-refresh-remote".into())
+                    .small()
+                    .ghost()
+                    .compact()
+                    .icon(if refreshing_tags {
+                        gpui_kit::assets::IconName::X
+                    } else {
+                        gpui_kit::assets::IconName::RefreshCw
+                    })
+                    .accessibility_label(if refreshing_tags {
+                        "取消查询远程标签"
+                    } else {
+                        "刷新远程标签"
+                    })
+                    .tooltip(if refreshing_tags {
+                        "取消查询远程标签"
+                    } else {
+                        "从当前上游查询远程标签"
+                    })
+                    .disabled(self.closing || (busy && !refreshing_tags))
+                    .on_click(move |_, _, cx| {
+                        refresh_app.update(cx, |this, cx| this.refresh_remote_tags(cx))
+                    }),
+            )
+            .child(
+                Button::new("git-tag-generate")
+                    .debug_selector(|| "git-tag-generate".into())
+                    .small()
+                    .ghost()
+                    .label("生成")
+                    .tooltip("根据已知的本地和远程稳定标签生成下一个版本")
+                    .disabled(
+                        busy || self.closing
+                            || !self.writable
+                            || candidate.is_err()
+                            || self.git_probe.is_some()
+                            || self.git_snapshot.is_none(),
+                    )
+                    .on_click(move |_, window, cx| {
+                        if let Ok(tag) = &candidate {
+                            tag_for_generate
+                                .update(cx, |input, cx| input.set_value(tag.clone(), window, cx));
+                        }
+                    }),
+            );
         let mut editor = v_flex()
             .debug_selector(|| "git-commit-editor".into())
             .w_full()
             .h_full()
             .min_h_0()
             .min_w_0()
-            .px_2()
-            .pb_2()
-            .gap_2()
+            .px_1()
+            .pb_1()
+            .gap_1()
             .child(
                 h_flex()
-                    .h(px(28.))
+                    .h(px(24.))
                     .flex_shrink_0()
                     .items_center()
                     .gap_2()
@@ -894,14 +1157,14 @@ impl ConduitApp {
                         )
                     }),
             )
+            .child(tag_row)
             .child(
                 v_flex()
                     .debug_selector(|| "git-commit-input".into())
                     .flex_1()
-                    .min_h(px(48.))
+                    .min_h(px(40.))
                     .min_w_0()
                     .overflow_hidden()
-                    .p_2()
                     .rounded(px(4.))
                     .bg(rgb(palette().surface))
                     .border_1()
@@ -925,49 +1188,64 @@ impl ConduitApp {
                                 ),
                         ),
                     ),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_size(px(11.))
-                    .line_height(relative(1.4))
-                    .text_color(rgb(palette().faint))
-                    .child(if self.worktree_has_runs(&path) {
-                        "该仓库的 CLI 任务运行中，结束后可提交"
-                    } else if self
-                        .git_snapshot
-                        .as_ref()
-                        .is_some_and(|snapshot| snapshot.target.branch.is_none())
-                    {
-                        "分离 HEAD：请先切回分支"
-                    } else if self
-                        .git_snapshot
-                        .as_ref()
-                        .is_some_and(|snapshot| snapshot.target.staged.is_empty())
-                    {
-                        "勾选文件后点击 + 暂存，再提交"
-                    } else {
-                        "仅提交已暂存变更"
-                    }),
             );
-        if let Some(feedback) = self.git_feedback.get(&path) {
-            editor = editor.child(
-                div()
-                    .id("git-action-feedback")
-                    .max_h(px(48.))
-                    .min_h(px(16.))
-                    .flex_shrink_1()
-                    .debug_selector(|| "git-action-feedback".into())
-                    .overflow_y_scroll()
-                    .text_size(px(11.))
-                    .line_height(relative(1.4))
-                    .text_color(rgb(if feedback.error {
-                        palette().error_text
+        if self.git_feedback.contains_key(&path) || self.pending_tag_retry.contains_key(&path) {
+            let mut row = h_flex()
+                .w_full()
+                .min_w_0()
+                .h(px(24.))
+                .flex_shrink_0()
+                .gap_1()
+                .items_center();
+            if let Some(feedback) = self.git_feedback.get(&path) {
+                row = row.child(
+                    div()
+                        .id("git-action-feedback")
+                        .debug_selector(|| "git-action-feedback".into())
+                        .flex_1()
+                        .min_w_0()
+                        .h(px(24.))
+                        .overflow_y_scroll()
+                        .text_size(px(11.))
+                        .line_height(relative(1.4))
+                        .text_color(rgb(if feedback.error {
+                            palette().error_text
+                        } else {
+                            palette().muted
+                        }))
+                        .child(feedback.text.clone()),
+                );
+            }
+            if let Some(retry) = self.pending_tag_retry.get(&path) {
+                let retry_app = view.clone();
+                let tooltip = format!(
+                    "仅推送 {} 至 {}；需先确保远程分支包含该提交",
+                    retry.tag,
+                    if retry.remote.is_empty() {
+                        "当前上游"
                     } else {
-                        palette().muted
-                    }))
-                    .child(feedback.text.clone()),
-            );
+                        &retry.remote
+                    }
+                );
+                row = row.child(
+                    Button::new("git-tag-retry")
+                        .debug_selector(|| "git-tag-retry".into())
+                        .small()
+                        .ghost()
+                        .compact()
+                        .h(px(24.))
+                        .icon(IconName::RefreshCw)
+                        .accessibility_label("重试推送标签")
+                        .tooltip(tooltip)
+                        .disabled(
+                            busy || self.closing || !self.writable || self.worktree_has_runs(&path),
+                        )
+                        .on_click(move |_, _, cx| {
+                            retry_app.update(cx, |this, cx| this.retry_tag(cx))
+                        }),
+                );
+            }
+            editor = editor.child(row);
         }
         editor
             .child(
@@ -991,9 +1269,28 @@ impl ConduitApp {
                             )
                             .when(can_commit, |button| button.cursor_pointer())
                             .on_click(move |_, _, cx| {
-                                commit_app.update(cx, |this, cx| this.start_commit(cx))
+                                commit_app
+                                    .update(cx, |this, cx| this.start_commit(primary_push, cx))
                             }),
                     )
+                    .child(
+                        Button::new("git-commit-alternate")
+                            .debug_selector(|| "git-commit-alternate".into())
+                            .label(if alternate_push {
+                                "Commit and Push"
+                            } else {
+                                "Commit"
+                            })
+                            .small()
+                            .h(px(30.))
+                            .disabled(!can_commit)
+                            .when(can_commit, |button| button.cursor_pointer())
+                            .on_click(move |_, _, cx| {
+                                alternate_commit_app
+                                    .update(cx, |this, cx| this.start_commit(alternate_push, cx))
+                            }),
+                    )
+                    .child(div().flex_1())
                     .child(dropdown),
             )
             .into_any_element()
@@ -1005,6 +1302,7 @@ impl ConduitApp {
             return;
         }
         self.git_workspace = path;
+        self.remote_tags_probe = None;
         self.branch_probe = None;
         self.git_repository = None;
         self.git_probe = None;
@@ -1450,15 +1748,13 @@ impl ConduitApp {
                 })
                 .into_any_element()
         };
-        let mut body = v_flex()
+        let mut body = sidebar::navigation_content()
             .id("git-panel-body")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
-            .min_w_0()
-            .gap_2()
-            .px_1()
-            .pb_2();
+            .gap_1()
+            .pb_1();
         if self.git_probe.is_some() && self.git_snapshot.is_none() {
             return body
                 .child(
@@ -1547,7 +1843,7 @@ impl ConduitApp {
                     ),
             );
         } else {
-            let mut groups = v_flex().w_full().gap_1();
+            let mut groups = v_flex().w_full().gap(px(2.));
             for kind in if self.git_group_by_status {
                 GitChangeGroup::STATUS.to_vec()
             } else {
@@ -1581,7 +1877,7 @@ impl ConduitApp {
                     h_flex()
                         .w_full()
                         .min_w_0()
-                        .h(px(28.))
+                        .h(px(24.))
                         .items_center()
                         .bg(rgb(palette().surface_strong))
                         .rounded(px(3.))
@@ -1592,7 +1888,7 @@ impl ConduitApp {
                                 .small()
                                 .compact()
                                 .w(px(24.))
-                                .h(px(28.))
+                                .h(px(24.))
                                 .px_1()
                                 .cursor_pointer()
                                 .tooltip(format!(
@@ -1704,7 +2000,7 @@ impl ConduitApp {
                         ),
                 );
                 if !collapsed {
-                    let mut rows = v_flex().w_full().gap(px(1.)).pl(px(16.));
+                    let mut rows = v_flex().w_full().pl(px(16.));
                     for file in files {
                         let app = view.clone();
                         let target = file.clone();
@@ -1745,10 +2041,9 @@ impl ConduitApp {
                                 .min_w_0()
                                 .gap(px(6.))
                                 .items_center()
-                                .h(px(28.))
+                                .h(px(22.))
                                 .px_2()
                                 .rounded(px(3.))
-                                .when(checked, |row| row.bg(rgb(palette().surface_hover)))
                                 .cursor_pointer()
                                 .tooltip({
                                     let tooltip = format!(
@@ -1920,14 +2215,14 @@ impl ConduitApp {
                                 .child(
                                     Icon::new(file_ref::icon_for(Path::new(&file.path)))
                                         .size(px(14.))
-                                        .text_color(rgb(palette().faint)),
+                                        .text_color(rgb(palette().activity_running)),
                                 )
                                 .child(
                                     div()
                                         .min_w_0()
                                         .flex_shrink_1()
                                         .truncate()
-                                        .text_size(px(13.))
+                                        .text_size(px(12.))
                                         .text_color(rgb(git_change_color(file.kind())))
                                         .child(filename),
                                 )

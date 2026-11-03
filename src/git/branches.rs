@@ -538,12 +538,16 @@ pub(super) fn operate_branch(
     })();
     match result {
         Ok(message) => OperationResult {
+            retry_completed: false,
+            retry_tag: None,
             committed: false,
             message,
             error: None,
             worktree_created: created,
         },
         Err(error) => OperationResult {
+            retry_completed: false,
+            retry_tag: None,
             committed: false,
             message: if progress.is_empty() {
                 "Git 操作未完成，请检查仓库状态".into()

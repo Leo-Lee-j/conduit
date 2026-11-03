@@ -5243,3 +5243,65 @@ fn settings_extensions_lists_search_details_and_context_are_isolated(cx: &mut Te
         });
     }
 }
+
+#[gpui_kit::test]
+fn workspace_collapse_hides_sessions_without_changing_selection(cx: &mut TestAppContext) {
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let workspaces = (0..2)
+                .map(|index| {
+                    let mut session = super::tests::session();
+                    session.id = index + 1;
+                    crate::domain::Workspace {
+                        path: std::env::temp_dir().join(format!("conduit-collapse-{index}")),
+                        sessions: vec![session],
+                    }
+                })
+                .collect();
+            let store = crate::store::Store {
+                workspaces,
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.selected_workspace = Some(1);
+            app.selected_session = Some(2);
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("session-row-1").is_some());
+    let toggle = cx.debug_bounds("workspace-collapse-0").unwrap().center();
+    cx.simulate_mouse_down(toggle, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(toggle, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        let app = app.read(cx);
+        assert_eq!(app.selected_workspace, Some(1));
+        assert_eq!(app.selected_session, Some(2));
+        assert!(
+            app.collapsed_workspaces
+                .contains(&app.store.workspaces[0].path)
+        );
+    });
+    assert!(cx.debug_bounds("session-row-1").is_none());
+    assert!(cx.debug_bounds("session-row-2").is_some());
+    let toggle = cx.debug_bounds("workspace-collapse-0").unwrap().center();
+    cx.simulate_mouse_down(toggle, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(toggle, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("session-row-1").is_some());
+}

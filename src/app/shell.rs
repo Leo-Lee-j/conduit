@@ -5,7 +5,7 @@ use super::*;
 // All navigation modes share one range and one retained resize state.
 pub(super) const NAVIGATION_MIN_WIDTH: f32 = 200.;
 pub(super) const NAVIGATION_MAX_WIDTH: f32 = 420.;
-pub(super) const NAVIGATION_DEFAULT_WIDTH: f32 = NAVIGATION_MAX_WIDTH * 0.75;
+pub(super) const NAVIGATION_DEFAULT_WIDTH: f32 = NAVIGATION_MAX_WIDTH;
 
 /// Keep wheel-driven invalidation inside the transcript. The list notifies its
 /// owning view on every wheel event, even when no surrounding controls change.

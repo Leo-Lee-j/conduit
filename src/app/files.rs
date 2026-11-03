@@ -662,32 +662,52 @@ impl ConduitApp {
             .border_r_1()
             .border_color(rgb(palette().border))
             .child(
-                Button::new("nav-workspaces")
-                    .debug_selector(|| "nav-workspaces".into())
-                    .ghost()
-                    .small()
-                    .compact()
+                div()
+                    .relative()
                     .w(px(36.))
                     .h(px(36.))
-                    .icon(IconName::Folder)
-                    .selected(mode == Navigation::Workspaces)
-                    .tooltip(format!("工作区与会话 · {pending} 个运行中或未读任务"))
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.files.mode = Navigation::Workspaces;
-                        this.files.sidebar_collapsed = false;
-                        cx.notify();
-                    })),
+                    .child(
+                        Button::new("nav-workspaces")
+                            .debug_selector(|| "nav-workspaces".into())
+                            .ghost()
+                            .small()
+                            .compact()
+                            .w(px(36.))
+                            .h(px(36.))
+                            .icon(IconName::Folder)
+                            .selected(mode == Navigation::Workspaces)
+                            .tooltip(format!("工作区与会话 · {pending} 个运行中或未读任务"))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.files.mode = Navigation::Workspaces;
+                                this.files.sidebar_collapsed = false;
+                                cx.notify();
+                            })),
+                    )
+                    .when(pending > 0, |button| {
+                        button.child(
+                            h_flex()
+                                .absolute()
+                                .top_0()
+                                .right_0()
+                                .min_w(px(14.))
+                                .h(px(14.))
+                                .px(px(3.))
+                                .items_center()
+                                .justify_center()
+                                .rounded_full()
+                                .bg(rgb(palette().text))
+                                .text_color(rgb(palette().on_text))
+                                .text_size(px(10.))
+                                .line_height(relative(1.))
+                                .child(if pending > 99 {
+                                    "99+".to_owned()
+                                } else {
+                                    pending.to_string()
+                                }),
+                        )
+                    }),
             )
-            .when(pending > 0, |rail| {
-                rail.child(
-                    div()
-                        .text_size(px(10.))
-                        .text_center()
-                        .text_color(rgb(palette().highlight_text))
-                        .child(pending.to_string()),
-                )
-            })
             .child(
                 Button::new("nav-files")
                     .debug_selector(|| "nav-files".into())
@@ -778,9 +798,9 @@ impl ConduitApp {
 
     fn render_file_tree(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let Some(index) = self.selected_workspace else {
-            return v_flex()
-                .size_full()
-                .p_3()
+            return sidebar::navigation_pane()
+                .px_2()
+                .py_3()
                 .gap_3()
                 .child("尚未选择工作区")
                 .child(
@@ -902,8 +922,9 @@ impl ConduitApp {
                                     })
                                     .h(px(28.))
                                     .min_w_0()
-                                    .pl(px(6. + *depth as f32 * 12.))
-                                    .pr_1()
+                                    .pl(px(8. + *depth as f32 * 12.))
+                                    .pr_2()
+                                    .rounded(px(8.))
                                     .gap_1()
                                     .items_center()
                                     .cursor_pointer()
@@ -982,18 +1003,11 @@ impl ConduitApp {
         )
         .h_full()
         .w_full();
-        v_flex()
+        sidebar::navigation_pane()
             .id("file-explorer")
             .debug_selector(|| "file-explorer".into())
-            .size_full()
-            .min_w_0()
-            .bg(rgb(palette().sidebar_bg))
             .child(
-                h_flex()
-                    .h(px(34.))
-                    .flex_shrink_0()
-                    .min_w_0()
-                    .items_center()
+                sidebar::navigation_header()
                     .child(div().flex_1().min_w_0().overflow_hidden().child(header))
                     .child(
                         Button::new("files-refresh")
@@ -1008,28 +1022,30 @@ impl ConduitApp {
                             })),
                     ),
             )
-            .child(div().flex_1().min_h_0().child(list))
+            .child(sidebar::navigation_content().flex_1().min_h_0().child(list))
             .child(
-                Button::new("files-show-ignored")
-                    .ghost()
-                    .small()
-                    .label(if show_ignored {
-                        "隐藏忽略文件"
-                    } else {
-                        "显示忽略文件"
-                    })
-                    .selected(show_ignored)
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(e) = this.files.explorers.get_mut(&ignore_root) {
-                            e.show_ignored = !e.show_ignored;
-                            for d in e.directories.values_mut() {
-                                d.loading = false;
-                                d.sequence += 1;
+                sidebar::navigation_content().child(
+                    Button::new("files-show-ignored")
+                        .ghost()
+                        .small()
+                        .label(if show_ignored {
+                            "隐藏忽略文件"
+                        } else {
+                            "显示忽略文件"
+                        })
+                        .selected(show_ignored)
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(e) = this.files.explorers.get_mut(&ignore_root) {
+                                e.show_ignored = !e.show_ignored;
+                                for d in e.directories.values_mut() {
+                                    d.loading = false;
+                                    d.sequence += 1;
+                                }
                             }
-                        }
-                        this.refresh_tree(ignore_root.clone(), cx);
-                    })),
+                            this.refresh_tree(ignore_root.clone(), cx);
+                        })),
+                ),
             )
             .into_any_element()
     }
@@ -1678,34 +1694,27 @@ impl ConduitApp {
 
     fn render_git_navigation(&self, cx: &mut Context<Self>) -> AnyElement {
         let app = cx.entity();
-        let mut pane = v_flex()
+        let mut pane = sidebar::navigation_pane()
             .id("git-navigation")
-            .debug_selector(|| "git-navigation".into())
-            .size_full()
-            .min_w_0()
-            .bg(rgb(palette().sidebar_bg));
+            .debug_selector(|| "git-navigation".into());
         if let Some(i) = self.selected_workspace {
             let workspace = &self.store.workspaces[i];
             pane = pane.child(
-                h_flex()
-                    .h(px(34.))
-                    .flex_shrink_0()
-                    .min_w_0()
+                sidebar::navigation_header()
                     .overflow_hidden()
-                    .items_center()
-                    .px_2()
                     .gap_2()
                     .border_b_1()
                     .border_color(rgb(palette().border))
                     .child(
                         div()
-                            .h_full()
+                            .h(px(26.))
                             .flex_shrink_0()
                             .px_2()
                             .flex()
                             .items_center()
-                            .border_b_2()
-                            .border_color(rgb(palette().activity_running))
+                            .rounded(px(4.))
+                            .bg(rgb(palette().surface_strong))
+                            .text_color(rgb(palette().activity_running))
                             .text_size(px(12.))
                             .font_semibold()
                             .child("Commit"),
@@ -1720,9 +1729,7 @@ impl ConduitApp {
             );
         } else {
             pane = pane.child(
-                div()
-                    .px_3()
-                    .py_2()
+                sidebar::navigation_header()
                     .text_size(px(12.))
                     .child("Git 变更 · 未选择工作区"),
             );
@@ -2139,6 +2146,9 @@ mod tests {
         cx.update(|window, cx| {
             let _ = window.draw(cx);
         });
+        let sidebar = cx.debug_bounds("sidebar").unwrap();
+        let workspace_row = cx.debug_bounds("workspace-item-0").unwrap();
+        assert_eq!(workspace_row.left() - sidebar.left(), px(8.));
         let point = cx.debug_bounds("nav-files").unwrap().center();
         cx.simulate_mouse_move(point, None, Modifiers::default());
         cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
@@ -2147,8 +2157,13 @@ mod tests {
         cx.update(|window, cx| {
             let _ = window.draw(cx);
         });
-        assert!(cx.debug_bounds("file-explorer").is_some());
-        let point = cx.debug_bounds("file-tree-entry-src").unwrap().center();
+        let explorer = cx.debug_bounds("file-explorer").unwrap();
+        let file_row = cx.debug_bounds("file-tree-entry-src").unwrap();
+        assert_eq!(
+            file_row.left() - explorer.left(),
+            workspace_row.left() - sidebar.left()
+        );
+        let point = file_row.center();
         cx.simulate_mouse_move(point, None, Modifiers::default());
         cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
         cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
@@ -2783,8 +2798,83 @@ mod git_navigation_tests {
         );
         let input = cx.debug_bounds("git-commit-input").unwrap();
         let actions = cx.debug_bounds("git-commit-actions").unwrap();
+        let alternate = cx.debug_bounds("git-commit-alternate").unwrap();
+        assert!(alternate.left() >= navigation.left());
+        assert!(alternate.right() <= navigation.right() + gpui_kit::px(1.));
         assert!(input.bottom() <= actions.top());
         assert!(actions.bottom() <= navigation.bottom());
+        click(cx, "git-tag-generate");
+        cx.update(|window, cx| {
+            app.update(cx, |a, cx| {
+                let draft = &a.commit_drafts[&repo.0];
+                assert_eq!(draft.tag.read(cx).value(), "v0.1.0");
+                draft
+                    .tag
+                    .update(cx, |tag, cx| tag.set_value("", window, cx));
+            });
+        });
+        let refresh = cx.debug_bounds("git-tag-refresh-remote").unwrap();
+        assert!(refresh.left() >= navigation.left() && refresh.right() <= navigation.right());
+        cx.update(|_, cx| {
+            app.update(cx, |a, cx| {
+                let branch = a.git_repository.as_ref().unwrap().current.clone();
+                a.remote_tags.insert(
+                    repo.0.clone(),
+                    git::RemoteTags {
+                        branch,
+                        remote: "origin".into(),
+                        names: vec!["v5.0.9".into()],
+                    },
+                );
+                a.store.git.tag_step = 10;
+                cx.notify();
+            });
+        });
+        draw(cx);
+        click(cx, "git-tag-generate");
+        cx.update(|window, cx| {
+            app.update(cx, |a, cx| {
+                assert_eq!(a.commit_drafts[&repo.0].tag.read(cx).value(), "v5.0.19");
+                a.commit_drafts[&repo.0]
+                    .tag
+                    .update(cx, |tag, cx| tag.set_value("", window, cx));
+                a.remote_tags_probe = Some(git::RemoteTagsProbe::test_pending(repo.0.clone()));
+                a.poll_git_actions(window, cx);
+                assert_eq!(a.remote_tags[&repo.0].names, vec!["v5.0.9"]);
+                a.remote_tags.remove(&repo.0);
+                a.store.git.tag_step = 1;
+            });
+        });
+        cx.update(|_, cx| {
+            app.update(cx, |a, cx| {
+                a.pending_tag_retry.insert(
+                    repo.0.clone(),
+                    git::TagRetry {
+                        branch: "main".into(),
+                        remote: "origin".into(),
+                        remote_url: "origin-url".into(),
+                        merge: "refs/heads/main".into(),
+                        tag: "v5.0.19".into(),
+                        oid: "123".into(),
+                    },
+                );
+                cx.notify();
+            });
+        });
+        draw(cx);
+        let retry = cx.debug_bounds("git-tag-retry").unwrap();
+        let actions_with_retry = cx.debug_bounds("git-commit-actions").unwrap();
+        assert!(
+            retry.bottom() <= actions_with_retry.top()
+                && actions_with_retry.bottom() <= navigation.bottom()
+        );
+        cx.update(|_, cx| {
+            app.update(cx, |a, cx| {
+                a.pending_tag_retry.remove(&repo.0);
+                cx.notify();
+            });
+        });
+        draw(cx);
         cx.update(|window, cx| {
             app.update(cx, |a, cx| {
                 let draft = &a.commit_drafts[&repo.0];

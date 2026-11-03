@@ -710,6 +710,7 @@ impl ConduitApp {
         }
         let removed = self.store.workspaces.remove(index);
         self.history_loading.remove(&removed.path);
+        self.collapsed_workspaces.remove(&removed.path);
         self.workspace_drafts.remove(&removed.path);
         self.selected_git_files.remove(&removed.path);
         self.composer_files
@@ -1147,6 +1148,8 @@ impl ConduitApp {
         if !self.writable || self.closing || index >= self.store.workspaces.len() {
             return None;
         }
+        self.collapsed_workspaces
+            .remove(&self.store.workspaces[index].path);
         let id = self.next_id;
         self.next_id += 1;
         if provider != Provider::OpenCode {

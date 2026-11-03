@@ -69,6 +69,8 @@ struct Recovery {
     workspace_drafts: Vec<(PathBuf, String)>,
     attachments: Vec<(PathBuf, Option<u64>, Vec<PathBuf>)>,
     commits: Vec<(PathBuf, String)>,
+    #[serde(default)]
+    commit_tags: Vec<(PathBuf, String)>,
 }
 
 impl ConduitApp {
@@ -331,6 +333,11 @@ impl ConduitApp {
                     )
                 })
                 .collect(),
+            commit_tags: self
+                .commit_drafts
+                .iter()
+                .map(|(path, draft)| (path.clone(), draft.tag.read(cx).value().to_string()))
+                .collect(),
             commits: self
                 .commit_drafts
                 .iter()
@@ -367,6 +374,7 @@ impl ConduitApp {
                     },
                 );
             }
+            let tags: HashMap<_, _> = recovery.commit_tags.into_iter().collect();
             for (path, value) in recovery.commits {
                 let input = cx.new(|cx| {
                     TextareaState::new(window, cx)
@@ -375,10 +383,18 @@ impl ConduitApp {
                 });
                 input.update(cx, |input, cx| input.set_value(value, window, cx));
                 let subscription = cx.subscribe(&input, |_, _, _: &InputEvent, cx| cx.notify());
+                let tag = cx
+                    .new(|cx| InputState::new(window, cx).placeholder("Tag（可选，例如 v1.2.3）"));
+                if let Some(value) = tags.get(&path) {
+                    tag.update(cx, |tag, cx| tag.set_value(value.clone(), window, cx));
+                }
+                let tag_subscription = cx.subscribe(&tag, |_, _, _: &InputEvent, cx| cx.notify());
                 self.commit_drafts.insert(
                     path,
                     CommitDraft {
                         input,
+                        tag,
+                        _tag_subscription: tag_subscription,
                         _subscription: subscription,
                     },
                 );

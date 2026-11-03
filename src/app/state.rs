@@ -337,6 +337,8 @@ impl MessageIndex {
 
 pub(super) struct CommitDraft {
     pub(super) input: Entity<TextareaState>,
+    pub(super) tag: Entity<InputState>,
+    pub(super) _tag_subscription: Subscription,
     pub(super) _subscription: Subscription,
 }
 

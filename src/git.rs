@@ -118,6 +118,7 @@ impl ChangeKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Snapshot {
     pub branch: String,
+    pub tags: Vec<String>,
     pub files: Vec<ChangedFile>,
     /// Staged patch used only for commit-message generation.
     pub staged_diff: String,
@@ -176,15 +177,36 @@ pub enum Operation {
         message: String,
         target: CommitTarget,
         push: bool,
+        tag: Option<String>,
     },
     Push {
         branch: String,
         upstream: String,
     },
+    RetryTag(TagRetry),
+}
+
+#[derive(Clone, Debug)]
+pub struct TagRetry {
+    pub branch: String,
+    pub remote: String,
+    pub remote_url: String,
+    pub merge: String,
+    pub tag: String,
+    pub oid: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct RemoteTags {
+    pub branch: String,
+    pub remote: String,
+    pub names: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
 pub struct OperationResult {
+    pub retry_completed: bool,
+    pub retry_tag: Option<TagRetry>,
     pub committed: bool,
     pub message: String,
     pub error: Option<String>,
@@ -219,6 +241,7 @@ pub struct Probe<T> {
 pub type GitProbe = Probe<Snapshot>;
 pub type BranchProbe = Probe<Repository>;
 pub type OperationProbe = Probe<OperationResult>;
+pub type RemoteTagsProbe = Probe<RemoteTags>;
 
 impl<T: Send + 'static> Probe<T> {
     #[cfg(all(test, feature = "ui-tests"))]
@@ -265,6 +288,12 @@ impl GitProbe {
 impl BranchProbe {
     pub fn start(path: PathBuf) -> Self {
         Self::start_with(path, load_repository)
+    }
+}
+
+impl RemoteTagsProbe {
+    pub fn start(path: PathBuf) -> Self {
+        Self::start_with(path, load_remote_tags)
     }
 }
 
@@ -525,13 +554,153 @@ pub fn load(workspace: &Path, cancel: &AtomicBool) -> Result<Snapshot> {
     if commit_target(&git, workspace, cancel)? != target {
         bail!("读取期间分支或暂存区发生变化，请刷新后重试");
     }
+    let tags = list_tags(&git, workspace, cancel)?;
     Ok(Snapshot {
         branch,
+        tags,
         files,
         staged_diff,
         notes,
         target,
     })
+}
+
+fn list_tags(git: &Path, workspace: &Path, cancel: &AtomicBool) -> Result<Vec<String>> {
+    let output = run_git(
+        git,
+        workspace,
+        &["for-each-ref", "--format=%(refname:strip=2)", "refs/tags"],
+        cancel,
+    )?;
+    if output.len() >= MAX_COMMAND_BYTES {
+        bail!("标签列表过长，无法安全生成版本号");
+    }
+    let mut tags: Vec<String> = output.lines().map(str::to_owned).collect();
+    sort_tags(&mut tags);
+    Ok(tags)
+}
+
+pub fn sort_tags(tags: &mut [String]) {
+    tags.sort_by(|a, b| match (stable_tag(a), stable_tag(b)) {
+        (Some(a), Some(b)) => b.cmp(&a),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.cmp(b),
+    });
+}
+
+fn stable_tag(tag: &str) -> Option<semver::Version> {
+    let version = semver::Version::parse(tag.strip_prefix('v')?).ok()?;
+    (version.pre.is_empty() && version.build.is_empty()).then_some(version)
+}
+
+pub fn next_tag(
+    tags: &[String],
+    increment: crate::store::TagIncrement,
+    step: usize,
+) -> Result<String> {
+    let step = u64::try_from(step)
+        .ok()
+        .filter(|step| *step > 0)
+        .ok_or_else(|| anyhow!("步长必须为正整数"))?;
+    use crate::store::TagIncrement;
+    let Some(mut version) = tags.iter().filter_map(|tag| stable_tag(tag)).max() else {
+        return Ok("v0.1.0".into());
+    };
+    loop {
+        match increment {
+            TagIncrement::Patch => {
+                version.patch = version
+                    .patch
+                    .checked_add(step)
+                    .ok_or_else(|| anyhow!("版本号超出范围"))?
+            }
+            TagIncrement::Minor => {
+                version.minor = version
+                    .minor
+                    .checked_add(step)
+                    .ok_or_else(|| anyhow!("版本号超出范围"))?;
+                version.patch = 0;
+            }
+            TagIncrement::Major => {
+                version.major = version
+                    .major
+                    .checked_add(step)
+                    .ok_or_else(|| anyhow!("版本号超出范围"))?;
+                version.minor = 0;
+                version.patch = 0;
+            }
+        }
+        let candidate = format!("v{version}");
+        if !tags.contains(&candidate) {
+            return Ok(candidate);
+        }
+    }
+}
+
+fn validate_tag(git: &Path, workspace: &Path, tag: &str, cancel: &AtomicBool) -> Result<()> {
+    if tag.is_empty() || tag.trim() != tag || tag.starts_with('-') {
+        bail!("标签名称无效");
+    }
+    let reference = format!("refs/tags/{tag}");
+    run_git(git, workspace, &["check-ref-format", &reference], cancel)
+        .map_err(|_| anyhow!("标签名称无效：{tag}"))?;
+    if run_git(
+        git,
+        workspace,
+        &["show-ref", "--verify", "--quiet", &reference],
+        cancel,
+    )
+    .is_ok()
+    {
+        bail!("标签 {tag} 已存在，请选择新的标签");
+    }
+    Ok(())
+}
+
+// Check only the actual Conduit release workflow in the staged tree, not arbitrary repositories.
+fn validate_conduit_release(
+    git: &Path,
+    workspace: &Path,
+    tag: &str,
+    tree: &str,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let workflow_path = format!("{tree}:.github/workflows/release.yml");
+    let workflow = match run_git(git, workspace, &["show", &workflow_path], cancel) {
+        Ok(value) => value,
+        Err(_) => return Ok(()),
+    };
+    if !tag.starts_with('v')
+        || !workflow.contains("Leo-Lee-j/conduit")
+        || !workflow.contains("Tag must match Cargo.toml")
+    {
+        return Ok(());
+    }
+    let version =
+        stable_tag(tag).ok_or_else(|| anyhow!("Conduit 发布标签必须采用稳定版 vX.Y.Z 格式"))?;
+    let cargo = run_git(
+        git,
+        workspace,
+        &["show", &format!("{tree}:Cargo.toml")],
+        cancel,
+    )?;
+    let value: toml::Value = toml::from_str(&cargo).context("无法解析暂存区 Cargo.toml")?;
+    let package = value
+        .get("package")
+        .and_then(|p| p.as_table())
+        .ok_or_else(|| anyhow!("暂存区 Cargo.toml 缺少 package"))?;
+    if package.get("name").and_then(|x| x.as_str()) != Some("conduit") {
+        return Ok(());
+    }
+    let actual = package
+        .get("version")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| anyhow!("暂存区 Cargo.toml 缺少版本号"))?;
+    if version.to_string() != actual {
+        bail!("发布标签 {tag} 与暂存区 Cargo.toml 版本 {actual} 不一致，请先更新并暂存版本号");
+    }
+    Ok(())
 }
 
 /// Read the patch for one changed file. Tracked files are compared against
@@ -732,6 +901,9 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
         return branches::operate_branch(workspace, *request, cancel);
     }
     let mut committed = false;
+    let mut retry_tag = None;
+    let mut retry_completed = false;
+    let mut failure_stage = "提交已成功，推送失败";
     let result = (|| -> Result<String> {
         let git = resolve_git().ok_or_else(|| anyhow!("未找到 git.exe"))?;
         if !matches!(
@@ -866,6 +1038,7 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                 message,
                 target,
                 push,
+                tag,
             } => {
                 if message.trim().is_empty() {
                     bail!("请填写提交说明");
@@ -882,6 +1055,12 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                 if commit_target(&git, workspace, cancel)? != target {
                     bail!("分支、HEAD 或暂存区已变化，请刷新变更后重新提交");
                 }
+                if let Some(tag) = tag.as_deref() {
+                    validate_tag(&git, workspace, tag, cancel)?;
+                    if push {
+                        validate_conduit_release(&git, workspace, tag, "", cancel)?;
+                    }
+                }
                 // No add/-a: Git commits exactly its index and preserves unstaged files.
                 run_git_with_timeout(
                     &git,
@@ -891,37 +1070,107 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                     Duration::from_secs(120),
                 )?;
                 committed = true;
+                failure_stage = "提交已成功，无法确认提交对象";
+                let oid = run_git(&git, workspace, &["rev-parse", "--verify", "HEAD"], cancel)?;
+                if let Some(tag) = tag.as_deref() {
+                    if push {
+                        failure_stage = "提交已成功，发布版本校验失败";
+                        validate_conduit_release(&git, workspace, tag, oid.trim(), cancel)?;
+                    }
+                    failure_stage = "提交已成功，创建标签失败";
+                    run_git(
+                        &git,
+                        workspace,
+                        &["-c", "tag.gpgSign=false", "tag", "--", tag, oid.trim()],
+                        cancel,
+                    )?;
+                }
+                failure_stage = if tag.is_some() {
+                    "提交和本地标签已创建，推送失败"
+                } else {
+                    "提交已成功，推送失败"
+                };
                 if push {
+                    if let Some(tag) = tag.as_deref() {
+                        let mut pending = TagRetry {
+                            branch: target.branch.clone().unwrap(),
+                            remote: String::new(),
+                            remote_url: String::new(),
+                            merge: String::new(),
+                            tag: tag.into(),
+                            oid: oid.trim().into(),
+                        };
+                        if let Ok((remote, merge)) =
+                            resolve_upstream(&git, workspace, &pending.branch, None, cancel)
+                        {
+                            if let Ok(url) = single_push_url(&git, workspace, &remote, cancel) {
+                                pending.remote = remote;
+                                pending.remote_url = url;
+                                pending.merge = merge;
+                            }
+                        }
+                        retry_tag = Some(pending);
+                    }
                     push_upstream(
                         &git,
                         workspace,
                         target.branch.as_deref().unwrap(),
                         None,
+                        tag.as_deref().map(|tag| (tag, oid.trim())),
                         cancel,
                     )?;
-                    Ok("提交并推送成功".into())
+                    retry_tag = None;
+                    Ok(if tag.is_some() {
+                        "提交、标签及推送成功"
+                    } else {
+                        "提交并推送成功"
+                    }
+                    .into())
                 } else {
-                    Ok("提交成功".into())
+                    Ok(if tag.is_some() {
+                        "提交及本地标签创建成功"
+                    } else {
+                        "提交成功"
+                    }
+                    .into())
                 }
             }
             Operation::Push { branch, upstream } => {
-                push_upstream(&git, workspace, &branch, Some(&upstream), cancel)?;
+                push_upstream(&git, workspace, &branch, Some(&upstream), None, cancel)?;
                 Ok("推送成功".into())
+            }
+            Operation::RetryTag(retry) => {
+                retry_tag = Some(retry.clone());
+                retry_tag_push(&git, workspace, &retry, cancel)?;
+                retry_tag = None;
+                retry_completed = true;
+                Ok("标签已推送（分支未在此操作中推送）".into())
             }
         }
     })();
     match result {
         Ok(message) => OperationResult {
+            retry_completed,
+            retry_tag: None,
             worktree_created: None,
             committed,
             message,
             error: None,
         },
         Err(error) => OperationResult {
+            retry_completed,
+            retry_tag,
             worktree_created: None,
             committed,
             message: if committed {
-                "提交已成功，推送失败".into()
+                if failure_stage.contains("推送失败")
+                    && (format!("{error:#}").contains("超时")
+                        || format!("{error:#}").contains("取消"))
+                {
+                    format!("{failure_stage}；远端状态可能未知，请检查远端后再重试")
+                } else {
+                    failure_stage.into()
+                }
             } else {
                 "Git 操作失败".into()
             },
@@ -930,13 +1179,13 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
     }
 }
 
-fn push_upstream(
+fn resolve_upstream(
     git: &Path,
     workspace: &Path,
     branch: &str,
     expected: Option<&str>,
     cancel: &AtomicBool,
-) -> Result<()> {
+) -> Result<(String, String)> {
     let current = run_git(
         git,
         workspace,
@@ -974,11 +1223,160 @@ fn push_upstream(
         &["config", "--get", &format!("branch.{branch}.merge")],
         cancel,
     )?;
-    let remote = remote.trim();
-    let merge = merge.trim();
+    let remote = remote.trim().to_owned();
+    let merge = merge.trim().to_owned();
     if remote.is_empty() || !merge.starts_with("refs/heads/") {
         bail!("上游配置不完整，请检查 Git 分支配置");
     }
+    Ok((remote, merge))
+}
+
+fn single_push_url(
+    git: &Path,
+    workspace: &Path,
+    remote: &str,
+    cancel: &AtomicBool,
+) -> Result<String> {
+    let urls = run_git(
+        git,
+        workspace,
+        &["remote", "get-url", "--push", "--all", remote],
+        cancel,
+    )?;
+    let mut urls = urls.lines();
+    let url = urls
+        .next()
+        .filter(|url| !url.is_empty())
+        .ok_or_else(|| anyhow!("远程推送地址为空"))?;
+    if urls.next().is_some() {
+        bail!("远程配置了多个推送地址，无法保证标签和分支原子推送");
+    }
+    Ok(url.to_owned())
+}
+
+fn load_remote_tags(workspace: &Path, cancel: &AtomicBool) -> Result<RemoteTags> {
+    let git = resolve_git().ok_or_else(|| anyhow!("未找到 git.exe"))?;
+    let branch = run_git(
+        &git,
+        workspace,
+        &["symbolic-ref", "--quiet", "--short", "HEAD"],
+        cancel,
+    )?
+    .trim()
+    .to_owned();
+    let (remote, _) = resolve_upstream(&git, workspace, &branch, None, cancel)?;
+    let push_url = single_push_url(&git, workspace, &remote, cancel)?;
+    let output = run_git_with_timeout(
+        &git,
+        workspace,
+        &[
+            "-c",
+            "credential.interactive=false",
+            "ls-remote",
+            "--refs",
+            "--tags",
+            "--",
+            &push_url,
+        ],
+        cancel,
+        Duration::from_secs(120),
+    )?;
+    if output.len() >= MAX_COMMAND_BYTES {
+        bail!("远程标签列表过长，请缩小范围后重试");
+    }
+    let mut names = Vec::new();
+    for line in output.lines() {
+        let (_, reference) = line
+            .split_once('\t')
+            .ok_or_else(|| anyhow!("远程标签响应无效"))?;
+        if let Some(name) = reference.strip_prefix("refs/tags/") {
+            names.push(name.to_owned());
+        }
+    }
+    names.sort();
+    names.dedup();
+    Ok(RemoteTags {
+        branch,
+        remote,
+        names,
+    })
+}
+
+fn retry_tag_push(
+    git: &Path,
+    workspace: &Path,
+    retry: &TagRetry,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let (remote, merge) = resolve_upstream(git, workspace, &retry.branch, None, cancel)?;
+    let url = single_push_url(git, workspace, &remote, cancel)?;
+    if !retry.remote.is_empty()
+        && (remote != retry.remote || merge != retry.merge || url != retry.remote_url)
+    {
+        bail!("上游或远程地址已变化，请检查后重新操作");
+    }
+    let head = run_git(git, workspace, &["rev-parse", "--verify", "HEAD"], cancel)?;
+    if head.trim() != retry.oid {
+        bail!("HEAD 已变化，请检查后重新操作");
+    }
+    let reference = format!("refs/tags/{}", retry.tag);
+    let local = run_git(
+        git,
+        workspace,
+        &["rev-parse", "--verify", &reference],
+        cancel,
+    )?;
+    if local.trim() != retry.oid {
+        bail!("本地标签指向已变化，请检查后重新操作");
+    }
+    // Query the push endpoint: a remote may have a separate fetch URL.
+    let output = run_git_with_timeout(
+        git,
+        workspace,
+        &[
+            "-c",
+            "credential.interactive=false",
+            "ls-remote",
+            "--refs",
+            "--",
+            &url,
+            &reference,
+            &merge,
+        ],
+        cancel,
+        Duration::from_secs(120),
+    )?;
+    if output.len() >= MAX_COMMAND_BYTES {
+        bail!("远程引用结果过大");
+    }
+    let mut branch_oid = None;
+    for line in output.lines() {
+        let (oid, name) = line
+            .split_once('\t')
+            .ok_or_else(|| anyhow!("远程引用响应无效"))?;
+        if name == reference {
+            if oid == retry.oid {
+                return Ok(());
+            }
+            bail!("远程已存在指向其他提交的同名标签");
+        }
+        if name == merge {
+            branch_oid = Some(oid);
+        }
+    }
+    let remote_head = branch_oid.ok_or_else(|| anyhow!("远程上游分支不存在，请先推送分支"))?;
+    if remote_head != retry.oid
+        && run_git(
+            git,
+            workspace,
+            &["merge-base", "--is-ancestor", &retry.oid, remote_head],
+            cancel,
+        )
+        .is_err()
+    {
+        bail!("远程上游分支尚未包含该提交，或本地缺少远程提交；请先推送或刷新分支");
+    }
+    let refspec = format!("{}:{}", retry.oid, reference);
     run_git_with_timeout(
         git,
         workspace,
@@ -987,13 +1385,50 @@ fn push_upstream(
             "credential.interactive=false",
             "push",
             "--porcelain",
+            "--no-follow-tags",
             "--",
-            remote,
-            &format!("HEAD:{merge}"),
+            &remote,
+            &refspec,
         ],
         cancel,
         Duration::from_secs(120),
     )?;
+    Ok(())
+}
+
+fn push_upstream(
+    git: &Path,
+    workspace: &Path,
+    branch: &str,
+    expected: Option<&str>,
+    tag: Option<(&str, &str)>,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let (remote, merge) = resolve_upstream(git, workspace, branch, expected, cancel)?;
+    if let Some((_, oid)) = tag {
+        single_push_url(git, workspace, &remote, cancel)?;
+        let head = run_git(git, workspace, &["rev-parse", "--verify", "HEAD"], cancel)?;
+        if head.trim() != oid {
+            bail!("提交后 HEAD 已变化，请检查分支和标签再推送");
+        }
+    }
+    let branch_ref = format!("{}:{merge}", tag.map_or("HEAD", |(_, oid)| oid));
+    let tag_ref = tag.map(|(name, oid)| format!("{oid}:refs/tags/{name}"));
+    let mut args = vec![
+        "-c",
+        "credential.interactive=false",
+        "push",
+        "--porcelain",
+        "--no-follow-tags",
+    ];
+    if tag_ref.is_some() {
+        args.push("--atomic");
+    }
+    args.extend(["--", remote.as_str(), branch_ref.as_str()]);
+    if let Some(ref tag_ref) = tag_ref {
+        args.push(tag_ref);
+    }
+    run_git_with_timeout(git, workspace, &args, cancel, Duration::from_secs(120))?;
     Ok(())
 }
 
@@ -1261,6 +1696,7 @@ mod tests {
                     message: message.into(),
                     target,
                     push,
+                    tag: None,
                 },
                 &AtomicBool::new(false),
             )
@@ -1404,6 +1840,356 @@ mod tests {
     }
 
     #[test]
+    fn tag_generation_uses_stable_numeric_versions() {
+        use crate::store::TagIncrement::*;
+        let tags = ["v0.1.9", "v0.1.10", "v9.0.0-rc.1", "other"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(next_tag(&tags, Patch, 1).unwrap(), "v0.1.11");
+        assert_eq!(next_tag(&tags, Minor, 1).unwrap(), "v0.2.0");
+        assert_eq!(next_tag(&tags, Major, 1).unwrap(), "v1.0.0");
+        assert_eq!(next_tag(&[], Patch, 1).unwrap(), "v0.1.0");
+    }
+
+    #[test]
+    fn tagged_commit_pushes_only_requested_tag_and_rejects_conflicts() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        let cancel = AtomicBool::new(false);
+        repo.stage("initial\n");
+        assert!(repo.commit("seed", false).committed);
+        let remote = repo.seed_remote();
+        repo.run(&["tag", "-a", "local-only", "-m", "local only"]);
+        repo.run(&["config", "push.followTags", "true"]);
+        repo.stage("next\n");
+        let target = commit_target(&repo.git, &repo.path, &cancel).unwrap();
+        let result = operate(
+            &repo.path,
+            Operation::Commit {
+                message: "release".into(),
+                target,
+                push: true,
+                tag: Some("v0.1.2".into()),
+            },
+            &cancel,
+        );
+        assert!(result.committed && result.error.is_none(), "{result:?}");
+        let head = repo.run(&["rev-parse", "HEAD"]);
+        assert_eq!(head, repo.run(&["rev-parse", "refs/tags/v0.1.2"]));
+        assert_eq!(
+            head,
+            repo.run(&[
+                "--git-dir",
+                remote.to_str().unwrap(),
+                "rev-parse",
+                "refs/tags/v0.1.2"
+            ])
+        );
+        assert!(
+            repo.run(&[
+                "--git-dir",
+                remote.to_str().unwrap(),
+                "tag",
+                "-l",
+                "local-only"
+            ])
+            .trim()
+            .is_empty()
+        );
+        repo.stage("duplicate\n");
+        let target = commit_target(&repo.git, &repo.path, &cancel).unwrap();
+        let duplicate = operate(
+            &repo.path,
+            Operation::Commit {
+                message: "duplicate".into(),
+                target,
+                push: false,
+                tag: Some("v0.1.2".into()),
+            },
+            &cancel,
+        );
+        assert!(!duplicate.committed && duplicate.error.unwrap().contains("已存在"));
+        assert_eq!(head, repo.run(&["rev-parse", "HEAD"]));
+    }
+
+    #[test]
+    fn invalid_tag_is_rejected_and_locked_tag_reports_partial_commit() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        let cancel = AtomicBool::new(false);
+        repo.stage("initial\n");
+        assert!(repo.commit("seed", false).committed);
+        repo.stage("next\n");
+        let target = commit_target(&repo.git, &repo.path, &cancel).unwrap();
+        let result = operate(
+            &repo.path,
+            Operation::Commit {
+                message: "invalid".into(),
+                target: target.clone(),
+                push: false,
+                tag: Some("bad tag".into()),
+            },
+            &cancel,
+        );
+        assert!(!result.committed && result.error.is_some());
+        std::fs::create_dir_all(repo.path.join(".git/refs/tags")).unwrap();
+        std::fs::write(repo.path.join(".git/refs/tags/v0.1.4.lock"), "locked").unwrap();
+        let result = operate(
+            &repo.path,
+            Operation::Commit {
+                message: "valid commit".into(),
+                target,
+                push: false,
+                tag: Some("v0.1.4".into()),
+            },
+            &cancel,
+        );
+        assert!(result.committed && result.error.is_some(), "{result:?}");
+        assert_eq!(result.message, "提交已成功，创建标签失败");
+        assert_eq!(
+            repo.run(&["log", "-1", "--format=%s"]).trim(),
+            "valid commit"
+        );
+    }
+
+    #[test]
+    fn conduit_release_checks_staged_cargo_version_before_commit() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        let cancel = AtomicBool::new(false);
+        std::fs::create_dir_all(repo.path.join(".github/workflows")).unwrap();
+        std::fs::write(
+            repo.path.join(".github/workflows/release.yml"),
+            "Leo-Lee-j/conduit\nTag must match Cargo.toml\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repo.path.join("Cargo.toml"),
+            "[package]\nname = \"conduit\"\nversion = \"0.1.1\"\n",
+        )
+        .unwrap();
+        repo.run(&["add", ".github/workflows/release.yml", "Cargo.toml"]);
+        // An unstaged version edit must not affect the version that is actually committed.
+        std::fs::write(
+            repo.path.join("Cargo.toml"),
+            "[package]\nname = \"conduit\"\nversion = \"0.1.2\"\n",
+        )
+        .unwrap();
+        let target = commit_target(&repo.git, &repo.path, &cancel).unwrap();
+        let result = operate(
+            &repo.path,
+            Operation::Commit {
+                message: "release".into(),
+                target,
+                push: true,
+                tag: Some("v0.1.2".into()),
+            },
+            &cancel,
+        );
+        assert!(!result.committed && result.error.unwrap().contains("0.1.1"));
+        assert!(validate_conduit_release(&repo.git, &repo.path, "v0.1.1", "", &cancel).is_ok());
+        assert!(
+            validate_conduit_release(&repo.git, &repo.path, "v0.1.1-rc.1", "", &cancel).is_err()
+        );
+    }
+
+    #[test]
+    fn custom_tag_steps_and_bounds() {
+        use crate::store::TagIncrement::*;
+        let tags = vec!["v0.1.1".into()];
+        assert_eq!(next_tag(&tags, Patch, 10).unwrap(), "v0.1.11");
+        assert_eq!(next_tag(&tags, Minor, 2).unwrap(), "v0.3.0");
+        assert_eq!(next_tag(&tags, Major, 2).unwrap(), "v2.0.0");
+        assert!(next_tag(&tags, Patch, 0).is_err());
+        assert!(next_tag(&["v0.0.18446744073709551615".into()], Patch, 1).is_err());
+    }
+
+    #[test]
+    fn remote_tag_refresh_does_not_modify_local_refs_and_observes_deletion() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        let cancel = AtomicBool::new(false);
+        repo.stage("seed\n");
+        assert!(repo.commit("seed", false).committed);
+        let remote = repo.seed_remote();
+        repo.run(&[
+            "--git-dir",
+            remote.to_str().unwrap(),
+            "tag",
+            "v1.0.0",
+            "refs/heads/main",
+        ]);
+        repo.run(&["tag", "local-only"]);
+        let result = load_remote_tags(&repo.path, &cancel).unwrap();
+        assert_eq!(result.remote, "origin");
+        assert_eq!(result.names, vec!["v1.0.0"]);
+        assert_eq!(repo.run(&["tag", "-l"]).trim(), "local-only");
+        repo.run(&["--git-dir", remote.to_str().unwrap(), "tag", "-d", "v1.0.0"]);
+        assert!(
+            load_remote_tags(&repo.path, &cancel)
+                .unwrap()
+                .names
+                .is_empty()
+        );
+        assert_eq!(repo.run(&["tag", "-l"]).trim(), "local-only");
+    }
+
+    #[test]
+    fn tag_retry_can_use_an_upstream_configured_after_commit() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        let cancel = AtomicBool::new(false);
+        repo.stage("seed\n");
+        assert!(repo.commit("seed", false).committed);
+        repo.stage("release\n");
+        let target = commit_target(&repo.git, &repo.path, &cancel).unwrap();
+        let result = operate(
+            &repo.path,
+            Operation::Commit {
+                message: "release".into(),
+                target,
+                push: true,
+                tag: Some("v0.1.2".into()),
+            },
+            &cancel,
+        );
+        let retry = result.retry_tag.expect("missing upstream retains retry");
+        assert!(retry.remote.is_empty());
+        let remote = repo.seed_remote();
+        let done = operate(&repo.path, Operation::RetryTag(retry.clone()), &cancel);
+        assert!(done.retry_completed && done.error.is_none(), "{done:?}");
+        assert_eq!(
+            repo.run(&[
+                "--git-dir",
+                remote.to_str().unwrap(),
+                "rev-parse",
+                "refs/tags/v0.1.2"
+            ])
+            .trim(),
+            retry.oid
+        );
+    }
+
+    #[test]
+    fn tag_retry_requires_branch_push_and_refuses_changed_refs() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        let cancel = AtomicBool::new(false);
+        repo.stage("seed\n");
+        assert!(repo.commit("seed", false).committed);
+        let remote = repo.seed_remote();
+        repo.run(&[
+            "--git-dir",
+            remote.to_str().unwrap(),
+            "config",
+            "receive.advertiseAtomic",
+            "false",
+        ]);
+        repo.stage("release\n");
+        let target = commit_target(&repo.git, &repo.path, &cancel).unwrap();
+        let result = operate(
+            &repo.path,
+            Operation::Commit {
+                message: "release".into(),
+                target,
+                push: true,
+                tag: Some("v0.1.2".into()),
+            },
+            &cancel,
+        );
+        assert!(result.committed && result.error.is_some(), "{result:?}");
+        let retry = result.retry_tag.expect("retry metadata");
+        let rejected = operate(&repo.path, Operation::RetryTag(retry.clone()), &cancel);
+        assert!(rejected.error.as_deref().unwrap().contains("尚未包含"));
+        repo.run(&["push", "origin", "main"]);
+        let done = operate(&repo.path, Operation::RetryTag(retry.clone()), &cancel);
+        assert!(done.retry_completed && done.error.is_none(), "{done:?}");
+        assert_eq!(
+            repo.run(&[
+                "--git-dir",
+                remote.to_str().unwrap(),
+                "rev-parse",
+                "refs/tags/v0.1.2"
+            ])
+            .trim(),
+            retry.oid
+        );
+        assert!(
+            operate(&repo.path, Operation::RetryTag(retry.clone()), &cancel)
+                .error
+                .is_none()
+        );
+        repo.run(&[
+            "--git-dir",
+            remote.to_str().unwrap(),
+            "tag",
+            "-f",
+            "v0.1.2",
+            "HEAD~1",
+        ]);
+        let conflict = operate(&repo.path, Operation::RetryTag(retry.clone()), &cancel);
+        assert!(conflict.error.unwrap().contains("远程已存在"));
+        repo.run(&["tag", "-f", "v0.1.2", "HEAD~1"]);
+        assert!(
+            operate(&repo.path, Operation::RetryTag(retry), &cancel)
+                .error
+                .unwrap()
+                .contains("本地标签")
+        );
+    }
+
+    #[test]
+    fn atomic_tag_conflict_leaves_remote_branch_unchanged() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        let cancel = AtomicBool::new(false);
+        repo.stage("initial\n");
+        assert!(repo.commit("seed", false).committed);
+        let remote = repo.seed_remote();
+        repo.run(&["tag", "v0.1.3"]);
+        repo.run(&["push", "origin", "refs/tags/v0.1.3"]);
+        repo.run(&["tag", "-d", "v0.1.3"]);
+        let old = repo.run(&[
+            "--git-dir",
+            remote.to_str().unwrap(),
+            "rev-parse",
+            "refs/heads/main",
+        ]);
+        repo.stage("next\n");
+        let target = commit_target(&repo.git, &repo.path, &cancel).unwrap();
+        let result = operate(
+            &repo.path,
+            Operation::Commit {
+                message: "release".into(),
+                target,
+                push: true,
+                tag: Some("v0.1.3".into()),
+            },
+            &cancel,
+        );
+        assert!(result.committed && result.error.is_some(), "{result:?}");
+        assert!(result.message.contains("本地标签"));
+        assert_eq!(
+            old,
+            repo.run(&[
+                "--git-dir",
+                remote.to_str().unwrap(),
+                "rev-parse",
+                "refs/heads/main"
+            ])
+        );
+        assert_ne!(old, repo.run(&["rev-parse", "refs/tags/v0.1.3"]));
+    }
+
+    #[test]
     fn commit_only_includes_index_and_preserves_unstaged_and_untracked_files() {
         let Some(repo) = TestRepository::new() else {
             return;
@@ -1446,6 +2232,7 @@ mod tests {
                 message: "stale".into(),
                 target,
                 push: false,
+                tag: None,
             },
             &AtomicBool::new(false),
         );
@@ -1458,6 +2245,7 @@ mod tests {
                 message: "wrong branch".into(),
                 target,
                 push: false,
+                tag: None,
             },
             &AtomicBool::new(false),
         );
@@ -1471,6 +2259,7 @@ mod tests {
                 message: "cancelled".into(),
                 target,
                 push: false,
+                tag: None,
             },
             &AtomicBool::new(true),
         );
@@ -1619,6 +2408,7 @@ mod tests {
     fn snapshot_counts_distinguish_staged_and_worktree_changes() {
         let snapshot = Snapshot {
             branch: "main".into(),
+            tags: vec![],
             files: parse_status(b"M  staged\0 M worktree\0MM both\0?? new\0"),
             staged_diff: String::new(),
             notes: vec![],
