@@ -343,19 +343,19 @@ impl ConduitApp {
             .get(&path)
             .map(|draft| draft.tag.read(cx).value().to_string())
             .filter(|value| !value.is_empty());
-        if let Some(name) = tag.as_deref() {
-            if self.remote_tags.get(&path).is_some_and(|remote| {
+        if let Some(name) = tag.as_deref()
+            && self.remote_tags.get(&path).is_some_and(|remote| {
                 snapshot.target.branch.as_ref() == Some(&remote.branch)
                     && remote.names.iter().any(|item| item == name)
-            }) {
-                self.git_feedback(
-                    path,
-                    format!("上次查询显示远程已存在标签 {name}，请选择新标签"),
-                    true,
-                    cx,
-                );
-                return;
-            }
+            })
+        {
+            self.git_feedback(
+                path,
+                format!("上次查询显示远程已存在标签 {name}，请选择新标签"),
+                true,
+                cx,
+            );
+            return;
         }
         self.remote_tags_probe = None;
         let operation = git::Operation::Commit {

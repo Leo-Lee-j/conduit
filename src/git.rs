@@ -1102,12 +1102,11 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                         };
                         if let Ok((remote, merge)) =
                             resolve_upstream(&git, workspace, &pending.branch, None, cancel)
+                            && let Ok(url) = single_push_url(&git, workspace, &remote, cancel)
                         {
-                            if let Ok(url) = single_push_url(&git, workspace, &remote, cancel) {
-                                pending.remote = remote;
-                                pending.remote_url = url;
-                                pending.merge = merge;
-                            }
+                            pending.remote = remote;
+                            pending.remote_url = url;
+                            pending.merge = merge;
                         }
                         retry_tag = Some(pending);
                     }
