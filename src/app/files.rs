@@ -3109,3 +3109,177 @@ mod git_navigation_tests {
         cx.run_until_parked();
     }
 }
+
+#[cfg(all(test, feature = "ui-tests"))]
+mod file_search_tests {
+    use super::{
+        ConduitApp, Duration, Modifiers, PathBuf, Root, Store, SystemTime, UNIX_EPOCH, Workspace,
+    };
+    use crate::app::file_picker::DoubleShift;
+    use gpui_kit::component::WindowExt;
+    use gpui_kit::{AppContext, Focusable, TestAppContext, VisualTestContext};
+
+    fn settle(cx: &mut VisualTestContext) {
+        cx.run_until_parked();
+        cx.background_executor
+            .advance_clock(Duration::from_millis(100));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+    }
+
+    fn tap_shift(cx: &mut VisualTestContext) {
+        cx.simulate_modifiers_change(Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        });
+        cx.simulate_modifiers_change(Modifiers::default());
+    }
+
+    #[gpui_kit::test]
+    fn double_shift_file_search_keyboard_and_workspace_scope(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let root = std::env::temp_dir().join(format!(
+            "conduit-shift-search-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("alpha/src")).unwrap();
+        std::fs::create_dir_all(root.join("beta")).unwrap();
+        for (file, text) in [
+            ("alpha/README.md", "alpha"),
+            ("alpha/src/main.rs", "fn main() {}"),
+            ("beta/other.rs", "beta"),
+        ] {
+            std::fs::write(root.join(file), text).unwrap();
+        }
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let store = Store {
+                    workspaces: vec![
+                        Workspace {
+                            path: root.join("alpha"),
+                            sessions: vec![super::super::tests::session()],
+                        },
+                        Workspace {
+                            path: root.join("beta"),
+                            sessions: vec![],
+                        },
+                    ],
+                    ..Default::default()
+                };
+                let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
+                app.startup = None;
+                app.writable = false; // Read-only browsing must not depend on chat write permission.
+                app.input
+                    .update(cx, |input, cx| input.set_value("keep draft", window, cx));
+                app.input.read(cx).focus_handle(cx).focus(window, cx);
+                app
+            });
+            *output.borrow_mut() = Some(app.clone());
+            Root::new(app, window, cx)
+        });
+        let app = slot.borrow().as_ref().unwrap().clone();
+        settle(cx);
+        tap_shift(cx);
+        cx.update(|window, cx| assert!(!window.has_active_dialog(cx), "one Shift is not enough"));
+        tap_shift(cx);
+        settle(cx);
+        cx.update(|window, cx| assert!(window.has_active_dialog(cx)));
+        assert!(cx.debug_bounds("file-search-input").is_some());
+        cx.simulate_input("main");
+        settle(cx);
+        cx.simulate_keystrokes("enter");
+        settle(cx);
+        cx.update(|window, cx| {
+            assert!(!window.has_active_dialog(cx));
+            let app = app.read(cx);
+            let id = app.active_file.expect("Enter opens the matching file");
+            assert_eq!(app.files.documents[&id].key.workspace, root.join("alpha"));
+            assert_eq!(
+                app.files.documents[&id].key.relative,
+                PathBuf::from("src/main.rs")
+            );
+            assert_eq!(app.input.read(cx).value(), "keep draft");
+            assert!(app.runs.is_empty());
+        });
+
+        // The shortcut also works with a file document focused, not only the composer.
+        tap_shift(cx);
+        tap_shift(cx);
+        settle(cx);
+        cx.simulate_input("other");
+        settle(cx);
+        cx.simulate_keystrokes("enter");
+        settle(cx);
+        cx.update(|window, cx| {
+            assert!(
+                window.has_active_dialog(cx),
+                "no result must not open another workspace's file"
+            )
+        });
+        cx.simulate_keystrokes("escape");
+        settle(cx);
+        cx.update(|window, cx| assert!(!window.has_active_dialog(cx)));
+
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.input.read(cx).focus_handle(cx).focus(window, cx);
+                app.double_shift = DoubleShift::default();
+            });
+        });
+        settle(cx);
+        tap_shift(cx);
+        cx.simulate_modifiers_change(Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        });
+        cx.simulate_keystrokes("shift-a");
+        cx.simulate_modifiers_change(Modifiers::default());
+        settle(cx);
+        cx.update(|window, cx| {
+            assert!(
+                !window.has_active_dialog(cx),
+                "Shift+letter is not a second tap"
+            )
+        });
+        tap_shift(cx);
+        settle(cx);
+        cx.update(|window, cx| {
+            assert!(
+                !window.has_active_dialog(cx),
+                "a modified keystroke resets the sequence"
+            )
+        });
+
+        // No workspace: show a message rather than attempting to scan an arbitrary directory.
+        cx.update(|_, cx| {
+            app.update(cx, |app, _| {
+                app.selected_workspace = None;
+                app.double_shift = DoubleShift::default();
+            })
+        });
+        tap_shift(cx);
+        tap_shift(cx);
+        settle(cx);
+        cx.update(|window, cx| {
+            assert!(!window.has_active_dialog(cx));
+            assert!(
+                app.read(cx)
+                    .message
+                    .as_ref()
+                    .unwrap()
+                    .contains("请先选择工作区")
+            );
+        });
+        let resolved = root.canonicalize().unwrap();
+        assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+        std::fs::remove_dir_all(resolved).unwrap();
+    }
+}
