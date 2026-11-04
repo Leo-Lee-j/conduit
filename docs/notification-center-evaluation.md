@@ -1,6 +1,8 @@
 # 通知中心与右侧历史面板评估
 
-评估日期：2026-11-04。依据：当前工作区源码（基准提交 `96f681c`，包含已有未提交修改）、项目锁定的 GPUI Kit 源码及官方文档。本文是实施评估，尚未实现通知中心或运行界面原型；下文容量、交互、工期均为建议。
+评估日期：2026-11-04。依据：当前工作区源码（基准提交 `96f681c`，包含已有未提交修改）、项目锁定的 GPUI Kit 源码及官方文档。第 1–7 节保留实施前的调研与设计依据；实施结果见第 8 节，桌面验收及后续修复见第 9 节。
+
+实施进展（2026-11-05）：应用内通知中心、独立历史文件、铃铛面板、Alert / Notification 适配器和主要业务来源已落地，使用方式见[通知使用说明](usage.md#通知)。下文保留实施前的评估与验收约定；具体实现采用右上角标题栏铃铛、完整本地时间提示、显式标读和类型化跳转；会话跳转同时校验创建时间及已有 CLI 会话标识，工具详情按钮仍位于标签栏。系统桌面通知和屏幕阅读器实机验收仍在首版范围之外。
 
 **建议实施：应用持有统一通知中心，右侧增加铃铛历史面板；使用用户提供的 GPUI Kit Alert 展示即时、持续性提示，首版默认使用 Notification 展示短暂浮层。** 通知中心负责历史、未读、归并、持久化和来源跳转，组件负责呈现。首版覆盖应用内通知，保留系统桌面通知的后续接入位置。
 
@@ -200,8 +202,71 @@ fn poll_notifications(&mut self, window: &mut Window, cx: &mut Context<Self>);
 
 - 用户提供的 [GPUI Kit Alert 官方文档](https://gpui-kit.com/zh-CN/component/alert/)：组件用途与展示能力。
 - 用户补充的 [GPUI Kit Notification 官方文档](https://gpui-kit.com/zh-CN/component/notification/)：浮层入口与交互能力；API 以锁定源码为准。
-- [GPUI Kit 锁定提交](https://github.com/longbridge/gpui-kit/tree/11345ec002d9f182a266b5d5dd3a217090700a87)：本机缓存直接核对 `crates/component/src/alert.rs`、`notification.rs`、`root.rs`、`crates/kit/src/lib.rs` 和 `crates/assets/default-icons.txt`。
+- [GPUI Kit 锁定提交](https://github.com/longbridge/gpui-kit/tree/11345ec002d9f182a266b5d5dd3a217090700a87)：本机缓存直接核对组件 API 与图标。
 - [VS Code 官方通知交互指南](https://code.visualstudio.com/api/ux-guidelines/notifications)：通知相关性、操作性与减少干扰。
 - 仓库证据见第 1 节及各段文件链接；现有插件文档仅用于兼容方向，不作为已实现能力。
 
-本次仅新增评估并更新文档索引。验证范围是源码 / API 核对、文档引用与差异检查；没有运行应用、编译、测试或性能基准，因此上述布局与无障碍行为仍是实施验收要求。
+调研阶段仅新增评估并更新文档索引，验证范围为源码 / API 核对、文档引用与差异检查。之后实施与桌面预验的结果分别记录于以下两节。
+
+## 8. 实施验证（2026-11-05）
+
+- `cargo fmt --all --check` 与 `git diff --check` 通过。
+- `cargo clippy --offline --locked --all-targets --features ui-tests -- -D warnings` 通过。
+- `cargo test --offline --locked --features ui-tests --bin conduit notifications:: -- --test-threads=1`：14 项通过，包含 6 项 GPUI 界面测试和 8 项规则 / 存储测试。
+- `cargo test --offline --locked --features ui-tests --bin conduit app:: -- --test-threads=1`：154 项通过。此前文件预览回归的失败在当前工作区复测通过。
+- 常规全量测试中，主程序 286 项通过、16 项按配置忽略，更新库 9 项通过；随后更新助手测试可执行文件因 Windows 错误 740（需要提升）未能启动，因此不将该命令记录为整体通过。
+
+验证覆盖通知不抢焦点、浮层自动消失后的未读保留、宽窄布局和 Git 分支页面、设置模态框共存、来源删除及会话编号重用、持续故障恢复、历史损坏保留和多进程写锁。没有进行系统桌面通知或屏幕阅读器实机验收。
+
+实际业务入口为 `ConduitApp::notify_user(Notice, cx) -> u64`；该入口无需 `Window`，返回稳定记录 ID。`Notice::new(source, level, title, message)` 默认请求浮层，可通过 `.presentation(Presentation::History)` 仅留历史，或 `.active().presentation(Presentation::Banner)` 表达需要持续显示的问题。`.target(...)` 绑定会话 / 工作区 / 设置 / 更新入口；会话目标使用 `session_notice_target` 获取，避免手动拼接身份。`.key(key, event)` 分别提供归并键与一次事件的身份；业务问题解决时调用 `resolve_notification(&key, cx)`，不能用关闭浮层、标读或删除历史代替解决。后台结果应先回到现有 UI 调度、通过业务上下文检查后再发布。
+
+## 9. 桌面预验与可访问性修复（2026-11-05）
+
+使用 [通知验收脚本](../scripts/notification-acceptance.ps1) 生成独立的合成工作区及通知历史，实际启动 Debug 程序，由 Windows UI Automation 调用按钮、`PrintWindow` 截图并逐张目检。每个场景通过正常关窗退出，再读取落盘 JSON 核对状态；重新启动场景复用同一隔离目录。数据与截图均位于 `target/notification-acceptance/<时间与随机标识>/`，不使用日常应用数据，也不运行真实模型任务。
+
+本轮发现 GPUI 锁定版本的视图缓存会重放绘制与输入处理器，但不保留可访问性子树：面板视觉正常，后续帧中 UI Automation 只能找到铃铛与关闭按钮，无法找到筛选及记录操作。通知视图现在在 `window.is_a11y_active()` 时使用普通 Entity 渲染，其余情况下仍复用缓存。历史提供 `List` / `ListItem` 语义，正文、来源、空状态和失效目标提示使用普通文本节点，时间按钮具有完整日期与时区名称；普通历史不使用 `Alert`，避免作为实时告警重复播报。历史损坏提示继续使用组件 `Alert`，其外围语义组补充可访问名称，解决该版本组件在 Windows 中正文可见却没有可读名称的问题。
+
+复现方式：
+
+```powershell
+cargo build --offline --locked --bin conduit
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/notification-acceptance.ps1
+# 也可单独执行一个场景，例如：
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/notification-acceptance.ps1 -Case restart
+```
+
+脚本覆盖宽窗、窄窗、浅色主题、连续英文与中文长文本、空工作区、来源会话跳转、来源失效、标读后重启与清除、损坏历史保护。窄窗请求 850×500，在本机实际获得含非客户区的 866×508 外框，截图和元数据记录实际尺寸。
+
+本轮完整运行 **9 组场景通过，共 11 次正常启动与退出**，证据位于 `target/notification-acceptance/20261105-011442-0cf0d8ed/out/`：
+
+| 场景 | 结果与核对点 |
+| --- | --- |
+| 宽窗 / 窄窗 / 浅色主题 | 通过；铃铛、筛选、记录按钮均可访问；打开历史不标读 |
+| 长文本 | 通过；连续英文和中文换行，没有横向越出面板；滚轮可到达长记录下方的操作按钮 |
+| 空工作区 | 通过；仍能打开面板，显示并可访问“暂无通知” |
+| 来源跳转 | 通过；从当前会话切到绑定的另一个会话，只将对应记录标读 |
+| 失效来源 | 通过；显示可访问的“目标已不存在”，未创建会话 |
+| 标读 / 重启 / 清除 | 通过；正常关窗落盘，重启后筛选为空，清除结果再次落盘 |
+| 损坏文件 | 通过；提示可见且可访问，正常退出后原损坏文件逐字节保留 |
+
+`cargo build --offline --locked --bin conduit` 与全仓库格式检查通过；带 `ui-tests` 的全目标 Clippy 在本轮曾复测通过，但随后工作区并行改动后的最终检查未通过（见下）。通知源码格式、差异空白与两个 PowerShell 脚本的语法检查通过。最终通知专项测试 **14 项通过**。复测期间并行新增的会话正文测试因通配导入了 GPUI 的 `test` 宏，发生递归展开；仅将 `src/app/transcripts/tests.rs` 改为显式导入后恢复编译，未改变测试逻辑。损坏文件场景额外使用 SHA-256 比对退出前后的文件，复测通过。
+
+最终全目标 Clippy 在并行插件接入改动中报错：`src/app/plugin_ui.rs:56` 的渲染函数指针要求 `&ConduitApp`，侧栏渲染需要 `&mut ConduitApp`；`src/app/files.rs:756`、`:758` 的文件树渲染也出现不可变引用下的可变借用错误。以上属于当前共享工作区的集成待处理项，未修改这些并行改动；桌面预验使用本轮已成功构建的程序，不能将其视为最终工作区全量编译通过。
+
+导入修复后的会话正文测试额外运行了 5 项，其中 4 项通过，`missing_body_has_error_retry_and_blocks_send_without_looking_empty` 在 `errors.contains_key(&2)` 断言失败。这是当前并行会话正文工作中的待处理项，本轮没有改动其业务行为，也不将全仓库测试记为通过。
+
+共用 [UI 验收脚本](../scripts/ui-acceptance.ps1) 新增 `-CloseNormally`，关闭超时或异常退出会使验收失败；按钮查找优先精确名称，避免“未读”误命中铃铛。截图日志包含列表项等语义节点，能够发现此次缓存回归。该自动预验仍不等同于屏幕阅读器、真实中文输入法、多屏或不同 DPI 的人工验收；本轮也未接入系统桌面通知。
+
+## 10. 续做记录（2026-11-05）
+
+今天暂停。通知中心首版与隔离数据桌面预验已完成；明天（2026-11-06）从**当前共享工作区**继续，不要重做已通过的 9 组 UI 场景或通知专项测试，除非相关代码再次变更。
+
+续做顺序：
+
+1. 先查看最新 `git status` 与相关 diff，识别其他并行改动；保留他人未提交内容。
+2. 处理 / 协调当前全仓库集成阻塞：插件导航渲染函数签名不匹配（`src/app/plugin_ui.rs:56`），以及 `src/app/files.rs:756`、`:758` 文件树在不可变 `self` 下执行可变加载。
+3. 复核 `src/app/transcripts/tests.rs` 正在进行的正文缓存改动。通配导入导致 GPUI `test` 宏递归的问题已通过显式导入规避；目前 5 项中 4 项通过，`missing_body_has_error_retry_and_blocks_send_without_looking_empty` 仍在 `errors.contains_key(&2)` 断言失败。
+4. 集成阻塞解除后，重跑 `cargo fmt --all --check`、`cargo clippy --offline --locked --all-targets --features ui-tests -- -D warnings`、通知专项 14 项和 `app::` 测试；若未改通知实现，无需再次跑完整桌面场景。
+5. 保留剩余人工验收项：真实屏幕阅读器、IME 输入焦点、多 DPI / 多屏。系统桌面推送属于首版之外，不要默认扩大本次范围。
+
+本轮本地新增 / 修改的交付文件为 `src/app/notifications.rs`、`src/app/transcripts/tests.rs`、`scripts/notification-acceptance.ps1`、`scripts/ui-acceptance.ps1` 与本文；仓库内还有多项并行未提交文件，修改归属需以明天的最新 diff 为准。隔离验收截图和数据在 `target/notification-acceptance/20261105-011442-0cf0d8ed/out/`，不需要纳入版本控制。
