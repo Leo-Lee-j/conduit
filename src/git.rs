@@ -9,6 +9,7 @@ use crate::child::{Child, available};
 use anyhow::{Context, Result, anyhow, bail};
 mod branches;
 mod compare;
+mod selected;
 pub use branches::{
     BranchAction, BranchContext, BranchInfo, BranchRequest, IntegrationState, repository_scope,
 };
@@ -126,6 +127,74 @@ pub struct Snapshot {
     pub target: CommitTarget,
 }
 
+/// Filter the bounded generation patch using exact Git-quoted file headers.
+/// Include both sides of renames, including when rename detection is disabled.
+pub fn selected_staged_patch(snapshot: &Snapshot, selected: &[String]) -> String {
+    let mut headers = std::collections::HashSet::new();
+    for file in snapshot
+        .files
+        .iter()
+        .filter(|file| file.staged() && selected.contains(&file.path))
+    {
+        let original = file.original.as_deref().unwrap_or(&file.path);
+        for quote_unicode in [false, true] {
+            for (from, to) in [
+                (original, file.path.as_str()),
+                (original, original),
+                (&file.path, &file.path),
+            ] {
+                headers.insert(format!(
+                    "diff --git {} {}",
+                    quote_diff_path(&format!("a/{from}"), quote_unicode),
+                    quote_diff_path(&format!("b/{to}"), quote_unicode)
+                ));
+            }
+        }
+    }
+    let mut include = false;
+    let mut patch = String::new();
+    for line in snapshot.staged_diff.split_inclusive('\n') {
+        if line.starts_with("diff --git ") {
+            include = headers.contains(line.trim_end_matches(['\r', '\n']));
+        }
+        if include {
+            patch.push_str(line);
+        }
+    }
+    patch
+}
+
+fn quote_diff_path(path: &str, quote_unicode: bool) -> String {
+    if !path
+        .bytes()
+        .any(|b| b < 32 || b == 127 || b == b'"' || b == b'\\' || (quote_unicode && b >= 128))
+    {
+        return path.into();
+    }
+    let mut out = String::from("\"");
+    for ch in path.chars() {
+        match ch {
+            '\x07' => out.push_str("\\a"),
+            '\x08' => out.push_str("\\b"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\x0b' => out.push_str("\\v"),
+            '\x0c' => out.push_str("\\f"),
+            '\r' => out.push_str("\\r"),
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            ch if ch.is_ascii_control() || (quote_unicode && !ch.is_ascii()) => {
+                for b in ch.encode_utf8(&mut [0; 4]).bytes() {
+                    out.push_str(&format!("\\{b:03o}"));
+                }
+            }
+            ch => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Patch for one file, compared against HEAD in the diff window.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileDiff {
@@ -174,6 +243,8 @@ pub enum Operation {
     },
     Branch(Box<BranchRequest>),
     Commit {
+        /// None commits the full index; Some commits only these staged paths.
+        files: Option<Vec<String>>,
         message: String,
         target: CommitTarget,
         push: bool,
@@ -541,6 +612,8 @@ pub fn load(workspace: &Path, cancel: &AtomicBool) -> Result<Snapshot> {
             "core.quotepath=false",
             "diff",
             "--cached",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
             "--no-color",
             "--no-ext-diff",
             "--no-textconv",
@@ -1004,6 +1077,7 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                 Ok(format!("已将 {} 个文件移出暂存区", files.len()))
             }
             Operation::Commit {
+                files,
                 message,
                 target,
                 push,
@@ -1026,18 +1100,31 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                 }
                 if let Some(tag) = tag.as_deref() {
                     validate_tag(&git, workspace, tag, cancel)?;
-                    if push {
+                    if push && files.is_none() {
                         validate_conduit_release(&git, workspace, tag, "", cancel)?;
                     }
                 }
-                // No add/-a: Git commits exactly its index and preserves unstaged files.
-                run_git_with_timeout(
-                    &git,
-                    workspace,
-                    &["commit", "-m", message.trim()],
-                    cancel,
-                    Duration::from_secs(120),
-                )?;
+                // An alternate index limits the commit without touching working files
+                // or removing unchecked changes from the real index.
+                if let Some(files) = files {
+                    selected::commit(
+                        &git,
+                        workspace,
+                        &target,
+                        &files,
+                        message.trim(),
+                        if push { tag.as_deref() } else { None },
+                        cancel,
+                    )?;
+                } else {
+                    run_git_with_timeout(
+                        &git,
+                        workspace,
+                        &["commit", "-m", message.trim()],
+                        cancel,
+                        Duration::from_secs(120),
+                    )?;
+                }
                 committed = true;
                 failure_stage = "提交已成功，无法确认提交对象";
                 let oid = run_git(&git, workspace, &["rev-parse", "--verify", "HEAD"], cancel)?;
@@ -1512,16 +1599,55 @@ fn run_git_bounded(
     timeout: Duration,
     stop_when_full: bool,
 ) -> Result<CommandOutput> {
+    run_git_with_environment(
+        git,
+        workspace,
+        args,
+        cancel,
+        None,
+        CommandLimits {
+            limit,
+            timeout,
+            stop_when_full,
+        },
+    )
+}
+
+struct CommandLimits {
+    limit: usize,
+    timeout: Duration,
+    stop_when_full: bool,
+}
+
+fn run_git_with_environment(
+    git: &Path,
+    workspace: &Path,
+    args: &[&str],
+    cancel: &AtomicBool,
+    index: Option<&Path>,
+    limits: CommandLimits,
+) -> Result<CommandOutput> {
+    let CommandLimits {
+        limit,
+        timeout,
+        stop_when_full,
+    } = limits;
     if cancel.load(Ordering::Acquire) {
         bail!("Git 读取已取消");
     }
     let args: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
-    let environment = std::collections::BTreeMap::from([
+    let mut environment = std::collections::BTreeMap::from([
         ("GIT_EDITOR".into(), "true".into()),
         ("GIT_SEQUENCE_EDITOR".into(), "true".into()),
         ("GIT_TERMINAL_PROMPT".into(), "0".into()),
         ("GCM_INTERACTIVE".into(), "Never".into()),
     ]);
+    if let Some(index) = index {
+        environment.insert(
+            "GIT_INDEX_FILE".into(),
+            index.to_string_lossy().into_owned(),
+        );
+    }
     let (child, mut pipes) = Child::spawn_with_env(git, &args, workspace, &environment)
         .with_context(|| format!("启动 {} 失败", git.display()))?;
     drop(pipes.stdin);
@@ -1660,6 +1786,171 @@ mod tests {
         );
     }
 
+    fn commit_selection(repo: &TestRepository, files: &[&str]) -> OperationResult {
+        let cancel = AtomicBool::new(false);
+        operate(
+            &repo.path,
+            Operation::Commit {
+                files: Some(files.iter().map(|s| s.to_string()).collect()),
+                message: "selected changes".into(),
+                target: commit_target(&repo.git, &repo.path, &cancel).unwrap(),
+                push: false,
+                tag: None,
+            },
+            &cancel,
+        )
+    }
+
+    #[test]
+    fn selected_commit_preserves_unchecked_index_and_unstaged_content() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        repo.stage("initial\n");
+        assert!(repo.commit("initial", false).committed);
+        repo.stage("staged version\n");
+        std::fs::write(repo.path.join("tracked.txt"), "unstaged version\n").unwrap();
+        std::fs::write(repo.path.join("other.txt"), "unchecked\n").unwrap();
+        repo.run(&["add", "other.txt"]);
+        let index = std::fs::read(repo.path.join(".git/index")).unwrap();
+        let result = commit_selection(&repo, &["tracked.txt"]);
+        assert!(result.committed, "{:?}", result.error);
+        assert_eq!(repo.run(&["show", "HEAD:tracked.txt"]), "staged version\n");
+        assert_eq!(
+            repo.run(&["diff", "--cached", "--name-only"]).trim(),
+            "other.txt"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.path.join("tracked.txt")).unwrap(),
+            "unstaged version\n"
+        );
+        assert_eq!(std::fs::read(repo.path.join(".git/index")).unwrap(), index);
+        assert!(!repo.path.join(".git/index.lock").exists());
+    }
+
+    #[test]
+    fn selected_release_validates_the_selected_tree_before_creating_commit() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        std::fs::create_dir_all(repo.path.join(".github/workflows")).unwrap();
+        std::fs::write(
+            repo.path.join(".github/workflows/release.yml"),
+            "Leo-Lee-j/conduit\nTag must match Cargo.toml\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repo.path.join("Cargo.toml"),
+            "[package]\nname = \"conduit\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        repo.stage("initial\n");
+        repo.run(&["add", "."]);
+        assert!(repo.commit("initial", false).committed);
+        let head = repo.run(&["rev-parse", "HEAD"]);
+        std::fs::write(
+            repo.path.join("Cargo.toml"),
+            "[package]\nname = \"conduit\"\nversion = \"2.0.0\"\n",
+        )
+        .unwrap();
+        repo.stage("selected\n");
+        repo.run(&["add", "Cargo.toml"]);
+        let cancel = AtomicBool::new(false);
+        let result = operate(
+            &repo.path,
+            Operation::Commit {
+                files: Some(vec!["tracked.txt".into()]),
+                message: "release".into(),
+                target: commit_target(&repo.git, &repo.path, &cancel).unwrap(),
+                push: true,
+                tag: Some("v2.0.0".into()),
+            },
+            &cancel,
+        );
+        assert!(!result.committed);
+        assert!(result.error.unwrap().contains("不一致"));
+        assert_eq!(repo.run(&["rev-parse", "HEAD"]), head);
+        assert!(!repo.path.join(".git/index.lock").exists());
+    }
+
+    #[test]
+    fn selected_initial_commit_and_literal_paths() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        for name in ["file[1].txt", "file1.txt", "中文 空格.txt"] {
+            std::fs::write(repo.path.join(name), name).unwrap();
+        }
+        repo.run(&["add", "."]);
+        let result = commit_selection(&repo, &["file[1].txt", "中文 空格.txt"]);
+        assert!(result.committed, "{:?}", result.error);
+        assert_eq!(
+            repo.run(&["diff", "--cached", "--name-only"]).trim(),
+            "file1.txt"
+        );
+        assert_eq!(repo.run(&["show", "HEAD:file[1].txt"]), "file[1].txt");
+        assert_eq!(repo.run(&["show", "HEAD:中文 空格.txt"]), "中文 空格.txt");
+    }
+
+    #[test]
+    fn selected_commit_renames_deletes_and_failure_keep_index() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        repo.stage("rename me\n");
+        std::fs::write(repo.path.join("delete.txt"), "delete me\n").unwrap();
+        repo.run(&["add", "."]);
+        assert!(repo.commit("initial", false).committed);
+        repo.run(&["mv", "tracked.txt", "renamed.txt"]);
+        repo.run(&["rm", "delete.txt"]);
+        std::fs::write(repo.path.join("other.txt"), "unchecked\n").unwrap();
+        repo.run(&["add", "other.txt"]);
+        let index = std::fs::read(repo.path.join(".git/index")).unwrap();
+        assert!(!commit_selection(&repo, &[]).committed);
+        assert!(!commit_selection(&repo, &["missing.txt"]).committed);
+        std::fs::write(
+            repo.path.join("empty-hooks/pre-commit"),
+            "#!/bin/sh\nexit 1\n",
+        )
+        .unwrap();
+        let failed = commit_selection(&repo, &["tracked.txt", "renamed.txt", "delete.txt"]);
+        assert!(!failed.committed);
+        assert_eq!(std::fs::read(repo.path.join(".git/index")).unwrap(), index);
+        assert!(!repo.path.join(".git/index.lock").exists());
+        std::fs::remove_file(repo.path.join("empty-hooks/pre-commit")).unwrap();
+        let result = commit_selection(&repo, &["tracked.txt", "renamed.txt", "delete.txt"]);
+        assert!(result.committed, "{:?}", result.error);
+        assert_eq!(
+            repo.run(&["ls-tree", "--name-only", "HEAD"]).trim(),
+            "renamed.txt"
+        );
+        assert_eq!(
+            repo.run(&["diff", "--cached", "--name-only"]).trim(),
+            "other.txt"
+        );
+    }
+
+    #[test]
+    fn selected_generation_patch_uses_exact_names_and_handles_git_quoting() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        for name in ["file[1].txt", "file1.txt", "中文 空格.txt"] {
+            std::fs::write(repo.path.join(name), format!("{name} content\n")).unwrap();
+        }
+        repo.run(&["add", "."]);
+        for quote in ["true", "false"] {
+            repo.run(&["config", "core.quotePath", quote]);
+            let snapshot = load(&repo.path, &AtomicBool::new(false)).unwrap();
+            let patch =
+                selected_staged_patch(&snapshot, &["file[1].txt".into(), "中文 空格.txt".into()]);
+            assert!(patch.contains("+file[1].txt content"), "{patch}");
+            assert!(patch.contains("+中文 空格.txt content"), "{patch}");
+            assert!(!patch.contains("+file1.txt content"), "{patch}");
+            assert!(selected_staged_patch(&snapshot, &[]).is_empty());
+        }
+    }
+
     struct TestRepository {
         path: PathBuf,
         git: PathBuf,
@@ -1708,6 +1999,7 @@ mod tests {
             operate(
                 &self.path,
                 Operation::Commit {
+                    files: None,
                     message: message.into(),
                     target,
                     push,
@@ -1883,6 +2175,7 @@ mod tests {
         let result = operate(
             &repo.path,
             Operation::Commit {
+                files: None,
                 message: "release".into(),
                 target,
                 push: true,
@@ -1918,6 +2211,7 @@ mod tests {
         let duplicate = operate(
             &repo.path,
             Operation::Commit {
+                files: None,
                 message: "duplicate".into(),
                 target,
                 push: false,
@@ -1942,6 +2236,7 @@ mod tests {
         let result = operate(
             &repo.path,
             Operation::Commit {
+                files: None,
                 message: "invalid".into(),
                 target: target.clone(),
                 push: false,
@@ -1955,6 +2250,7 @@ mod tests {
         let result = operate(
             &repo.path,
             Operation::Commit {
+                files: None,
                 message: "valid commit".into(),
                 target,
                 push: false,
@@ -1998,6 +2294,7 @@ mod tests {
         let result = operate(
             &repo.path,
             Operation::Commit {
+                files: None,
                 message: "release".into(),
                 target,
                 push: true,
@@ -2067,6 +2364,7 @@ mod tests {
         let result = operate(
             &repo.path,
             Operation::Commit {
+                files: None,
                 message: "release".into(),
                 target,
                 push: true,
@@ -2112,6 +2410,7 @@ mod tests {
         let result = operate(
             &repo.path,
             Operation::Commit {
+                files: None,
                 message: "release".into(),
                 target,
                 push: true,
@@ -2183,6 +2482,7 @@ mod tests {
         let result = operate(
             &repo.path,
             Operation::Commit {
+                files: None,
                 message: "release".into(),
                 target,
                 push: true,
@@ -2244,6 +2544,7 @@ mod tests {
         let changed = operate(
             &repo.path,
             Operation::Commit {
+                files: None,
                 message: "stale".into(),
                 target,
                 push: false,
@@ -2257,6 +2558,7 @@ mod tests {
         let changed = operate(
             &repo.path,
             Operation::Commit {
+                files: None,
                 message: "wrong branch".into(),
                 target,
                 push: false,
@@ -2271,6 +2573,7 @@ mod tests {
         let cancelled = operate(
             &repo.path,
             Operation::Commit {
+                files: None,
                 message: "cancelled".into(),
                 target,
                 push: false,

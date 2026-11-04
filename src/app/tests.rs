@@ -1268,3 +1268,23 @@ fn historical_reply_timing_prefers_recorded_duration_and_bounds_estimates_to_a_t
     session.messages[4].created_at = 1008;
     assert_eq!(reply_elapsed_label(&session, 5, false), None);
 }
+
+#[test]
+fn session_activity_survives_restore_and_legacy_messages() {
+    let mut restored = session();
+    restored.created_at = 10;
+    assert_eq!(restored.last_activity_at(), 10);
+    restored.messages = vec![
+        serde_json::from_value(serde_json::json!({
+            "key":"resumed", "kind":"User", "text":"continue", "created_at":100
+        }))
+        .unwrap(),
+        serde_json::from_value(serde_json::json!({
+            "key":"legacy-notice", "kind":"Notice", "text":"notice"
+        }))
+        .unwrap(),
+    ];
+    let saved = serde_json::to_string(&restored).unwrap();
+    let restored: SessionRecord = serde_json::from_str(&saved).unwrap();
+    assert_eq!(restored.last_activity_at(), 100);
+}

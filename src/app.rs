@@ -424,7 +424,7 @@ impl ConduitApp {
         for workspace in &mut store.workspaces {
             workspace
                 .sessions
-                .sort_by_key(|session| std::cmp::Reverse(session.created_at));
+                .sort_by_key(|session| std::cmp::Reverse((session.last_activity_at(), session.id)));
         }
         let selected_workspace = (!store.workspaces.is_empty()).then_some(0);
         let selected_session = store

@@ -262,13 +262,20 @@ impl ConduitApp {
                 ),
         );
         for (index, workspace) in self.store.workspaces.iter().enumerate() {
-            let sessions: Vec<&SessionRecord> = workspace
+            let mut sessions: Vec<&SessionRecord> = workspace
                 .sessions
                 .iter()
                 .filter(|session| {
                     (self.show_archived || !session.archived) && session_matches(session, &query)
                 })
                 .collect();
+            sessions.sort_by_key(|session| {
+                std::cmp::Reverse((
+                    self.session_control.runs.contains_key(&session.id),
+                    session.last_activity_at(),
+                    session.id,
+                ))
+            });
             if !query.is_empty() && sessions.is_empty() {
                 continue;
             }
@@ -625,7 +632,7 @@ impl ConduitApp {
                                     .child(self.delete_session_popover(id, cx)),
                             )
                         })
-                        .when_some(session_age_label(session.created_at), |row, age| {
+                        .when_some(session_age_label(session.last_activity_at()), |row, age| {
                             row.child(
                                 div()
                                     .flex_shrink_0()

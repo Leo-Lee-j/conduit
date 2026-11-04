@@ -247,6 +247,17 @@ pub struct ToolApproval {
 }
 
 impl SessionRecord {
+    /// Restored transcripts carry activity timestamps even in older stores.
+    pub fn last_activity_at(&self) -> u64 {
+        self.messages
+            .iter()
+            .rev()
+            .find(|message| message.created_at > 0)
+            .map_or(self.created_at, |message| {
+                message.created_at.max(self.created_at)
+            })
+    }
+
     /// Match exact provider item IDs first, then a matching Claude tool in this
     /// turn. Some permission requests precede the tool-start event, so create a
     /// placeholder with the provider key for the later event to update.

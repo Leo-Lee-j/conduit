@@ -181,7 +181,6 @@ impl ConduitApp {
         let select_app = view.clone();
         let selected_app = view.clone();
         let unstage_selected_app = view.clone();
-        let all_app = view;
         let all_for_select: Vec<_> = snapshot
             .files
             .iter()
@@ -193,7 +192,6 @@ impl ConduitApp {
                 .get(&path)
                 .is_some_and(|set| set.contains(file))
         });
-        let all = available.clone();
         let selected_for_unstage = selected_staged.clone();
         h_flex()
             .w_full()
@@ -257,21 +255,17 @@ impl ConduitApp {
                         });
                     }),
             )
-            .child(
-                Button::new("git-stage-all")
-                    .debug_selector(|| "git-stage-all".into())
-                    .ghost()
-                    .small()
-                    .compact()
-                    .icon(gpui_kit::assets::IconName::ArrowUpFromLine)
-                    .accessibility_label("全部暂存")
-                    .tooltip(format!("全部暂存 ({})", all.len()))
-                    .disabled(!self.can_stage_files() || all.is_empty())
-                    .on_click(move |_, _, cx| {
-                        all_app.update(cx, |this, cx| this.stage_git_files(all.clone(), cx));
-                    }),
-            )
             .into_any_element()
+    }
+
+    fn checked_staged_files(&self, path: &Path, snapshot: &git::Snapshot) -> Vec<String> {
+        let selected = self.git.selected_files.get(path);
+        snapshot
+            .files
+            .iter()
+            .filter(|file| file.staged() && selected.is_some_and(|set| set.contains(&file.path)))
+            .map(|file| file.path.clone())
+            .collect()
     }
 
     fn start_commit(&mut self, push: bool, cx: &mut Context<Self>) {
@@ -300,6 +294,19 @@ impl ConduitApp {
         if self.git.probe.is_some() {
             return;
         }
+        let selected = self.checked_staged_files(&path, snapshot);
+        if selected.is_empty() {
+            self.git_feedback(path, "请勾选需要提交的已暂存文件。", true, cx);
+            return;
+        }
+        let mut files = selected.clone();
+        for file in &snapshot.files {
+            if selected.contains(&file.path) && file.index == 'R' {
+                files.extend(file.original.iter().cloned());
+            }
+        }
+        files.sort();
+        files.dedup();
         let message = self
             .git
             .drafts
@@ -332,6 +339,7 @@ impl ConduitApp {
         }
         self.git.remote_tags_probe = None;
         let operation = git::Operation::Commit {
+            files: Some(files),
             message: message.clone(),
             target: snapshot.target.clone(),
             push,
@@ -504,10 +512,11 @@ impl ConduitApp {
             self.git_feedback(path, "请先刷新工作区 Git 状态。", true, cx);
             return;
         };
-        if snapshot.target.staged.is_empty() {
+        let selected = self.checked_staged_files(&path, snapshot);
+        if selected.is_empty() {
             self.git_feedback(
                 path,
-                "请先选择修改文件并加入暂存区，再生成 Commit Message。",
+                "请先勾选需要提交的已暂存文件，再生成 Commit Message。",
                 true,
                 cx,
             );
@@ -543,16 +552,9 @@ impl ConduitApp {
             .get(&path)
             .map(|draft| draft.input.read(cx).value().to_string())
             .unwrap_or_default();
-        let files: Vec<_> = snapshot
-            .files
-            .iter()
-            .filter(|file| file.staged())
-            .map(|file| file.path.as_str())
-            .collect();
-        let prompt = self
-            .store
-            .git
-            .generation_prompt(&files, &snapshot.staged_diff);
+        let files: Vec<_> = selected.iter().map(String::as_str).collect();
+        let patch = git::selected_staged_patch(snapshot, &selected);
+        let prompt = self.store.git.generation_prompt(&files, &patch);
         self.git.generation = Some(CommitGeneration {
             path: path.clone(),
             runtime: ChatRuntime::start_text_with_route_in(
@@ -828,9 +830,15 @@ impl ConduitApp {
             .as_ref()
             .is_some_and(|generation| generation.path == path);
         let busy = self.git.operation.is_some() || self.git.generation.is_some();
-        let staged = self.git.snapshot.as_ref().is_some_and(|snapshot| {
-            !snapshot.target.staged.is_empty() && snapshot.target.branch.is_some()
+        let checked_count = self.git.snapshot.as_ref().map_or(0, |snapshot| {
+            self.checked_staged_files(&path, snapshot).len()
         });
+        let staged = checked_count > 0
+            && self
+                .git
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.target.branch.is_some());
         let staged_count = self
             .git
             .snapshot
@@ -850,7 +858,7 @@ impl ConduitApp {
         let can_commit = !disabled && !draft.input.read(cx).value().trim().is_empty();
         let can_generate = !disabled;
         let generate_tip = if !staged {
-            "请先将需要提交的修改加入暂存区"
+            "请勾选需要提交的已暂存文件"
         } else if self.worktree_has_runs(&path) {
             "请等待此工作区的 CLI 任务结束"
         } else if busy {
@@ -1100,7 +1108,7 @@ impl ConduitApp {
                                 .items_center()
                                 .text_size(px(11.))
                                 .text_color(rgb(palette().muted))
-                                .child(format!("已暂存 {staged_count}")),
+                                .child(format!("已勾选 {checked_count} / 已暂存 {staged_count}")),
                         )
                     })
                     .child(
@@ -1241,6 +1249,7 @@ impl ConduitApp {
                         Button::new("git-commit")
                             .debug_selector(|| "git-commit".into())
                             .label(action_label)
+                            .tooltip(format!("仅提交勾选的 {checked_count} 个已暂存文件"))
                             .primary()
                             .small()
                             .h(px(30.))
@@ -1910,7 +1919,7 @@ impl ConduitApp {
                                 .checked(group_checked)
                                 .accessibility_label(format!("选择整组 {}", kind.label()))
                                 .tooltip(format!(
-                                    "已选择 {selected_count} / {} 个文件；勾选仅用于批量操作",
+                                    "已选择 {selected_count} / {} 个文件；暂存、移出暂存区和提交仅操作勾选文件",
                                     files.len()
                                 ))
                                 .on_click(move |checked, _, cx| {

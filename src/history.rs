@@ -56,10 +56,10 @@ pub fn merge_imported(
     for session in sessions {
         imported += merge_session(workspace, next_id, session);
     }
-    // New imported sessions first in the sidebar ordering.
+    // Resumed historical conversations precede inactive newer conversations.
     workspace
         .sessions
-        .sort_by_key(|session| std::cmp::Reverse(session.created_at));
+        .sort_by_key(|session| std::cmp::Reverse((session.last_activity_at(), session.id)));
     imported
 }
 

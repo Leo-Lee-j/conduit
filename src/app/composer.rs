@@ -516,6 +516,7 @@ impl ConduitApp {
         let usage_parts = self.usage_status_parts();
         let mut composer = v_flex()
             .id("composer")
+            .debug_selector(|| "composer".into())
             .key_context(if mentions_open {
                 "ConduitComposer FileMention"
             } else {
@@ -592,10 +593,6 @@ impl ConduitApp {
                     .border_color(rgb(palette().focus))
             })
             .when_some(
-                self.render_queued_message(composer_enabled, cx),
-                |composer, card| composer.child(card),
-            )
-            .when_some(
                 self.render_composer_files(composer_enabled, cx),
                 |composer, files| composer.child(files),
             )
@@ -637,28 +634,6 @@ impl ConduitApp {
                                 "添加文件（也可输入 @、拖入或 Ctrl+V 粘贴文件/图片）",
                             )
                             .on_click(cx.listener(Self::pick_files)),
-                        )
-                    })
-                    .when(composer_active, |row| {
-                        row.child(
-                            Button::new("queue-message")
-                                .debug_selector(|| "queue-message".into())
-                                .small()
-                                .compact()
-                                .ghost()
-                                .label(
-                                    if self
-                                        .send_target(true)
-                                        .is_some_and(|id| self.queued_messages.contains_key(&id))
-                                    {
-                                        "队列已满 1/1"
-                                    } else {
-                                        "加入队列"
-                                    },
-                                )
-                                .tooltip("最多排队 1 条；当前回复完成后自动发送（Enter）")
-                                .disabled(!send_ready)
-                                .on_click(cx.listener(Self::send_message)),
                         )
                     })
                     .child(if composer_active {
@@ -765,6 +740,19 @@ impl ConduitApp {
                 .w_full()
                 .items_center()
                 .when(has_status_row, |column| column.child(status_row))
+                .when_some(
+                    self.render_queued_message(composer_enabled, cx),
+                    |column, bubble| {
+                        column.child(
+                            div()
+                                .w_full()
+                                .px_2()
+                                .pb_2()
+                                .when(!self.store.ui.full_width_content, |row| row.max_w(px(856.)))
+                                .child(bubble),
+                        )
+                    },
+                )
                 .child(
                     div()
                         .relative()

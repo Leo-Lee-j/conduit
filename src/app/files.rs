@@ -62,6 +62,8 @@ struct DiffDocument {
 #[derive(Default)]
 pub(super) struct FileBrowser {
     pub(super) sidebar_collapsed: bool,
+    tab_scroll: ScrollHandle,
+    tab_layout: std::cell::RefCell<(Vec<DocumentTab>, Option<DocumentTab>, Pixels)>,
     mode: Navigation,
     explorers: HashMap<PathBuf, Explorer>,
     documents: HashMap<u64, Document>,
@@ -1367,8 +1369,22 @@ impl ConduitApp {
         let selected = self
             .active_document()
             .and_then(|t| self.open_tabs.iter().position(|item| *item == t));
+        let active = self.active_document();
+        {
+            let mut layout = self.files.tab_layout.borrow_mut();
+            if layout.0 != self.open_tabs || layout.1 != active {
+                layout.0 = self.open_tabs.clone();
+                layout.1 = active;
+                if let Some(index) = selected {
+                    self.files.tab_scroll.scroll_to_item(index);
+                }
+            }
+        }
         let mut bar = TabBar::new("session-tabs")
             .folder()
+            .menu(true)
+            .max_width(px(240.))
+            .track_scroll(&self.files.tab_scroll)
             .with_size(Size::Medium)
             .h(px(36.))
             .when_some(selected, |bar, i| bar.selected_index(i));
@@ -1485,15 +1501,9 @@ impl ConduitApp {
                     }
                 }))
                 .prefix(icon)
-                .child(
-                    div()
-                        .max_w(px(180.))
-                        .truncate()
-                        .whitespace_nowrap()
-                        .text_size(px(12.))
-                        .when(preview, |s| s.italic())
-                        .child(title),
-                );
+                .label(title)
+                .text_size(px(12.))
+                .when(preview, |style| style.italic());
             if let DocumentTab::Chat(id) = tab
                 && (running || unread)
             {
@@ -1535,9 +1545,34 @@ impl ConduitApp {
             bar = bar.prefix(div().pl_3().text_size(px(12.)).child("选择会话或文件"));
         }
         let app = cx.entity();
+        let resize_app = app.downgrade();
         div()
+            .debug_selector(|| "document-tab-strip".into())
+            .relative()
             .h(px(36.))
+            .min_w_0()
             .flex_shrink_0()
+            .on_prepaint(move |bounds, window, cx| {
+                let _ = resize_app.update(cx, |this, cx| {
+                    let mut layout = this.files.tab_layout.borrow_mut();
+                    if layout.2 != bounds.size.width {
+                        layout.2 = bounds.size.width;
+                        // The tracked viewport still contains the previous
+                        // frame's width here. Reveal after its layout updates.
+                        let view = cx.weak_entity();
+                        window.on_next_frame(move |_, cx| {
+                            let _ = view.update(cx, |this, cx| {
+                                if let Some(index) = this.active_document().and_then(|tab| {
+                                    this.open_tabs.iter().position(|item| *item == tab)
+                                }) {
+                                    this.files.tab_scroll.scroll_to_item(index);
+                                    cx.notify();
+                                }
+                            });
+                        });
+                    }
+                });
+            })
             .child(bar.suffix(self.detail_toggle(cx)))
             .context_menu(move |menu, _, cx| {
                 let Some(target) = app.read(cx).tab_menu_target else {
@@ -2024,6 +2059,123 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[gpui_kit::test]
+    fn active_tabs_reveal_on_selection_resize_and_close_without_resetting_manual_scroll(
+        cx: &mut TestAppContext,
+    ) {
+        fn draw(cx: &mut gpui_kit::VisualTestContext) {
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                window.simulate_next_frame(cx);
+                let _ = window.draw(cx);
+            });
+            cx.run_until_parked();
+        }
+        cx.update(gpui_kit::init);
+        let fixture = Fixture::new();
+        let mut store = fixture.store();
+        store.workspaces.truncate(1);
+        store.ui.sessions_per_workspace = 2;
+        store.ui.max_tabs = 20;
+        store.workspaces[0].sessions = (1..=12)
+            .map(|id| {
+                let mut session = super::super::tests::session();
+                session.id = id;
+                session.created_at = id;
+                session.title = format!("会话 {id}：用于检查标签溢出和当前会话可见性");
+                session
+            })
+            .collect();
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
+                app.writable = false;
+                app.startup = None;
+                app.details = false;
+                app.selected_workspace = Some(0);
+                app.selected_session = Some(1);
+                app.open_tabs = (1..=12).map(DocumentTab::Chat).collect();
+                app
+            });
+            *output.borrow_mut() = Some(app.clone());
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        let app = slot.borrow().as_ref().unwrap().clone();
+        cx.simulate_resize(gpui_kit::size(px(1100.), px(800.)));
+        draw(cx);
+        draw(cx);
+        let order = cx.update(|_, cx| app.read(cx).open_tabs.clone());
+        cx.update(|window, cx| {
+            app.update(cx, |a, cx| {
+                a.select_document(DocumentTab::Chat(12), window, cx)
+            })
+        });
+        for width in [1100., 850., 1200.] {
+            cx.simulate_resize(gpui_kit::size(px(width), px(800.)));
+            draw(cx);
+            draw(cx);
+            let viewport = cx.update(|_, cx| app.read(cx).files.tab_scroll.bounds());
+            let active = cx.debug_bounds("session-tab-12").unwrap();
+            assert!(
+                active.left() >= viewport.left() - px(1.),
+                "{active:?} / {viewport:?}"
+            );
+            assert!(
+                active.right() <= viewport.right() + px(1.),
+                "{active:?} / {viewport:?}"
+            );
+            assert_eq!(cx.update(|_, cx| app.read(cx).open_tabs.clone()), order);
+        }
+        cx.update(|_, cx| {
+            app.update(cx, |a, cx| {
+                a.files.tab_scroll.scroll_to_item(0);
+                cx.notify();
+            })
+        });
+        draw(cx);
+        draw(cx);
+        let manual = cx.update(|_, cx| app.read(cx).files.tab_scroll.offset());
+        cx.update(|_, cx| app.update(cx, |_, cx| cx.notify()));
+        draw(cx);
+        assert_eq!(
+            cx.update(|_, cx| app.read(cx).files.tab_scroll.offset()),
+            manual
+        );
+        // A resumed historical session must enter the collapsed sidebar's top two.
+        cx.update(|_, cx| {
+            app.update(cx, |a, cx| {
+                a.session_mut(1).unwrap().messages.push(
+                    serde_json::from_value(serde_json::json!({
+                        "key":"resumed", "kind":"User", "text":"继续", "created_at":100
+                    }))
+                    .unwrap(),
+                );
+                cx.notify();
+            })
+        });
+        draw(cx);
+        assert!(cx.debug_bounds("session-row-1").is_some());
+        assert!(cx.debug_bounds("session-row-12").is_some());
+        assert!(cx.debug_bounds("session-row-11").is_none());
+        cx.update(|window, cx| {
+            app.update(cx, |a, cx| {
+                a.close_documents(&[DocumentTab::Chat(12)], window, cx)
+            })
+        });
+        draw(cx);
+        draw(cx);
+        let id = cx.update(|_, cx| app.read(cx).selected_session.unwrap());
+        let viewport = cx.update(|_, cx| app.read(cx).files.tab_scroll.bounds());
+        assert_eq!(id, 11);
+        let active = cx.debug_bounds("session-tab-11").unwrap();
+        assert!(
+            active.left() >= viewport.left() - px(1.)
+                && active.right() <= viewport.right() + px(1.)
+        );
     }
 
     #[gpui_kit::test]
@@ -2752,6 +2904,62 @@ mod git_navigation_tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         draw(cx);
+    }
+
+    #[gpui_kit::test]
+    fn commit_button_requires_checks_and_commits_only_checked_staged_files(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let repo = Repo::new();
+        repo.git(&["add", "."]);
+        let store = repo.store();
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
+                app.writable = true;
+                app.startup = None;
+                app.selected_workspace = Some(0);
+                app.selected_session = Some(1);
+                app.open_tabs = vec![DocumentTab::Chat(1)];
+                app
+            });
+            *output.borrow_mut() = Some(app.clone());
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        let app = slot.borrow().as_ref().unwrap().clone();
+        draw(cx);
+        click(cx, "nav-git");
+        wait_git(cx, &app);
+        cx.update(|window, cx| {
+            app.update(cx, |a, cx| {
+                a.git.drafts[&repo.0]
+                    .input
+                    .update(cx, |input, cx| input.set_value("only main", window, cx));
+                cx.notify();
+            })
+        });
+        draw(cx);
+        click(cx, "git-commit");
+        assert!(cx.update(|_, cx| app.read(cx).git.operation.is_none()));
+        assert!(cx.debug_bounds("git-stage-all").is_none());
+        click(cx, "git-select-src/main.rs");
+        click(cx, "git-commit");
+        wait_git(cx, &app);
+        cx.update(|_, cx| {
+            let a = app.read(cx);
+            let snapshot = a.git.snapshot.as_ref().unwrap();
+            assert_eq!(snapshot.staged_count(), 1);
+            assert_eq!(snapshot.files[0].path, "new file.txt");
+            assert!(
+                !a.git.feedback[&repo.0].error,
+                "{}",
+                a.git.feedback[&repo.0].text
+            );
+            assert!(a.git.drafts[&repo.0].input.read(cx).value().is_empty());
+        });
     }
 
     #[gpui_kit::test]

@@ -1,9 +1,6 @@
 use crate::app::{ActiveRun, ChatRuntime, ConduitApp, Event, ItemKind, Provider, Store, Workspace};
 use crate::event_queue::Sender;
-use gpui_kit::{
-    AppContext as _, Entity, Focusable as _, Modifiers, MouseButton, TestAppContext,
-    VisualTestContext,
-};
+use gpui_kit::{AppContext as _, Entity, Focusable as _, TestAppContext, VisualTestContext};
 use std::path::PathBuf;
 
 fn fixture<'a>(
@@ -111,20 +108,14 @@ fn queue_message_ui_capacity_and_takeback_preserve_drafts(cx: &mut TestAppContex
         })
     });
     draw(cx);
-    let queue = cx
-        .debug_bounds("queue-message")
-        .expect("queue action is visible during a reply");
-    let stop = cx
-        .debug_bounds("stop")
-        .expect("stop remains independently visible");
-    assert!(
-        queue.right() <= stop.left(),
-        "queue and stop must not overlap"
-    );
-    cx.simulate_mouse_down(queue.center(), MouseButton::Left, Modifiers::default());
-    cx.simulate_mouse_up(queue.center(), MouseButton::Left, Modifiers::default());
+    assert!(cx.debug_bounds("queue-message").is_none());
+    assert!(cx.debug_bounds("stop").is_some());
+    cx.simulate_keystrokes("enter");
     draw(cx);
-    assert!(cx.debug_bounds("queued-message").is_some());
+    let bubble = cx.debug_bounds("queued-message").unwrap();
+    let composer = cx.debug_bounds("composer").unwrap();
+    assert!(bubble.bottom() <= composer.top());
+    assert!(bubble.size.height <= gpui_kit::px(40.));
     cx.update(|window, cx| {
         app.update(cx, |this, cx| {
             assert_eq!(this.queued_messages[&1].text, "第二条消息");

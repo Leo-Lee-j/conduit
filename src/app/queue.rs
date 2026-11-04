@@ -218,10 +218,10 @@ impl ConduitApp {
                 .id("queued-message")
                 .debug_selector(|| "queued-message".into())
                 .mx(px(4.))
-                .mt(px(4.))
-                .p(px(10.))
+                .px_2()
+                .py_1()
                 .gap_1()
-                .rounded(px(14.))
+                .rounded(px(10.))
                 .bg(rgb(palette().surface_strong))
                 .min_w_0()
                 .child(
@@ -235,10 +235,27 @@ impl ConduitApp {
                                 .child(if paused {
                                     "待发送 · 已暂停"
                                 } else {
-                                    "待发送 · 1/1"
+                                    "排队中"
                                 }),
                         )
-                        .child(div().flex_1())
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(12.))
+                                .text_color(rgb(palette().text))
+                                .child(summary),
+                        )
+                        .when(!message.references.is_empty(), |row| {
+                            row.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(palette().muted))
+                                    .child(format!("{} 个附件", message.references.len())),
+                            )
+                        })
                         .when(paused, |row| {
                             row.child(
                                 Button::new("send-queued-message")
@@ -260,7 +277,8 @@ impl ConduitApp {
                                 .ghost()
                                 .small()
                                 .compact()
-                                .label("取回编辑")
+                                .icon(FullIconName::Pencil)
+                                .accessibility_label("取回编辑")
                                 .disabled(!can_take_back)
                                 .tooltip(if can_take_back {
                                     "撤回队列并放回输入框"
@@ -290,30 +308,14 @@ impl ConduitApp {
                                 })),
                         ),
                 )
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(12.))
-                        .text_color(rgb(palette().text))
-                        .child(summary),
-                )
-                .when(!message.references.is_empty(), |card| {
+                .when_some(message.paused.clone(), |card, reason| {
                     card.child(
                         div()
                             .text_size(px(11.))
                             .text_color(rgb(palette().muted))
-                            .child(format!("{} 个附件", message.references.len())),
+                            .child(reason),
                     )
                 })
-                .child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(rgb(palette().muted))
-                        .child(message.paused.clone().unwrap_or_else(|| {
-                            "当前回复完成后自动发送；停止或失败时暂停。".into()
-                        })),
-                )
                 .into_any_element(),
         )
     }
