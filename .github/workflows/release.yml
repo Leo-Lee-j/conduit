@@ -52,7 +52,7 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo clippy --locked --all-targets --features ui-tests -- -D warnings
       - run: cargo test --locked -- --test-threads=1
-      - run: cargo test --locked --features ui-tests --bin conduit app:: -- --test-threads=1
+      - run: "cargo test --locked --features ui-tests --bin conduit app:: -- --test-threads=1"
       - name: Build and package
         shell: pwsh
         run: |
