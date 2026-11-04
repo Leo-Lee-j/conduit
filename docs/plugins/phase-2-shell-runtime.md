@@ -1,6 +1,6 @@
 # P2-A：GPUI Shell 插件运行时候选设计
 
-设计版本：0.2；日期：2026-11-04；状态：优先验证的候选，未进入实现。前置：[P1 界面贡献](phase-1-contributions.md)、[共同约定](README.md)与[Shell 复用评估](gpui-shell-reuse-assessment.md)。本文定义采用 Shell 时的目标和准入条件；其中 Conduit 类型、清单和 API 均为拟议接口。上游缺失的接口必须先通过原型或明确补丁解决。
+设计版本：0.3；日期：2026-11-05；状态：独立原型已实现，生产接入仍为候选。前置：[P1 界面贡献](phase-1-contributions.md)、[共同约定](README.md)与[Shell 复用评估](gpui-shell-reuse-assessment.md)。本文定义采用 Shell 时的目标和准入条件；其中 Conduit 类型、清单和 API 均为拟议接口。上游缺失的接口必须先通过原型或明确补丁解决。
 
 ## 选择条件与交付
 
@@ -12,10 +12,10 @@
 
 ## 依赖与最小原型
 
-第一轮原型基于 Conduit 当前 Git rev，评估以下依赖组合。片段仅描述候选配置，尚未加入工程，也未证明能独立编译；尤其需要解决上游根 workspace 的 `rquickjs-compat` patch 与实际依赖解析。
+第一轮原型已位于 [tools/shell-prototype](../../tools/shell-prototype/README.md)，使用 Conduit 固定 Git rev、独立 workspace 与 lockfile。下列依赖已在原型默认后端中编译；实际 manifest 还包含同提交的 `rquickjs` patch，并锁回兼容的 RSA / PKCS1 版本。具体构建范围与 G1–G6 缺口见[验证记录](shell-prototype-validation.md)，不等于已纳入正式应用。
 
 ```toml
-# 候选依赖；实现前以 G1 的实际构建记录为准。
+# 原型依赖；完整 patch / feature / lockfile 见原型工程。
 gpui-shell = { git = "https://github.com/longbridge/gpui-kit.git", rev = "11345ec002d9f182a266b5d5dd3a217090700a87", default-features = false, features = ["quickjs", "components"] }
 ```
 

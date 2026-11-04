@@ -1,6 +1,6 @@
 # GPUI Shell 复用评估
 
-评估日期：2026-11-04；状态：源码核对完成，未编译或运行集成原型。本文补充并修正[初始评估](../ui-plugin-extensibility-evaluation.md)，影响[阶段总览](README.md)中的 P2 选型。
+源码评估基线：2026-11-04；后续更新：2026-11-05，已实现独立验证原型，实测见[原型验证记录](shell-prototype-validation.md)。本文保留源码评估依据，构建与运行结论以后续记录为准。本文补充并修正[初始评估](../ui-plugin-extensibility-evaluation.md)，影响[阶段总览](README.md)中的 P2 选型。
 
 ## 结论与决策
 
@@ -25,7 +25,7 @@ Conduit 仍需实现三处贡献的注册、排序、作用域、命令路由、
 
 上游默认 Shell features 为 `quickjs`、`components`、`webview`。其中 `webview` 会启用 `gpui-fast`；Conduit 当前把 GPUI Fast 作为可选后端。因此原型应显式关闭 Shell 默认 features，再选择 `quickjs` / `components`，并把 Conduit 的可选 `gpui-fast` 同步传给 Shell。Shell 还会启用 `gpui-base/inspector`，应计入 release 构建成本。[U1、U2、U3]
 
-另一个构建前提是上游 workspace 的 `[patch.crates-io] rquickjs` 指向 `crates/shell/rquickjs-compat`。Conduit 不能假定上游 workspace 的补丁和 profile 会随 Git 依赖自动应用；原型须核对兼容门面、QuickJS/JIT/stdlib 的解析结果及根工程补丁要求。本文没有修改 Cargo 文件或验证该依赖组合。[U10]
+另一个构建前提是上游 workspace 的 `[patch.crates-io] rquickjs` 指向 `crates/shell/rquickjs-compat`。Conduit 不能假定上游 workspace 的补丁和 profile 会随 Git 依赖自动应用；原型须核对兼容门面、QuickJS/JIT/stdlib 的解析结果及根工程补丁要求。源码评估阶段没有修改 Cargo 文件；后续[独立原型](../../tools/shell-prototype/Cargo.toml)已验证该 patch，并在实验锁文件中固定兼容的 RSA / PKCS1 版本。[U10]
 
 ## 三处扩展如何分工
 
@@ -53,7 +53,7 @@ Base 的 `PanelRegistry` 负责按名称恢复停靠面板；Shell 的 `Componen
 | G5 资源与响应 | VM 与 App 共用 UI 线程；默认无 JS 堆上限；默认 render / event / detached 看门狗分别为 2 / 5 / 10 秒；未发现公开宿主配置这些限额的入口 | 秒级中断不足以满足聊天交互目标。需要可配置资源边界及可测故障恢复；未解决前不开放普通第三方脚本安装。每插件 VM 也不隔离 UI 线程或进程崩溃 |
 | G6 静态发现与关闭 | Shell 清单不提供 Conduit 的静态贡献与激活声明；unload 会取消 Policy 任务，但 Conduit 还有注册表、数据写入与更新流程 | 发现时只读数据，首次点击才执行 JS；停用须撤销贡献和任务、完成写入屏障，不能将 drop 视为全部清理完成 |
 
-G1–G6 的依据分别见 U1–U9；它们是尚待原型验证的条件，没有一项因本次阅读被标记为通过。
+G1–G6 的源码依据分别见 U1–U9，阅读源码本身不构成通过。2026-11-05 的实测状态见[准入结果](shell-prototype-validation.md#准入结果)：部分路径已验证，G2 与 G5 仍为明确阻塞项，G1 的 Fast 编译也未通过。
 
 特别需要纠正文档与源码的差异：官网 Capabilities / Engine 页面写有 256 MiB 堆上限，但锁定提交的 `sandbox.rs` 明确移除了堆上限，runtime 构造也未调用堆限额设置。长篇架构文档仍写 Dock 无脚本绑定，实际 `DockArea` / `dock_area` / `register_panel` 已在引擎中绑定。因此不能只读概览或架构文档判断实现状态，也不能引用官网基准作为 Conduit 的测量结果。[W2、W3、U7、U8、U9]
 
@@ -76,7 +76,7 @@ Shell 使用进程内能力检查、语言限制和中断机制，不提供操�
 
 原 21–34 人日仅为独立进程路线估算。Shell 可以减少模板及协议工作，但会增加兼容接口与主线程资源控制工作；现有证据不能支持“引入即可完成”或降低总预算。建议先给复用验证 2–3 人日时间盒，此数仅为规划；未能形成可编译、可清理、可测的最小原型就结束时间盒并记录缺口，不以等待上游无限延长。P1 原 6–10 人日不含该验证；Shell 版 P2 / P3 在 G1–G6 结果明确后重估。
 
-本次仅完成设计文档修改、官网读取与精确版本源码核对。没有添加依赖、构建 Shell、启动示例、修改应用代码或测量性能。
+2026-11-04 的工作范围是文档与源码核对；2026-11-05 已追加独立原型及实际验证。原型未接入正式 ConduitApp，也没有测得正式应用的性能指标。
 
 ## 官方资料与源码索引
 

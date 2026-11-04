@@ -1,0 +1,10 @@
+{
+  "id": "example.workspace-overview",
+  "name": "Conduit Shell prototype",
+  "version": "0.1.0",
+  "shell-version": "0.8.0",
+  "entry": "navigation.js",
+  "capabilities": {
+    "storage": false
+  }
+}

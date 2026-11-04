@@ -150,10 +150,14 @@ impl ConduitApp {
             let _ = this.update_in(cx, |app, window, cx| {
                 app.extensions_ui.importing = false;
                 if let Some(result) = result {
-                    app.extensions_ui.feedback = Some(match result {
+                    let level = if result.is_ok() { NoticeLevel::Success } else { NoticeLevel::Error };
+                    let message = match result {
                         Ok(path) => format!("已导入 {}；下次启动会话时加载。", path.display()),
                         Err(error) => error.to_string(),
-                    });
+                    };
+                    app.notify_user(Notice::new(NoticeSource::Settings, level, "Skill 导入结果", message.clone())
+                        .target(NoticeTarget::Settings).presentation(NoticePresentation::History), cx);
+                    app.extensions_ui.feedback = Some(message);
                     app.extensions_ui.invalidate();
                     app.ensure_extensions(window, cx, true);
                 }
@@ -236,13 +240,27 @@ impl ConduitApp {
             });
         if let Some((id, result)) = connection {
             self.extensions_ui.connection_probe = None;
-            self.extensions_ui.connection_results.insert(
-                id,
-                match result {
-                    Ok(message) => message,
-                    Err(error) => format!("连接未完成：{error}"),
-                },
+            let level = if result.is_ok() {
+                NoticeLevel::Success
+            } else {
+                NoticeLevel::Error
+            };
+            let message = match result {
+                Ok(message) => message,
+                Err(error) => format!("连接未完成：{error}"),
+            };
+            self.notify_user(
+                Notice::new(
+                    NoticeSource::Settings,
+                    level,
+                    "MCP 连接测试",
+                    message.clone(),
+                )
+                .target(NoticeTarget::Settings)
+                .presentation(NoticePresentation::History),
+                cx,
             );
+            self.extensions_ui.connection_results.insert(id, message);
             self.extensions_ui.lists = new_lists();
             cx.notify();
         }

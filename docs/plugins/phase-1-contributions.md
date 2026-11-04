@@ -1,6 +1,8 @@
 # P1：界面贡献与内置适配
 
-设计版本：0.2；日期：2026-11-04；状态：待实现。前置阅读：[共同约定](README.md)与[Shell 复用评估](gpui-shell-reuse-assessment.md)；下一阶段优先验证 [P2-A Shell](phase-2-shell-runtime.md)，[P2-B 独立进程](phase-2-local-runtime.md)为备选。
+设计版本：0.3；日期：2026-11-05；状态：P1-0 已记录原型结果，P1-1 数据注册层已实现，三处正式 UI 待迁移。前置阅读：[共同约定](README.md)与[Shell 复用评估](gpui-shell-reuse-assessment.md)；下一阶段优先验证 [P2-A Shell](phase-2-shell-runtime.md)，[P2-B 独立进程](phase-2-local-runtime.md)为备选。
+
+当前代码与验证边界见 [P1-1 实现记录](p1-registry-validation.md)。本文仍描述完整 P1 目标；已实现的数据契约与后续 UI / 生命周期工作分别记录，不能将注册层测试等同于整个阶段验收。
 
 ## 目标与交付边界
 
@@ -18,7 +20,7 @@ renderer key 应能由 app 层解析为内置视图，或未来所选后端的�
 
 ## 数据模型与依赖方向
 
-`src/plugins/` 中的类型只依赖普通 Rust 数据和序列化类型。建议新增 `ids.rs`、`contributions.rs`、`registry.rs`、`commands.rs`、`context.rs`；先由 `src/plugins.rs` 声明模块，在当前应用入口模块中接入，是否另行公开到库 crate 根据测试需要决定。
+`src/plugins/` 中的类型只依赖普通 Rust 数据和序列化类型。建议新增 `ids.rs`、`contributions.rs`、`registry.rs`、`commands.rs`、`context.rs`；由 `src/plugins.rs` 声明模块，并已从现有 `src/lib.rs` 导出为 `conduit::plugins`，支持独立库级测试；ConduitApp 适配将在 P1-2 开始接入。
 
 | 类型 | 必要字段 | 约束 |
 | --- | --- | --- |
@@ -31,7 +33,7 @@ renderer key 应能由 app 层解析为内置视图，或未来所选后端的�
 | `ViewInstanceKey` | owner、view_id、scope_key | 区分不同工作区或会话的视图状态 |
 | `ScopeKey` | Global / Workspace / Session | Session 必须同时绑定工作区及会话身份 |
 
-以下为结构示意，名称和字段表达设计，不是可直接编译的补丁。
+以下为完整阶段的结构示意；当前纯数据版本见 `src/plugins/state.rs`，GUI 尺寸、拖动、工具内容与实例缓存仍由后续 app 适配补齐。
 
 ```rust
 struct NavigationState {
@@ -128,7 +130,7 @@ struct ViewInstanceKey {
 | 工作项 | 产物 | 验证 |
 | --- | --- | --- |
 | P1-0 Shell 复用验证 | G1–G6 结果、公开 API 路径及后端选择记录 | 多实例、按插件权限、主线程预算与 Root 兼容；不以 standalone 示例代替集成 |
-| P1-1 身份与注册 | 数据模型、原子注册、注销和条件求值 | 重复 ID、非法引用、未知条件、回退规则的单元测试 |
+| P1-1 身份与注册 | 已实现数据模型、原子注册、注销、条件与路由校验；见[实现记录](p1-registry-validation.md) | 重复 ID、非法引用、未知条件、跨 owner / 代次、回退规则的单元测试 |
 | P1-2 左侧接入 | 核心导航适配、更多菜单、统一导航动作 | 文件 / Git 导航、工作区重排、折叠及宽度回归 |
 | P1-3 右侧接入 | 通用容器、工具详情适配、实例状态 | 宽 / 窄屏、独立滚动、显式打开、会话隔离 |
 | P1-4 底栏与示例 | 状态项布局、命令分发、完整示例 | 三处联动、窄窗口溢出、重复点击和只读行为 |
