@@ -8,7 +8,7 @@ use crate::{
 };
 
 #[test]
-fn error_retry_preserves_partial_output_across_repeated_failures_and_restore() {
+fn error_retry_clears_errors_and_preserves_partial_output_across_restore() {
     let mut s = session();
     let user = ChatItem::from(crate::domain::ChatItemData {
         elapsed_ms: None,
@@ -46,15 +46,16 @@ fn error_retry_preserves_partial_output_across_repeated_failures_and_restore() {
         "turn-0",
         Event::ErrorBanner("API Error: 503 unavailable".into()),
     );
-    let original = serde_json::to_value(&s.messages).unwrap();
+    let original = serde_json::to_value(&s.messages[..3]).unwrap();
     assert_eq!(
         super::runtime::error_retry_prompt(&s, 3),
         Some("检查项目并说明结果")
     );
+    super::runtime::clear_retry_errors(&mut s);
     assert_eq!(serde_json::to_value(&s.messages).unwrap(), original);
 
     // Retry output uses a new turn prefix, even when the CLI reuses its item keys.
-    let prefix = format!("turn-{}", s.messages.len());
+    let prefix = super::runtime::next_turn_prefix(&s);
     apply_event(
         &mut s,
         &prefix,
@@ -68,16 +69,17 @@ fn error_retry_preserves_partial_output_across_repeated_failures_and_restore() {
         &prefix,
         Event::ErrorBanner("API Error: 503 unavailable".into()),
     );
-    assert_eq!(serde_json::to_value(&s.messages[..4]).unwrap(), original);
+    assert_eq!(serde_json::to_value(&s.messages[..3]).unwrap(), original);
     assert_eq!(
-        super::runtime::error_retry_prompt(&s, 5),
+        super::runtime::error_retry_prompt(&s, 4),
         Some("检查项目并说明结果")
     );
     assert_eq!(super::runtime::error_retry_prompt(&s, 3), None);
 
     let mut restored: SessionRecord =
         serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
-    let prefix = format!("turn-{}", restored.messages.len());
+    super::runtime::clear_retry_errors(&mut restored);
+    let prefix = super::runtime::next_turn_prefix(&restored);
     apply_event(
         &mut restored,
         &prefix,
@@ -87,11 +89,11 @@ fn error_retry_preserves_partial_output_across_repeated_failures_and_restore() {
         },
     );
     assert_eq!(
-        serde_json::to_value(&restored.messages[..4]).unwrap(),
+        serde_json::to_value(&restored.messages[..3]).unwrap(),
         original
     );
-    assert_eq!(restored.messages[4].text, "接着检查代码。");
-    assert_eq!(restored.messages[6].text, "检查完成。");
+    assert_eq!(restored.messages[3].text, "接着检查代码。");
+    assert_eq!(restored.messages[4].text, "检查完成。");
     assert_eq!(
         restored
             .messages
@@ -100,6 +102,69 @@ fn error_retry_preserves_partial_output_across_repeated_failures_and_restore() {
             .count(),
         1
     );
+}
+
+#[test]
+fn error_retry_only_clears_errors_after_the_last_visible_reply() {
+    let mut s = session();
+    s.messages = serde_json::from_value(serde_json::json!([
+        {"key": "old-user", "kind": "User", "text": "old question"},
+        {"key": "old-error", "kind": "Error", "text": "old error"},
+        {"key": "reply", "kind": "Assistant", "text": "last visible reply"},
+        {"key": "new-user", "kind": "User", "text": "new question"},
+        {"key": "error-1", "kind": "Error", "text": "first failure"},
+        {"key": "notice", "kind": "Notice", "text": "retrying"},
+        {"key": "empty", "kind": "Assistant", "text": "  "},
+        {"key": "tool", "kind": "Tool", "text": "read file"},
+        {"key": "error-2", "kind": "Error", "text": "second failure"}
+    ]))
+    .unwrap();
+    let original = serde_json::to_value(&s.messages).unwrap();
+    let removed = super::runtime::clear_retry_errors(&mut s);
+    assert_eq!(
+        s.messages
+            .iter()
+            .map(|item| item.key.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "old-user",
+            "old-error",
+            "reply",
+            "new-user",
+            "notice",
+            "empty",
+            "tool"
+        ]
+    );
+    assert_eq!(
+        removed.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+        [4, 8]
+    );
+    for (index, item) in removed {
+        s.messages.insert(index, item);
+    }
+    assert_eq!(serde_json::to_value(&s.messages).unwrap(), original);
+}
+
+#[test]
+fn error_retry_clears_repeated_failures_before_any_reply() {
+    let mut s = session();
+    s.messages = serde_json::from_value(serde_json::json!([
+        {"key": "turn-0-user", "kind": "User", "text": "question"},
+        {"key": "turn-0-notice", "kind": "Notice", "text": "starting"}
+    ]))
+    .unwrap();
+    let original = serde_json::to_value(&s.messages).unwrap();
+    for _ in 0..3 {
+        let prefix = super::runtime::next_turn_prefix(&s);
+        for error in ["API Error: 503 unavailable", "API Error: 429 rate limit"] {
+            apply_event(&mut s, &prefix, Event::ErrorBanner(error.into()));
+        }
+        assert_eq!(s.messages.len(), 4);
+        assert_eq!(super::runtime::error_retry_prompt(&s, 3), Some("question"));
+        assert_eq!(super::runtime::clear_retry_errors(&mut s).len(), 2);
+        assert_eq!(serde_json::to_value(&s.messages).unwrap(), original);
+    }
 }
 
 #[test]

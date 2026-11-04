@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// A retry reuses the prompt without removing any output from the failed turn.
+/// Only the latest failed exchange can reuse its original prompt.
 pub(super) fn error_retry_prompt(session: &SessionRecord, index: usize) -> Option<&str> {
     if session.messages.get(index)?.kind != ItemKind::Error
         || session.messages[index + 1..]
@@ -15,6 +15,44 @@ pub(super) fn error_retry_prompt(session: &SessionRecord, index: usize) -> Optio
         .iter()
         .rfind(|item| item.kind == ItemKind::User)
         .map(|item| item.text.as_str())
+}
+
+/// Remove error cards after the last visible reply, retaining their positions
+/// so a rejected send can restore the original transcript.
+pub(super) fn clear_retry_errors(session: &mut SessionRecord) -> Vec<(usize, ChatItem)> {
+    let start = session
+        .messages
+        .iter()
+        .rposition(|item| item.kind == ItemKind::Assistant && !item.text.trim().is_empty())
+        .map_or(0, |index| index + 1);
+    let mut removed = Vec::new();
+    let mut index = 0;
+    session.messages.retain(|item| {
+        let keep = index < start || item.kind != ItemKind::Error;
+        if !keep {
+            removed.push((index, item.clone()));
+        }
+        index += 1;
+        keep
+    });
+    removed
+}
+
+/// Clearing errors can reduce the message count below an existing turn number.
+pub(super) fn next_turn_prefix(session: &SessionRecord) -> String {
+    let mut turn = session.messages.len();
+    loop {
+        let prefix = format!("turn-{turn}");
+        let key_prefix = format!("{prefix}-");
+        if !session
+            .messages
+            .iter()
+            .any(|item| item.key.starts_with(&key_prefix))
+        {
+            return prefix;
+        }
+        turn += 1;
+    }
 }
 
 impl ConduitApp {
@@ -307,7 +345,7 @@ impl ConduitApp {
             .map_err(|error| format!("无法使用所选 Provider：{error:#}"))?;
         let model = model.or_else(|| route.default_model.clone());
         let session = self.session_mut(id).unwrap();
-        let prefix = format!("turn-{}", session.messages.len());
+        let prefix = next_turn_prefix(session);
         if append_user {
             if !session.messages.iter().any(|m| m.kind == ItemKind::User) {
                 session.title = prompt
@@ -399,7 +437,7 @@ impl ConduitApp {
         Ok(id)
     }
 
-    /// Retry with the original prompt and append output after the failed attempt.
+    /// Retry the original prompt after clearing errors since the last visible reply.
     pub(super) fn retry_error(
         &mut self,
         index: usize,
@@ -421,7 +459,17 @@ impl ConduitApp {
         let Some(prompt) = error_retry_prompt(session, index).map(str::to_owned) else {
             return;
         };
-        self.send_text(prompt, false, window, cx);
+        let removed = clear_retry_errors(self.session_mut(id).unwrap());
+        if self.send_text(prompt, false, window, cx) {
+            for (_, item) in removed {
+                self.expanded_errors.remove(&(id, item.key.clone()));
+            }
+        } else if let Some(session) = self.session_mut(id) {
+            for (index, item) in removed {
+                session.messages.insert(index, item);
+            }
+            cx.notify();
+        }
     }
 
     /// Re-runs the latest exchange: keeps its user message, drops everything

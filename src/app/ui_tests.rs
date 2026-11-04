@@ -66,6 +66,120 @@ fn error_retry_keeps_partial_output_when_context_validation_fails(cx: &mut TestA
 }
 
 #[gpui_kit::test]
+fn error_retry_clears_cards_before_repeated_failures_and_preserves_output(cx: &mut TestAppContext) {
+    use crate::{domain::Workspace, protocol::Event, store::Store};
+    use gpui_kit::AppContext as _;
+
+    let root = std::env::temp_dir().join(format!("conduit-error-retry-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let shim = root.join("offline.cmd");
+    std::fs::write(&shim, "@echo off\r\nexit /b 0\r\n").unwrap();
+    cx.update(gpui_kit::init);
+    cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut session = super::tests::session();
+            session.native_id = Some("retry-context".into());
+            session.messages = serde_json::from_value(serde_json::json!([
+                {"key": "turn-0-user", "kind": "User", "text": "check project"},
+                {"key": "turn-0-reply", "kind": "Assistant", "text": "checked configuration"},
+                {"key": "turn-4-tool", "kind": "Tool", "text": "read file", "detail": "original output"},
+                {"key": "turn-4-error", "kind": "Error", "text": "API Error: 503 unavailable"},
+                {"key": "turn-5-error", "kind": "Error", "text": "API Error: 429 rate limit"},
+                {"key": "turn-5-notice", "kind": "Notice", "text": "waiting to retry"}
+            ]))
+            .unwrap();
+            let store = Store {
+                version: 2,
+                workspaces: vec![Workspace {
+                    path: root.clone(),
+                    sessions: vec![session],
+                }],
+                cli: crate::cli::CliSettings {
+                    claude_path: Some(shim.clone()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.store.ui.auto_rename = false;
+            app.selected_workspace = Some(0);
+            app.selected_session = Some(1);
+            for attempt in 0..3 {
+                let session = app.session(1).unwrap();
+                let kept = session
+                    .messages
+                    .iter()
+                    .filter(|item| item.kind != super::ItemKind::Error)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let error_index = session
+                    .messages
+                    .iter()
+                    .rposition(|item| item.kind == super::ItemKind::Error)
+                    .unwrap();
+                app.retry_error(error_index, window, cx);
+                assert!(app.session_control.runs.contains_key(&1), "{:?}", app.message);
+                assert_eq!(
+                    serde_json::to_value(&app.session(1).unwrap().messages).unwrap(),
+                    serde_json::to_value(&kept).unwrap(),
+                    "retry must clear old errors before any new output arrives"
+                );
+                let saved = Store::load().unwrap();
+                let saved_messages = &saved.workspaces[0].sessions[0].messages;
+                // Loading a running turn also appends an interruption notice.
+                assert_eq!(
+                    serde_json::to_value(&saved_messages[..kept.len()]).unwrap(),
+                    serde_json::to_value(&kept).unwrap(),
+                    "reopening must retain all existing output"
+                );
+                assert!(
+                    saved_messages.iter().all(|item| item.kind != super::ItemKind::Error),
+                    "cleared cards must stay cleared after reopening"
+                );
+                let mut run = app.session_control.runs.remove(&1).unwrap();
+                run.cancel();
+                let session = app.session_mut(1).unwrap();
+                assert!(
+                    session.messages.iter().all(|item| {
+                        !item.key.starts_with(&format!("{}-", run.prefix))
+                    }),
+                    "retry must not reuse a retained message's turn prefix"
+                );
+                super::apply_event(
+                    session,
+                    &run.prefix,
+                    Event::Tool {
+                        key: "tool".into(),
+                        title: "read file".into(),
+                        detail: format!("retry output {attempt}"),
+                        status: "completed".into(),
+                    },
+                );
+                super::apply_event(
+                    session,
+                    &run.prefix,
+                    Event::ErrorBanner("API Error: 503 unavailable".into()),
+                );
+                assert_eq!(
+                    serde_json::to_value(&session.messages[..kept.len()]).unwrap(),
+                    serde_json::to_value(&kept).unwrap(),
+                    "new output must not overwrite a tool from an earlier attempt"
+                );
+                assert_eq!(session.messages.len(), kept.len() + 2);
+                assert_eq!(
+                    session.messages.iter().filter(|item| item.kind == super::ItemKind::Error).count(),
+                    1
+                );
+                assert_eq!(session.native_id.as_deref(), Some("retry-context"));
+            }
+            app.writable = false;
+            app
+        });
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+}
+
+#[gpui_kit::test]
 fn settings_dismisses_on_outside_click_and_keeps_inside_clicks(cx: &mut TestAppContext) {
     use gpui_kit::{AppContext as _, Modifiers, MouseButton};
     cx.update(gpui_kit::init);
