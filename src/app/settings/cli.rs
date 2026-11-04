@@ -62,11 +62,10 @@ impl ConduitApp {
                 self.opencode_model_probes.clear();
                 self.opencode_catalogs.clear();
             }
-            if let Some(probe) = self.probes.get(&provider) {
+            if let Some(probe) = self.probes.remove(&provider) {
                 probe.cancel();
             }
-            self.diagnostics
-                .insert(provider, "配置已保存，用于后续启动；请检测版本。".into());
+            self.probe_cli(provider, cx);
         } else {
             self.store.cli = previous;
             self.diagnostics.insert(
@@ -115,7 +114,16 @@ impl ConduitApp {
         let has_path = self.store.cli.path(provider).is_some();
         let (effective, available) = match cli::resolve(provider, &self.store.cli) {
             Ok(cli) => (
-                format!("{}：{}", cli.source.label(), display_path(&cli.path)),
+                format!(
+                    "{}：{}{}",
+                    cli.source.label(),
+                    display_path(&cli.path),
+                    if cli.source == cli::PathSource::Environment {
+                        "（环境变量优先，覆盖应用路径设置）"
+                    } else {
+                        ""
+                    }
+                ),
                 true,
             ),
             Err(error) => (format!("尚不可用：{error:#}"), false),
@@ -213,7 +221,29 @@ impl ConduitApp {
             row
         });
 
+        let guide = SettingField::render(move |_, _, _| {
+            Button::new(("engine-guide", index))
+                .small()
+                .outline()
+                .label("安装与登录说明")
+                .on_click(move |_, _, cx| {
+                    cx.open_url(match provider {
+                        Provider::Claude => "https://code.claude.com/docs/en/setup",
+                        Provider::Codex => "https://developers.openai.com/codex/cli",
+                        Provider::OpenCode => "https://opencode.ai/docs/",
+                    })
+                })
+        });
         let capabilities = vec![
+            SettingItem::new(
+                if available {
+                    "已找到启动文件"
+                } else {
+                    "需要安装或选择 CLI"
+                },
+                guide,
+            )
+            .description("会话沿用 CLI 的登录状态；版本检测不验证认证与模型权限。"),
             SettingItem::new("启动路径", choose)
                 .description(configured)
                 .disabled(disabled),

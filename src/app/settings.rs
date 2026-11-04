@@ -11,9 +11,11 @@ fn settings_page(title: &'static str, icon: FullIconName) -> SettingPage {
     let description = match title {
         "通用" => "调整工作台布局。",
         "外观" => "选择主题，调整聊天文字与代码的阅读体验。",
-        "会话" => "设置会话标题的生成方式与使用的模型。",
-        "Git" => "自定义提交说明的生成模型与提示词。",
-        "CLI & 模型服务" => "选择引擎，配置启动路径与聊天使用的模型服务。",
+        "自动命名" => "设置会话标题的生成方式与使用的模型。",
+        "Git 提交" => "自定义提交说明的生成模型与提示词。",
+        "AI 引擎" => "选择引擎，检查本机 CLI 的启动路径与版本。",
+        "模型与服务" => "管理服务端点和模型目录；新会话默认值单独设置。",
+        "新会话默认" => "按引擎设置新会话使用的服务和模型。现有会话保留自己的选择。",
         "数据与更新" => "管理本机数据、更新偏好与诊断。",
         _ => "",
     };
@@ -352,8 +354,10 @@ fn typography_stepper(
 mod appearance;
 #[path = "settings/cli.rs"]
 mod cli_settings;
+mod config_editor;
 #[path = "settings/connections.rs"]
 mod connections;
+mod defaults;
 mod general;
 #[path = "settings/models.rs"]
 mod model_sync;
@@ -369,7 +373,7 @@ impl ConduitApp {
     pub(super) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.reload_all_models_async(false, window, cx);
         let view = cx.entity();
-        if self.settings_ui.page == 4 {
+        if matches!(self.settings_ui.page, 4 | 9) {
             self.ensure_extensions(window, cx, false);
         }
         window.open_dialog(cx, move |dialog, window, _| {
@@ -378,7 +382,7 @@ impl ConduitApp {
             let viewport_height = f32::from(window.viewport_size().height);
             let modal_height = settings_modal_height(window);
             let margin_top = ((viewport_height - modal_height) * 0.5).max(16.);
-            let modal_width = (f32::from(window.viewport_size().width) - 48.).clamp(0., 920.);
+            let modal_width = (f32::from(window.viewport_size().width) - 48.).clamp(0., 1080.);
             dialog
                 // The library paints its scrim at full opacity on the first
                 // frame and fades only the surface, so an entrance animation
@@ -397,6 +401,7 @@ impl ConduitApp {
                 .on_close(move |_, _, cx| {
                     close_view.update(cx, |app, cx| {
                         app.extensions_ui.probe = None;
+                        app.extensions_ui.connection_probe = None;
                         cx.notify();
                     });
                 })
@@ -552,12 +557,16 @@ impl ConduitApp {
                         })
                         .small(),
                     )
-                    .child(if disabled {
-                        "当前为只读模式"
-                    } else if self.settings_ui.page == 4 {
-                        "CLI 扩展只读展示 · 不修改原生配置"
+                    .child(if let Some(error) = &self.persistence.error {
+                        format!("保存失败：{error}")
+                    } else if disabled {
+                        "当前为只读模式".to_string()
+                    } else if self.persistence.busy() {
+                        "正在保存偏好设置…".to_string()
+                    } else if matches!(self.settings_ui.page, 4 | 9) {
+                        "原生配置通过编辑器保存 · 下次启动会话时加载".to_string()
                     } else {
-                        "偏好设置修改后自动保存"
+                        "偏好设置已保存 · 编辑表单需点击保存".to_string()
                     }),
             )
             .into_any_element()

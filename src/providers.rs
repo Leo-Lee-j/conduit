@@ -4,6 +4,8 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+pub mod credentials;
+pub mod discovery;
 
 /// Only catalog changes invalidate the model panel; ordinary parent renders do not.
 pub struct ProviderCatalogChanged;
@@ -76,6 +78,9 @@ pub struct ModelProvider {
     pub base_url: String,
     /// Name of an inherited environment variable, never the credential itself.
     pub api_key_env: String,
+    /// Windows account protected ciphertext, never a plaintext credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protected_api_key: Option<String>,
     pub models: Vec<String>,
     /// Origin is metadata; all providers share one registry and picker.
     #[serde(default)]
@@ -135,12 +140,7 @@ impl ModelProvider {
         if self.name.trim().is_empty() {
             bail!("请输入 Provider 名称");
         }
-        if !(self.base_url.starts_with("https://") || self.base_url.starts_with("http://"))
-            || self.base_url.chars().any(char::is_whitespace)
-            || self.base_url.contains(['\0', '"', '\\'])
-        {
-            bail!("Base URL 必须是有效的 http:// 或 https:// 地址");
-        }
+        discovery::endpoint(&self.base_url)?;
         if !self.api_key_env.is_empty()
             && (!self
                 .api_key_env
@@ -163,21 +163,27 @@ impl ModelProvider {
 
     pub fn route(&self) -> Result<RuntimeRoute> {
         self.validate()?;
-        let key = if self.api_key_env.is_empty() {
-            None
+        let key = self.api_key()?;
+        let mut route = RuntimeRoute::endpoint(self.engine, &self.name, &self.base_url, key);
+        route.default_model = self.models.first().cloned();
+        Ok(route)
+    }
+
+    pub fn api_key(&self) -> Result<Option<String>> {
+        if let Some(protected) = &self.protected_api_key {
+            credentials::unprotect(protected).map(Some)
+        } else if self.api_key_env.is_empty() {
+            Ok(None)
         } else {
-            Some(
+            Ok(Some(
                 std::env::var(&self.api_key_env)
                     .ok()
                     .filter(|v| !v.trim().is_empty())
                     .ok_or_else(|| {
                         anyhow::anyhow!("请先设置环境变量 {} 并重新启动 Conduit", self.api_key_env)
                     })?,
-            )
-        };
-        let mut route = RuntimeRoute::endpoint(self.engine, &self.name, &self.base_url, key);
-        route.default_model = self.models.first().cloned();
-        Ok(route)
+            ))
+        }
     }
 }
 
@@ -232,5 +238,29 @@ impl RuntimeRoute {
             }
         }
         route
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    #[test]
+    fn legacy_providers_load_and_protected_credentials_only_enter_runtime_environment() {
+        let mut provider: ModelProvider = serde_json::from_value(json!({
+            "id":"test", "name":"Test", "engine":"Codex", "base_url":"https://example.invalid/v1", "api_key_env":"", "models":["test-model"]
+        })).unwrap();
+        assert!(provider.protected_api_key.is_none());
+        provider.protected_api_key = Some(credentials::protect("fixture-only-key").unwrap());
+        let serialized = serde_json::to_string(&provider).unwrap();
+        assert!(!serialized.contains("fixture-only-key"));
+        let restored: ModelProvider = serde_json::from_str(&serialized).unwrap();
+        let route = restored.route().unwrap();
+        assert_eq!(route.env["CONDUIT_PROVIDER_API_KEY"], "fixture-only-key");
+        assert_eq!(route.default_model.as_deref(), Some("test-model"));
+        assert!(
+            !serde_json::to_string(&route.config)
+                .unwrap()
+                .contains("fixture-only-key")
+        );
     }
 }

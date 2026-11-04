@@ -610,7 +610,11 @@ impl ConduitApp {
                 git_expanded: false,
                 prompt_expanded: false,
             },
-            extensions_ui: settings::ExtensionsUi::new(skill_search, mcp_search),
+            extensions_ui: settings::ExtensionsUi::new(
+                skill_search,
+                mcp_search,
+                new_session_provider,
+            ),
             writable,
             selected_workspace,
             selected_session,

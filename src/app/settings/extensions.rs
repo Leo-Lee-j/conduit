@@ -1,8 +1,13 @@
-//! Read-only extension browser, scoped independently from the conversation.
+//! Native extensions, scoped independently from connections and conversations.
 use super::*;
 use crate::extensions::{self, Catalog, Kind};
 
 pub(in crate::app) struct ExtensionsUi {
+    pub engine: Provider,
+    pub feedback: Option<String>,
+    pub importing: bool,
+    pub connection_probe: Option<extensions::connection::ConnectionProbe>,
+    pub connection_results: HashMap<String, String>,
     pub workspace: Option<PathBuf>,
     pub initialized: bool,
     pub mcp: bool,
@@ -15,8 +20,13 @@ pub(in crate::app) struct ExtensionsUi {
     pub context: Option<extensions::Context>,
 }
 impl ExtensionsUi {
-    pub fn new(skills: Entity<InputState>, mcp: Entity<InputState>) -> Self {
+    pub fn new(skills: Entity<InputState>, mcp: Entity<InputState>, engine: Provider) -> Self {
         Self {
+            engine,
+            feedback: None,
+            importing: false,
+            connection_probe: None,
+            connection_results: HashMap::new(),
             workspace: None,
             initialized: false,
             mcp: false,
@@ -31,12 +41,127 @@ impl ExtensionsUi {
     }
     pub fn invalidate(&mut self) {
         self.probe = None;
+        self.connection_probe = None;
+        self.connection_results.clear();
         self.catalogs.clear();
         self.context = None;
     }
 }
 
 impl ConduitApp {
+    fn test_mcp_connection(&mut self, entry: extensions::Entry, cx: &mut Context<Self>) {
+        if self.closing || self.extensions_ui.connection_probe.is_some() {
+            return;
+        }
+        if let Some(context) = self.extensions_ui.context.clone() {
+            self.extensions_ui
+                .connection_results
+                .insert(entry.id(), "正在初始化并读取工具列表…".into());
+            self.extensions_ui.connection_probe = Some(
+                extensions::connection::ConnectionProbe::start(entry, context),
+            );
+            self.extensions_ui.lists = new_lists();
+            cx.notify();
+        }
+    }
+    fn extension_actions(&self, view: Entity<Self>) -> AnyElement {
+        let kind = if self.extensions_ui.mcp {
+            Kind::Mcp
+        } else {
+            Kind::Skill
+        };
+        let target = extensions::edit::destination(
+            self.extensions_ui.engine,
+            self.extensions_ui.workspace.as_deref(),
+            kind,
+        );
+        let edit_view = view.clone();
+        let disabled = !self.writable || self.closing || self.extensions_ui.importing;
+        let import_view = view;
+        h_flex()
+            .gap_2()
+            .flex_wrap()
+            .child(
+                Button::new("extensions-add")
+                    .debug_selector(|| "extensions-add".into())
+                    .primary()
+                    .small()
+                    .label(if kind == Kind::Mcp {
+                        "添加 MCP 服务"
+                    } else {
+                        "创建 Skill"
+                    })
+                    .disabled(disabled)
+                    .on_click(move |_, window, cx| {
+                        edit_view.update(cx, |app, cx| {
+                            if kind == Kind::Mcp {
+                                app.open_mcp_form(window, cx);
+                            } else {
+                                app.open_native_config(target.clone(), kind, true, window, cx);
+                            }
+                        })
+                    }),
+            )
+            .when(kind == Kind::Skill, |row| {
+                row.child(
+                    Button::new("extensions-import")
+                        .outline()
+                        .small()
+                        .label(if self.extensions_ui.importing {
+                            "导入中…"
+                        } else {
+                            "从文件夹导入"
+                        })
+                        .disabled(disabled)
+                        .on_click(move |_, window, cx| {
+                            import_view.update(cx, |app, cx| app.import_skill(window, cx))
+                        }),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn import_skill(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.writable || self.closing || self.extensions_ui.importing {
+            return;
+        }
+        let destination = extensions::edit::destination(
+            self.extensions_ui.engine,
+            self.extensions_ui.workspace.as_deref(),
+            Kind::Skill,
+        );
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("选择含 SKILL.md 的技能文件夹".into()),
+        });
+        self.extensions_ui.importing = true;
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = match paths.await {
+                Ok(Ok(Some(paths))) if !paths.is_empty() => {
+                    let source = paths[0].clone();
+                    Some(cx.background_executor().spawn(async move { extensions::edit::import_skill(&source, &destination) }).await)
+                }
+                Ok(Ok(_)) => None,
+                _ => Some(Err(anyhow::anyhow!("无法打开文件夹选择窗口"))),
+            };
+            let _ = this.update_in(cx, |app, window, cx| {
+                app.extensions_ui.importing = false;
+                if let Some(result) = result {
+                    app.extensions_ui.feedback = Some(match result {
+                        Ok(path) => format!("已导入 {}；下次启动会话时加载。", path.display()),
+                        Err(error) => error.to_string(),
+                    });
+                    app.extensions_ui.invalidate();
+                    app.ensure_extensions(window, cx, true);
+                }
+                cx.notify();
+            });
+        }).detach();
+    }
+
     pub(in crate::app) fn ensure_extensions(
         &mut self,
         _: &mut Window,
@@ -54,13 +179,15 @@ impl ConduitApp {
             self.extensions_ui.initialized = true;
         }
         let context = extensions::Context {
-            engine: self.connection_settings.engine,
+            engine: self.extensions_ui.engine,
             workspace: self.extensions_ui.workspace.clone(),
-            cli_path: cli::resolve(self.connection_settings.engine, &self.store.cli)
+            cli_path: cli::resolve(self.extensions_ui.engine, &self.store.cli)
                 .ok()
                 .map(|c| c.path),
         };
         if self.extensions_ui.context.as_ref() != Some(&context) {
+            self.extensions_ui.connection_probe = None;
+            self.extensions_ui.connection_results.clear();
             self.extensions_ui.expanded.clear();
             self.extensions_ui.lists = new_lists();
         }
@@ -90,9 +217,34 @@ impl ConduitApp {
     }
 
     pub(in crate::app) fn poll_extensions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.closing || !window.has_active_dialog(cx) || self.settings_ui.page != 4 {
+        if self.closing || !window.has_active_dialog(cx) || !matches!(self.settings_ui.page, 4 | 9)
+        {
             self.extensions_ui.probe = None;
+            self.extensions_ui.connection_probe = None;
             return;
+        }
+        let connection = self
+            .extensions_ui
+            .connection_probe
+            .as_ref()
+            .and_then(|probe| match probe.events.try_recv() {
+                Ok(result) => Some((probe.id.clone(), result)),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Some((probe.id.clone(), Err("测试线程已退出，请重试".into())))
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            });
+        if let Some((id, result)) = connection {
+            self.extensions_ui.connection_probe = None;
+            self.extensions_ui.connection_results.insert(
+                id,
+                match result {
+                    Ok(message) => message,
+                    Err(error) => format!("连接未完成：{error}"),
+                },
+            );
+            self.extensions_ui.lists = new_lists();
+            cx.notify();
         }
         let result = self
             .extensions_ui
@@ -125,7 +277,7 @@ impl ConduitApp {
         view: Entity<Self>,
         cx: &App,
     ) -> AnyElement {
-        let engine = self.connection_settings.engine;
+        let engine = self.extensions_ui.engine;
         let mut controls = h_flex().gap_2().flex_wrap();
         for (index, candidate) in Provider::ALL.into_iter().enumerate() {
             let view = view.clone();
@@ -138,7 +290,8 @@ impl ConduitApp {
                     .selected(engine == candidate)
                     .on_click(move |_, window, cx| {
                         view.update(cx, |app, cx| {
-                            app.connection_settings.engine = candidate;
+                            app.extensions_ui.engine = candidate;
+                            app.extensions_ui.feedback = None;
                             app.ensure_extensions(window, cx, false);
                             cx.notify();
                         });
@@ -177,6 +330,7 @@ impl ConduitApp {
                             move |_, window, cx| {
                                 view.update(cx, |app, cx| {
                                     app.extensions_ui.workspace = path.clone();
+                                    app.extensions_ui.feedback = None;
                                     app.ensure_extensions(window, cx, false);
                                     cx.notify();
                                 });
@@ -188,26 +342,6 @@ impl ConduitApp {
         );
         let mcp = self.extensions_ui.mcp;
         let selected = usize::from(mcp);
-        let tab_view = view.clone();
-        let tabs = TabBar::new("extensions-tabs")
-            .underline()
-            .selected_index(selected)
-            .child(
-                Tab::new()
-                    .label("Skills")
-                    .debug_selector(|| "extensions-skills-tab".into()),
-            )
-            .child(
-                Tab::new()
-                    .label("MCP")
-                    .debug_selector(|| "extensions-mcp-tab".into()),
-            )
-            .on_click(move |index, _, cx| {
-                tab_view.update(cx, |app, cx| {
-                    app.extensions_ui.mcp = *index == 1;
-                    cx.notify();
-                });
-            });
         let refresh = view.clone();
         let cancel = view.clone();
         let probing = self.extensions_ui.probe.is_some();
@@ -272,8 +406,8 @@ impl ConduitApp {
         }
         let expanded = self.extensions_ui.expanded.clone();
         let list_view = view.clone();
-        let rows = list(list_state.clone(), move |index, _, _| {
-            render_extension_row(&rows[index], index, &expanded, list_view.clone())
+        let rows = list(list_state.clone(), move |index, _, cx| {
+            render_extension_row(&rows[index], index, &expanded, list_view.clone(), cx)
         })
         .size_full();
         let sources_view = view.clone();
@@ -297,9 +431,13 @@ impl ConduitApp {
                     .gap_2()
                     .border_b_1()
                     .border_color(rgb(palette().border))
-                    .child(div().text_size(px(18.)).font_semibold().child("扩展"))
+                    .child(div().text_size(px(18.)).font_semibold().child(if mcp {
+                        "MCP 服务"
+                    } else {
+                        "Skills"
+                    }))
                     .child(controls)
-                    .child(tabs)
+                    .child(self.extension_actions(view.clone()))
                     .child(
                         h_flex()
                             .gap_2()
@@ -340,8 +478,15 @@ impl ConduitApp {
                         div()
                             .text_size(px(11.))
                             .text_color(rgb(palette().muted))
-                            .child("配置扫描结果 · 完整性与会话可用性未确认；不自动连接 MCP。"),
+                            .child(if self.extensions_ui.workspace.is_some() {
+                                "显示此工作区及继承的全局定义。加载状态以会话为准。"
+                            } else {
+                                "显示全局定义。加载状态以会话为准。"
+                            }),
                     )
+                    .when_some(self.extensions_ui.feedback.clone(), |body, message| {
+                        body.child(div().text_size(px(12.)).child(message))
+                    })
                     .child(
                         h_flex()
                             .w_full()
@@ -397,7 +542,9 @@ fn render_extension_row(
     index: usize,
     expanded: &HashSet<String>,
     view: Entity<ConduitApp>,
+    cx: &App,
 ) -> AnyElement {
+    let disabled = !view.read(cx).writable || view.read(cx).closing;
     match row {
         ExtensionRow::Entry(entry) => {
             let mcp = entry.kind == Kind::Mcp;
@@ -406,6 +553,27 @@ fn render_extension_row(
             let toggle_view = view.clone();
             let toggle_id = id.clone();
             let copy_path = entry.path.display().to_string();
+            let edit_path = entry.path.clone();
+            let reveal_path = entry.path.clone();
+            let kind = entry.kind;
+            let edit_view = view.clone();
+            let managed = entry.scope.starts_with("插件");
+            let test_entry = entry.clone();
+            let test_view = view.clone();
+            let cancel_view = view.clone();
+            let probing = view.read(cx).extensions_ui.connection_probe.is_some();
+            let this_probe = view
+                .read(cx)
+                .extensions_ui
+                .connection_probe
+                .as_ref()
+                .is_some_and(|p| p.id == id);
+            let connection_result = view
+                .read(cx)
+                .extensions_ui
+                .connection_results
+                .get(&id)
+                .cloned();
             let summary = if mcp {
                 format!("{} · {}", entry.transport, entry.target)
             } else {
@@ -469,11 +637,12 @@ fn render_extension_row(
                                 .on_click(move |_, _, cx| {
                                     toggle_view.update(cx, |app, cx| {
                                         if !app.extensions_ui.expanded.remove(&toggle_id) {
+                                            app.extensions_ui.expanded.clear();
                                             app.extensions_ui.expanded.insert(toggle_id.clone());
                                         }
                                         let selected = usize::from(app.extensions_ui.mcp);
                                         app.extensions_ui.lists[selected]
-                                            .splice(index..index + 1, 1);
+                                            .reset(app.extensions_ui.lists[selected].item_count());
                                         cx.notify();
                                     });
                                 }),
@@ -504,10 +673,22 @@ fn render_extension_row(
                                     .text_color(rgb(palette().muted))
                                     .child(format!("来源：{}", entry.path.display())),
                             )
-                            .when(mcp, |details| {
-                                details
-                                    .child("连接与认证状态未检测；命令参数、凭据和端点路径不展示。")
-                            })
+                            .when(mcp, |details| details.child("测试会启动此定义中的命令或连接远程服务，仅初始化并读取工具列表。"))
+                            .when(mcp, |details| details.child(h_flex().gap_2()
+                                .child(Button::new(("mcp-test", index)).small().outline().label(if this_probe { "测试中…" } else { "测试连接" })
+                                    .disabled(probing || entry.disabled || view.read(cx).closing)
+                                    .on_click(move |_, _, cx| test_view.update(cx, |app, cx| app.test_mcp_connection(test_entry.clone(), cx))))
+                                .when(this_probe, |row| row.child(Button::new(("mcp-cancel", index)).small().ghost().label("取消")
+                                    .on_click(move |_, _, cx| cancel_view.update(cx, |app, cx| {
+                                        if let Some(probe) = app.extensions_ui.connection_probe.take() { app.extensions_ui.connection_results.insert(probe.id.clone(), "测试已取消".into()); }
+                                        app.extensions_ui.lists = new_lists(); cx.notify();
+                                    }))))))
+                            .when_some(connection_result, |details, message| details.child(div().text_size(px(12.)).child(message)))
+                            .child(h_flex().gap_2().flex_wrap()
+                                .child(Button::new(("extension-edit", index)).small().outline().label("编辑来源文件").disabled(disabled || managed)
+                                    .tooltip(if managed { "插件文件由安装包管理，请在对应 CLI 中管理插件" } else { "校验格式并备份后保存" })
+                                    .on_click(move |_, window, cx| edit_view.update(cx, |app, cx| app.open_native_config(edit_path.clone(), kind, false, window, cx))))
+                                .child(Button::new(("extension-reveal", index)).small().ghost().label("在文件夹中显示").on_click(move |_, _, cx| cx.reveal_path(&reveal_path))))
                             .child(
                                 Button::new(("extension-copy-path", index))
                                     .small()

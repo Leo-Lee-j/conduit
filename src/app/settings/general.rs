@@ -191,7 +191,7 @@ impl ConduitApp {
                 SettingItem::new("命名模型", model).disabled(disabled),
             ]);
         }
-        settings_page("会话", FullIconName::Sparkles).group(
+        settings_page("自动命名", FullIconName::Sparkles).group(
             settings_section("会话命名")
                 .items(items)
                 .footer(|_, _| "命名在后台进行；失败保留当前标题，手动命名不会被覆盖。"),
@@ -361,7 +361,7 @@ impl ConduitApp {
                 SettingItem::new("恢复默认", reset).disabled(disabled),
             ]);
         }
-        settings_page("Git", FullIconName::GitFork).groups([
+        settings_page("Git 提交", FullIconName::GitFork).groups([
             settings_section("标签生成").items(vec![
                 SettingItem::new("版本递增策略", tag_strategy)
                     .description("根据已知稳定版标签生成新版本")

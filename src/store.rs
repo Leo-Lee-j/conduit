@@ -261,6 +261,16 @@ pub struct Store {
     pub git: GitSettings,
     #[serde(default, alias = "custom_providers")]
     pub providers: Vec<crate::providers::ModelProvider>,
+    #[serde(default)]
+    pub session_defaults: std::collections::HashMap<crate::domain::Provider, SessionDefaults>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SessionDefaults {
+    #[serde(default)]
+    pub channel: crate::providers::ModelChannel,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 impl Store {
@@ -338,6 +348,7 @@ impl Store {
                 updates: Default::default(),
                 git: Default::default(),
                 providers: vec![],
+                session_defaults: Default::default(),
             });
         }
         let mut state: Self = serde_json::from_slice(&fs::read(path)?)
@@ -588,6 +599,7 @@ mod tests {
             engine: Provider::Codex,
             base_url: "https://local.invalid/v1".into(),
             api_key_env: "MY_KEY".into(),
+            protected_api_key: None,
             models: vec!["local-model".into()],
             source: ProviderSource::Local,
             model_metadata: vec![],
@@ -692,6 +704,7 @@ mod tests {
             updates: Default::default(),
             git: Default::default(),
             providers: vec![],
+            session_defaults: Default::default(),
             workspaces: vec![Workspace {
                 path: directory.clone(),
                 sessions: vec![],
@@ -985,6 +998,7 @@ mod tests {
             engine: crate::domain::Provider::Codex,
             base_url: "https://proxy.invalid/v1".into(),
             api_key_env: "MY_PROXY_KEY".into(),
+            protected_api_key: None,
             models: vec!["custom-model".into()],
             source: Default::default(),
             model_metadata: vec![],

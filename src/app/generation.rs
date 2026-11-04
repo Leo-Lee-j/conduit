@@ -366,6 +366,7 @@ mod tests {
                     engine,
                     base_url: format!("https://{id}.example/v1"),
                     api_key_env: String::new(),
+                    protected_api_key: None,
                     models: vec![model.into()],
                     source: ProviderSource::Local,
                     model_metadata: vec![],

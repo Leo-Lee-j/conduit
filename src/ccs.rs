@@ -42,6 +42,7 @@ impl CcsCatalog {
                 engine: p.provider,
                 base_url: p.base_url.clone(),
                 api_key_env: String::new(),
+                protected_api_key: None,
                 models: p.models.iter().map(|m| m.id.clone()).collect(),
                 source: crate::providers::ProviderSource::Ccs { id: p.id.clone() },
                 model_metadata: p.models.clone(),

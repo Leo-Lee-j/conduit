@@ -1,4 +1,7 @@
 //! Bounded, read-only discovery. A definition is not proof of runtime availability.
+pub mod connection;
+pub mod edit;
+pub mod mcp;
 
 use crate::domain::Provider;
 use serde_json::Value;

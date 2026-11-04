@@ -1271,6 +1271,10 @@ impl ConduitApp {
         self.active_file = None;
         self.active_diff = None;
         self.selected_session = Some(id);
+        if self.store.session_defaults.contains_key(&provider) {
+            self.default_selection(provider)
+                .apply(&mut self.store.workspaces[index].sessions[0]);
+        }
         if self
             .pending_model_selection
             .as_ref()

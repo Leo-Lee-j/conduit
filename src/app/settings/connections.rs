@@ -4,7 +4,6 @@ use super::*;
 
 pub(in crate::app) struct ConnectionsUi {
     pub engine: Provider,
-    pub services: bool,
     pub models_expanded: bool,
     pub sources_expanded: bool,
     pub path_help: bool,
@@ -15,7 +14,6 @@ impl ConnectionsUi {
     pub(in crate::app) fn new(engine: Provider) -> Self {
         Self {
             engine,
-            services: false,
             models_expanded: false,
             sources_expanded: false,
             path_help: false,
@@ -31,7 +29,7 @@ impl ConduitApp {
         view: Entity<Self>,
     ) -> SettingPage {
         let engine = self.connection_settings.engine;
-        let services = self.connection_settings.services;
+        let services = self.settings_ui.page == 8;
         let selector_view = view.clone();
         let selector = SettingItem::render(move |_, _, _| {
             let mut engines = h_flex().w_full().gap_2();
@@ -62,28 +60,7 @@ impl ConduitApp {
                         }),
                 );
             }
-            let tab_view = selector_view.clone();
-            v_flex().w_full().gap_2().child(engines).child(
-                TabBar::new("settings-connection-tabs")
-                    .underline()
-                    .selected_index(usize::from(services))
-                    .child(
-                        Tab::new()
-                            .label("CLI 配置")
-                            .debug_selector(|| "settings-cli-tab".into()),
-                    )
-                    .child(
-                        Tab::new()
-                            .label("模型服务")
-                            .debug_selector(|| "settings-services-tab".into()),
-                    )
-                    .on_click(move |index, _, cx| {
-                        tab_view.update(cx, |app, cx| {
-                            app.connection_settings.services = *index == 1;
-                            cx.notify();
-                        });
-                    }),
-            )
+            engines
         })
         .keywords([
             "CLI", "模型", "服务", "Claude", "Codex", "OpenCode", "Provider", "CCS", "路径", "版本",
@@ -111,9 +88,12 @@ impl ConduitApp {
                         Button::new("settings-view-extensions")
                             .small()
                             .ghost()
-                            .label("查看 Skills / MCP")
+                            .label("管理 Skills")
                             .on_click(move |_, window, cx| {
-                                view.update(cx, |app, cx| app.select_settings_page(4, window, cx));
+                                view.update(cx, |app, cx| {
+                                    app.extensions_ui.engine = engine;
+                                    app.select_settings_page(4, window, cx);
+                                });
                             })
                     })
                     .keywords(["Skills", "MCP", "扩展"]),
@@ -155,8 +135,15 @@ impl ConduitApp {
                     .item(help),
             );
         }
-        settings_page("CLI & 模型服务", FullIconName::SquareTerminal)
-            .header_style(&page_header_style().py(px(12.)))
-            .groups(groups)
+        settings_page(
+            if services {
+                "模型与服务"
+            } else {
+                "AI 引擎"
+            },
+            FullIconName::SquareTerminal,
+        )
+        .header_style(&page_header_style().py(px(12.)))
+        .groups(groups)
     }
 }

@@ -188,7 +188,7 @@ fn settings_connections_switch_engines_and_keep_read_only_actions_disabled(
         cx.simulate_resize(gpui_kit::size(px(width), px(height)));
         cx.update(|window, cx| {
             app.update(cx, |app, cx| {
-                app.connection_settings.services = false;
+                app.settings_ui.page = 3;
                 app.open_settings(window, cx);
             })
         });
@@ -217,11 +217,7 @@ fn settings_connections_switch_engines_and_keep_read_only_actions_disabled(
             assert!(bounds.top() >= body.top() && bounds.bottom() <= body.bottom());
             last_right = bounds.right();
         }
-        for selector in [
-            "settings-engine-2",
-            "settings-services-tab",
-            "settings-engine-0",
-        ] {
+        for selector in ["settings-engine-2", "settings-nav-8", "settings-engine-0"] {
             let bounds = cx.debug_bounds(selector).unwrap();
             cx.simulate_mouse_down(bounds.center(), MouseButton::Left, Modifiers::default());
             cx.simulate_mouse_up(bounds.center(), MouseButton::Left, Modifiers::default());
@@ -229,13 +225,13 @@ fn settings_connections_switch_engines_and_keep_read_only_actions_disabled(
             cx.update(|window, cx| {
                 let _ = window.draw(cx);
             });
-            if selector == "settings-services-tab" {
+            if selector == "settings-nav-8" {
                 cx.update(|_, cx| {
                     assert_eq!(
                         app.read(cx).connection_settings.engine,
                         crate::domain::Provider::OpenCode
                     );
-                    assert!(app.read(cx).connection_settings.services);
+                    assert_eq!(app.read(cx).settings_ui.page, 8);
                 });
                 assert!(cx.debug_bounds("settings-add-service").is_none());
             }
@@ -335,6 +331,7 @@ fn model_picker_switches_engine_and_applies_the_full_route_to_a_new_session(
                 engine: Provider::Codex,
                 base_url: "https://fixture.invalid/v1".into(),
                 api_key_env: String::new(),
+                protected_api_key: None,
                 models: vec!["step-3.5-flash".into(), "gpt-5".into()],
                 source: ProviderSource::Local,
                 model_metadata: vec![],
@@ -523,6 +520,7 @@ fn opencode_model_picker_defaults_to_native_catalog_and_never_ccs(cx: &mut TestA
                 engine: Provider::OpenCode,
                 base_url: String::new(),
                 api_key_env: String::new(),
+                protected_api_key: None,
                 models: vec!["ccs-default".into()],
                 source: ProviderSource::Ccs { id: "ccs".into() },
                 model_metadata: vec![],
@@ -1482,6 +1480,7 @@ fn model_picker_renders_search_provider_and_effort_without_overlapping(cx: &mut 
                 engine: super::Provider::Claude,
                 base_url: "https://fixture.invalid".into(),
                 api_key_env: String::new(),
+                protected_api_key: None,
                 models: vec!["synced-model".into()],
                 source: ProviderSource::Ccs {
                     id: "fixture".into(),
@@ -5151,7 +5150,7 @@ fn settings_extensions_lists_search_details_and_context_are_isolated(cx: &mut Te
             app.writable = false;
             app.connection_settings.syncing = true;
             app.extensions_ui.initialized = true;
-            app.connection_settings.engine = crate::domain::Provider::Codex;
+            app.extensions_ui.engine = crate::domain::Provider::Codex;
             let context = ExtensionContext {
                 engine: crate::domain::Provider::Codex,
                 workspace: None,
@@ -5245,7 +5244,7 @@ fn settings_extensions_lists_search_details_and_context_are_isolated(cx: &mut Te
             let _ = window.draw(cx);
         });
         cx.update(|_, cx| assert_eq!(app.read(cx).extensions_ui.lists[0].item_count(), 1));
-        let tab = cx.debug_bounds("extensions-mcp-tab").unwrap();
+        let tab = cx.debug_bounds("settings-nav-9").unwrap();
         cx.simulate_mouse_down(tab.center(), MouseButton::Left, Modifiers::default());
         cx.simulate_mouse_up(tab.center(), MouseButton::Left, Modifiers::default());
         cx.run_until_parked();
@@ -5261,13 +5260,13 @@ fn settings_extensions_lists_search_details_and_context_are_isolated(cx: &mut Te
             app.update(cx, |app, cx| {
                 let before = app.new_session_provider;
                 let context = app.extensions_ui.context.clone().unwrap();
-                app.connection_settings.engine = crate::domain::Provider::OpenCode;
+                app.extensions_ui.engine = crate::domain::Provider::OpenCode;
                 app.ensure_extensions(window, cx, false);
                 assert_eq!(app.new_session_provider, before);
                 assert_ne!(app.extensions_ui.context.as_ref(), Some(&context));
                 assert!(app.extensions_ui.expanded.is_empty());
                 app.extensions_ui.probe = None;
-                app.connection_settings.engine = crate::domain::Provider::Codex;
+                app.extensions_ui.engine = crate::domain::Provider::Codex;
                 app.ensure_extensions(window, cx, false);
                 app.extensions_ui.searches[0]
                     .update(cx, |input, cx| input.set_value("", window, cx));
