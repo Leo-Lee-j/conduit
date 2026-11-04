@@ -1,6 +1,6 @@
 use super::{
     apply_event, finish_tool_cards, highlight_ranges, latest_naming_excerpt, same_failure,
-    search_snippet, session_matches, single_line_title,
+    search_snippet, single_line_title,
 };
 use crate::{
     domain::{ChatItem, ItemKind, PermissionLevel, Provider, SessionRecord, Usage},
@@ -549,8 +549,9 @@ fn commit_generation_snapshot_replaces_stream_without_duplicate_text() {
         ]
     );
 }
-pub(super) fn session() -> SessionRecord {
+pub(crate) fn session() -> SessionRecord {
     SessionRecord {
+        transcript: Default::default(),
         id: 1,
         provider: Provider::Claude,
         created_at: 0,
@@ -1232,11 +1233,20 @@ fn session_search_matches_title_and_message_text() {
         approval: None,
         model: None,
     }));
-    assert!(session_matches(&s, ""));
-    assert!(session_matches(&s, "rust"));
-    assert!(session_matches(&s, "alpha"));
-    assert!(!session_matches(&s, "beta"));
-    assert!(!session_matches(&s, "已归档"));
+    let workspaces = [crate::domain::Workspace {
+        path: std::env::temp_dir(),
+        sessions: vec![s],
+    }];
+    for query in ["", "rust", "ALPHA", "重构"] {
+        let results = super::search_worker::collect(&workspaces, query);
+        assert!(results.matches.contains(&1), "{query}");
+        assert_eq!(results.hits.len(), 1);
+    }
+    for query in ["beta", "unmatched"] {
+        let results = super::search_worker::collect(&workspaces, query);
+        assert!(results.matches.is_empty(), "{query}");
+        assert!(results.hits.is_empty());
+    }
 }
 #[test]
 fn highlight_ranges_handle_unicode_and_case() {

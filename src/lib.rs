@@ -1,2 +1,3 @@
-//! Release/update protocol shared by the desktop, installer helper and CI tool.
+//! Host data models shared by desktop adapters and focused tests.
+pub mod plugins;
 pub mod update;

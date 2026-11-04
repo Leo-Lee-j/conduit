@@ -264,6 +264,9 @@ impl ConduitApp {
                         cx.notify();
                         return;
                     }
+                    if !self.notifications.finish() {
+                        return;
+                    }
                     self.updater.exiting = true;
                     cx.quit();
                 }
@@ -562,6 +565,50 @@ impl ConduitApp {
             );
         }
         content.child(actions).into_any_element()
+    }
+
+    pub(super) fn publish_update_notification(&mut self, cx: &mut Context<Self>) {
+        let version = self
+            .updater
+            .release
+            .as_ref()
+            .map(|release| release.manifest.version.to_string())
+            .unwrap_or_default();
+        let (phase, level, title) = match self.updater.phase {
+            Phase::Available => ("available", NoticeLevel::Info, "发现新版本"),
+            Phase::Ready => ("ready", NoticeLevel::Success, "更新已准备好"),
+            Phase::Failed => ("failed", NoticeLevel::Error, "应用更新失败"),
+            Phase::Checking | Phase::Downloading => {
+                self.notifications.update_state = None;
+                return;
+            }
+            _ => return,
+        };
+        let state = format!("{version}/{phase}/{}", self.updater.status);
+        if self.notifications.update_state.as_ref() == Some(&state) {
+            return;
+        }
+        self.notifications.update_state = Some(state);
+        let event = if self.updater.phase == Phase::Available {
+            "available".into()
+        } else {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+                .to_string()
+        };
+        self.notify_user(
+            Notice::new(
+                NoticeSource::Update,
+                level,
+                title,
+                self.updater.status.clone(),
+            )
+            .target(NoticeTarget::Updates)
+            .key(format!("update/{version}"), event),
+            cx,
+        );
     }
 
     pub(super) fn update_notice(&self, cx: &mut Context<Self>) -> AnyElement {

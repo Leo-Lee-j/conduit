@@ -137,6 +137,32 @@ impl ConduitApp {
                     if !accepted {
                         continue;
                     }
+                    if let Some(target) = self.session_notice_target(id) {
+                        let title = if approval.is_user_input() {
+                            "会话等待你的回答"
+                        } else {
+                            "会话等待审批"
+                        };
+                        self.notify_user(
+                            Notice::new(
+                                NoticeSource::Session,
+                                NoticeLevel::Warning,
+                                title,
+                                approval.title.clone(),
+                            )
+                            .target(target)
+                            .key(format!("approval/{id}/{prefix}/{}", approval.id), "waiting")
+                            .active()
+                            .presentation(
+                                if self.session_is_visible(id) {
+                                    NoticePresentation::History
+                                } else {
+                                    NoticePresentation::Toast
+                                },
+                            ),
+                            cx,
+                        );
+                    }
                     let questions = approval.questions();
                     let drafts = questions
                         .iter()
@@ -175,6 +201,7 @@ impl ConduitApp {
                     }
                 }
                 Event::ApprovalCancelled(request) => {
+                    self.resolve_notification(&format!("approval/{id}/{prefix}/{request}"), cx);
                     let mut approval = None;
                     if let Some(run) = self.session_control.runs.get_mut(&id) {
                         run.expanded_approvals.remove(&request);
@@ -199,6 +226,7 @@ impl ConduitApp {
                     }
                 }
                 Event::ApprovalResolved { id: request, allow } => {
+                    self.resolve_notification(&format!("approval/{id}/{prefix}/{request}"), cx);
                     let approval = self.session_control.runs.get_mut(&id).and_then(|run| {
                         run.expanded_approvals.remove(&request);
                         run.question_drafts.remove(&request);
@@ -235,6 +263,34 @@ impl ConduitApp {
                 }
                 Event::Finished { error, cancelled } => {
                     let finished_run = self.session_control.runs.remove(&id);
+                    self.notifications.center.resolve_session(id, unix_now());
+                    if finished_run.is_some()
+                        && !cancelled
+                        && (error.is_some() || !self.session_is_visible(id))
+                        && let Some(target) = self.session_notice_target(id)
+                    {
+                        let session_title = self
+                            .session(id)
+                            .map(|session| session.title.clone())
+                            .unwrap_or_default();
+                        let (level, title, message) = if let Some(error) = &error {
+                            (NoticeLevel::Error, "会话执行失败", error.clone())
+                        } else {
+                            (NoticeLevel::Success, "会话已完成", session_title)
+                        };
+                        self.notify_user(
+                            Notice::new(NoticeSource::Session, level, title, message)
+                                .target(target)
+                                .key(format!("session/{id}/{prefix}/finished"), "finished")
+                                .presentation(if self.session_is_visible(id) {
+                                    NoticePresentation::History
+                                } else {
+                                    NoticePresentation::Toast
+                                }),
+                            cx,
+                        );
+                    }
+                    self.refresh_notifications(cx);
                     if error.is_some() || cancelled {
                         self.pause_queued_message(
                             id,

@@ -125,7 +125,7 @@ fn error_retry_clears_cards_before_repeated_failures_and_preserves_output(cx: &m
                     "retry must clear old errors before any new output arrives"
                 );
                 let saved = Store::load().unwrap();
-                let saved_messages = &saved.workspaces[0].sessions[0].messages;
+                let saved_messages = crate::transcript::read(&saved.workspaces[0].sessions[0]).unwrap();
                 // Loading a running turn also appends an interruption notice.
                 assert_eq!(
                     serde_json::to_value(&saved_messages[..kept.len()]).unwrap(),
@@ -2278,6 +2278,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
     use gpui_kit::AppContext as _;
 
     let session = |id, provider, native: &str| SessionRecord {
+        transcript: Default::default(),
         id,
         provider,
         native_id: Some(native.into()),
@@ -2592,6 +2593,7 @@ fn long_chat_virtualizes_real_rows_and_keeps_history_jump_on_append(cx: &mut Tes
                 workspaces: vec![Workspace {
                     path: std::env::temp_dir(),
                     sessions: vec![SessionRecord {
+                        transcript: Default::default(),
                         id: 1,
                         provider: Provider::Claude,
                         title: "Long chat".into(),
@@ -2958,6 +2960,7 @@ fn check_assistant_drag_selection(
                 workspaces: vec![Workspace {
                     path: std::env::temp_dir(),
                     sessions: vec![SessionRecord {
+                        transcript: Default::default(),
                         id: 1,
                         provider: Provider::Claude,
                         title: "选中".into(),
@@ -3429,6 +3432,7 @@ fn composer_files_paste_drafts_removal_and_failed_send(cx: &mut TestAppContext) 
     std::fs::write(&first, b"fn first() {}").unwrap();
     std::fs::write(&second, b"fn second() {}").unwrap();
     let session = |id| SessionRecord {
+        transcript: Default::default(),
         id,
         provider: Provider::Claude,
         created_at: 0,
@@ -3788,6 +3792,7 @@ fn attachment_tags_size_to_names_and_stay_inside_the_user_bubble(cx: &mut TestAp
                 workspaces: vec![Workspace {
                     path: workspace.clone(),
                     sessions: vec![SessionRecord {
+                        transcript: Default::default(),
                         id: 1,
                         provider: Provider::Claude,
                         created_at: 0,
@@ -3991,6 +3996,7 @@ fn deleting_blank_session_skips_confirmation(cx: &mut TestAppContext) {
     use gpui_kit::test::TestWindowExt as _;
 
     let session = |id, messages| SessionRecord {
+        transcript: Default::default(),
         id,
         provider: Provider::Claude,
         created_at: 0,
@@ -4530,6 +4536,7 @@ fn composer_recalls_sent_prompts_with_arrow_keys(cx: &mut TestAppContext) {
                 workspaces: vec![Workspace {
                     path: root.clone(),
                     sessions: vec![SessionRecord {
+                        transcript: Default::default(),
                         id: 1,
                         provider: Provider::Claude,
                         native_id: Some("native-1".into()),

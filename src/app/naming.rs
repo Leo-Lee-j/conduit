@@ -68,6 +68,15 @@ impl ConduitApp {
         if !self.writable || self.closing {
             return;
         }
+        if self
+            .session(id)
+            .is_some_and(|session| !session.transcript.loaded)
+        {
+            self.transcripts.renames.insert(id);
+            self.request_transcript(id, cx);
+            cx.notify();
+            return;
+        }
         let Some(excerpt) = self.session(id).and_then(latest_naming_excerpt) else {
             self.session_control
                 .naming_errors
@@ -177,7 +186,7 @@ impl ConduitApp {
                 continue;
             }
             if let Some(session) = self.session_mut(id)
-                && session.messages.iter().any(|m| m.kind == ItemKind::User)
+                && session.has_user_messages()
             {
                 session.title = title;
                 self.persist();

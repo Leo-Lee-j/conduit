@@ -120,6 +120,23 @@ impl ConduitApp {
                 }
             }
             Err(error) => {
+                if let Some(target) = self.session_notice_target(id) {
+                    self.notify_user(
+                        Notice::new(
+                            NoticeSource::Session,
+                            NoticeLevel::Error,
+                            "待发送消息已暂停",
+                            error.clone(),
+                        )
+                        .target(target)
+                        .presentation(if self.session_is_visible(id) {
+                            NoticePresentation::History
+                        } else {
+                            NoticePresentation::Toast
+                        }),
+                        cx,
+                    );
+                }
                 self.queued_messages.insert(
                     id,
                     QueuedMessage {

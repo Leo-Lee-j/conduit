@@ -90,7 +90,9 @@ impl ConduitApp {
         if !self.details {
             return (None, None);
         }
-        let narrow = window.viewport_size().width < px(1100.);
+        if self.detail_view == DetailView::Notifications {
+            return self.notification_dock(window, cx);
+        }
         let item = self.detail_text.as_ref().and_then(|key| {
             self.session(self.selected_session?)?
                 .messages
@@ -331,6 +333,16 @@ impl ConduitApp {
                 )
                 .into_any_element()
         };
+        self.wrap_detail_panel(header.into_any_element(), body, window)
+    }
+
+    pub(super) fn wrap_detail_panel(
+        &self,
+        header: AnyElement,
+        body: AnyElement,
+        window: &Window,
+    ) -> (Option<AnyElement>, Option<AnyElement>) {
+        let narrow = window.viewport_size().width < px(1100.);
         let panel = v_flex()
             .debug_selector(|| "detail-panel".into())
             .occlude()

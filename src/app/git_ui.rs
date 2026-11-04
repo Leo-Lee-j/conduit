@@ -56,6 +56,43 @@ impl ConduitApp {
         cx.notify();
     }
 
+    fn git_result_feedback(
+        &mut self,
+        path: PathBuf,
+        text: impl Into<String>,
+        error: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let text = text.into();
+        let presentation = if self.git_navigation_open()
+            && self.selected_workspace_path().as_ref() == Some(&path)
+        {
+            NoticePresentation::History
+        } else {
+            NoticePresentation::Toast
+        };
+        self.notify_user(
+            Notice::new(
+                NoticeSource::Git,
+                if error {
+                    NoticeLevel::Error
+                } else {
+                    NoticeLevel::Success
+                },
+                if error {
+                    "Git 操作失败"
+                } else {
+                    "Git 操作完成"
+                },
+                text.clone(),
+            )
+            .target(NoticeTarget::Workspace(path.clone()))
+            .presentation(presentation),
+            cx,
+        );
+        self.git_feedback(path, text, error, cx);
+    }
+
     pub(super) fn can_stage_files(&self) -> bool {
         self.writable
             && !self.closing
@@ -758,9 +795,9 @@ impl ConduitApp {
                         Some(error) => format!("{}：{}", result.message, error),
                         None => result.message,
                     };
-                    self.git_feedback(path.clone(), text, result.error.is_some(), cx);
+                    self.git_result_feedback(path.clone(), text, result.error.is_some(), cx);
                 }
-                Err(error) => self.git_feedback(path.clone(), error, true, cx),
+                Err(error) => self.git_result_feedback(path.clone(), error, true, cx),
             }
             if self.selected_workspace_path().as_ref() == Some(&path) {
                 self.git.branch_probe = None;
@@ -847,7 +884,7 @@ impl ConduitApp {
             if error.as_deref() == Some("已取消生成。") {
                 self.git_feedback(generation.path, "已取消生成，草稿未修改。", false, cx);
             } else if let Some(error) = error {
-                self.git_feedback(
+                self.git_result_feedback(
                     generation.path,
                     format!(
                         "生成失败：{}。{}",
@@ -858,7 +895,7 @@ impl ConduitApp {
                     cx,
                 );
             } else if text.trim().is_empty() {
-                self.git_feedback(
+                self.git_result_feedback(
                     generation.path,
                     generation.last_diagnostic.map(|error| format!("生成失败：{}。{}", failure_summary(&error), failure_guidance(&error))).unwrap_or_else(|| "AI 没有返回 Commit Message，请检查生成引擎、Provider 和模型配置后重试。".into()),
                     true,
@@ -869,14 +906,14 @@ impl ConduitApp {
                     draft
                         .input
                         .update(cx, |input, cx| input.set_value(text.trim(), window, cx));
-                    self.git_feedback(
+                    self.git_result_feedback(
                         generation.path,
                         "Commit Message 已生成，可编辑后提交。",
                         false,
                         cx,
                     );
                 } else {
-                    self.git_feedback(
+                    self.git_result_feedback(
                         generation.path,
                         "草稿已修改，未覆盖；可重新生成。",
                         true,

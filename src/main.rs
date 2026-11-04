@@ -15,11 +15,13 @@ mod git;
 mod history;
 mod message_status;
 mod models;
+mod notifications;
 mod performance;
 mod persistence;
 mod protocol;
 mod providers;
 mod store;
+mod transcript;
 mod workspace_files;
 
 use app::ConduitApp;

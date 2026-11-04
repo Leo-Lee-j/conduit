@@ -33,6 +33,7 @@ mod tests {
                     workspaces: vec![Workspace {
                         path: std::env::temp_dir(),
                         sessions: vec![SessionRecord {
+                            transcript: Default::default(),
                             id: 1,
                             provider: crate::domain::Provider::Codex,
                             title: "Question test".into(),

@@ -66,7 +66,8 @@ param(
     [ValidateSet('all', 'claude', 'codex')]
     [string]$SeedProfile = 'all',
     [switch]$Seed,
-    [switch]$KeepRunning
+    [switch]$KeepRunning,
+    [switch]$CloseNormally
 )
 
 $ErrorActionPreference = 'Stop'
@@ -231,8 +232,12 @@ function Wait-MainWindow($process) {
     while ([DateTime]::UtcNow -lt $deadline) {
         $process.Refresh()
         if ($process.HasExited) { throw "Conduit exited during startup ($($process.ExitCode))" }
-        if ($process.MainWindowHandle -ne [IntPtr]::Zero -and $process.MainWindowTitle -eq 'Conduit' -and $process.Responding) {
-            return $process.MainWindowHandle
+        # Hidden startup does not populate Process.MainWindowHandle. Locate only
+        # this fixture's window, then reveal it for the requested UI capture.
+        $candidate = [ConduitWin]::FindMainWindow($process.Id)
+        if ($candidate -ne [IntPtr]::Zero -and $process.Responding) {
+            [ConduitWin]::ShowWindow($candidate, 9) | Out-Null
+            return $candidate
         }
         Start-Sleep -Milliseconds 150
     }
@@ -241,6 +246,17 @@ function Wait-MainWindow($process) {
 
 function Get-ElementName($element) {
     try { return [string]$element.Current.Name } catch { return '' }
+}
+
+# Prefer exact labels: "未读" must not match the bell's unread count.
+function Find-Button($buttons, $wanted) {
+    for ($i = 0; $i -lt $buttons.Count; $i++) {
+        if ((Get-ElementName $buttons.Item($i)) -eq $wanted) { return $buttons.Item($i) }
+    }
+    for ($i = 0; $i -lt $buttons.Count; $i++) {
+        if ((Get-ElementName $buttons.Item($i)) -like "*$wanted*") { return $buttons.Item($i) }
+    }
+    return $null
 }
 
 function Set-TargetForeground($handle) {
@@ -302,6 +318,23 @@ public class ConduitWin {
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    private delegate bool EnumWindowProc(IntPtr handle, IntPtr parameter);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowProc callback, IntPtr parameter);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr handle, System.Text.StringBuilder text, int count);
+    public static IntPtr FindMainWindow(int processId) {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows(delegate(IntPtr handle, IntPtr parameter) {
+            uint owner;
+            GetWindowThreadProcessId(handle, out owner);
+            if (owner != (uint)processId) return true;
+            var title = new System.Text.StringBuilder(256);
+            GetWindowText(handle, title, title.Capacity);
+            if (title.ToString() != "Conduit") return true;
+            found = handle;
+            return false;
+        }, IntPtr.Zero);
+        return found;
+    }
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
     [DllImport("user32.dll")] public static extern int GetSystemMetrics(int nIndex);
@@ -318,12 +351,13 @@ public class ConduitWin {
 
 $previousData = [Environment]::GetEnvironmentVariable('CONDUIT_DATA_DIR', 'Process')
 $process = $null
+$captureCompleted = $false
 try {
     $env:CONDUIT_DATA_DIR = $DataDir
     $launch = @{
         FilePath         = $exe
         WorkingDirectory = $root
-        WindowStyle      = 'Normal'
+        WindowStyle      = 'Hidden'
         PassThru         = $true
         # Keep child stdout/stderr for diagnosing crashes during automation.
         RedirectStandardOutput = (Join-Path $OutDir ($Name + '-stdout.log'))
@@ -331,6 +365,7 @@ try {
     }
     if ($AppArgs -ne '') { $launch.ArgumentList = $AppArgs }
     $process = Start-Process @launch
+    $null = $process.Handle # Retain the handle so ExitCode survives process exit.
     $handle = Wait-MainWindow $process
     Start-Sleep -Milliseconds 600
     # Foreground activation can be refused by the shell while another window
@@ -417,10 +452,7 @@ try {
     }
 
     foreach ($wanted in $ClickButton) {
-        $target = $null
-        for ($i = 0; $i -lt $buttons.Count; $i++) {
-            if ((Get-ElementName $buttons.Item($i)) -like "*$wanted*") { $target = $buttons.Item($i); break }
-        }
+        $target = Find-Button $buttons $wanted
         if ($null -eq $target) { throw "UIA button not found: $wanted" }
         $pattern = $target.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
         $pattern.Invoke()
@@ -648,10 +680,7 @@ try {
         Set-TargetForeground $handle
         foreach ($wanted in $PostClickButton) {
             $buttons = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $buttonCondition)
-            $target = $null
-            for ($i = 0; $i -lt $buttons.Count; $i++) {
-                if ((Get-ElementName $buttons.Item($i)) -like "*$wanted*") { $target = $buttons.Item($i); break }
-            }
+            $target = Find-Button $buttons $wanted
             if ($null -eq $target) { Write-Output "POST_BUTTON_NOT_FOUND=$wanted"; continue }
             $pattern = $target.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
             $pattern.Invoke()
@@ -730,6 +759,18 @@ try {
         $uia.Add(("TEXT {0} | {1}" -f $i, (Get-ElementName $texts.Item($i))))
     }
 
+    # History rows are semantic list items, not live alerts or Text controls.
+    $elements = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+    for ($i = 0; $i -lt $elements.Count; $i++) {
+        $element = $elements.Item($i)
+        $kind = $element.Current.ControlType.ProgrammaticName
+        if ($kind -in 'ControlType.Button', 'ControlType.Edit', 'ControlType.Text') { continue }
+        $label = Get-ElementName $element
+        if ($label -ne '') {
+            $uia.Add(("ELEMENT {0} | {1} | help={2}" -f $kind, $label, $element.Current.HelpText))
+        }
+    }
+
     $uia | Out-File -FilePath $uiaPath -Encoding utf8
     [ordered]@{
         name      = $Name
@@ -744,12 +785,28 @@ try {
         timestamp = (Get-Date).ToString('o')
     } | ConvertTo-Json -Depth 4 | Out-File -FilePath $metaPath -Encoding utf8
 
+    $captureCompleted = $true
     Write-Output "CAPTURED name=$Name png=$png size=${w}x${h} buttons=$($buttons.Count) edits=$($edits.Count) texts=$($texts.Count)"
 }
 finally {
     [Environment]::SetEnvironmentVariable('CONDUIT_DATA_DIR', $previousData, 'Process')
     if ($null -ne $process -and -not $KeepRunning -and -not $process.HasExited) {
-        $process.Kill()
-        $null = $process.WaitForExit(5000)
+        if ($CloseNormally) {
+            $requested = $process.CloseMainWindow()
+            $closed = $requested -and $process.WaitForExit(5000)
+            if (-not $closed) {
+                $process.Kill()
+                $null = $process.WaitForExit(5000)
+                if ($captureCompleted) { throw 'Conduit did not close normally within 5 seconds.' }
+                Write-Warning 'Cleanup forced the isolated process to exit after a capture error.'
+            }
+            if ($captureCompleted -and $process.ExitCode -ne 0) {
+                throw "Conduit exited with code $($process.ExitCode)."
+            }
+            if ($closed) { Write-Output 'CLOSED_NORMALLY' }
+        } else {
+            $process.Kill()
+            $null = $process.WaitForExit(5000)
+        }
     }
 }

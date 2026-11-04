@@ -396,6 +396,7 @@ pub(super) fn update_commit_text(
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum DetailView {
     Tool,
+    Notifications,
 }
 
 /// Drag payload (and invisible drag preview) for the right-sidebar edge.

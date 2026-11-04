@@ -103,6 +103,8 @@ impl Render for ConduitApp {
         if self.startup.is_some() {
             return self.startup_page();
         }
+        self.sync_plugin_context();
+        self.ensure_selected_transcript(cx);
         let render_started = Instant::now();
         let app_entity = cx.entity();
         let selected = self
@@ -213,7 +215,47 @@ impl Render for ConduitApp {
                     }
                 }));
             if let Some(session) = &selected {
-                if session.message_count == 0 {
+                let unloaded = self
+                    .session(session.id)
+                    .is_some_and(|record| !record.transcript.loaded);
+                if unloaded {
+                    let id = session.id;
+                    let error = self.transcripts.errors.get(&id).cloned();
+                    let mut loading = v_flex()
+                        .id("transcript-loading")
+                        .debug_selector(|| "transcript-loading".into())
+                        .flex_1()
+                        .items_center()
+                        .justify_center()
+                        .gap_3()
+                        .px_4()
+                        .child(div().text_size(px(14.)).child(if error.is_some() {
+                            "会话正文加载失败"
+                        } else {
+                            "正在加载会话…"
+                        }));
+                    if let Some(error) = error {
+                        loading = loading
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(palette().muted))
+                                    .child(error),
+                            )
+                            .child(
+                                Button::new("retry-transcript")
+                                    .label("重试加载")
+                                    .small()
+                                    .ghost()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.retry_transcript(id, cx)
+                                    })),
+                            );
+                    } else {
+                        loading = loading.child(Spinner::new());
+                    }
+                    messages = messages.child(loading);
+                } else if session.message_count == 0 {
                     messages = messages.child(
                         v_flex()
                             .flex_1()
@@ -532,25 +574,30 @@ impl Render for ConduitApp {
                     ),
                 );
             }
-            if let Some(message) = &self.message {
+            if let Some(message) = &self.message
+                && self.writable
+                && self.persistence.error.is_none()
+            {
                 conversation = conversation.child(
-                    div()
-                        .mx_6()
-                        .mb_3()
-                        .p_3()
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(rgb(palette().danger_border))
-                        .bg(rgb(palette().danger_bg))
-                        .text_sm()
-                        .text_color(rgb(palette().danger_text))
-                        .child(message.clone()),
+                    div().mx_6().mb_3().child(
+                        gpui_kit::component::alert::Alert::error(
+                            "application-message",
+                            message.clone(),
+                        )
+                        .small()
+                        .on_close(cx.listener(|app, _, _, cx| {
+                            app.message = None;
+                            cx.notify();
+                        })),
+                    ),
                 );
             }
             conversation = conversation.child(self.render_composer(selected.as_ref(), window, cx));
             conversation
         };
-        conversation = conversation.child(self.update_notice(cx));
+        conversation = conversation
+            .child(self.notification_banner(cx))
+            .child(self.update_notice(cx));
         let toolbar = self.render_toolbar(cx);
         let title_bar = TitleBar::new()
             .bg(rgb(palette().canvas))
@@ -574,12 +621,16 @@ impl Render for ConduitApp {
                             .child("Chat M0 · Preview"),
                     ),
             );
+        let title_bar = title_bar
+            .child(div().flex_1())
+            .child(self.notification_bell(cx));
         conversation = conversation.child(toolbar);
-        let (detail_panel, overlay) = if self.branch_navigation_open() {
-            (None, None)
-        } else {
-            self.render_detail_dock(selected.as_ref(), window, cx)
-        };
+        let (detail_panel, overlay) =
+            if self.branch_navigation_open() && self.detail_view != DetailView::Notifications {
+                (None, None)
+            } else {
+                self.render_detail_dock(selected.as_ref(), window, cx)
+            };
         // The left workspace rail stays a resizable group. The right sidebar is
         // laid out by hand so dragging its edge follows the pointer 1:1 and its
         // width can be capped at half of the remaining content area.
@@ -593,7 +644,7 @@ impl Render for ConduitApp {
             .map(|width| f32::from(*width))
             .filter(|width| *width > 0.)
             .unwrap_or(NAVIGATION_DEFAULT_WIDTH);
-        let measured_sidebar = if self.files.sidebar_collapsed {
+        let measured_sidebar = if self.plugins.collapsed() {
             38.
         } else {
             measured_sidebar
@@ -651,7 +702,7 @@ impl Render for ConduitApp {
             }
             None => conversation.into_any_element(),
         };
-        let body = if self.files.sidebar_collapsed {
+        let body = if self.plugins.collapsed() {
             h_flex()
                 .size_full()
                 .child(

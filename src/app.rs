@@ -1,5 +1,9 @@
 //! Application state and initialization. Views and workflows live in app/.
 
+use crate::notifications::{
+    Level as NoticeLevel, Notice, Presentation as NoticePresentation, Source as NoticeSource,
+    Target as NoticeTarget,
+};
 use crate::{
     approval::ApprovalQueue,
     ccs::{self, CcsCatalog},
@@ -64,6 +68,7 @@ mod dock;
 mod events;
 mod file_links;
 mod file_picker;
+mod file_preview;
 mod files;
 mod generation;
 mod git_branches;
@@ -76,10 +81,12 @@ mod mentions;
 mod mermaid;
 mod model_picker;
 mod naming;
+mod notifications;
 mod numbered_code;
 mod opencode_models;
 mod outline;
 mod performance_view;
+mod plugin_ui;
 mod queue;
 #[cfg(all(test, feature = "ui-tests"))]
 mod review_tests;
@@ -96,6 +103,7 @@ mod stream_events;
 mod theme;
 mod toolbar;
 mod tools;
+mod transcripts;
 mod typography;
 mod update;
 mod user_input;
@@ -145,7 +153,9 @@ pub struct ConduitApp {
     branch_manager: Option<Entity<git_log::GitLogView>>,
     persistence: crate::persistence::Persistence,
     session_control: session_controller::SessionController,
+    transcripts: transcripts::TranscriptUi,
     updater: update::UpdateUi,
+    notifications: notifications::NotificationUi,
     connection_settings: settings::ConnectionsUi,
     settings_ui: settings::SettingsUi,
     extensions_ui: settings::ExtensionsUi,
@@ -158,6 +168,7 @@ pub struct ConduitApp {
     active_file: Option<u64>,
     active_diff: Option<u64>,
     files: files::FileBrowser,
+    plugins: plugin_ui::PluginUi,
     /// The open tab under the pointer, so the strip's right-click menu knows
     /// which tab it was opened on.
     tab_menu_target: Option<DocumentTab>,
@@ -227,6 +238,7 @@ pub struct ConduitApp {
     scroll: gpui_kit::ListState,
     timeline: Entity<shell::ChatTimeline>,
     sidebar_view: Entity<sidebar::SidebarView>,
+    sidebar: sidebar::SidebarState,
     file_view: Entity<files::FileDocumentView>,
     /// Focus target for the conversation, so a finished selection drag leaves the
     /// composer and Ctrl+C reaches the window root's copy handler.
@@ -279,6 +291,7 @@ impl ConduitApp {
         start_in_settings: bool,
         start_in_git: bool,
     ) -> Self {
+        file_preview::init(cx);
         cx.bind_keys([
             KeyBinding::new("enter", SubmitBranchForm, Some("GitBranchForm > Input")),
             KeyBinding::new("enter", SubmitBranchForm, Some("GitBranchForm")),
@@ -596,15 +609,17 @@ impl ConduitApp {
         let scroll = gpui_kit::ListState::new(0, ListAlignment::Bottom, px(240.));
         let app = cx.entity().downgrade();
         let timeline = cx.new(|_| shell::ChatTimeline::new(app.clone(), scroll.clone()));
-        let sidebar_view = cx.new(|cx| sidebar::SidebarView::new(app.clone(), cx));
+        let sidebar_view = cx.new(|cx| sidebar::SidebarView::new(app.clone(), window, cx));
         let file_view = cx.new(|cx| files::FileDocumentView::new(app, cx));
         let mut app = Self {
             persistence: crate::persistence::Persistence::new(Store::path()),
             session_control: session_controller::SessionController::default(),
+            transcripts: Default::default(),
             store,
             git: git_ui::GitUi::default(),
             branch_manager: None,
             updater: update::UpdateUi::default(),
+            notifications: notifications::NotificationUi::new(writable, cx),
             connection_settings: settings::ConnectionsUi::new(new_session_provider),
             settings_ui: settings::SettingsUi {
                 page: 0,
@@ -628,6 +643,7 @@ impl ConduitApp {
             active_file: None,
             active_diff: None,
             files: files::FileBrowser::default(),
+            plugins: plugin_ui::PluginUi::new(),
             tab_menu_target: None,
             input,
             drafts: HashMap::new(),
@@ -693,6 +709,7 @@ impl ConduitApp {
             scroll,
             timeline,
             sidebar_view,
+            sidebar: sidebar::SidebarState::default(),
             file_view,
             chat_focus: cx.focus_handle(),
             timeline_session: None,
@@ -723,12 +740,14 @@ impl ConduitApp {
         for message in app.queued_messages.values_mut() {
             message.paused = Some("应用已重新打开；请确认后手动发送。".into());
         }
+        app.sync_plugin_context();
         app.restore_update_drafts(window, cx);
         app.show_installed_changelog(window, cx);
         if start_in_git {
             app.show_git_navigation(cx);
         }
         app.cleanup_attachments();
+        app.ensure_selected_transcript(cx);
         app
     }
 
@@ -768,6 +787,7 @@ impl ConduitApp {
         #[cfg(test)]
         {
             self.persistence.flush();
+            self.trim_transcripts();
             if let Some(error) = &self.persistence.error {
                 self.dirty = true;
                 self.message = Some(format!("保存失败：{error}"));
@@ -778,6 +798,7 @@ impl ConduitApp {
     }
     fn poll_persistence(&mut self, cx: &mut Context<Self>) {
         if self.persistence.poll() {
+            self.trim_transcripts();
             if let Some(error) = &self.persistence.error {
                 self.dirty = true;
                 self.message = Some(format!("保存失败：{error}"));
@@ -788,7 +809,7 @@ impl ConduitApp {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod ui_tests;
