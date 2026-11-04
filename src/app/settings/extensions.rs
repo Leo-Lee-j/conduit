@@ -492,6 +492,7 @@ fn render_extension_row(
                             .child(
                                 div()
                                     .id(("extension-source", index))
+                                    .debug_selector(move || format!("extension-source-{index}"))
                                     .truncate()
                                     .tooltip({
                                         let path = copy_path.clone();

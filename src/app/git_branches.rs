@@ -293,7 +293,8 @@ pub(super) fn branch_menu(
     let workspace = host.workspace.clone();
     let state = app.read(cx);
     let Some(repository) = state
-        .git_repository
+        .git
+        .repository
         .clone()
         .filter(|_| state.selected_workspace_path().as_ref() == Some(&workspace))
     else {
@@ -578,9 +579,9 @@ impl ConduitApp {
     fn branch_operation_blocked(&self, path: &Path) -> Option<&'static str> {
         if self.closing || !self.writable {
             Some("应用当前不可写")
-        } else if self.git_operation.is_some() {
+        } else if self.git.operation.is_some() {
             Some("已有 Git 操作运行，请等待完成")
-        } else if self.commit_generation.is_some() {
+        } else if self.git.generation.is_some() {
             Some("请先完成或取消 Commit Message 生成")
         } else if self.worktree_has_runs(path) {
             Some("该仓库的工作区有 CLI 任务运行，请等待完成后再操作")
@@ -606,7 +607,7 @@ impl ConduitApp {
             return false;
         }
         self.show_git_navigation(cx);
-        self.git_operation = Some(GitOperation {
+        self.git.operation = Some(GitOperation {
             worktree: git::worktree_root(&path),
             probe: git::OperationProbe::start(
                 path.clone(),
@@ -619,7 +620,7 @@ impl ConduitApp {
     }
 
     pub(super) fn git_integration_banner(&self, app: Entity<Self>) -> Option<AnyElement> {
-        let repository = self.git_repository.as_ref()?;
+        let repository = self.git.repository.as_ref()?;
         let state = repository.integration?;
         let path = self.selected_workspace_path()?;
         let supported = matches!(

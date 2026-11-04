@@ -275,17 +275,17 @@ fn run(
     let executable = crate::cli::resolve(Provider::OpenCode, &crate::cli::CliSettings::default())
         .expect("install OpenCode before running this opt-in test")
         .path;
-    ChatRuntime::start_with_options(
-        Provider::OpenCode,
+    ChatRuntime::start_request(super::StartRequest {
+        provider: Provider::OpenCode,
         executable,
-        root.join("workspace"),
-        prompt.into(),
-        native,
-        Some("conduit-test/mock".into()),
+        cwd: root.join("workspace"),
+        prompt: prompt.into(),
+        native_id: native,
+        model: Some("conduit-test/mock".into()),
         permission,
-        Default::default(),
-        route(root, server),
-    )
+        effort: Default::default(),
+        route: route(root, server),
+    })
 }
 
 #[derive(Clone, Copy)]

@@ -192,8 +192,30 @@ pub enum ItemKind {
     Error,
 }
 
+/// Shared immutable snapshots; editing a message copies only that message.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ChatItem {
+#[serde(transparent)]
+pub struct ChatItem(std::sync::Arc<ChatItemData>);
+
+impl From<ChatItemData> for ChatItem {
+    fn from(item: ChatItemData) -> Self {
+        Self(std::sync::Arc::new(item))
+    }
+}
+impl std::ops::Deref for ChatItem {
+    type Target = ChatItemData;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for ChatItem {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        std::sync::Arc::make_mut(&mut self.0)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChatItemData {
     /// Total wall time of the CLI turn, recorded when it finishes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elapsed_ms: Option<u64>,
@@ -208,7 +230,7 @@ pub struct ChatItem {
     #[serde(default)]
     pub detail: String,
     #[serde(default)]
-    pub status: String,
+    pub status: crate::message_status::ToolStatus,
     /// Permission decisions are independent of the tool's execution status.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<ToolApproval>,
@@ -221,7 +243,7 @@ pub struct ChatItem {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolApproval {
     pub request: String,
-    pub status: String,
+    pub status: crate::message_status::ApprovalStatus,
 }
 
 impl SessionRecord {
@@ -275,22 +297,23 @@ impl SessionRecord {
                 })
             })
             .unwrap_or_else(|| {
-                self.messages.push(ChatItem {
-                    elapsed_ms: None,
-                    key: key.unwrap_or_else(|| format!("{turn}permission-{request}")),
-                    created_at: 0,
-                    kind: ItemKind::Tool,
-                    text: tool_name.into(),
-                    input: details
-                        .get("input")
-                        .or_else(|| details.get("toolInput"))
-                        .and_then(|value| serde_json::to_string_pretty(value).ok())
-                        .unwrap_or_default(),
-                    detail: String::new(),
-                    status: String::new(),
-                    approval: None,
-                    model: None,
-                });
+                self.messages
+                    .push(ChatItem::from(crate::domain::ChatItemData {
+                        elapsed_ms: None,
+                        key: key.unwrap_or_else(|| format!("{turn}permission-{request}")),
+                        created_at: 0,
+                        kind: ItemKind::Tool,
+                        text: tool_name.into(),
+                        input: details
+                            .get("input")
+                            .or_else(|| details.get("toolInput"))
+                            .and_then(|value| serde_json::to_string_pretty(value).ok())
+                            .unwrap_or_default(),
+                        detail: String::new(),
+                        status: Default::default(),
+                        approval: None,
+                        model: None,
+                    }));
                 self.messages.len() - 1
             });
         self.messages[index].approval = Some(ToolApproval {
@@ -356,6 +379,22 @@ impl Workspace {
             .unwrap_or(self.path.as_os_str())
             .to_string_lossy()
             .into_owned()
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    #[test]
+    fn message_snapshots_share_history_and_copy_only_an_edited_message() {
+        let mut item: ChatItem =
+            serde_json::from_str(r#"{"key":"one","kind":"Assistant","text":"before"}"#).unwrap();
+        let snapshot = item.clone();
+        assert!(std::sync::Arc::ptr_eq(&item.0, &snapshot.0));
+        item.text.push_str(" after");
+        assert_eq!(snapshot.text, "before");
+        assert_eq!(item.text, "before after");
+        assert!(!std::sync::Arc::ptr_eq(&item.0, &snapshot.0));
     }
 }
 

@@ -2,39 +2,7 @@
 
 use super::*;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(super) enum GitChangeGroup {
-    Changes,
-    Untracked,
-    Added,
-    Modified,
-    Deleted,
-}
-
-impl GitChangeGroup {
-    const ALL: [Self; 2] = [Self::Changes, Self::Untracked];
-    const STATUS: [Self; 3] = [Self::Added, Self::Modified, Self::Deleted];
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Changes => "Changes",
-            Self::Untracked => "Unversioned Files",
-            Self::Added => "新增",
-            Self::Modified => "修改",
-            Self::Deleted => "删除",
-        }
-    }
-
-    fn contains(self, file: &git::ChangedFile) -> bool {
-        match self {
-            Self::Changes => !file.untracked(),
-            Self::Untracked => file.untracked(),
-            Self::Added => file.kind() == git::ChangeKind::Added,
-            Self::Modified => file.kind() == git::ChangeKind::Modified,
-            Self::Deleted => file.kind() == git::ChangeKind::Deleted,
-        }
-    }
-}
+pub(super) use super::git_state::{GitChangeGroup, GitUi};
 use gpui_kit::component::checkbox::Checkbox;
 
 impl ConduitApp {
@@ -48,7 +16,7 @@ impl ConduitApp {
         let Some(path) = self.selected_workspace_path() else {
             return;
         };
-        if self.commit_drafts.contains_key(&path) {
+        if self.git.drafts.contains_key(&path) {
             return;
         }
         let input = cx.new(|cx| {
@@ -59,7 +27,7 @@ impl ConduitApp {
         let subscription = cx.subscribe(&input, |_, _, _: &InputEvent, cx| cx.notify());
         let tag = cx.new(|cx| InputState::new(window, cx).placeholder("Tag（可选，例如 v1.2.3）"));
         let tag_subscription = cx.subscribe(&tag, |_, _, _: &InputEvent, cx| cx.notify());
-        self.commit_drafts.insert(
+        self.git.drafts.insert(
             path,
             CommitDraft {
                 input,
@@ -78,7 +46,7 @@ impl ConduitApp {
         error: bool,
         cx: &mut Context<Self>,
     ) {
-        self.git_feedback.insert(
+        self.git.feedback.insert(
             path,
             GitFeedback {
                 text: text.into(),
@@ -91,10 +59,10 @@ impl ConduitApp {
     pub(super) fn can_stage_files(&self) -> bool {
         self.writable
             && !self.closing
-            && self.git_operation.is_none()
-            && self.commit_generation.is_none()
-            && self.git_probe.is_none()
-            && self.git_snapshot.is_some()
+            && self.git.operation.is_none()
+            && self.git.generation.is_none()
+            && self.git.probe.is_none()
+            && self.git.snapshot.is_some()
             && self
                 .selected_workspace_path()
                 .is_some_and(|path| !self.worktree_has_runs(&path))
@@ -107,7 +75,7 @@ impl ConduitApp {
         let Some(path) = self.selected_workspace_path() else {
             return;
         };
-        let Some(snapshot) = &self.git_snapshot else {
+        let Some(snapshot) = &self.git.snapshot else {
             return;
         };
         let mut files = vec![];
@@ -131,7 +99,7 @@ impl ConduitApp {
             files,
             target: snapshot.target.clone(),
         };
-        self.git_operation = Some(GitOperation {
+        self.git.operation = Some(GitOperation {
             worktree: git::worktree_root(&path),
             probe: git::OperationProbe::start(path.clone(), operation),
             draft: String::new(),
@@ -146,7 +114,7 @@ impl ConduitApp {
         let Some(path) = self.selected_workspace_path() else {
             return;
         };
-        let Some(snapshot) = &self.git_snapshot else {
+        let Some(snapshot) = &self.git.snapshot else {
             return;
         };
         let mut files = vec![];
@@ -168,7 +136,7 @@ impl ConduitApp {
             files,
             target: snapshot.target.clone(),
         };
-        self.git_operation = Some(GitOperation {
+        self.git.operation = Some(GitOperation {
             worktree: git::worktree_root(&path),
             probe: git::OperationProbe::start(path.clone(), operation),
             draft: String::new(),
@@ -187,7 +155,8 @@ impl ConduitApp {
         let selected: Vec<String> = available
             .iter()
             .filter(|p| {
-                self.selected_git_files
+                self.git
+                    .selected_files
                     .get(&path)
                     .is_some_and(|set| set.contains(*p))
             })
@@ -202,7 +171,8 @@ impl ConduitApp {
         let selected_staged: Vec<String> = staged
             .iter()
             .filter(|file_path| {
-                self.selected_git_files
+                self.git
+                    .selected_files
                     .get(&path)
                     .is_some_and(|set| set.contains(*file_path))
             })
@@ -218,7 +188,8 @@ impl ConduitApp {
             .map(|file| file.path.clone())
             .collect();
         let all_selected = all_for_select.iter().all(|file| {
-            self.selected_git_files
+            self.git
+                .selected_files
                 .get(&path)
                 .is_some_and(|set| set.contains(file))
         });
@@ -245,7 +216,7 @@ impl ConduitApp {
                     .disabled(snapshot.is_clean())
                     .on_click(move |_, _, cx| {
                         select_app.update(cx, |this, cx| {
-                            let set = this.selected_git_files.entry(path.clone()).or_default();
+                            let set = this.git.selected_files.entry(path.clone()).or_default();
                             if all_selected {
                                 set.clear();
                             } else {
@@ -309,8 +280,8 @@ impl ConduitApp {
         };
         if self.closing
             || !self.writable
-            || self.git_operation.is_some()
-            || self.commit_generation.is_some()
+            || self.git.operation.is_some()
+            || self.git.generation.is_some()
         {
             return;
         }
@@ -323,14 +294,15 @@ impl ConduitApp {
             );
             return;
         }
-        let Some(snapshot) = &self.git_snapshot else {
+        let Some(snapshot) = &self.git.snapshot else {
             return;
         };
-        if self.git_probe.is_some() {
+        if self.git.probe.is_some() {
             return;
         }
         let message = self
-            .commit_drafts
+            .git
+            .drafts
             .get(&path)
             .map(|draft| draft.input.read(cx).value().to_string())
             .unwrap_or_default();
@@ -339,12 +311,13 @@ impl ConduitApp {
             return;
         }
         let tag = self
-            .commit_drafts
+            .git
+            .drafts
             .get(&path)
             .map(|draft| draft.tag.read(cx).value().to_string())
             .filter(|value| !value.is_empty());
         if let Some(name) = tag.as_deref()
-            && self.remote_tags.get(&path).is_some_and(|remote| {
+            && self.git.remote_tags.get(&path).is_some_and(|remote| {
                 snapshot.target.branch.as_ref() == Some(&remote.branch)
                     && remote.names.iter().any(|item| item == name)
             })
@@ -357,14 +330,14 @@ impl ConduitApp {
             );
             return;
         }
-        self.remote_tags_probe = None;
+        self.git.remote_tags_probe = None;
         let operation = git::Operation::Commit {
             message: message.clone(),
             target: snapshot.target.clone(),
             push,
             tag,
         };
-        self.git_operation = Some(GitOperation {
+        self.git.operation = Some(GitOperation {
             worktree: git::worktree_root(&path),
             probe: git::OperationProbe::start(path.clone(), operation),
             draft: message,
@@ -385,15 +358,15 @@ impl ConduitApp {
         let Some(path) = self.selected_workspace_path() else {
             return;
         };
-        if self.remote_tags_probe.is_some() {
-            self.remote_tags_probe = None;
+        if self.git.remote_tags_probe.is_some() {
+            self.git.remote_tags_probe = None;
             self.git_feedback(path, "已取消远程标签查询", false, cx);
             return;
         }
-        if self.closing || self.git_operation.is_some() {
+        if self.closing || self.git.operation.is_some() {
             return;
         }
-        self.remote_tags_probe = Some(git::RemoteTagsProbe::start(path.clone()));
+        self.git.remote_tags_probe = Some(git::RemoteTagsProbe::start(path.clone()));
         self.git_feedback(path, "正在读取远程标签…", false, cx);
     }
 
@@ -403,17 +376,17 @@ impl ConduitApp {
         };
         if self.closing
             || !self.writable
-            || self.git_operation.is_some()
-            || self.commit_generation.is_some()
+            || self.git.operation.is_some()
+            || self.git.generation.is_some()
             || self.worktree_has_runs(&path)
         {
             return;
         }
-        let Some(retry) = self.pending_tag_retry.get(&path).cloned() else {
+        let Some(retry) = self.git.pending_tag_retry.get(&path).cloned() else {
             return;
         };
-        self.remote_tags_probe = None;
-        self.git_operation = Some(GitOperation {
+        self.git.remote_tags_probe = None;
+        self.git.operation = Some(GitOperation {
             worktree: git::worktree_root(&path),
             probe: git::OperationProbe::start(path.clone(), git::Operation::RetryTag(retry)),
             draft: String::new(),
@@ -427,8 +400,8 @@ impl ConduitApp {
         };
         if self.closing
             || !self.writable
-            || self.git_operation.is_some()
-            || self.commit_generation.is_some()
+            || self.git.operation.is_some()
+            || self.git.generation.is_some()
         {
             return;
         }
@@ -436,7 +409,7 @@ impl ConduitApp {
             self.git_feedback(path, "请等待 CLI 任务结束后推送。", true, cx);
             return;
         }
-        let Some(repository) = &self.git_repository else {
+        let Some(repository) = &self.git.repository else {
             return;
         };
         let Some(upstream) = repository.upstream.clone() else {
@@ -453,7 +426,7 @@ impl ConduitApp {
             branch: repository.current.clone(),
             upstream,
         };
-        self.git_operation = Some(GitOperation {
+        self.git.operation = Some(GitOperation {
             worktree: git::worktree_root(&path),
             probe: git::OperationProbe::start(path.clone(), operation),
             draft: String::new(),
@@ -463,15 +436,16 @@ impl ConduitApp {
 
     pub(super) fn push_button(&self, view: Entity<Self>) -> Option<AnyElement> {
         let repository = self
-            .git_repository
+            .git
+            .repository
             .as_ref()
             .filter(|repository| !repository.detached && repository.ahead > 0)?;
-        let busy = self.git_operation.is_some();
+        let busy = self.git.operation.is_some();
         let disabled = self.closing
             || !self.writable
             || busy
             || repository.integration.is_some()
-            || self.commit_generation.is_some()
+            || self.git.generation.is_some()
             || self
                 .selected_workspace_path()
                 .is_some_and(|path| self.worktree_has_runs(&path));
@@ -517,16 +491,16 @@ impl ConduitApp {
         };
         if self.closing
             || !self.writable
-            || self.git_operation.is_some()
-            || self.commit_generation.is_some()
+            || self.git.operation.is_some()
+            || self.git.generation.is_some()
         {
             return;
         }
-        if self.git_probe.is_some() {
+        if self.git.probe.is_some() {
             self.git_feedback(path, "正在刷新 Git 状态，请稍后再生成。", true, cx);
             return;
         }
-        let Some(snapshot) = self.git_snapshot.as_ref() else {
+        let Some(snapshot) = self.git.snapshot.as_ref() else {
             self.git_feedback(path, "请先刷新工作区 Git 状态。", true, cx);
             return;
         };
@@ -564,7 +538,8 @@ impl ConduitApp {
             }
         };
         let original = self
-            .commit_drafts
+            .git
+            .drafts
             .get(&path)
             .map(|draft| draft.input.read(cx).value().to_string())
             .unwrap_or_default();
@@ -578,7 +553,7 @@ impl ConduitApp {
             .store
             .git
             .generation_prompt(&files, &snapshot.staged_diff);
-        self.commit_generation = Some(CommitGeneration {
+        self.git.generation = Some(CommitGeneration {
             path: path.clone(),
             runtime: ChatRuntime::start_text_with_route_in(
                 provider,
@@ -605,7 +580,8 @@ impl ConduitApp {
     pub(super) fn poll_git_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.ensure_commit_draft(window, cx);
         let remote_result =
-            self.remote_tags_probe
+            self.git
+                .remote_tags_probe
                 .as_ref()
                 .and_then(|probe| match probe.events.try_recv() {
                     Ok(result) => Some((probe.path.clone(), result)),
@@ -615,18 +591,19 @@ impl ConduitApp {
                     Err(std::sync::mpsc::TryRecvError::Empty) => None,
                 });
         if let Some((path, result)) = remote_result {
-            self.remote_tags_probe = None;
+            self.git.remote_tags_probe = None;
             if self.selected_workspace_path().as_ref() == Some(&path) {
                 match result {
                     Ok(tags)
                         if self
-                            .git_repository
+                            .git
+                            .repository
                             .as_ref()
                             .is_some_and(|repo| repo.current == tags.branch) =>
                     {
                         let count = tags.names.len();
                         let remote = tags.remote.clone();
-                        self.remote_tags.insert(path.clone(), tags);
+                        self.git.remote_tags.insert(path.clone(), tags);
                         self.git_feedback(
                             path,
                             format!("已读取 {remote} 的 {count} 个远程标签"),
@@ -643,7 +620,7 @@ impl ConduitApp {
                 }
             }
         }
-        let completed = self.git_operation.as_ref().and_then(|operation| {
+        let completed = self.git.operation.as_ref().and_then(|operation| {
             match operation.probe.events.try_recv() {
                 Ok(result) => Some(result),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err(
@@ -653,18 +630,18 @@ impl ConduitApp {
             }
         });
         if let Some(result) = completed {
-            let operation = self.git_operation.take().unwrap();
+            let operation = self.git.operation.take().unwrap();
             let path = operation.probe.path.clone();
             match result {
                 Ok(result) => {
                     if result.committed || result.retry_completed || result.retry_tag.is_some() {
-                        self.remote_tags.remove(&path);
+                        self.git.remote_tags.remove(&path);
                     }
                     if result.retry_completed {
-                        self.pending_tag_retry.remove(&path);
+                        self.git.pending_tag_retry.remove(&path);
                     }
                     if let Some(retry) = result.retry_tag.clone() {
-                        self.pending_tag_retry.insert(path.clone(), retry);
+                        self.git.pending_tag_retry.insert(path.clone(), retry);
                     }
                     if let Some(created) = &result.worktree_created
                         && !self
@@ -685,7 +662,7 @@ impl ConduitApp {
                         self.show_git_navigation(cx);
                     }
                     if result.committed
-                        && let Some(draft) = self.commit_drafts.get(&path)
+                        && let Some(draft) = self.git.drafts.get(&path)
                         && draft.input.read(cx).value().as_ref() == operation.draft
                     {
                         draft
@@ -706,13 +683,13 @@ impl ConduitApp {
                 Err(error) => self.git_feedback(path.clone(), error, true, cx),
             }
             if self.selected_workspace_path().as_ref() == Some(&path) {
-                self.branch_probe = None;
+                self.git.branch_probe = None;
                 self.refresh_branches();
                 self.refresh_git(cx);
             }
         }
         let mut generation_result = None;
-        if let Some(generation) = &mut self.commit_generation {
+        if let Some(generation) = &mut self.git.generation {
             if generation.started.elapsed() > Duration::from_secs(120) && generation.error.is_none()
             {
                 generation.error = Some("AI 生成超时，请重试。".into());
@@ -779,7 +756,7 @@ impl ConduitApp {
             }
         }
         if let Some(error) = generation_result {
-            let generation = self.commit_generation.take().unwrap();
+            let generation = self.git.generation.take().unwrap();
             let text = generation
                 .parts
                 .into_iter()
@@ -807,7 +784,7 @@ impl ConduitApp {
                     true,
                     cx,
                 );
-            } else if let Some(draft) = self.commit_drafts.get(&generation.path) {
+            } else if let Some(draft) = self.git.drafts.get(&generation.path) {
                 if draft.input.read(cx).value().as_ref() == generation.original {
                     draft
                         .input
@@ -831,39 +808,42 @@ impl ConduitApp {
     }
 
     pub(super) fn refresh_branches(&mut self) {
-        if self.closing || self.branch_probe.is_some() {
+        if self.closing || self.git.branch_probe.is_some() {
             return;
         }
-        self.last_branch_check = Instant::now();
-        self.branch_probe = self.selected_workspace_path().map(BranchProbe::start);
+        self.git.last_branch_check = Instant::now();
+        self.git.branch_probe = self.selected_workspace_path().map(BranchProbe::start);
     }
 
     pub(super) fn commit_editor(&self, view: Entity<Self>, cx: &App) -> AnyElement {
         let Some(path) = self.selected_workspace_path() else {
             return div().into_any_element();
         };
-        let Some(draft) = self.commit_drafts.get(&path) else {
+        let Some(draft) = self.git.drafts.get(&path) else {
             return div().into_any_element();
         };
         let generating = self
-            .commit_generation
+            .git
+            .generation
             .as_ref()
             .is_some_and(|generation| generation.path == path);
-        let busy = self.git_operation.is_some() || self.commit_generation.is_some();
-        let staged = self.git_snapshot.as_ref().is_some_and(|snapshot| {
+        let busy = self.git.operation.is_some() || self.git.generation.is_some();
+        let staged = self.git.snapshot.as_ref().is_some_and(|snapshot| {
             !snapshot.target.staged.is_empty() && snapshot.target.branch.is_some()
         });
         let staged_count = self
-            .git_snapshot
+            .git
+            .snapshot
             .as_ref()
             .map_or(0, |snapshot| snapshot.staged_count());
         let disabled = self.closing
             || !self.writable
             || busy
             || self.worktree_has_runs(&path)
-            || self.git_probe.is_some()
+            || self.git.probe.is_some()
             || self
-                .git_repository
+                .git
+                .repository
                 .as_ref()
                 .is_some_and(|repository| repository.integration.is_some())
             || !staged;
@@ -881,10 +861,10 @@ impl ConduitApp {
         let generate_app = view.clone();
         let commit_app = view.clone();
         let alternate_commit_app = view.clone();
-        let primary_push = self.commit_and_push;
+        let primary_push = self.git.commit_and_push;
         let alternate_push = !primary_push;
         let cancel_app = view.clone();
-        let action_label = if self.commit_and_push {
+        let action_label = if self.git.commit_and_push {
             "Commit and Push"
         } else {
             "Commit"
@@ -936,7 +916,7 @@ impl ConduitApp {
                         .cursor_pointer()
                         .on_click(move |_, window, cx| {
                             app.update(cx, |this, cx| {
-                                this.commit_and_push = push;
+                                this.git.commit_and_push = push;
                                 cx.notify();
                             });
                             if let Some(popover) = popover.clone().upgrade() {
@@ -950,12 +930,14 @@ impl ConduitApp {
         let tag_input = draft.tag.clone();
         let tag_for_generate = tag_input.clone();
         let local_tags = self
-            .git_snapshot
+            .git
+            .snapshot
             .as_ref()
             .map(|snapshot| snapshot.tags.clone())
             .unwrap_or_default();
-        let remote = self.remote_tags.get(&path).filter(|tags| {
-            self.git_repository
+        let remote = self.git.remote_tags.get(&path).filter(|tags| {
+            self.git
+                .repository
                 .as_ref()
                 .is_some_and(|repo| repo.current == tags.branch)
         });
@@ -993,7 +975,7 @@ impl ConduitApp {
             })
             .collect();
         let refresh_app = view.clone();
-        let refreshing_tags = self.remote_tags_probe.is_some();
+        let refreshing_tags = self.git.remote_tags_probe.is_some();
         let tag_menu_input = tag_input.clone();
         let tag_row = h_flex()
             .w_full()
@@ -1078,8 +1060,8 @@ impl ConduitApp {
                         busy || self.closing
                             || !self.writable
                             || candidate.is_err()
-                            || self.git_probe.is_some()
-                            || self.git_snapshot.is_none(),
+                            || self.git.probe.is_some()
+                            || self.git.snapshot.is_none(),
                     )
                     .on_click(move |_, window, cx| {
                         if let Ok(tag) = &candidate {
@@ -1148,7 +1130,7 @@ impl ConduitApp {
                                 .cursor_pointer()
                                 .on_click(move |_, _, cx| {
                                     cancel_app.update(cx, |this, cx| {
-                                        if let Some(generation) = &this.commit_generation {
+                                        if let Some(generation) = &this.git.generation {
                                             generation.runtime.cancel();
                                         }
                                         cx.notify();
@@ -1182,14 +1164,15 @@ impl ConduitApp {
                                         || !self.writable
                                         || generating
                                         || self
-                                            .git_operation
+                                            .git
+                                            .operation
                                             .as_ref()
                                             .is_some_and(|operation| operation.probe.path == path),
                                 ),
                         ),
                     ),
             );
-        if self.git_feedback.contains_key(&path) || self.pending_tag_retry.contains_key(&path) {
+        if self.git.feedback.contains_key(&path) || self.git.pending_tag_retry.contains_key(&path) {
             let mut row = h_flex()
                 .w_full()
                 .min_w_0()
@@ -1197,7 +1180,7 @@ impl ConduitApp {
                 .flex_shrink_0()
                 .gap_1()
                 .items_center();
-            if let Some(feedback) = self.git_feedback.get(&path) {
+            if let Some(feedback) = self.git.feedback.get(&path) {
                 row = row.child(
                     div()
                         .id("git-action-feedback")
@@ -1216,7 +1199,7 @@ impl ConduitApp {
                         .child(feedback.text.clone()),
                 );
             }
-            if let Some(retry) = self.pending_tag_retry.get(&path) {
+            if let Some(retry) = self.git.pending_tag_retry.get(&path) {
                 let retry_app = view.clone();
                 let tooltip = format!(
                     "仅推送 {} 至 {}；需先确保远程分支包含该提交",
@@ -1263,7 +1246,8 @@ impl ConduitApp {
                             .h(px(30.))
                             .disabled(!can_commit)
                             .loading(
-                                self.git_operation
+                                self.git
+                                    .operation
                                     .as_ref()
                                     .is_some_and(|operation| operation.probe.path == path),
                             )
@@ -1298,16 +1282,16 @@ impl ConduitApp {
 
     pub(super) fn sync_git_workspace(&mut self, cx: &mut Context<Self>) {
         let path = self.selected_workspace_path();
-        if self.git_workspace == path {
+        if self.git.workspace == path {
             return;
         }
-        self.git_workspace = path;
-        self.remote_tags_probe = None;
-        self.branch_probe = None;
-        self.git_repository = None;
-        self.git_probe = None;
-        self.git_snapshot = None;
-        self.git_error = None;
+        self.git.workspace = path;
+        self.git.remote_tags_probe = None;
+        self.git.branch_probe = None;
+        self.git.repository = None;
+        self.git.probe = None;
+        self.git.snapshot = None;
+        self.git.error = None;
         self.refresh_branches();
         if self.git_navigation_open() {
             self.refresh_git(cx);
@@ -1317,43 +1301,45 @@ impl ConduitApp {
 
     pub(super) fn poll_branches(&mut self, cx: &mut Context<Self>) {
         self.sync_git_workspace(cx);
-        let update = self
-            .branch_probe
-            .as_ref()
-            .and_then(|probe| match probe.events.try_recv() {
-                Ok(result) => Some((probe.path.clone(), result.ok())),
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    Some((probe.path.clone(), None))
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => None,
-            });
+        let update =
+            self.git
+                .branch_probe
+                .as_ref()
+                .and_then(|probe| match probe.events.try_recv() {
+                    Ok(result) => Some((probe.path.clone(), result.ok())),
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        Some((probe.path.clone(), None))
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                });
         if let Some((path, repository)) = update {
-            self.branch_probe = None;
+            self.git.branch_probe = None;
             if self.selected_workspace_path().as_ref() == Some(&path)
-                && self.git_repository != repository
+                && self.git.repository != repository
             {
                 let head_changed = self
-                    .git_repository
+                    .git
+                    .repository
                     .as_ref()
                     .map(|repo| (&repo.current, repo.detached))
                     != repository
                         .as_ref()
                         .map(|repo| (&repo.current, repo.detached));
-                self.git_repository = repository;
-                if head_changed && self.git_navigation_open() && self.git_probe.is_none() {
+                self.git.repository = repository;
+                if head_changed && self.git_navigation_open() && self.git.probe.is_none() {
                     self.refresh_git(cx);
                 }
                 cx.notify();
             }
         }
         // Pick up changes made in an external terminal, even with the dock closed.
-        if self.last_branch_check.elapsed() >= Duration::from_secs(10) {
+        if self.git.last_branch_check.elapsed() >= Duration::from_secs(10) {
             self.refresh_branches();
         }
     }
 
     pub(super) fn branch_picker(&self, view: Entity<Self>) -> AnyElement {
-        let Some(repository) = self.git_repository.clone() else {
+        let Some(repository) = self.git.repository.clone() else {
             return div().into_any_element();
         };
         let label = if repository.detached {
@@ -1389,7 +1375,8 @@ impl ConduitApp {
             );
         Popover::new(SharedString::from(format!(
             "git-branch-picker-{}",
-            self.git_workspace
+            self.git
+                .workspace
                 .as_deref()
                 .map(display_path)
                 .unwrap_or_default()
@@ -1404,7 +1391,7 @@ impl ConduitApp {
         .content(move |_, window, cx| {
             let popover = cx.entity().downgrade();
             let app = view.clone();
-            let Some(repository) = app.read(cx).git_repository.clone() else {
+            let Some(repository) = app.read(cx).git.repository.clone() else {
                 return div().into_any_element();
             };
             let host = git_branches::BranchMenuHost {
@@ -1598,7 +1585,7 @@ impl ConduitApp {
                         .child("分支过多，列表已截断"),
                 );
             }
-            if let Some(feedback) = app.read(cx).git_feedback.get(&host.workspace) {
+            if let Some(feedback) = app.read(cx).git.feedback.get(&host.workspace) {
                 list = list.child(
                     div()
                         .id("git-branch-feedback")
@@ -1661,18 +1648,18 @@ impl ConduitApp {
 
     /// Start a background read-only Git snapshot for the selected workspace.
     pub(super) fn refresh_git(&mut self, cx: &mut Context<Self>) {
-        if self.last_branch_check.elapsed() >= Duration::from_secs(1) {
+        if self.git.last_branch_check.elapsed() >= Duration::from_secs(1) {
             self.refresh_branches();
         }
         self.mark_git_refresh();
-        self.git_probe = None;
+        self.git.probe = None;
         let Some(path) = self.selected_workspace_path() else {
-            self.git_error = Some("未选择工作区".into());
+            self.git.error = Some("未选择工作区".into());
             cx.notify();
             return;
         };
-        self.git_error = None;
-        self.git_probe = Some(GitProbe::start(path));
+        self.git.error = None;
+        self.git.probe = Some(GitProbe::start(path));
         cx.notify();
     }
 
@@ -1680,7 +1667,8 @@ impl ConduitApp {
     /// dropped so switching sessions cannot show the previous directory's diff.
     pub(super) fn poll_git(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let update = self
-            .git_probe
+            .git
+            .probe
             .as_ref()
             .and_then(|probe| match probe.events.try_recv() {
                 Ok(result) => Some((probe.path.clone(), result)),
@@ -1693,13 +1681,13 @@ impl ConduitApp {
         let Some((path, result)) = update else {
             return;
         };
-        self.git_probe = None;
+        self.git.probe = None;
         if self.selected_workspace_path().as_deref() != Some(path.as_path()) {
             return;
         }
         match result {
             Ok(snapshot) => {
-                if let Some(selected) = self.selected_git_files.get_mut(&path) {
+                if let Some(selected) = self.git.selected_files.get_mut(&path) {
                     selected.retain(|p| {
                         snapshot
                             .files
@@ -1708,12 +1696,12 @@ impl ConduitApp {
                     });
                 }
                 self.refresh_diff_documents(&path, &snapshot, window, cx);
-                self.git_snapshot = Some(snapshot);
-                self.git_error = None;
+                self.git.snapshot = Some(snapshot);
+                self.git.error = None;
             }
             Err(error) => {
-                self.git_snapshot = None;
-                self.git_error = Some(error);
+                self.git.snapshot = None;
+                self.git.error = Some(error);
             }
         }
         cx.notify();
@@ -1755,7 +1743,7 @@ impl ConduitApp {
             .overflow_y_scroll()
             .gap_1()
             .pb_1();
-        if self.git_probe.is_some() && self.git_snapshot.is_none() {
+        if self.git.probe.is_some() && self.git.snapshot.is_none() {
             return body
                 .child(
                     h_flex()
@@ -1773,7 +1761,7 @@ impl ConduitApp {
                 .child(h_flex().child(retry("git-refresh-loading")))
                 .into_any_element();
         }
-        if let Some(error) = &self.git_error {
+        if let Some(error) = &self.git.error {
             return body
                 .child(
                     v_flex()
@@ -1802,7 +1790,7 @@ impl ConduitApp {
                 )
                 .into_any_element();
         }
-        let Some(snapshot) = &self.git_snapshot else {
+        let Some(snapshot) = &self.git.snapshot else {
             return body
                 .child(
                     div()
@@ -1844,7 +1832,7 @@ impl ConduitApp {
             );
         } else {
             let mut groups = v_flex().w_full().gap(px(2.));
-            for kind in if self.git_group_by_status {
+            for kind in if self.git.group_by_status {
                 GitChangeGroup::STATUS.to_vec()
             } else {
                 GitChangeGroup::ALL.to_vec()
@@ -1857,14 +1845,15 @@ impl ConduitApp {
                 if files.is_empty() {
                     continue;
                 }
-                let collapsed = self.collapsed_git_groups.contains(&kind);
+                let collapsed = self.git.collapsed_groups.contains(&kind);
                 let toggle_kind = kind;
                 let app = view.clone();
                 let workspace = self.selected_workspace_path().unwrap_or_default();
                 let selected_count = files
                     .iter()
                     .filter(|file| {
-                        self.selected_git_files
+                        self.git
+                            .selected_files
                             .get(&workspace)
                             .is_some_and(|set| set.contains(&file.path))
                     })
@@ -1903,8 +1892,8 @@ impl ConduitApp {
                                 ))
                                 .on_click(move |_, _, cx| {
                                     app.update(cx, |this, cx| {
-                                        if !this.collapsed_git_groups.remove(&toggle_kind) {
-                                            this.collapsed_git_groups.insert(toggle_kind);
+                                        if !this.git.collapsed_groups.remove(&toggle_kind) {
+                                            this.git.collapsed_groups.insert(toggle_kind);
                                         }
                                         cx.notify();
                                     })
@@ -1932,7 +1921,8 @@ impl ConduitApp {
                                             return;
                                         }
                                         let selected = this
-                                            .selected_git_files
+                                            .git
+                                            .selected_files
                                             .entry(workspace.clone())
                                             .or_default();
                                         for file in &group_files {
@@ -1962,8 +1952,8 @@ impl ConduitApp {
                                 ))
                                 .on_click(move |_, _, cx| {
                                     label_app.update(cx, |this, cx| {
-                                        if !this.collapsed_git_groups.remove(&kind) {
-                                            this.collapsed_git_groups.insert(kind);
+                                        if !this.git.collapsed_groups.remove(&kind) {
+                                            this.git.collapsed_groups.insert(kind);
                                         }
                                         cx.notify();
                                     });
@@ -2009,7 +1999,8 @@ impl ConduitApp {
                         let can_unstage = self.can_stage_files() && file.staged();
                         let workspace = self.selected_workspace_path().unwrap_or_default();
                         let checked = self
-                            .selected_git_files
+                            .git
+                            .selected_files
                             .get(&workspace)
                             .is_some_and(|set| set.contains(&file.path));
                         let select_app = view.clone();
@@ -2081,13 +2072,15 @@ impl ConduitApp {
                                     let batch_app = menu_app.clone();
                                     let batch: Vec<String> = menu_app
                                         .read(cx)
-                                        .selected_git_files
+                                        .git
+                                        .selected_files
                                         .get(&menu_workspace)
                                         .map(|set| set.iter().cloned().collect())
                                         .unwrap_or_default();
                                     let batch_staged: Vec<String> = menu_app
                                         .read(cx)
-                                        .git_snapshot
+                                        .git
+                                        .snapshot
                                         .as_ref()
                                         .map(|snapshot| {
                                             snapshot
@@ -2199,7 +2192,8 @@ impl ConduitApp {
                                         move |checked, _, cx| {
                                             select_app.update(cx, |this, cx| {
                                                 let set = this
-                                                    .selected_git_files
+                                                    .git
+                                                    .selected_files
                                                     .entry(workspace.clone())
                                                     .or_default();
                                                 if *checked {
@@ -2292,16 +2286,16 @@ impl ConduitApp {
             }
         }
         let collapse_app = view.clone();
-        let active_groups = if self.git_group_by_status {
+        let active_groups = if self.git.group_by_status {
             GitChangeGroup::STATUS.to_vec()
         } else {
             GitChangeGroup::ALL.to_vec()
         };
         let collapsed = active_groups
             .iter()
-            .all(|kind| self.collapsed_git_groups.contains(kind));
+            .all(|kind| self.git.collapsed_groups.contains(kind));
         let options_app = view.clone();
-        let group_by_status = self.git_group_by_status;
+        let group_by_status = self.git.group_by_status;
         v_flex()
             .size_full()
             .min_w_0()
@@ -2339,9 +2333,10 @@ impl ConduitApp {
                             .on_click(move |_, _, cx| {
                                 collapse_app.update(cx, |this, cx| {
                                     if collapsed {
-                                        this.collapsed_git_groups.clear();
+                                        this.git.collapsed_groups.clear();
                                     } else {
-                                        this.collapsed_git_groups
+                                        this.git
+                                            .collapsed_groups
                                             .extend(active_groups.iter().copied());
                                     }
                                     cx.notify();
@@ -2368,7 +2363,7 @@ impl ConduitApp {
                                             .checked(group_by_status == status)
                                             .on_click(move |_, _, cx| {
                                                 app.update(cx, |this, cx| {
-                                                    this.git_group_by_status = status;
+                                                    this.git.group_by_status = status;
                                                     cx.notify();
                                                 });
                                             }),
@@ -2402,7 +2397,7 @@ impl ConduitApp {
                         snapshot.unstaged_count(),
                         snapshot.untracked_count()
                     ))
-                    .when(self.git_probe.is_some(), |row| {
+                    .when(self.git.probe.is_some(), |row| {
                         row.child(Spinner::new().small())
                     }),
             )

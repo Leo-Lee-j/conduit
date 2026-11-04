@@ -6,15 +6,16 @@ impl ConduitApp {
     /// Ask the naming engine (settings → 会话) for a short title in the
     /// background; progress and failures stay visible in the conversation toolbar.
     pub(super) fn start_session_naming(&mut self, id: u64, content: &str, cx: &mut Context<Self>) {
-        if self.session_namings.contains_key(&id) {
+        if self.session_control.namings.contains_key(&id) {
             return;
         }
-        self.naming_errors.remove(&id);
+        self.session_control.naming_errors.remove(&id);
         let (provider, model, route) =
             match self.generation_request(super::generation::GenerationKind::Naming, Some(id)) {
                 Ok(selection) => selection,
                 Err(error) => {
-                    self.naming_errors
+                    self.session_control
+                        .naming_errors
                         .insert(id, format!("命名 Provider 不可用：{error:#}"));
                     cx.notify();
                     return;
@@ -23,7 +24,8 @@ impl ConduitApp {
         let executable = match cli::resolve(provider, &self.store.cli) {
             Ok(cli) => cli.path,
             Err(error) => {
-                self.naming_errors
+                self.session_control
+                    .naming_errors
                     .insert(id, format!("无法启动命名引擎：{error:#}"));
                 cx.notify();
                 return;
@@ -40,7 +42,7 @@ impl ConduitApp {
         let naming_prompt = format!(
             "请根据以下对话内容为这段对话起一个简短的标题（不超过 12 个字，与内容使用相同语言，不带标点、引号或换行）。只返回标题本身。\n\n<content>\n{snippet}\n</content>"
         );
-        self.session_namings.insert(
+        self.session_control.namings.insert(
             id,
             SessionNaming {
                 automatic: true,
@@ -67,16 +69,17 @@ impl ConduitApp {
             return;
         }
         let Some(excerpt) = self.session(id).and_then(latest_naming_excerpt) else {
-            self.naming_errors
+            self.session_control
+                .naming_errors
                 .insert(id, "会话没有可用于重命名的内容".into());
             cx.notify();
             return;
         };
-        if let Some(naming) = self.session_namings.remove(&id) {
+        if let Some(naming) = self.session_control.namings.remove(&id) {
             naming.runtime.cancel();
         }
         self.start_session_naming(id, &excerpt, cx);
-        if let Some(naming) = self.session_namings.get_mut(&id) {
+        if let Some(naming) = self.session_control.namings.get_mut(&id) {
             naming.automatic = false;
         }
         cx.notify();
@@ -85,7 +88,7 @@ impl ConduitApp {
     /// Drain naming requests. Manual renames cancel and remove pending requests.
     pub(super) fn poll_session_namings(&mut self, cx: &mut Context<Self>) {
         let mut finished = vec![];
-        for (id, naming) in &mut self.session_namings {
+        for (id, naming) in &mut self.session_control.namings {
             if naming.started.elapsed() > Duration::from_secs(60) && naming.error.is_none() {
                 naming.error = Some("命名超时（60 秒）".into());
                 naming.runtime.cancel();
@@ -134,12 +137,12 @@ impl ConduitApp {
             }
         }
         for id in finished {
-            let Some(naming) = self.session_namings.remove(&id) else {
+            let Some(naming) = self.session_control.namings.remove(&id) else {
                 continue;
             };
             let SessionNaming { error, parts, .. } = naming;
             if let Some(reason) = error {
-                self.naming_errors.insert(id, reason);
+                self.session_control.naming_errors.insert(id, reason);
                 cx.notify();
                 continue;
             }
@@ -167,7 +170,9 @@ impl ConduitApp {
                 .take(30)
                 .collect::<String>();
             if title.is_empty() {
-                self.naming_errors.insert(id, "模型未返回有效标题".into());
+                self.session_control
+                    .naming_errors
+                    .insert(id, "模型未返回有效标题".into());
                 cx.notify();
                 continue;
             }

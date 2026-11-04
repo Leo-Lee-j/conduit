@@ -138,7 +138,7 @@ impl ConduitApp {
                     }
                     this.store.ui.auto_rename = value;
                     if !value {
-                        this.session_namings.retain(|_, naming| {
+                        this.session_control.namings.retain(|_, naming| {
                             if naming.automatic {
                                 naming.runtime.cancel();
                                 false

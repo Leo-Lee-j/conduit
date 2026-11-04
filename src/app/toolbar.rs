@@ -8,10 +8,10 @@ impl ConduitApp {
         let app_entity = cx.entity();
         let active = self
             .selected_session
-            .is_some_and(|id| self.runs.contains_key(&id));
+            .is_some_and(|id| self.session_control.runs.contains_key(&id));
         let status = self
             .selected_session
-            .and_then(|id| self.runs.get(&id))
+            .and_then(|id| self.session_control.runs.get(&id))
             .map(|run| run.status.clone());
         // The toolbar belongs to the conversation; workspace navigation and
         // the independent right dock use their full height.
@@ -36,10 +36,11 @@ impl ConduitApp {
             })
             .map(Workspace::name);
         let naming_status: Option<Result<(), String>> = self.selected_session.and_then(|id| {
-            if let Some(error) = self.naming_errors.get(&id) {
+            if let Some(error) = self.session_control.naming_errors.get(&id) {
                 Some(Err(error.clone()))
             } else if !self.closing {
-                self.session_namings
+                self.session_control
+                    .namings
                     .get(&id)
                     .map(|naming| naming.error.clone().map_or(Ok(()), Err))
             } else {
@@ -81,7 +82,7 @@ impl ConduitApp {
                         ),
                 )
             })
-            .when(self.git_repository.is_some(), |bar| {
+            .when(self.git.repository.is_some(), |bar| {
                 bar.left(self.branch_picker(app_entity.clone()))
             })
             .when_some(toolbar_hint, |bar, hint| {

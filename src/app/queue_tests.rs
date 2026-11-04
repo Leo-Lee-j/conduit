@@ -1,10 +1,10 @@
 use crate::app::{ActiveRun, ChatRuntime, ConduitApp, Event, ItemKind, Provider, Store, Workspace};
+use crate::event_queue::Sender;
 use gpui_kit::{
     AppContext as _, Entity, Focusable as _, Modifiers, MouseButton, TestAppContext,
     VisualTestContext,
 };
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
 
 fn fixture<'a>(
     cx: &'a mut TestAppContext,
@@ -52,7 +52,7 @@ fn fixture<'a>(
             app.selected_session = Some(1);
             app.new_session_provider = Provider::Claude;
             app.queued_messages.clear();
-            app.runs.clear();
+            app.session_control.runs.clear();
             app
         });
         *output.borrow_mut() = Some(app.clone());
@@ -62,7 +62,7 @@ fn fixture<'a>(
     (app, cx, root)
 }
 
-fn running(app: &mut ConduitApp, id: u64) -> Sender<Event> {
+fn running(app: &mut ConduitApp, id: u64) -> Sender {
     let (runtime, sender) = ChatRuntime::test_channel();
     let path = app
         .store
@@ -72,7 +72,7 @@ fn running(app: &mut ConduitApp, id: u64) -> Sender<Event> {
         .unwrap()
         .path
         .clone();
-    app.runs.insert(
+    app.session_control.runs.insert(
         id,
         ActiveRun::new(
             runtime,
@@ -102,7 +102,7 @@ fn queue_message_ui_capacity_and_takeback_preserve_drafts(cx: &mut TestAppContex
     let sender = cx.update(|window, cx| {
         app.update(cx, |this, cx| {
             let sender = running(this, 1);
-            this.attach_paths(&[file.clone()], window, cx);
+            this.attach_paths(std::slice::from_ref(&file), window, cx);
             this.input
                 .update(cx, |input, cx| input.set_value("第二条消息", window, cx));
             this.input.read(cx).focus_handle(cx).focus(window, cx);
@@ -227,8 +227,8 @@ fn queue_message_background_completion_uses_bound_session_and_keeps_focus(cx: &m
             );
             assert!(this.queued_messages.is_empty());
             assert!(Store::load().unwrap().queued_messages.is_empty());
-            assert!(this.runs.contains_key(&1));
-            this.runs.remove(&1).unwrap().cancel();
+            assert!(this.session_control.runs.contains_key(&1));
+            this.session_control.runs.remove(&1).unwrap().cancel();
         })
     });
 }
@@ -247,10 +247,10 @@ fn queue_message_failure_cancel_and_manual_send(cx: &mut TestAppContext) {
                 this.poll(window, cx);
                 assert_eq!(this.queued_messages[&1].text, "retained");
                 assert!(this.queued_messages[&1].paused.is_some());
-                assert!(!this.runs.contains_key(&1));
+                assert!(!this.session_control.runs.contains_key(&1));
                 this.dispatch_queued_message(1, cx);
                 assert!(
-                    !this.runs.contains_key(&1),
+                    !this.session_control.runs.contains_key(&1),
                     "paused queue cannot automatically resume"
                 );
                 this.queued_messages.remove(&1);
@@ -272,9 +272,9 @@ fn queue_message_failure_cancel_and_manual_send(cx: &mut TestAppContext) {
                 .update(cx, |input, cx| input.set_value("keep my draft", window, cx));
             this.send_queued_message(1, cx);
             assert!(this.queued_messages.is_empty());
-            assert!(this.runs.contains_key(&1));
+            assert!(this.session_control.runs.contains_key(&1));
             assert_eq!(this.input.read(cx).value().as_ref(), "keep my draft");
-            this.runs.remove(&1).unwrap().cancel();
+            this.session_control.runs.remove(&1).unwrap().cancel();
         })
     });
 }
@@ -287,7 +287,7 @@ fn queue_message_invalid_attachment_launch_failure_and_close_keep_content(cx: &m
     cx.update(|window, cx| {
         app.update(cx, |this, cx| {
             let sender = running(this, 1);
-            this.attach_paths(&[file.clone()], window, cx);
+            this.attach_paths(std::slice::from_ref(&file), window, cx);
             this.input.update(cx, |input, cx| {
                 input.set_value("with attachment", window, cx)
             });
@@ -319,7 +319,7 @@ fn queue_message_invalid_attachment_launch_failure_and_close_keep_content(cx: &m
             this.closing = true;
             this.dispatch_queued_message(1, cx);
             assert!(this.queued_messages.contains_key(&1));
-            assert!(this.runs.is_empty());
+            assert!(this.session_control.runs.is_empty());
             this.closing = false;
             this.delete_session(1, cx);
             assert!(!this.queued_messages.contains_key(&1));
@@ -344,7 +344,7 @@ fn queue_message_reopen_restores_paused_and_never_auto_sends(cx: &mut TestAppCon
                 assert_eq!(restored.queued_messages[&1].text, "survive restart");
                 assert!(restored.queued_messages[&1].paused.is_some());
                 restored.dispatch_queued_message(1, cx);
-                assert!(restored.runs.is_empty());
+                assert!(restored.session_control.runs.is_empty());
                 restored.remove_workspace(0, cx);
                 assert!(restored.queued_messages.is_empty());
             });

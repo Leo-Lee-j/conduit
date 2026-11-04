@@ -916,7 +916,7 @@ impl ConduitApp {
             self.pending_permission = permission;
         }
         if permission == PermissionLevel::FullAccess
-            && let Some(run) = target.and_then(|id| self.runs.get(&id))
+            && let Some(run) = target.and_then(|id| self.session_control.runs.get(&id))
         {
             run.runtime.enable_full_access();
         }
@@ -924,7 +924,7 @@ impl ConduitApp {
         // resolves the active turn's approval gates, without restarting it.
         if self
             .selected_session
-            .is_none_or(|id| !self.runs.contains_key(&id))
+            .is_none_or(|id| !self.session_control.runs.contains_key(&id))
         {
             self.input.read(cx).focus_handle(cx).focus(window, cx);
         }

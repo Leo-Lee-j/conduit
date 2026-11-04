@@ -2,8 +2,8 @@
 
 use super::*;
 
+#[derive(Clone)]
 pub(super) struct SearchHit {
-    pub(super) workspace: usize,
     pub(super) session: u64,
     pub(super) provider: Provider,
     pub(super) workspace_name: String,
@@ -45,31 +45,9 @@ pub(super) fn highlight_ranges(text: &str, query: &str) -> Vec<(usize, usize)> {
     ranges
 }
 
+#[cfg(test)]
 pub(super) fn search_snippet(text: &str, query: &str) -> String {
-    let ranges = highlight_ranges(text, query);
-    let fallback = |text: &str| -> String {
-        let mut snippet: String = text.chars().take(160).collect();
-        if text.chars().count() > 160 {
-            snippet.push('…');
-        }
-        snippet.replace(['\r', '\n'], " ")
-    };
-    let Some((match_start, match_end)) = ranges.first().copied() else {
-        return fallback(text);
-    };
-    let char_position = text[..match_start].chars().count();
-    let match_chars = text[match_start..match_end].chars().count();
-    let chars: Vec<char> = text.chars().collect();
-    let start = char_position.saturating_sub(40);
-    let end = (char_position + match_chars + 120).min(chars.len());
-    let mut snippet: String = chars[start..end].iter().collect();
-    if start > 0 {
-        snippet.insert(0, '…');
-    }
-    if end < chars.len() {
-        snippet.push('…');
-    }
-    snippet.replace(['\r', '\n'], " ")
+    super::search_worker::snippet(text, query)
 }
 
 pub(super) fn highlighted_text(text: &str, query: &str, size: f32, color: u32) -> AnyElement {
@@ -158,62 +136,40 @@ impl ConduitApp {
         });
     }
 
-    pub(super) fn collect_search_results(&self, query: &str) -> Vec<SearchHit> {
-        let mut hits = Vec::new();
-        'outer: for (workspace_index, workspace) in self.store.workspaces.iter().enumerate() {
-            let workspace_name = workspace.name();
-            for session in workspace.sessions.iter() {
-                let title_matches =
-                    !query.is_empty() && session.title.to_lowercase().contains(query);
-                let matching_message = if query.is_empty() {
-                    None
-                } else {
-                    session
-                        .messages
-                        .iter()
-                        .find(|message| message.text.to_lowercase().contains(query))
-                };
-                if !query.is_empty() && !title_matches && matching_message.is_none() {
-                    continue;
-                }
-                let snippet_source = matching_message
-                    .map(|message| message.text.as_str())
-                    .or_else(|| {
-                        session
-                            .messages
-                            .iter()
-                            .find(|message| message.kind == ItemKind::User)
-                            .map(|message| message.text.as_str())
-                    })
-                    .or_else(|| {
-                        session
-                            .messages
-                            .first()
-                            .map(|message| message.text.as_str())
-                    })
-                    .unwrap_or("");
-                hits.push(SearchHit {
-                    workspace: workspace_index,
-                    session: session.id,
-                    provider: session.provider,
-                    workspace_name: workspace_name.clone(),
-                    title: if session.title.is_empty() {
-                        "新会话".into()
-                    } else {
-                        session.title.clone()
-                    },
-                    archived: session.archived,
-                    snippet: search_snippet(snippet_source, query),
-                });
-                if hits.len() >= 40 {
-                    break 'outer;
-                }
-            }
+    pub(super) fn refresh_search(&mut self, cx: &mut Context<Self>, debounce: bool) {
+        self.search_ui.generation = self.search_ui.generation.wrapping_add(1);
+        let generation = self.search_ui.generation;
+        let query = self.search_query.trim().to_lowercase();
+        let workspaces = self.store.workspaces.clone();
+        let revision = self.session_control.global_revision;
+        self.search_ui.requested = Instant::now();
+        self.search_ui.revision = revision;
+        if debounce {
+            self.search_ui.hits.clear();
         }
-        hits
+        self.search_ui.task = Some(cx.spawn(async move |this, cx| {
+            if debounce {
+                cx.background_executor()
+                    .timer(Duration::from_millis(150))
+                    .await;
+            }
+            let hits = cx
+                .background_executor()
+                .spawn(async move { super::search_worker::collect(&workspaces, &query) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.search_ui.generation == generation
+                    && this.session_control.global_revision == revision
+                {
+                    this.search_ui.hits = hits;
+                    cx.notify();
+                }
+            });
+        }));
     }
 
     pub(super) fn open_search_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_search(cx, false);
         self.search.read(cx).focus_handle(cx).focus(window, cx);
         let view = cx.entity();
         window.open_dialog(cx, move |dialog, window, _| {
@@ -229,7 +185,7 @@ impl ConduitApp {
                     let this = view.read(cx);
                     let input = this.search.clone();
                     let query = this.search_query.trim().to_lowercase();
-                    let hits = this.collect_search_results(&query);
+                    let hits = this.search_ui.hits.clone();
                     let mut body = v_flex().w_full().gap_2();
                     body = body.child(
                         Input::new(&input).h(px(34.)).prefix(
@@ -259,7 +215,6 @@ impl ConduitApp {
                             .gap(px(1.));
                         for hit in hits {
                             let SearchHit {
-                                workspace,
                                 session,
                                 provider,
                                 workspace_name,
@@ -280,7 +235,12 @@ impl ConduitApp {
                                     .hover(|style| style.bg(rgb(palette().surface_hover)))
                                     .on_click(move |_, window, cx| {
                                         app.update(cx, |this, cx| {
-                                            this.switch(workspace, Some(session), window, cx)
+                                            if let Some((workspace, _)) = this
+                                                .session_control
+                                                .locate(&this.store.workspaces, session)
+                                            {
+                                                this.switch(workspace, Some(session), window, cx);
+                                            }
                                         });
                                         window.close_dialog(cx);
                                     })

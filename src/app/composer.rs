@@ -496,7 +496,7 @@ impl ConduitApp {
         let send_ready = can_edit && !busy && has_workspace && has_content;
         let composer_active = self
             .send_target(true)
-            .is_some_and(|id| self.runs.contains_key(&id));
+            .is_some_and(|id| self.session_control.runs.contains_key(&id));
         // The latest-message arrow appears
         // only when the user has scrolled away from the end of the message list.
         let show_latest_button = !self.at_bottom
@@ -664,6 +664,7 @@ impl ConduitApp {
                     .child(if composer_active {
                         h_flex()
                             .id("stop")
+                            .debug_selector(|| "stop".into())
                             .w(px(30.))
                             .h(px(30.))
                             .items_center()
@@ -678,7 +679,7 @@ impl ConduitApp {
                                         id,
                                         "当前回复已停止；待发送消息不会自动发送。",
                                     );
-                                    if let Some(run) = this.runs.get_mut(&id) {
+                                    if let Some(run) = this.session_control.runs.get_mut(&id) {
                                         run.cancel();
                                     }
                                 }

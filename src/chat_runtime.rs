@@ -65,16 +65,28 @@ impl ApprovalBroker {
         self.pending.get(self.tickets.get(ticket)?)
     }
 }
+pub struct StartRequest {
+    pub provider: Provider,
+    pub executable: PathBuf,
+    pub cwd: PathBuf,
+    pub prompt: String,
+    pub native_id: Option<String>,
+    pub model: Option<String>,
+    pub permission: PermissionLevel,
+    pub effort: crate::providers::ReasoningEffort,
+    pub route: crate::providers::RuntimeRoute,
+}
+
 pub struct ChatRuntime {
-    pub events: Receiver<Event>,
+    pub events: crate::event_queue::Receiver,
     controls: Sender<Control>,
     cancelled: Arc<AtomicBool>,
 }
 impl ChatRuntime {
     /// Controllable event source for UI concurrency regressions; starts no CLI.
     #[cfg(all(test, feature = "ui-tests"))]
-    pub(crate) fn test_channel() -> (Self, Sender<Event>) {
-        let (sender, events) = mpsc::channel();
+    pub(crate) fn test_channel() -> (Self, crate::event_queue::Sender) {
+        let (sender, events) = crate::event_queue::channel();
         let (controls, _) = mpsc::channel();
         (
             Self {
@@ -140,7 +152,7 @@ impl ChatRuntime {
         model: Option<String>,
         permission: PermissionLevel,
     ) -> Self {
-        Self::start_with_options(
+        Self::start_request(StartRequest {
             provider,
             executable,
             cwd,
@@ -148,22 +160,22 @@ impl ChatRuntime {
             native_id,
             model,
             permission,
-            Default::default(),
-            Default::default(),
-        )
+            effort: Default::default(),
+            route: Default::default(),
+        })
     }
-    #[allow(clippy::too_many_arguments)] // Existing engine runtime entry point.
-    pub fn start_with_options(
-        provider: Provider,
-        executable: PathBuf,
-        cwd: PathBuf,
-        prompt: String,
-        native_id: Option<String>,
-        model: Option<String>,
-        permission: PermissionLevel,
-        effort: crate::providers::ReasoningEffort,
-        route: crate::providers::RuntimeRoute,
-    ) -> Self {
+    pub fn start_request(request: StartRequest) -> Self {
+        let StartRequest {
+            provider,
+            executable,
+            cwd,
+            prompt,
+            native_id,
+            model,
+            permission,
+            effort,
+            route,
+        } = request;
         let protocol = Protocol::new(
             provider,
             cwd.to_string_lossy().into_owned(),
@@ -200,7 +212,7 @@ impl ChatRuntime {
         args: Vec<String>,
         cwd: PathBuf,
     ) -> Self {
-        let (tx, events) = mpsc::channel();
+        let (tx, events) = crate::event_queue::channel();
         let (controls, rx) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let stop = cancelled.clone();
@@ -324,7 +336,7 @@ fn execute(
     cwd: PathBuf,
     cancel: Arc<AtomicBool>,
     controls: Receiver<Control>,
-    events: &Sender<Event>,
+    events: &crate::event_queue::Sender,
 ) -> Result<()> {
     protocol.prepare()?;
     let mut question_bridge = protocol
@@ -455,7 +467,11 @@ fn execute(
                         },
                         other => other,
                     };
-                    let _ = events.send(event);
+                    events.send(event).map_err(|_| {
+                        anyhow::anyhow!(
+                            "事件积压超过限制或界面已关闭；任务已停止，请检查已接收的结果"
+                        )
+                    })?;
                 }
                 if step.done {
                     if let Some(error) = step.error {

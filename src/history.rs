@@ -10,6 +10,8 @@
 //! `native_id`, so sending a message in an imported session continues the very
 //! same conversation the terminal CLI sees.
 
+mod scan;
+
 use crate::domain::{ChatItem, ItemKind, Provider};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -29,44 +31,27 @@ pub struct ImportedSession {
 /// Scans both CLI histories for sessions whose working directory is
 /// `workspace`, newest first.
 pub fn scan_workspace(workspace: &Path) -> Vec<ImportedSession> {
-    let mut sessions = scan_claude(workspace);
-    sessions.extend(scan_codex(workspace));
-    sessions.sort_by_key(|session| std::cmp::Reverse(session.created_at));
-    sessions
+    scan_workspaces(&[workspace.to_owned()])
+        .pop()
+        .unwrap_or_default()
 }
 
 /// Scans both CLI histories once for several workspaces at startup. Each
 /// session file is read once and assigned to every workspace whose cwd it
 /// matches, instead of rescanning the whole history per workspace.
 pub fn scan_workspaces(workspaces: &[PathBuf]) -> Vec<Vec<ImportedSession>> {
-    let mut out = vec![Vec::new(); workspaces.len()];
-    if workspaces.is_empty() {
-        return out;
-    }
-    scan_claude_files(|text| {
-        let Some((cwds, session)) = parse_claude_any(text) else {
-            return;
-        };
-        for (workspace, sessions) in workspaces.iter().zip(out.iter_mut()) {
-            if cwds.iter().any(|cwd| same_dir(cwd, workspace)) {
-                sessions.push(session.clone());
-            }
-        }
-    });
-    scan_codex_files(|text| {
-        let Some((cwd, session)) = parse_codex_any(text, None) else {
-            return;
-        };
-        for (workspace, sessions) in workspaces.iter().zip(out.iter_mut()) {
-            if same_dir(&cwd, workspace) {
-                sessions.push(session.clone());
-            }
-        }
-    });
-    for sessions in &mut out {
-        sessions.sort_by_key(|session| std::cmp::Reverse(session.created_at));
-    }
-    out
+    scan::run(
+        home().as_deref(),
+        workspaces,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .sessions
+}
+pub(crate) fn scan_cancellable(
+    workspaces: &[PathBuf],
+    cancel: &std::sync::atomic::AtomicBool,
+) -> scan::Batch {
+    scan::run(home().as_deref(), workspaces, cancel)
 }
 
 /// Applies an already-scanned batch to a workspace. Kept separate from the
@@ -98,7 +83,7 @@ fn merge_session(
         s.provider == session.provider && s.native_id.as_deref() == Some(session.native_id.as_str())
     }) {
         existing.created_at = session.created_at;
-        if !session.title.is_empty() {
+        if existing.title.is_empty() && !session.title.is_empty() {
             existing.title = session.title;
         }
         if existing.model.is_none() {
@@ -106,7 +91,7 @@ fn merge_session(
         }
         let mut messages = session.messages;
         preserve_reply_timings(&existing.messages, &mut messages);
-        existing.messages = messages;
+        existing.messages = merge_transcript(&existing.messages, messages);
         return 0;
     }
     let id = *next_id;
@@ -129,6 +114,58 @@ fn merge_session(
         usage: crate::domain::Usage::default(),
     });
     1
+}
+
+fn merge_transcript(previous: &[ChatItem], incoming: Vec<ChatItem>) -> Vec<ChatItem> {
+    if previous.is_empty() {
+        return incoming;
+    }
+    if previous.iter().all(|m| {
+        m.key.starts_with("import-")
+            && m.approval.is_none()
+            && m.model.is_none()
+            && !matches!(m.kind, ItemKind::Error | ItemKind::Notice)
+    }) && incoming.iter().filter(|m| m.kind == ItemKind::User).count()
+        >= previous.iter().filter(|m| m.kind == ItemKind::User).count()
+        && incoming
+            .iter()
+            .filter(|m| m.kind == ItemKind::Assistant)
+            .map(|m| m.text.len())
+            .sum::<usize>()
+            >= previous
+                .iter()
+                .filter(|m| m.kind == ItemKind::Assistant)
+                .map(|m| m.text.len())
+                .sum::<usize>()
+    {
+        return incoming;
+    }
+    let users = previous
+        .iter()
+        .filter(|m| m.kind == ItemKind::User)
+        .collect::<Vec<_>>();
+    let mut cursor = 0;
+    let mut after_last = None;
+    for user in users {
+        if let Some(offset) = incoming[cursor..]
+            .iter()
+            .position(|m| m.kind == ItemKind::User && m.text == user.text)
+        {
+            let start = cursor + offset;
+            cursor = incoming[start + 1..]
+                .iter()
+                .position(|m| m.kind == ItemKind::User)
+                .map_or(incoming.len(), |i| start + 1 + i);
+            after_last = Some(cursor);
+        } else {
+            return previous.to_vec();
+        }
+    }
+    let mut kept = previous.to_vec();
+    if let Some(start) = after_last {
+        kept.extend(incoming.into_iter().skip(start));
+    }
+    kept
 }
 
 /// Native imports rebuild keys and may segment assistant text differently.
@@ -218,48 +255,9 @@ fn same_dir(a: &str, b: &Path) -> bool {
 // Claude Code
 // ---------------------------------------------------------------------------
 
-pub fn scan_claude(workspace: &Path) -> Vec<ImportedSession> {
-    let mut out = Vec::new();
-    scan_claude_files(|text| {
-        if let Some(session) = parse_claude(text, workspace) {
-            out.push(session);
-        }
-    });
-    out.sort_by_key(|session| std::cmp::Reverse(session.created_at));
-    out
-}
-
-fn scan_claude_files(mut visit: impl FnMut(&str)) {
-    let Some(home) = home() else {
-        return;
-    };
-    let root = home.join(".claude").join("projects");
-    let Ok(entries) = std::fs::read_dir(&root) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let dir = entry.path();
-        if !dir.is_dir() {
-            continue;
-        }
-        let Ok(files) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for file in files.flatten() {
-            let path = file.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                continue;
-            }
-            let Ok(text) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            visit(&text);
-        }
-    }
-}
-
 /// Parses one Claude Code session jsonl. Returns `None` when the session's
 /// `cwd` does not match `workspace` or no displayable content was found.
+#[cfg(test)]
 fn parse_claude(text: &str, workspace: &Path) -> Option<ImportedSession> {
     let (cwds, session) = parse_claude_any(text)?;
     cwds.iter()
@@ -267,7 +265,13 @@ fn parse_claude(text: &str, workspace: &Path) -> Option<ImportedSession> {
         .then_some(session)
 }
 
+#[cfg(test)]
 fn parse_claude_any(text: &str) -> Option<(Vec<String>, ImportedSession)> {
+    parse_claude_lines(text.lines().map(str::to_owned))
+}
+fn parse_claude_lines(
+    lines: impl Iterator<Item = String>,
+) -> Option<(Vec<String>, ImportedSession)> {
     let mut native_id: Option<String> = None;
     let mut created_at = 0u64;
     let mut model: Option<String> = None;
@@ -275,8 +279,8 @@ fn parse_claude_any(text: &str) -> Option<(Vec<String>, ImportedSession)> {
     let mut title = String::new();
     let mut cwds: Vec<String> = Vec::new();
 
-    for (index, line) in text.lines().enumerate() {
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
+    for (index, line) in lines.enumerate() {
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
             continue; // Tolerate malformed or partial trailing lines.
         };
         if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
@@ -324,7 +328,7 @@ fn parse_claude_any(text: &str) -> Option<(Vec<String>, ImportedSession)> {
                     if title.is_empty() {
                         title = truncate_title(&text);
                     }
-                    messages.push(ChatItem {
+                    messages.push(ChatItem::from(crate::domain::ChatItemData {
                         elapsed_ms: None,
                         key: format!("import-{index}"),
                         created_at: event_created_at,
@@ -332,10 +336,10 @@ fn parse_claude_any(text: &str) -> Option<(Vec<String>, ImportedSession)> {
                         text,
                         input: String::new(),
                         detail: String::new(),
-                        status: String::new(),
+                        status: Default::default(),
                         approval: None,
                         model: None,
-                    });
+                    }));
                 }
             }
             Some("assistant") => {
@@ -354,7 +358,7 @@ fn parse_claude_any(text: &str) -> Option<(Vec<String>, ImportedSession)> {
                             if text.trim().is_empty() {
                                 continue;
                             }
-                            messages.push(ChatItem {
+                            messages.push(ChatItem::from(crate::domain::ChatItemData {
                                 elapsed_ms: None,
                                 key: format!("import-{index}-{part_index}"),
                                 created_at: event_created_at,
@@ -362,14 +366,14 @@ fn parse_claude_any(text: &str) -> Option<(Vec<String>, ImportedSession)> {
                                 text: text.to_owned(),
                                 input: String::new(),
                                 detail: String::new(),
-                                status: String::new(),
+                                status: Default::default(),
                                 approval: None,
                                 model: None,
-                            });
+                            }));
                         }
                         Some("tool_use") => {
                             let name = part.get("name").and_then(Value::as_str).unwrap_or("tool");
-                            messages.push(ChatItem {
+                            messages.push(ChatItem::from(crate::domain::ChatItemData {
                                 elapsed_ms: None,
                                 key: format!(
                                     "import-{index}-{part_index}-{}",
@@ -386,7 +390,7 @@ fn parse_claude_any(text: &str) -> Option<(Vec<String>, ImportedSession)> {
                                 status: "已完成".into(),
                                 approval: None,
                                 model: None,
-                            });
+                            }));
                         }
                         _ => {}
                     }
@@ -445,48 +449,11 @@ fn content_parts(message: Option<&Value>) -> Vec<(&Value, usize)> {
 // Codex
 // ---------------------------------------------------------------------------
 
-pub fn scan_codex(workspace: &Path) -> Vec<ImportedSession> {
-    let mut out = Vec::new();
-    scan_codex_files(|text| {
-        if let Some(session) = parse_codex(text, workspace) {
-            out.push(session);
-        }
-    });
-    out.sort_by_key(|session| std::cmp::Reverse(session.created_at));
-    out
-}
-
-fn scan_codex_files(mut visit: impl FnMut(&str)) {
-    let Some(home) = home() else {
-        return;
-    };
-    let root = home.join(".codex").join("sessions");
-    let mut stack = vec![root];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                continue;
-            }
-            let Ok(text) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            visit(&text);
-        }
-    }
-}
-
 /// Parses one Codex rollout jsonl. Structured `event_msg/item_completed`
 /// records are the primary source because they carry commands, file changes,
 /// MCP calls, web searches and reasoning summaries; raw `response_item`
 /// messages remain as a fallback for older rollouts without those events.
+#[cfg(test)]
 fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
     let (cwd, session) = parse_codex_any(text, Some(workspace))?;
     same_dir(&cwd, workspace).then_some(session)
@@ -495,15 +462,27 @@ fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
 /// Parses one Codex rollout, optionally relative to `workspace`. Without a
 /// workspace the session's own cwd is used as the base for tool file paths,
 /// which is what the multi-workspace startup scan needs.
+#[cfg(test)]
 fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, ImportedSession)> {
-    let values: Vec<Value> = text
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .collect();
-    let meta = values
-        .iter()
-        .find(|value| value.get("type").and_then(Value::as_str) == Some("session_meta"))?;
-    let meta = meta.get("payload").unwrap_or(meta);
+    parse_codex_lines(text.lines().map(str::to_owned), workspace)
+}
+fn parse_codex_lines(
+    lines: impl Iterator<Item = String>,
+    workspace: Option<&Path>,
+) -> Option<(String, ImportedSession)> {
+    let mut values = lines
+        .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
+        .enumerate();
+    let mut prelude = Vec::new();
+    let meta = loop {
+        let (index, value) = values.next()?;
+        let found = value.get("type").and_then(Value::as_str) == Some("session_meta");
+        prelude.push((index, value));
+        if found {
+            break prelude.last()?.1.clone();
+        }
+    };
+    let meta = meta.get("payload").unwrap_or(&meta);
     let native_id = meta
         .get("id")
         .or_else(|| meta.get("session_id"))
@@ -538,8 +517,10 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
     let mut turn_starts = HashMap::new();
     let mut timings = Vec::new();
     let mut previous_end = 0;
+    let mut timestamps = Vec::new();
 
-    for (index, value) in values.iter().enumerate() {
+    for (index, value) in prelude.into_iter().chain(values) {
+        let value = &value;
         let payload = value.get("payload").unwrap_or(value);
         let event_created_at = value
             .get("timestamp")
@@ -547,6 +528,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
             .and_then(Value::as_str)
             .and_then(rfc3339_to_unix_opt)
             .unwrap_or(created_at);
+        timestamps.push(event_created_at);
         if value.get("type").and_then(Value::as_str) == Some("event_msg") {
             let turn_id = payload.get("turn_id").and_then(Value::as_str).unwrap_or("");
             let timestamp = value
@@ -623,7 +605,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                             response_rows.push((
                                 index,
                                 part_index,
-                                ChatItem {
+                                ChatItem::from(crate::domain::ChatItemData {
                                     elapsed_ms: None,
                                     key: format!("import-{index}-{part_index}"),
                                     created_at: event_created_at,
@@ -635,7 +617,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                                     text: text.to_owned(),
                                     input: String::new(),
                                     detail: String::new(),
-                                    status: String::new(),
+                                    status: Default::default(),
                                     approval: None,
                                     model: (role == "assistant")
                                         .then(|| {
@@ -646,7 +628,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                                                 .or_else(|| current_model.clone())
                                         })
                                         .flatten(),
-                                },
+                                }),
                             ));
                         }
                     }
@@ -658,7 +640,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                         response_rows.push((
                             index,
                             0,
-                            ChatItem {
+                            ChatItem::from(crate::domain::ChatItemData {
                                 elapsed_ms: None,
                                 key: format!("import-{index}-call"),
                                 created_at: event_created_at,
@@ -673,7 +655,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                                 status: "已完成".into(),
                                 approval: None,
                                 model: None,
-                            },
+                            }),
                         ));
                     }
                     Some("custom_tool_call") => {
@@ -684,7 +666,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                         response_rows.push((
                             index,
                             0,
-                            ChatItem {
+                            ChatItem::from(crate::domain::ChatItemData {
                                 elapsed_ms: None,
                                 key: format!("import-{index}-call"),
                                 created_at: event_created_at,
@@ -699,7 +681,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                                 status: "已完成".into(),
                                 approval: None,
                                 model: None,
-                            },
+                            }),
                         ));
                     }
                     Some("reasoning") => {
@@ -740,7 +722,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                         event_rows.push((
                             index,
                             0,
-                            ChatItem {
+                            ChatItem::from(crate::domain::ChatItemData {
                                 elapsed_ms: None,
                                 key,
                                 created_at: event_created_at,
@@ -748,10 +730,10 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                                 text,
                                 input: String::new(),
                                 detail: String::new(),
-                                status: String::new(),
+                                status: Default::default(),
                                 approval: None,
                                 model: None,
-                            },
+                            }),
                         ));
                     }
                     "AgentMessage" => {
@@ -762,7 +744,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                         event_rows.push((
                             index,
                             0,
-                            ChatItem {
+                            ChatItem::from(crate::domain::ChatItemData {
                                 elapsed_ms: None,
                                 key,
                                 created_at: event_created_at,
@@ -770,10 +752,10 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                                 text,
                                 input: String::new(),
                                 detail: String::new(),
-                                status: String::new(),
+                                status: Default::default(),
                                 approval: None,
                                 model: current_model.clone(),
-                            },
+                            }),
                         ));
                     }
                     "CommandExecution" => {
@@ -791,7 +773,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                         event_rows.push((
                             index,
                             0,
-                            ChatItem {
+                            ChatItem::from(crate::domain::ChatItemData {
                                 elapsed_ms: None,
                                 key,
                                 created_at: event_created_at,
@@ -818,7 +800,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                                 },
                                 approval: None,
                                 model: None,
-                            },
+                            }),
                         ));
                     }
                     "FileChange" => {
@@ -843,7 +825,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                         event_rows.push((
                             index,
                             0,
-                            ChatItem {
+                            ChatItem::from(crate::domain::ChatItemData {
                                 elapsed_ms: None,
                                 key,
                                 created_at: event_created_at,
@@ -855,7 +837,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                                 status: "已完成".into(),
                                 approval: None,
                                 model: None,
-                            },
+                            }),
                         ));
                     }
                     "McpToolCall" => {
@@ -874,7 +856,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                         event_rows.push((
                             index,
                             0,
-                            ChatItem {
+                            ChatItem::from(crate::domain::ChatItemData {
                                 elapsed_ms: None,
                                 key,
                                 created_at: event_created_at,
@@ -898,7 +880,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                                 },
                                 approval: None,
                                 model: None,
-                            },
+                            }),
                         ));
                     }
                     "WebSearch" => {
@@ -907,7 +889,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                         event_rows.push((
                             index,
                             0,
-                            ChatItem {
+                            ChatItem::from(crate::domain::ChatItemData {
                                 elapsed_ms: None,
                                 key,
                                 created_at: event_created_at,
@@ -922,7 +904,7 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
                                 status: "已完成".into(),
                                 approval: None,
                                 model: None,
-                            },
+                            }),
                         ));
                     }
                     "Reasoning" => {
@@ -972,26 +954,18 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
         rows.push((
             index,
             0,
-            ChatItem {
+            ChatItem::from(crate::domain::ChatItemData {
                 elapsed_ms: None,
                 key: format!("import-{index}-{id}"),
-                created_at: values
-                    .get(index)
-                    .and_then(|value| {
-                        value
-                            .get("timestamp")
-                            .and_then(Value::as_str)
-                            .and_then(rfc3339_to_unix_opt)
-                    })
-                    .unwrap_or(created_at),
+                created_at: timestamps.get(index).copied().unwrap_or(created_at),
                 kind: ItemKind::Reasoning,
                 text,
                 input: String::new(),
                 detail: String::new(),
-                status: String::new(),
+                status: Default::default(),
                 approval: None,
                 model: None,
-            },
+            }),
         ));
     }
 
@@ -1478,8 +1452,13 @@ mod tests {
         let dir = tmpdir("scan-empty");
         // USERPROFILE is inherited on the test host; scanning a workspace no
         // CLI session ever used yields nothing instead of failing.
-        let result = scan_workspace(&dir.join("nope"));
-        assert!(result.is_empty() || result.iter().all(|_s| true));
+        let result = scan::run(
+            Some(&dir),
+            &[dir.join("nope")],
+            &std::sync::atomic::AtomicBool::new(false),
+        );
+        assert!(result.sessions[0].is_empty());
+        assert!(result.warnings.is_empty());
     }
 
     #[test]
@@ -1526,7 +1505,7 @@ mod tests {
             opencode: Default::default(),
             permission: crate::domain::PermissionLevel::default(),
             usage: crate::domain::Usage::default(),
-            messages: vec![ChatItem {
+            messages: vec![ChatItem::from(crate::domain::ChatItemData {
                 elapsed_ms: None,
                 key: "old".into(),
                 created_at: 0,
@@ -1534,10 +1513,10 @@ mod tests {
                 text: "旧消息".into(),
                 input: String::new(),
                 detail: String::new(),
-                status: String::new(),
+                status: Default::default(),
                 approval: None,
                 model: None,
-            }],
+            })],
             interrupted: false,
         });
         // scan_workspace would hit the real CLI dirs; inject parsed sessions
@@ -1549,7 +1528,7 @@ mod tests {
                 created_at: 100,
                 title: "新标题".into(),
                 model: Some("m1".into()),
-                messages: vec![ChatItem {
+                messages: vec![ChatItem::from(crate::domain::ChatItemData {
                     elapsed_ms: None,
                     key: "a".into(),
                     created_at: 0,
@@ -1557,10 +1536,10 @@ mod tests {
                     text: "刷新后的内容".into(),
                     input: String::new(),
                     detail: String::new(),
-                    status: String::new(),
+                    status: Default::default(),
                     approval: None,
                     model: None,
-                }],
+                })],
             },
             ImportedSession {
                 provider: Provider::Codex,
@@ -1568,7 +1547,7 @@ mod tests {
                 created_at: 200,
                 title: "终端会话".into(),
                 model: None,
-                messages: vec![ChatItem {
+                messages: vec![ChatItem::from(crate::domain::ChatItemData {
                     elapsed_ms: None,
                     key: "b".into(),
                     created_at: 0,
@@ -1576,10 +1555,10 @@ mod tests {
                     text: "hi".into(),
                     input: String::new(),
                     detail: String::new(),
-                    status: String::new(),
+                    status: Default::default(),
                     approval: None,
                     model: None,
-                }],
+                })],
             },
         ];
         let mut next_id = 8u64;
@@ -1587,10 +1566,16 @@ mod tests {
         assert_eq!(count, 1, "only the unknown session is newly imported");
         assert_eq!(workspace.sessions.len(), 2);
         let refreshed = workspace.sessions.iter().find(|s| s.id == 7).unwrap();
-        assert_eq!(refreshed.title, "新标题");
+        assert_eq!(
+            refreshed.title, "旧标题",
+            "saved titles survive native import"
+        );
         assert_eq!(refreshed.created_at, 100);
         assert_eq!(refreshed.messages.len(), 1);
-        assert_eq!(refreshed.messages[0].text, "刷新后的内容");
+        assert_eq!(
+            refreshed.messages[0].text, "旧消息",
+            "unmatched native snapshots cannot erase saved messages"
+        );
         assert_eq!(refreshed.model.as_deref(), Some("m1"));
         let fresh = workspace
             .sessions

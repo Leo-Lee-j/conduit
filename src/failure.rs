@@ -199,7 +199,7 @@ pub(crate) fn record_failure(
     {
         let count = failure_repeats(previous).saturating_add(u64::from(!terminal));
         let item = &mut session.messages[index];
-        item.status = format!("repeats:{count}");
+        item.status = format!("repeats:{count}").into();
         item.detail = error.to_string();
         return index;
     }
@@ -208,18 +208,20 @@ pub(crate) fn record_failure(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    session.messages.push(ChatItem {
-        elapsed_ms: None,
-        key,
-        created_at,
-        kind: ItemKind::Error,
-        text: error.to_string(),
-        input: String::new(),
-        detail: error.to_string(),
-        status: String::new(),
-        approval: None,
-        model: None,
-    });
+    session
+        .messages
+        .push(ChatItem::from(crate::domain::ChatItemData {
+            elapsed_ms: None,
+            key,
+            created_at,
+            kind: ItemKind::Error,
+            text: error.to_string(),
+            input: String::new(),
+            detail: error.to_string(),
+            status: Default::default(),
+            approval: None,
+            model: None,
+        }));
     session.messages.len() - 1
 }
 
@@ -234,11 +236,12 @@ pub(crate) fn coalesce_restored_failures(session: &mut SessionRecord) {
             previous.status = format!(
                 "repeats:{}",
                 failure_repeats(previous).saturating_add(failure_repeats(&item))
-            );
+            )
+            .into();
             previous.detail = if item.detail.is_empty() {
-                item.text
+                item.text.clone()
             } else {
-                item.detail
+                item.detail.clone()
             };
             continue;
         }

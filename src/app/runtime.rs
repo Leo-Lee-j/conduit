@@ -19,21 +19,21 @@ pub(super) fn error_retry_prompt(session: &SessionRecord, index: usize) -> Optio
 
 impl ConduitApp {
     pub(super) fn workspace_busy(&self, index: usize) -> bool {
-        self.git_operation.as_ref().is_some_and(|operation| {
+        self.git.operation.as_ref().is_some_and(|operation| {
             git::repository_scope(&operation.worktree)
                 == git::repository_scope(&self.store.workspaces[index].path)
         }) || self.store.workspaces[index]
             .sessions
             .iter()
-            .any(|s| self.runs.contains_key(&s.id))
+            .any(|s| self.session_control.runs.contains_key(&s.id))
     }
 
     /// One turn per conversation, including aliases of the same native context.
     /// Other sessions may run even when they share the same working directory.
     pub(super) fn session_busy(&self, id: u64) -> bool {
-        self.runs.contains_key(&id)
+        self.session_control.runs.contains_key(&id)
             || self.session(id).is_some_and(|target| {
-                self.runs.keys().any(|running| {
+                self.session_control.runs.keys().any(|running| {
                     self.session(*running).is_some_and(|session| {
                         session.provider == target.provider
                             && target.native_id.as_deref().is_some_and(|native| {
@@ -47,11 +47,12 @@ impl ConduitApp {
     /// Git refs are shared by linked worktrees, so Git writes coordinate with
     /// every CLI turn using this repository. Chat-to-chat concurrency is unchanged.
     pub(super) fn worktree_has_runs(&self, path: &Path) -> bool {
-        if self.runs.is_empty() {
+        if self.session_control.runs.is_empty() {
             return false;
         }
         let root = git::repository_scope(path);
-        self.runs
+        self.session_control
+            .runs
             .values()
             .any(|run| git::repository_scope(&run.worktree) == root)
     }
@@ -74,7 +75,7 @@ impl ConduitApp {
         {
             return Some("该会话已有任务运行，请等待完成或取消后发送。");
         }
-        if self.git_operation.as_ref().is_some_and(|operation| {
+        if self.git.operation.as_ref().is_some_and(|operation| {
             self.selected_workspace_path().is_some_and(|path| {
                 git::repository_scope(&operation.worktree) == git::repository_scope(&path)
             })
@@ -128,7 +129,7 @@ impl ConduitApp {
             return;
         }
         let accepted = if let Some(id) = self.send_target(true)
-            && self.runs.contains_key(&id)
+            && self.session_control.runs.contains_key(&id)
         {
             self.enqueue_message(id, text, references.to_vec(), cx)
         } else {
@@ -249,7 +250,7 @@ impl ConduitApp {
             return Err("该会话已有任务运行，请等待完成或取消后发送。".into());
         }
         let cwd = self.store.workspaces[index].path.clone();
-        if self.git_operation.as_ref().is_some_and(|operation| {
+        if self.git.operation.as_ref().is_some_and(|operation| {
             git::repository_scope(&operation.worktree) == git::repository_scope(&cwd)
         }) {
             return Err("该仓库正在执行 Git 操作，请等待完成后发送。".into());
@@ -318,18 +319,20 @@ impl ConduitApp {
                     .take(26)
                     .collect();
             }
-            session.messages.push(ChatItem {
-                elapsed_ms: None,
-                key: format!("{prefix}-user"),
-                created_at: unix_now(),
-                kind: ItemKind::User,
-                text: prompt.clone(),
-                input: String::new(),
-                detail: String::new(),
-                status: String::new(),
-                approval: None,
-                model: None,
-            });
+            session
+                .messages
+                .push(ChatItem::from(crate::domain::ChatItemData {
+                    elapsed_ms: None,
+                    key: format!("{prefix}-user"),
+                    created_at: unix_now(),
+                    kind: ItemKind::User,
+                    text: prompt.clone(),
+                    input: String::new(),
+                    detail: String::new(),
+                    status: Default::default(),
+                    approval: None,
+                    model: None,
+                }));
         }
         session.interrupted = true;
         if !self.persist() {
@@ -362,28 +365,28 @@ impl ConduitApp {
                 self.usage_context_window_fallback(provider, &session.channel, model.as_deref())
             })
             .unwrap_or(0);
-        let runtime = ChatRuntime::start_with_options(
+        let runtime = ChatRuntime::start_request(crate::chat_runtime::StartRequest {
             provider,
             executable,
             cwd,
             prompt,
             native_id,
-            model.clone(),
+            model: model.clone(),
             permission,
             effort,
             route,
-        );
+        });
         let usage = self
             .session(id)
             .map(|session| session.usage)
             .unwrap_or_default();
-        self.plans.remove(&id);
-        self.unread_completed.remove(&id);
-        self.runs.insert(
+        self.session_control.plans.remove(&id);
+        self.session_control.unread_completed.remove(&id);
+        self.session_control.runs.insert(
             id,
             ActiveRun::new(runtime, worktree, prefix, usage, model, effort),
         );
-        if let Some(run) = self.runs.get_mut(&id) {
+        if let Some(run) = self.session_control.runs.get_mut(&id) {
             run.opencode_variant = opencode_variant;
             run.context_window_fallback = context_window_fallback;
             if fresh_session && provider == Provider::Codex {
@@ -433,7 +436,7 @@ impl ConduitApp {
         let Some(session) = self.session(id) else {
             return;
         };
-        if self.runs.contains_key(&id)
+        if self.session_control.runs.contains_key(&id)
             || session
                 .messages
                 .get(index)
@@ -470,6 +473,13 @@ impl ConduitApp {
     }
 
     pub(super) fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.poll_persistence(cx);
+        if !self.search_query.trim().is_empty()
+            && self.search_ui.revision != self.session_control.global_revision
+            && self.search_ui.requested.elapsed() >= Duration::from_millis(500)
+        {
+            self.refresh_search(cx, false);
+        }
         self.poll_updates(window, cx);
         if self.updater.exiting || self.updater.preparing() {
             return;
@@ -484,6 +494,11 @@ impl ConduitApp {
             (startup.imports_done && elapsed >= STARTUP_MIN_DISPLAY) || elapsed >= STARTUP_TIMEOUT
         });
         if startup_released {
+            if self.startup.as_ref().is_some_and(|s| !s.imports_done) {
+                self.session_control.cancel_imports();
+                self.history_loading.clear();
+                self.message = Some("历史读取超时，已保留现有对话；可重新导入。".into());
+            }
             self.startup = None;
             cx.notify();
         }
@@ -491,7 +506,11 @@ impl ConduitApp {
         self.poll_extensions(window, cx);
         // Refresh session ages every minute while idle, and running elapsed
         // labels once a second; avoid repainting every 33 ms poll otherwise.
-        let label_interval = if self.runs.is_empty() { 60 } else { 1 };
+        let label_interval = if self.session_control.runs.is_empty() {
+            60
+        } else {
+            1
+        };
         if self.last_live_tick.elapsed() >= Duration::from_secs(label_interval) {
             self.last_live_tick = Instant::now();
             cx.notify();
@@ -556,454 +575,18 @@ impl ConduitApp {
             self.message_focus = None;
             cx.notify();
         }
-        let navigating = self.pending_message_jump.is_some();
-        let follow = self.scroll.is_scrolled_to_end().unwrap_or_else(|| {
-            self.scroll.logical_scroll_top().item_ix >= self.scroll.item_count()
-        });
-        // Re-render when the scroll position crosses the "at the end" threshold
-        // so the floating arrow appears/disappears without polling every frame.
-        if !navigating && follow != self.at_bottom {
-            self.at_bottom = follow;
-            cx.notify();
-        }
-        let mut incoming = vec![];
-        for (id, run) in &self.runs {
-            for event in run.runtime.events.try_iter().take(1000) {
-                incoming.push((*id, run.prefix.clone(), event));
-            }
-        }
-        if self.store.ui.performance_monitor {
-            self.performance
-                .update(cx, |monitor, _| monitor.record_events(incoming.len()));
-        }
-        let mut changed = false;
-        let mut terminal = false;
-        let mut visible = false;
-        let mut dirty_messages = Vec::new();
-        let mut structural_change = false;
-        let mut completed_turns = Vec::new();
-        for (id, prefix, event) in incoming {
-            changed = true;
-            visible |= Some(id) == self.selected_session;
-            if Some(id) == self.selected_session
-                && matches!(
-                    event,
-                    Event::Approval(_)
-                        | Event::ApprovalCancelled(_)
-                        | Event::ApprovalResolved { .. }
-                        | Event::ReasoningSummary { .. }
-                        | Event::Finished { .. }
-                )
-            {
-                structural_change = true;
-            }
-            match event {
-                Event::OpenCodeConfig(options) => {
-                    let variant = if let Some(session) = self.session_mut(id) {
-                        session.opencode.options = options;
-                        session.opencode.effective_variant().map(str::to_owned)
-                    } else {
-                        None
-                    };
-                    if let Some(run) = self.runs.get_mut(&id) {
-                        run.opencode_variant = variant;
-                    }
-                    self.dirty = true;
-                    cx.emit(crate::providers::ProviderCatalogChanged);
-                }
-                Event::Plan { steps } => {
-                    let steps = steps
-                        .into_iter()
-                        .filter_map(|(text, status)| {
-                            let text = text.trim().to_string();
-                            (!text.is_empty()).then(|| PlanStep {
-                                text,
-                                status: PlanStatus::from_wire(&status),
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    if steps.is_empty() {
-                        self.plans.remove(&id);
-                    } else {
-                        self.plans.insert(id, steps);
-                    }
-                }
-                Event::Usage(mut usage) => {
-                    if let Some(run) = self.runs.get_mut(&id) {
-                        if (usage.output_tokens < run.output_tokens_at_start.unwrap_or(0)
-                            || usage.output_tokens < run.usage.output_tokens)
-                            && usage.turn_output_tokens.is_none()
-                        {
-                            // A counter reset is not a new speed measurement.
-                            run.output_tokens_at_start = None;
-                        }
-                        let elapsed =
-                            run.turn_started.elapsed().as_millis().min(u64::MAX as u128) as u64;
-                        usage = usage
-                            .sample_turn(run.output_tokens_at_start, elapsed)
-                            .with_session_speed(run.completed_usage);
-                        if usage.context_window == 0 && run.context_window_fallback > 0 {
-                            usage.context_window = run.context_window_fallback;
-                            usage.context_window_estimated = true;
-                        }
-                        run.usage = usage;
-                    }
-                    if let Some(session) = self.session_mut(id) {
-                        session.usage = usage;
-                    }
-                }
-                Event::Approval(approval) => {
-                    let accepted = self
-                        .runs
-                        .get(&id)
-                        .is_some_and(|run| !self.closing && !run.runtime.is_cancelled());
-                    if !accepted {
-                        continue;
-                    }
-                    let questions = approval.questions();
-                    let drafts = questions
-                        .iter()
-                        .map(|q| {
-                            let input = cx.new(|cx| {
-                                InputState::new(window, cx)
-                                    .placeholder("输入你的回答")
-                                    .masked(q.secret)
-                            });
-                            let subscription =
-                                cx.subscribe(&input, |_, _, _: &InputEvent, cx| cx.notify());
-                            super::user_input::QuestionDraft {
-                                selected: Default::default(),
-                                custom: input,
-                                _subscription: subscription,
-                                question: q.clone(),
-                            }
-                        })
-                        .collect();
-                    if let Some(session) = self.session_mut(id) {
-                        session.record_tool_approval(
-                            &prefix,
-                            &approval.id,
-                            &approval.title,
-                            &approval.detail,
-                            "等待中",
-                        );
-                    }
-                    if let Some(run) = self.runs.get_mut(&id) {
-                        if approval.is_user_input() {
-                            run.question_drafts.insert(approval.id.clone(), drafts);
-                        }
-                        run.approvals.push(approval);
-                        run.status = run.waiting_status().into();
-                        run.activity = run.status.clone();
-                    }
-                }
-                Event::ApprovalCancelled(request) => {
-                    let mut approval = None;
-                    if let Some(run) = self.runs.get_mut(&id) {
-                        run.expanded_approvals.remove(&request);
-                        run.question_drafts.remove(&request);
-                        approval = run.approvals.remove(&request);
-                        if run.approvals.is_empty() && !run.runtime.is_cancelled() {
-                            run.status = "正在执行…".into();
-                            run.activity = "正在继续处理…".into();
-                        } else if !run.runtime.is_cancelled() {
-                            run.status = run.waiting_status().into();
-                            run.activity = run.status.clone();
-                        }
-                    }
-                    if let (Some(approval), Some(session)) = (approval, self.session_mut(id)) {
-                        session.record_tool_approval(
-                            &prefix,
-                            &request,
-                            &approval.title,
-                            &approval.detail,
-                            "已取消",
-                        );
-                    }
-                }
-                Event::ApprovalResolved { id: request, allow } => {
-                    let approval = self.runs.get_mut(&id).and_then(|run| {
-                        run.expanded_approvals.remove(&request);
-                        run.question_drafts.remove(&request);
-                        let approval = run.approvals.remove(&request);
-                        run.status = if run.approvals.is_empty() {
-                            "正在执行…"
-                        } else {
-                            run.waiting_status()
-                        }
-                        .into();
-                        run.activity = if run.approvals.is_empty() {
-                            "正在继续处理…"
-                        } else {
-                            run.waiting_status()
-                        }
-                        .into();
-                        approval
-                    });
-                    if let (Some(approval), Some(session)) = (approval, self.session_mut(id)) {
-                        session.record_tool_approval(
-                            &prefix,
-                            &request,
-                            &approval.title,
-                            &approval.detail,
-                            if approval.is_user_input() {
-                                if allow { "已回答" } else { "已跳过" }
-                            } else if allow {
-                                "已允许"
-                            } else {
-                                "已拒绝"
-                            },
-                        );
-                    }
-                }
-                Event::Finished { error, cancelled } => {
-                    let finished_run = self.runs.remove(&id);
-                    if error.is_some() || cancelled {
-                        self.pause_queued_message(
-                            id,
-                            if cancelled {
-                                "当前回复已停止；待发送消息不会自动发送。"
-                            } else {
-                                "当前回复失败；待发送消息不会自动发送。"
-                            },
-                        );
-                    }
-                    let elapsed_ms = finished_run.as_ref().map(|run| {
-                        run.turn_started.elapsed().as_millis().min(u64::MAX as u128) as u64
-                    });
-                    let finished_usage = finished_run
-                        .as_ref()
-                        .filter(|run| run.usage.turn_elapsed_ms.is_some())
-                        .map(|run| {
-                            let mut usage = run.usage;
-                            usage.turn_elapsed_ms = elapsed_ms;
-                            usage.with_session_speed(run.completed_usage)
-                        });
-                    self.unread_completed.remove(&id);
-                    terminal = true;
-                    if (self.active_file.is_some() || self.active_diff.is_some())
-                        && error.is_some()
-                        && !cancelled
-                    {
-                        self.unread_completed.insert(id);
-                    }
-                    if error.is_none() && !cancelled {
-                        completed_turns.push(id);
-                        if self.selected_session != Some(id)
-                            || (self.active_file.is_some() || self.active_diff.is_some())
-                        {
-                            self.unread_completed.insert(id);
-                        }
-                    }
-                    if let Some(session) = self.session_mut(id) {
-                        session.interrupted = false;
-                        if let Some(usage) = finished_usage {
-                            session.usage = usage;
-                        }
-                        // Scope timing to this run, including partial replies on failure/cancel.
-                        let item_prefix = format!("{prefix}-");
-                        for item in &mut session.messages {
-                            if item.kind == ItemKind::Assistant
-                                && item.key.starts_with(&item_prefix)
-                            {
-                                item.elapsed_ms = elapsed_ms;
-                            }
-                        }
-                        finish_tool_cards(
-                            session,
-                            &prefix,
-                            if cancelled {
-                                "已取消"
-                            } else {
-                                "未返回结果"
-                            },
-                        );
-                        // Do not duplicate a failure already surfaced by the stream.
-                        let already_shown = error.as_deref().is_some_and(|error| {
-                            session
-                                .messages
-                                .iter()
-                                .rev()
-                                .filter(|item| {
-                                    matches!(
-                                        item.kind,
-                                        ItemKind::Assistant | ItemKind::Tool | ItemKind::Error
-                                    )
-                                })
-                                .take(5)
-                                .any(|item| same_failure(&item.text, error))
-                        });
-                        if !cancelled
-                            && let Some(error) = &error
-                            && (!already_shown
-                                || session.messages.iter().any(|item| {
-                                    item.kind == ItemKind::Error
-                                        && item.key.starts_with(&format!("{prefix}-"))
-                                }))
-                        {
-                            crate::failure::record_failure(session, &prefix, error, true);
-                        }
-                        if cancelled {
-                            session.messages.push(ChatItem {
-                                elapsed_ms: None,
-                                key: format!("{prefix}-finish"),
-                                created_at: unix_now(),
-                                kind: ItemKind::Notice,
-                                text: "已取消；不会自动重试。".into(),
-                                input: String::new(),
-                                detail: error.clone().unwrap_or_default(),
-                                status: String::new(),
-                                approval: None,
-                                model: None,
-                            });
-                        }
-                    }
-                }
-                Event::NativeId(native_id) => {
-                    if let Some(session) = self.session_mut(id) {
-                        session.native_id = Some(native_id);
-                    }
-                    if let Some(run) = self.runs.get_mut(&id) {
-                        run.status = "正在执行…".into();
-                        run.activity = "正在思考…".into();
-                    }
-                    self.dirty = true;
-                    self.persist();
-                }
-                other => {
-                    // Starting a reply also collapses earlier tool rows. Their
-                    // cached heights must change before the turn finishes.
-                    if Some(id) == self.selected_session
-                        && matches!(&other, Event::Delta { text, .. } | Event::Text { text, .. }
-                            if !text.trim().is_empty())
-                        && self.session(id).is_some_and(|session| {
-                            session
-                                .messages
-                                .iter()
-                                .rposition(is_groupable_activity)
-                                .is_some_and(|index| !tool_group_has_reply(session, index + 1))
-                        })
-                    {
-                        structural_change = true;
-                    }
-                    if let Some(run) = self.runs.get_mut(&id) {
-                        let activity = match &other {
-                            Event::Delta { .. } | Event::Text { .. } => "正在生成回复…".to_string(),
-                            Event::ToolInput { .. } => "正在准备工具调用…".to_string(),
-                            Event::Tool { title, status, .. } => match status.as_str() {
-                                "运行中" if !title.is_empty() => {
-                                    format!("正在调用工具：{title}")
-                                }
-                                "运行中" => "正在调用工具…".to_string(),
-                                "输出中" => "正在接收工具输出…".to_string(),
-                                _ => "正在继续处理…".to_string(),
-                            },
-                            _ => String::new(),
-                        };
-                        if !activity.is_empty() {
-                            run.activity = activity;
-                        }
-                    }
-                    let mut index = self
-                        .runs
-                        .get_mut(&id)
-                        .map(|run| std::mem::take(&mut run.message_index))
-                        .unwrap_or_default();
-                    let turn_model = self.runs.get(&id).and_then(|run| run.model.clone());
-                    let selected = Some(id) == self.selected_session;
-                    if let Some(session) = self.session_mut(id) {
-                        let old_len = session.messages.len();
-                        let shape = |item: &ChatItem| {
-                            (is_empty_chat_placeholder(item), is_groupable_activity(item))
-                        };
-                        let previous_shape = match &other {
-                            Event::Delta { key, .. }
-                            | Event::Text { key, .. }
-                            | Event::Tool { key, .. }
-                            | Event::ToolInput { key, .. } => index
-                                .find(&session.messages, &format!("{prefix}-{key}"))
-                                .map(|position| shape(&session.messages[position])),
-                            _ => None,
-                        };
-                        if let Some(changed_index) =
-                            apply_event_indexed(session, &prefix, other, &mut index)
-                        {
-                            if let Some(model) = &turn_model {
-                                attach_turn_model(session, &prefix, model);
-                            }
-                            if selected {
-                                // New tools can merge earlier rows into a group;
-                                // text arriving in an empty block can split it.
-                                // A new reply segment also removes the footer
-                                // and its reserved height from the previous one.
-                                // Invalidate those rows as well as the event's row.
-                                let current_shape = shape(&session.messages[changed_index]);
-                                structural_change |= previous_shape
-                                    .is_some_and(|previous| previous != current_shape)
-                                    || (changed_index >= old_len
-                                        && (current_shape.1
-                                            || (session.messages[changed_index].kind
-                                                == ItemKind::Assistant
-                                                && !current_shape.0)));
-                                dirty_messages.push(changed_index);
-                            }
-                        }
-                    }
-                    if let Some(run) = self.runs.get_mut(&id) {
-                        run.message_index = index;
-                    }
-                }
-            }
-        }
-        if self.store.ui.auto_rename && self.store.ui.naming_mode == NamingMode::Latest {
-            for &id in &completed_turns {
-                if let Some(excerpt) = self.session(id).and_then(latest_naming_excerpt) {
-                    self.start_session_naming(id, &excerpt, cx);
-                }
-            }
-        }
-        if changed {
-            if structural_change {
-                self.scroll.remeasure();
-            } else {
-                dirty_messages.sort_unstable();
-                dirty_messages.dedup();
-                for index in dirty_messages {
-                    if index < self.scroll.item_count() {
-                        self.scroll.remeasure_items(index..index + 1);
-                    }
-                }
-            }
-            self.dirty = true;
-            if terminal || self.last_save.elapsed() > Duration::from_secs(1) {
-                self.persist();
-            }
-            cx.notify();
-            if follow && visible && !navigating && self.message_focus.is_none() {
-                self.scroll_to_end();
-            }
-            // A finished turn can change workspace files; keep an open Git
-            // panel current without requiring the user to press 刷新.
-            if terminal {
-                self.refresh_branches();
-                if (self.git_navigation_open() || self.active_diff.is_some())
-                    && self.git_probe.is_none()
-                {
-                    self.refresh_git(cx);
-                }
-            }
-        }
-        for id in completed_turns {
-            self.dispatch_queued_message(id, cx);
-        }
+        self.poll_streams(window, cx);
         if self.closing
             && !self.updater.preparing()
-            && self.runs.is_empty()
+            && self.session_control.runs.is_empty()
             && self.probes.is_empty()
             && self.opencode_model_probes.is_empty()
-            && self.git_operation.is_none()
-            && self.commit_generation.is_none()
-            && self.session_namings.is_empty()
+            && self.git.operation.is_none()
+            && self.git.generation.is_none()
+            && self.session_control.namings.is_empty()
+            && !self.dirty
+            && !self.persistence.busy()
+            && self.persistence.error.is_none()
         {
             self.discard_composer_attachments();
             window.remove_window();
@@ -1017,7 +600,7 @@ impl ConduitApp {
         id: String,
         cx: &mut Context<Self>,
     ) {
-        if let Some(run) = self.runs.get_mut(&session)
+        if let Some(run) = self.session_control.runs.get_mut(&session)
             && !run.expanded_approvals.remove(&id)
         {
             run.expanded_approvals.insert(id);
@@ -1034,7 +617,7 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) {
         if !self.closing
-            && let Some(run) = self.runs.get_mut(&session)
+            && let Some(run) = self.session_control.runs.get_mut(&session)
             && !run.runtime.is_cancelled()
             && run
                 .approvals

@@ -13,13 +13,17 @@ pub(super) fn finish_tool_cards(session: &mut SessionRecord, prefix: &str, statu
         if item.kind == ItemKind::Tool
             && item.key.starts_with(&prefix)
             && let Some(approval) = item.approval.as_mut()
-            && approval.status == "等待中"
+            && approval.status == crate::message_status::ApprovalStatus::Waiting
         {
             approval.status = "已取消".into();
         }
         if item.kind == ItemKind::Tool
             && item.key.starts_with(&prefix)
-            && matches!(item.status.as_str(), "运行中" | "输出中")
+            && matches!(
+                item.status,
+                crate::message_status::ToolStatus::Running
+                    | crate::message_status::ToolStatus::Output
+            )
         {
             item.status = status.into();
         }
@@ -68,15 +72,6 @@ pub fn apply_event(session: &mut SessionRecord, prefix: &str, event: Event) {
     apply_event_indexed(session, prefix, event, &mut MessageIndex::default());
 }
 
-pub(super) fn attach_turn_model(session: &mut SessionRecord, prefix: &str, model: &str) {
-    let turn = format!("{prefix}-");
-    for item in &mut session.messages {
-        if item.kind == ItemKind::Assistant && item.key.starts_with(&turn) && item.model.is_none() {
-            item.model = Some(model.to_string());
-        }
-    }
-}
-
 pub(super) fn apply_event_indexed(
     session: &mut SessionRecord,
     prefix: &str,
@@ -106,18 +101,20 @@ pub(super) fn apply_event_indexed(
             }
             return Some(position);
         }
-        session.messages.push(ChatItem {
-            elapsed_ms: None,
-            key,
-            created_at: unix_now(),
-            kind: ItemKind::Reasoning,
-            text,
-            input: String::new(),
-            detail: summary_index.to_string(),
-            status: String::new(),
-            approval: None,
-            model: None,
-        });
+        session
+            .messages
+            .push(ChatItem::from(crate::domain::ChatItemData {
+                elapsed_ms: None,
+                key,
+                created_at: unix_now(),
+                kind: ItemKind::Reasoning,
+                text,
+                input: String::new(),
+                detail: summary_index.to_string(),
+                status: Default::default(),
+                approval: None,
+                model: None,
+            }));
         return Some(session.messages.len() - 1);
     }
     if let Event::ToolInput { key, input } = event {
@@ -126,18 +123,20 @@ pub(super) fn apply_event_indexed(
             session.messages[position].input = input;
             return Some(position);
         } else {
-            session.messages.push(ChatItem {
-                elapsed_ms: None,
-                key,
-                created_at: 0,
-                kind: ItemKind::Tool,
-                text: "工具调用".into(),
-                input,
-                detail: String::new(),
-                status: "运行中".into(),
-                approval: None,
-                model: None,
-            });
+            session
+                .messages
+                .push(ChatItem::from(crate::domain::ChatItemData {
+                    elapsed_ms: None,
+                    key,
+                    created_at: 0,
+                    kind: ItemKind::Tool,
+                    text: "工具调用".into(),
+                    input,
+                    detail: String::new(),
+                    status: "运行中".into(),
+                    approval: None,
+                    model: None,
+                }));
         }
         return Some(session.messages.len() - 1);
     }
@@ -219,7 +218,7 @@ pub(super) fn apply_event_indexed(
             } else if !detail.is_empty() {
                 item.detail = detail;
             }
-            item.status = status;
+            item.status = status.into();
         }
         Some(position)
     } else {
@@ -236,18 +235,20 @@ pub(super) fn apply_event_indexed(
                 .last()
                 .is_some_and(|last| last.kind == ItemKind::Notice && last.text == text);
         if !duplicate_text && !duplicate_notice {
-            session.messages.push(ChatItem {
-                elapsed_ms: None,
-                key,
-                created_at: unix_now(),
-                kind,
-                text,
-                input: String::new(),
-                detail,
-                status,
-                approval: None,
-                model: None,
-            });
+            session
+                .messages
+                .push(ChatItem::from(crate::domain::ChatItemData {
+                    elapsed_ms: None,
+                    key,
+                    created_at: unix_now(),
+                    kind,
+                    text,
+                    input: String::new(),
+                    detail,
+                    status: status.into(),
+                    approval: None,
+                    model: None,
+                }));
             Some(session.messages.len() - 1)
         } else {
             None

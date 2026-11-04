@@ -89,15 +89,18 @@ impl ConduitApp {
     }
 
     fn update_idle(&self) -> bool {
-        self.runs.is_empty()
+        self.session_control.runs.is_empty()
             && self.probes.is_empty()
             && self.opencode_model_probes.is_empty()
-            && self.git_operation.is_none()
-            && self.commit_generation.is_none()
-            && self.session_namings.is_empty()
+            && self.git.operation.is_none()
+            && self.git.generation.is_none()
+            && self.session_control.namings.is_empty()
             && self.history_loading.is_empty()
-            && self.git_probe.is_none()
-            && self.branch_probe.is_none()
+            && self.git.probe.is_none()
+            && self.git.branch_probe.is_none()
+            && !self.dirty
+            && !self.persistence.busy()
+            && self.persistence.error.is_none()
     }
 
     fn check_update(&mut self, cx: &mut Context<Self>) {
@@ -287,7 +290,7 @@ impl ConduitApp {
         else {
             return;
         };
-        if !self.persist() {
+        if self.persistence.error.is_some() {
             self.updater.fail("无法保存数据，更新已取消".into());
             cx.notify();
             return;
@@ -315,7 +318,12 @@ impl ConduitApp {
             self.workspace_drafts
                 .insert(target.workspace, self.input.read(cx).value().to_string());
         }
+        #[cfg(test)]
         anyhow::ensure!(self.persist(), "无法保存应用数据");
+        anyhow::ensure!(
+            !self.dirty && !self.persistence.busy() && self.persistence.error.is_none(),
+            "等待应用数据保存完成"
+        );
         let recovery = Recovery {
             schema: 1,
             workspace: self.selected_workspace_path(),
@@ -334,12 +342,14 @@ impl ConduitApp {
                 })
                 .collect(),
             commit_tags: self
-                .commit_drafts
+                .git
+                .drafts
                 .iter()
                 .map(|(path, draft)| (path.clone(), draft.tag.read(cx).value().to_string()))
                 .collect(),
             commits: self
-                .commit_drafts
+                .git
+                .drafts
                 .iter()
                 .map(|(path, draft)| (path.clone(), draft.input.read(cx).value().to_string()))
                 .collect(),
@@ -389,7 +399,7 @@ impl ConduitApp {
                     tag.update(cx, |tag, cx| tag.set_value(value.clone(), window, cx));
                 }
                 let tag_subscription = cx.subscribe(&tag, |_, _, _: &InputEvent, cx| cx.notify());
-                self.commit_drafts.insert(
+                self.git.drafts.insert(
                     path,
                     CommitDraft {
                         input,
@@ -627,7 +637,7 @@ mod tests {
                     },
                 );
                 app.ensure_commit_draft(window, cx);
-                app.commit_drafts[&workspace]
+                app.git.drafts[&workspace]
                     .input
                     .update(cx, |input, cx| input.set_value("待提交说明", window, cx));
                 app.save_update_drafts(cx).unwrap();
@@ -641,11 +651,7 @@ mod tests {
                     attachment.canonicalize().unwrap()
                 );
                 assert_eq!(
-                    app.commit_drafts[&workspace]
-                        .input
-                        .read(cx)
-                        .value()
-                        .as_str(),
+                    app.git.drafts[&workspace].input.read(cx).value().as_str(),
                     "待提交说明"
                 );
                 assert!(

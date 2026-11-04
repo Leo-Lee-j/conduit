@@ -90,6 +90,7 @@ struct FileViewSnapshot {
 impl FileViewSnapshot {
     fn new(app: &ConduitApp) -> Self {
         let mut approvals: Vec<_> = app
+            .session_control
             .runs
             .iter()
             .filter(|(_, r)| !r.approvals.is_empty())
@@ -97,6 +98,7 @@ impl FileViewSnapshot {
             .collect();
         approvals.sort_unstable();
         let mut errors: Vec<_> = app
+            .session_control
             .unread_completed
             .iter()
             .copied()
@@ -198,7 +200,7 @@ impl ConduitApp {
                     if self.selected_session == Some(id) && self.selected_workspace == Some(index) {
                         self.active_file = None;
                         self.push_tab(id);
-                        self.unread_completed.remove(&id);
+                        self.session_control.unread_completed.remove(&id);
                         if let Some(provider) = self.session(id).map(|s| s.provider) {
                             self.new_session_provider = provider;
                             self.remember_provider(provider);
@@ -284,7 +286,7 @@ impl ConduitApp {
                 }
                 self.active_file = None;
                 self.active_diff = Some(id);
-                if self.git_snapshot.is_none() && self.git_probe.is_none() {
+                if self.git.snapshot.is_none() && self.git.probe.is_none() {
                     self.refresh_git(cx);
                 }
                 view.update(cx, |view, cx| {
@@ -651,7 +653,7 @@ impl ConduitApp {
 
     pub(super) fn render_navigation(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let mode = self.files.mode;
-        let pending = self.unread_completed.len() + self.runs.len();
+        let pending = self.session_control.unread_completed.len() + self.session_control.runs.len();
         let rail = v_flex()
             .w(px(38.))
             .h_full()
@@ -1385,8 +1387,8 @@ impl ConduitApp {
                         title.clone(),
                         title,
                         provider_icon(s.provider).into_any_element(),
-                        self.runs.contains_key(&id),
-                        self.unread_completed.contains(&id),
+                        self.session_control.runs.contains_key(&id),
+                        self.session_control.unread_completed.contains(&id),
                         format!("session-tab-{id}"),
                     )
                 }
@@ -1604,9 +1606,9 @@ impl ConduitApp {
 
     pub(super) fn poll_git_navigation(&mut self, cx: &mut Context<Self>) {
         if (self.git_navigation_open() || self.active_diff.is_some())
-            && self.git_probe.is_none()
-            && self.git_operation.is_none()
-            && self.commit_generation.is_none()
+            && self.git.probe.is_none()
+            && self.git.operation.is_none()
+            && self.git.generation.is_none()
             && self
                 .files
                 .last_git_refresh
@@ -1910,6 +1912,7 @@ impl ConduitApp {
 
     fn document_attention(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if let Some((id, count)) = self
+            .session_control
             .runs
             .iter()
             .filter(|(_, r)| !r.approvals.is_empty())
@@ -1930,7 +1933,8 @@ impl ConduitApp {
                     .into_any_element(),
             )
         } else {
-            self.unread_completed
+            self.session_control
+                .unread_completed
                 .iter()
                 .copied()
                 .find(|id| {
@@ -2241,11 +2245,11 @@ mod tests {
                 assert_eq!(a.input.read(cx).value(), "draft alpha");
                 // File context may change workspace, but it must not open/evict chats or consume unread replies.
                 a.store.ui.max_tabs = 1;
-                a.unread_completed.insert(2);
+                a.session_control.unread_completed.insert(2);
                 a.open_workspace_file(fixture.key("beta", "src/main.rs"), true, window, cx);
                 assert_eq!(a.selected_workspace, Some(1));
                 assert_eq!(a.selected_session, Some(2));
-                assert!(a.unread_completed.contains(&2));
+                assert!(a.session_control.unread_completed.contains(&2));
                 assert!(a.open_tabs.contains(&DocumentTab::Chat(1)));
                 assert!(!a.open_tabs.contains(&DocumentTab::Chat(2)));
                 assert_eq!(a.drafts.get(&1).unwrap(), "draft alpha");
@@ -2478,7 +2482,7 @@ mod tests {
                 app.selected_workspace = Some(0);
                 app.selected_session = Some(1);
                 app.open_tabs = vec![DocumentTab::Chat(1)];
-                app.runs.insert(
+                app.session_control.runs.insert(
                     1,
                     ActiveRun::new(
                         runtime,
@@ -2499,7 +2503,7 @@ mod tests {
         cx.run_until_parked();
         let id = cx.update(|_, cx| app.read(cx).active_file.unwrap());
         cx.update(|_, cx| {
-            assert!(app.read(cx).runs.contains_key(&1));
+            assert!(app.read(cx).session_control.runs.contains_key(&1));
         });
         cx.update(|window, cx| {
             let _ = window.draw(cx);
@@ -2523,11 +2527,8 @@ mod tests {
         );
         cx.update(|_, cx| {
             app.update(cx, |a, cx| {
-                a.runs
-                    .get_mut(&1)
-                    .unwrap()
-                    .approvals
-                    .push(crate::protocol::Approval {
+                a.session_control.runs.get_mut(&1).unwrap().approvals.push(
+                    crate::protocol::Approval {
                         id: "file-test-approval".into(),
                         title: "command".into(),
                         detail: "test".into(),
@@ -2535,7 +2536,8 @@ mod tests {
                         input: serde_json::Value::Null,
                         allow_once: true,
                         kind: crate::protocol::ApprovalKind::Command,
-                    });
+                    },
+                );
                 cx.notify();
             })
         });
@@ -2551,8 +2553,13 @@ mod tests {
         cx.update(|window, cx| {
             app.update(cx, |a, cx| {
                 assert_eq!(a.active_file, None);
-                assert_eq!(a.runs[&1].approvals.len(), 1);
-                a.runs.get_mut(&1).unwrap().approvals.clear();
+                assert_eq!(a.session_control.runs[&1].approvals.len(), 1);
+                a.session_control
+                    .runs
+                    .get_mut(&1)
+                    .unwrap()
+                    .approvals
+                    .clear();
                 a.open_workspace_file(key.clone(), false, window, cx);
             })
         });
@@ -2585,7 +2592,7 @@ mod tests {
         cx.update(|_, cx| {
             let a = app.read(cx);
             assert_eq!(a.active_file, Some(id));
-            assert!(a.unread_completed.contains(&1));
+            assert!(a.session_control.unread_completed.contains(&1));
         });
         assert!(cx.debug_bounds("file-document").is_some());
         std::fs::remove_file(key.workspace.join(&key.relative)).unwrap();
@@ -2720,7 +2727,9 @@ mod git_navigation_tests {
                     a.poll_git_actions(window, cx);
                     a.poll_branches(cx);
                     a.poll_git(window, cx);
-                    a.git_probe.is_none() && a.git_operation.is_none() && a.branch_probe.is_none()
+                    a.git.probe.is_none()
+                        && a.git.operation.is_none()
+                        && a.git.branch_probe.is_none()
                 })
             });
             cx.run_until_parked();
@@ -2806,7 +2815,7 @@ mod git_navigation_tests {
         click(cx, "git-tag-generate");
         cx.update(|window, cx| {
             app.update(cx, |a, cx| {
-                let draft = &a.commit_drafts[&repo.0];
+                let draft = &a.git.drafts[&repo.0];
                 assert_eq!(draft.tag.read(cx).value(), "v0.1.0");
                 draft
                     .tag
@@ -2817,8 +2826,8 @@ mod git_navigation_tests {
         assert!(refresh.left() >= navigation.left() && refresh.right() <= navigation.right());
         cx.update(|_, cx| {
             app.update(cx, |a, cx| {
-                let branch = a.git_repository.as_ref().unwrap().current.clone();
-                a.remote_tags.insert(
+                let branch = a.git.repository.as_ref().unwrap().current.clone();
+                a.git.remote_tags.insert(
                     repo.0.clone(),
                     git::RemoteTags {
                         branch,
@@ -2834,20 +2843,20 @@ mod git_navigation_tests {
         click(cx, "git-tag-generate");
         cx.update(|window, cx| {
             app.update(cx, |a, cx| {
-                assert_eq!(a.commit_drafts[&repo.0].tag.read(cx).value(), "v5.0.19");
-                a.commit_drafts[&repo.0]
+                assert_eq!(a.git.drafts[&repo.0].tag.read(cx).value(), "v5.0.19");
+                a.git.drafts[&repo.0]
                     .tag
                     .update(cx, |tag, cx| tag.set_value("", window, cx));
-                a.remote_tags_probe = Some(git::RemoteTagsProbe::test_pending(repo.0.clone()));
+                a.git.remote_tags_probe = Some(git::RemoteTagsProbe::test_pending(repo.0.clone()));
                 a.poll_git_actions(window, cx);
-                assert_eq!(a.remote_tags[&repo.0].names, vec!["v5.0.9"]);
-                a.remote_tags.remove(&repo.0);
+                assert_eq!(a.git.remote_tags[&repo.0].names, vec!["v5.0.9"]);
+                a.git.remote_tags.remove(&repo.0);
                 a.store.git.tag_step = 1;
             });
         });
         cx.update(|_, cx| {
             app.update(cx, |a, cx| {
-                a.pending_tag_retry.insert(
+                a.git.pending_tag_retry.insert(
                     repo.0.clone(),
                     git::TagRetry {
                         branch: "main".into(),
@@ -2870,14 +2879,14 @@ mod git_navigation_tests {
         );
         cx.update(|_, cx| {
             app.update(cx, |a, cx| {
-                a.pending_tag_retry.remove(&repo.0);
+                a.git.pending_tag_retry.remove(&repo.0);
                 cx.notify();
             });
         });
         draw(cx);
         cx.update(|window, cx| {
             app.update(cx, |a, cx| {
-                let draft = &a.commit_drafts[&repo.0];
+                let draft = &a.git.drafts[&repo.0];
                 draft.input.update(cx, |input, cx| {
                     input.set_value("long draft\n".repeat(80), window, cx)
                 });
@@ -2890,7 +2899,7 @@ mod git_navigation_tests {
         assert!(cx.debug_bounds("git-change-file-new file.txt").is_none());
         click(cx, "git-select-group-Untracked");
         cx.update(|_, cx| {
-            let selected = &app.read(cx).selected_git_files[&repo.0];
+            let selected = &app.read(cx).git.selected_files[&repo.0];
             assert_eq!(selected.len(), 1);
             assert!(selected.contains("new file.txt"));
         });
@@ -2898,7 +2907,7 @@ mod git_navigation_tests {
         wait_git(cx, &app);
         cx.update(|_, cx| {
             let a = app.read(cx);
-            let s = a.git_snapshot.as_ref().unwrap();
+            let s = a.git.snapshot.as_ref().unwrap();
             assert_eq!(s.staged_count(), 1);
             assert!(
                 s.files
@@ -2910,7 +2919,7 @@ mod git_navigation_tests {
         wait_git(cx, &app);
         cx.update(|_, cx| {
             assert_eq!(
-                app.read(cx).git_snapshot.as_ref().unwrap().staged_count(),
+                app.read(cx).git.snapshot.as_ref().unwrap().staged_count(),
                 0
             )
         });
@@ -2921,15 +2930,15 @@ mod git_navigation_tests {
         click(cx, "git-collapse-all");
         assert!(cx.debug_bounds("git-change-file-src/main.rs").is_some());
         click(cx, "git-select-unstaged");
-        cx.update(|_, cx| assert_eq!(app.read(cx).selected_git_files[&repo.0].len(), 2));
+        cx.update(|_, cx| assert_eq!(app.read(cx).git.selected_files[&repo.0].len(), 2));
         click(cx, "git-select-unstaged");
-        cx.update(|_, cx| assert!(app.read(cx).selected_git_files[&repo.0].is_empty()));
+        cx.update(|_, cx| assert!(app.read(cx).git.selected_files[&repo.0].is_empty()));
         click(cx, "git-commit-mode-trigger");
         click(cx, "git-mode-commit-push");
-        cx.update(|_, cx| assert!(app.read(cx).commit_and_push));
+        cx.update(|_, cx| assert!(app.read(cx).git.commit_and_push));
         click(cx, "git-commit-mode-trigger");
         click(cx, "git-mode-commit");
-        cx.update(|_, cx| assert!(!app.read(cx).commit_and_push));
+        cx.update(|_, cx| assert!(!app.read(cx).git.commit_and_push));
         cx.update(|_, cx| {
             app.update(cx, |a, cx| {
                 a.git_feedback(
@@ -2938,7 +2947,7 @@ mod git_navigation_tests {
                     true,
                     cx,
                 );
-                a.git_group_by_status = true;
+                a.git.group_by_status = true;
                 cx.notify();
             });
         });
@@ -2954,7 +2963,7 @@ mod git_navigation_tests {
         assert!(actions.bottom() <= navigation.bottom());
         cx.update(|_, cx| {
             app.update(cx, |a, cx| {
-                a.git_group_by_status = false;
+                a.git.group_by_status = false;
                 cx.notify();
             })
         });
@@ -2962,7 +2971,8 @@ mod git_navigation_tests {
         draw(cx);
         let file = cx.update(|_, cx| {
             app.read(cx)
-                .git_snapshot
+                .git
+                .snapshot
                 .as_ref()
                 .unwrap()
                 .files
@@ -3054,7 +3064,8 @@ mod git_navigation_tests {
         // Newly staged and subsequently committed files must not remain a fake added-file diff.
         let new = cx.update(|_, cx| {
             app.read(cx)
-                .git_snapshot
+                .git
+                .snapshot
                 .as_ref()
                 .unwrap()
                 .files
@@ -3297,7 +3308,7 @@ mod file_search_tests {
                 PathBuf::from("src/main.rs")
             );
             assert_eq!(app.input.read(cx).value(), "keep draft");
-            assert!(app.runs.is_empty());
+            assert!(app.session_control.runs.is_empty());
         });
 
         // The shortcut also works with a file document focused, not only the composer.
@@ -3349,12 +3360,16 @@ mod file_search_tests {
         });
 
         // No workspace: show a message rather than attempting to scan an arbitrary directory.
-        cx.update(|_, cx| {
-            app.update(cx, |app, _| {
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
                 app.selected_workspace = None;
                 app.double_shift = DoubleShift::default();
+                app.active_file = None;
+                app.input.read(cx).focus_handle(cx).focus(window, cx);
+                cx.notify();
             })
         });
+        settle(cx);
         tap_shift(cx);
         tap_shift(cx);
         settle(cx);

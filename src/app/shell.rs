@@ -156,7 +156,7 @@ impl Render for ConduitApp {
             self.performance.update(cx, |monitor, _| {
                 monitor.begin_render(
                     message_count,
-                    self.runs.len(),
+                    self.session_control.runs.len(),
                     self.store.workspaces.iter().map(|w| w.sessions.len()).sum(),
                 );
             });
@@ -338,12 +338,12 @@ impl Render for ConduitApp {
             conversation = conversation.child(message_area);
             let approval_count = self
                 .selected_session
-                .and_then(|id| self.runs.get(&id))
+                .and_then(|id| self.session_control.runs.get(&id))
                 .map(|r| r.approvals.len())
                 .unwrap_or(0);
             let approvals = self
                 .selected_session
-                .and_then(|id| self.runs.get(&id))
+                .and_then(|id| self.session_control.runs.get(&id))
                 .and_then(|r| r.approvals.front().cloned());
             for (index, approval) in approvals.into_iter().enumerate() {
                 if approval.is_user_input() {
@@ -353,13 +353,14 @@ impl Render for ConduitApp {
                 }
                 let submitted = self
                     .selected_session
-                    .and_then(|id| self.runs.get(&id))
+                    .and_then(|id| self.session_control.runs.get(&id))
                     .is_some_and(|r| r.approvals.is_submitted(&approval.id));
                 let id = self.selected_session.unwrap();
                 let allow_id = approval.id.clone();
                 let deny_id = approval.id;
                 let toggle_id = deny_id.clone();
                 let expanded = self
+                    .session_control
                     .runs
                     .get(&id)
                     .is_some_and(|run| run.expanded_approvals.contains(&deny_id));

@@ -51,7 +51,7 @@ fn error_retry_keeps_partial_output_when_context_validation_fails(cx: &mut TestA
                 serde_json::to_value(&app.session(1).unwrap().messages).unwrap(),
                 before
             );
-            assert!(app.runs.is_empty());
+            assert!(app.session_control.runs.is_empty());
             assert!(
                 app.message
                     .as_deref()
@@ -750,9 +750,9 @@ fn git_branch_menu_opens_create_form_and_remains_usable_after_repaint(cx: &mut T
             };
             let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
             app.selected_workspace = Some(0);
-            app.git_workspace = Some(path);
-            app.branch_probe = None;
-            app.git_probe = None;
+            app.git.workspace = Some(path);
+            app.git.branch_probe = None;
+            app.git.probe = None;
             let info = git::BranchInfo {
                 name: "main".into(),
                 full_ref: "refs/heads/main".into(),
@@ -763,7 +763,7 @@ fn git_branch_menu_opens_create_form_and_remains_usable_after_repaint(cx: &mut T
                 upstream_ref: None,
                 occupied: None,
             };
-            app.git_repository = Some(git::Repository {
+            app.git.repository = Some(git::Repository {
                 current: "main".into(),
                 detached: false,
                 branches: vec![git::Branch {
@@ -911,7 +911,8 @@ fn git_branch_menu_opens_create_form_and_remains_usable_after_repaint(cx: &mut T
                 .as_ref()
                 .unwrap()
                 .read(cx)
-                .git_operation
+                .git
+                .operation
                 .is_none(),
             "cancelling cannot start a Git mutation"
         );
@@ -1021,7 +1022,7 @@ fn git_branch_menu_opens_create_form_and_remains_usable_after_repaint(cx: &mut T
     // A long upstream submenu must scroll independently of the branch picker.
     cx.update(|_, cx| {
         slot.borrow().as_ref().unwrap().update(cx, |app, cx| {
-            let repository = app.git_repository.as_mut().unwrap();
+            let repository = app.git.repository.as_mut().unwrap();
             let template = repository.branch_info[0].clone();
             for index in 0..80 {
                 let name = format!("origin/remote-{index:03}");
@@ -1127,7 +1128,7 @@ fn git_branch_menu_opens_create_form_and_remains_usable_after_repaint(cx: &mut T
     cx.run_until_parked();
     cx.update(|window, cx| {
         slot.borrow().as_ref().unwrap().update(cx, |app, cx| {
-            let repository = app.git_repository.as_mut().unwrap();
+            let repository = app.git.repository.as_mut().unwrap();
             repository.integration = Some(git::IntegrationState::Merge);
             repository.conflicts = vec!["src/conflicted.rs".into()];
             cx.notify();
@@ -1234,10 +1235,10 @@ fn git_branch_mouse_actions_checkout_create_and_track_real_repository(cx: &mut T
             };
             let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
             app.selected_workspace = Some(0);
-            app.git_workspace = Some(repository.0.clone());
-            app.branch_probe = None;
-            app.git_probe = None;
-            app.git_repository = Some(metadata);
+            app.git.workspace = Some(repository.0.clone());
+            app.git.branch_probe = None;
+            app.git.probe = None;
+            app.git.repository = Some(metadata);
             app
         });
         *output.borrow_mut() = Some(app.clone());
@@ -1269,7 +1270,7 @@ fn git_branch_mouse_actions_checkout_create_and_track_real_repository(cx: &mut T
             let done = cx.update(|window, cx| {
                 app.update(cx, |app, cx| {
                     app.poll_git_actions(window, cx);
-                    app.git_operation.is_none()
+                    app.git.operation.is_none()
                 })
             });
             if done {
@@ -1281,9 +1282,10 @@ fn git_branch_mouse_actions_checkout_create_and_track_real_repository(cx: &mut T
         cx.update(|_, cx| {
             let app = app.read(cx);
             assert!(
-                app.git_feedback.values().all(|feedback| !feedback.error),
+                app.git.feedback.values().all(|feedback| !feedback.error),
                 "{}",
-                app.git_feedback
+                app.git
+                    .feedback
                     .values()
                     .map(|feedback| feedback.text.as_str())
                     .collect::<Vec<_>>()
@@ -1309,7 +1311,7 @@ fn git_branch_mouse_actions_checkout_create_and_track_real_repository(cx: &mut T
     pointer_click(cx, checkout, MouseButton::Left);
     cx.update(|_, cx| {
         assert!(
-            app.read(cx).git_operation.is_some(),
+            app.read(cx).git.operation.is_some(),
             "Checkout click starts a Git operation"
         )
     });
@@ -1319,8 +1321,8 @@ fn git_branch_mouse_actions_checkout_create_and_track_real_repository(cx: &mut T
     let metadata = git::load_repository(&repository.0, &AtomicBool::new(false)).unwrap();
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
-            app.branch_probe = None;
-            app.git_repository = Some(metadata);
+            app.git.branch_probe = None;
+            app.git.repository = Some(metadata);
             cx.notify();
         })
     });
@@ -1348,7 +1350,7 @@ fn git_branch_mouse_actions_checkout_create_and_track_real_repository(cx: &mut T
     draw(cx);
     cx.update(|_, cx| {
         assert!(
-            app.read(cx).git_operation.is_some(),
+            app.read(cx).git.operation.is_some(),
             "form confirmation starts creation"
         )
     });
@@ -1367,8 +1369,8 @@ fn git_branch_mouse_actions_checkout_create_and_track_real_repository(cx: &mut T
     let metadata = git::load_repository(&repository.0, &AtomicBool::new(false)).unwrap();
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
-            app.branch_probe = None;
-            app.git_repository = Some(metadata);
+            app.git.branch_probe = None;
+            app.git.repository = Some(metadata);
             cx.notify();
         })
     });
@@ -1394,7 +1396,7 @@ fn git_branch_mouse_actions_checkout_create_and_track_real_repository(cx: &mut T
     pointer_click(cx, upstream, MouseButton::Left);
     cx.update(|_, cx| {
         assert!(
-            app.read(cx).git_operation.is_some(),
+            app.read(cx).git.operation.is_some(),
             "submenu mouse selection starts tracking update"
         )
     });
@@ -1407,8 +1409,8 @@ fn git_branch_mouse_actions_checkout_create_and_track_real_repository(cx: &mut T
     let metadata = git::load_repository(&repository.0, &AtomicBool::new(false)).unwrap();
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
-            app.branch_probe = None;
-            app.git_repository = Some(metadata);
+            app.git.branch_probe = None;
+            app.git.repository = Some(metadata);
             cx.notify();
         })
     });
@@ -1442,8 +1444,8 @@ fn git_branch_mouse_actions_checkout_create_and_track_real_repository(cx: &mut T
     );
     cx.update(|_, cx| {
         app.update(cx, |app, _| {
-            app.branch_probe = None;
-            app.git_probe = None;
+            app.git.branch_probe = None;
+            app.git.probe = None;
         })
     });
 }
@@ -1638,17 +1640,19 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
         let app = cx.new(|cx| {
             let mut session = super::tests::session();
             session.title = "状态布局回归".into();
-            let item = |key: &str, kind, text: &str, status: &str| ChatItem {
-                elapsed_ms: None,
-                key: key.into(),
-                created_at: 0,
-                kind,
-                text: text.into(),
-                input: String::new(),
-                detail: String::new(),
-                status: status.into(),
-                approval: None,
-                model: None,
+            let item = |key: &str, kind, text: &str, status: &str| {
+                ChatItem::from(crate::domain::ChatItemData {
+                    elapsed_ms: None,
+                    key: key.into(),
+                    created_at: 0,
+                    kind,
+                    text: text.into(),
+                    input: String::new(),
+                    detail: String::new(),
+                    status: status.into(),
+                    approval: None,
+                    model: None,
+                })
             };
             session.messages = vec![
                 item("user", super::ItemKind::User, "检查代码", ""),
@@ -1671,7 +1675,7 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
             };
             let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
             app.writable = false;
-            app.runs.insert(
+            app.session_control.runs.insert(
                 1,
                 super::ActiveRun::new(
                     runtime,
@@ -1682,11 +1686,15 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
                     Default::default(),
                 ),
             );
-            app.runs.get_mut(&1).unwrap().model = Some("running-model".into());
-            app.runs.get_mut(&1).unwrap().reasoning_effort = super::ReasoningEffort::High;
+            app.session_control.runs.get_mut(&1).unwrap().model = Some("running-model".into());
+            app.session_control
+                .runs
+                .get_mut(&1)
+                .unwrap()
+                .reasoning_effort = super::ReasoningEffort::High;
             app.session_mut(1).unwrap().model = Some("next-turn-model".into());
             app.session_mut(1).unwrap().reasoning_effort = super::ReasoningEffort::Low;
-            app.plans.insert(
+            app.session_control.plans.insert(
                 1,
                 vec![super::PlanStep {
                     text: "检查代码".into(),
@@ -1702,7 +1710,7 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
     let turn_start = std::time::Instant::now() - std::time::Duration::from_secs(12);
     cx.update(|_, cx| {
         app.update(cx, |this, _| {
-            let run = this.runs.get_mut(&1).unwrap();
+            let run = this.session_control.runs.get_mut(&1).unwrap();
             run.turn_started = turn_start;
             run.output_tokens_at_start = Some(100);
         })
@@ -1719,7 +1727,7 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
         .unwrap();
     cx.update(|window, cx| app.update(cx, |this, cx| this.poll(window, cx)));
     cx.update(|_, cx| {
-        let run = app.read(cx).runs.get(&1).unwrap();
+        let run = app.read(cx).session_control.runs.get(&1).unwrap();
         assert_eq!(
             run.turn_started, turn_start,
             "token reset must not reset wall time"
@@ -1743,7 +1751,7 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
     assert!(model.left() >= elapsed.right());
     assert!(effort.left() >= model.right());
     cx.update(|_, cx| {
-        let run = app.read(cx).runs.get(&1).unwrap();
+        let run = app.read(cx).session_control.runs.get(&1).unwrap();
         assert_eq!(run.model.as_deref(), Some("running-model"));
         assert_eq!(run.reasoning_effort, super::ReasoningEffort::High);
     });
@@ -1806,7 +1814,7 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
         before_height
     );
     assert!(
-        cx.update(|_, cx| app.read(cx).runs.contains_key(&1)),
+        cx.update(|_, cx| app.read(cx).session_control.runs.contains_key(&1)),
         "collapse happens while the reply is streaming"
     );
 
@@ -1900,17 +1908,19 @@ fn empty_chat_blocks_have_no_chrome_and_streaming_replies_reflow_tool_groups(
     let (_, cx) = cx.add_window_view(|window, cx| {
         let app = cx.new(|cx| {
             let mut session = super::tests::session();
-            let item = |key: &str, kind, text: &str| ChatItem {
-                elapsed_ms: None,
-                key: key.into(),
-                created_at: 0,
-                kind,
-                text: text.into(),
-                input: String::new(),
-                detail: String::new(),
-                status: "completed".into(),
-                approval: None,
-                model: None,
+            let item = |key: &str, kind, text: &str| {
+                ChatItem::from(crate::domain::ChatItemData {
+                    elapsed_ms: None,
+                    key: key.into(),
+                    created_at: 0,
+                    kind,
+                    text: text.into(),
+                    input: String::new(),
+                    detail: String::new(),
+                    status: "completed".into(),
+                    approval: None,
+                    model: None,
+                })
             };
             session.messages = vec![
                 item("user", super::ItemKind::User, "检查聊天排版"),
@@ -1939,7 +1949,7 @@ fn empty_chat_blocks_have_no_chrome_and_streaming_replies_reflow_tool_groups(
             };
             let mut app = super::ConduitApp::with_store(window, cx, Ok(store), false, false);
             app.writable = false;
-            app.runs.insert(
+            app.session_control.runs.insert(
                 1,
                 super::ActiveRun::new(
                     runtime,
@@ -2068,18 +2078,20 @@ fn session_naming_applies_success_and_reports_failure_without_starting_cli(
         let app = cx.new(|cx| {
             let mut session = super::tests::session();
             session.title = "原始标题".into();
-            session.messages.push(ChatItem {
-                elapsed_ms: None,
-                key: "user".into(),
-                created_at: 0,
-                kind: super::ItemKind::User,
-                text: "优化聊天界面".into(),
-                input: String::new(),
-                detail: String::new(),
-                status: String::new(),
-                approval: None,
-                model: None,
-            });
+            session
+                .messages
+                .push(ChatItem::from(crate::domain::ChatItemData {
+                    elapsed_ms: None,
+                    key: "user".into(),
+                    created_at: 0,
+                    kind: super::ItemKind::User,
+                    text: "优化聊天界面".into(),
+                    input: String::new(),
+                    detail: String::new(),
+                    status: Default::default(),
+                    approval: None,
+                    model: None,
+                }));
             let store = Store {
                 workspaces: vec![Workspace {
                     path: std::env::temp_dir().join("conduit-naming-ui"),
@@ -2103,8 +2115,8 @@ fn session_naming_applies_success_and_reports_failure_without_starting_cli(
                 ("", None, Some("模型未返回有效标题")),
             ] {
                 let (runtime, sender) = crate::chat_runtime::ChatRuntime::test_channel();
-                this.naming_errors.remove(&1);
-                this.session_namings.insert(
+                this.session_control.naming_errors.remove(&1);
+                this.session_control.namings.insert(
                     1,
                     super::SessionNaming {
                         automatic: true,
@@ -2115,7 +2127,7 @@ fn session_naming_applies_success_and_reports_failure_without_starting_cli(
                     },
                 );
                 this.poll_session_namings(cx);
-                assert!(this.session_namings.contains_key(&1));
+                assert!(this.session_control.namings.contains_key(&1));
                 sender
                     .send(Event::Text {
                         key: "title".into(),
@@ -2129,8 +2141,14 @@ fn session_naming_applies_success_and_reports_failure_without_starting_cli(
                     })
                     .unwrap();
                 this.poll_session_namings(cx);
-                assert!(!this.session_namings.contains_key(&1));
-                assert_eq!(this.naming_errors.get(&1).map(String::as_str), expected);
+                assert!(!this.session_control.namings.contains_key(&1));
+                assert_eq!(
+                    this.session_control
+                        .naming_errors
+                        .get(&1)
+                        .map(String::as_str),
+                    expected
+                );
                 assert_eq!(this.session(1).unwrap().title, "聊天界面优化");
             }
         })
@@ -2193,7 +2211,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
             app.selected_workspace = Some(0);
             app.selected_session = Some(1);
             app.new_session_provider = Provider::Claude;
-            app.runs.clear();
+            app.session_control.runs.clear();
             app
         });
         *output.borrow_mut() = Some(app.clone());
@@ -2212,7 +2230,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
                     "other sessions cannot block {id}"
                 );
                 let (runtime, sender) = crate::chat_runtime::ChatRuntime::test_channel();
-                this.runs.insert(
+                this.session_control.runs.insert(
                     id,
                     super::ActiveRun::new(
                         runtime,
@@ -2225,7 +2243,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
                 );
                 senders.insert(id, sender);
             }
-            assert_eq!(this.runs.len(), 3);
+            assert_eq!(this.session_control.runs.len(), 3);
             assert!(this.worktree_has_runs(&root));
             assert!(this.worktree_has_runs(&other));
             assert!(!this.worktree_has_runs(&root.join("unrelated")));
@@ -2241,7 +2259,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
             this.writable = false;
             assert!(this.session(1).unwrap().messages.is_empty());
             assert_eq!(
-                this.runs.len(),
+                this.session_control.runs.len(),
                 3,
                 "duplicate sends must not replace a runtime"
             );
@@ -2288,7 +2306,11 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
                     format!("reply-{id}")
                 );
                 assert_eq!(
-                    this.runs[&id].approvals.front().unwrap().title,
+                    this.session_control.runs[&id]
+                        .approvals
+                        .front()
+                        .unwrap()
+                        .title,
                     format!("request-{id}")
                 );
                 this.toggle_approval_detail(id, "approval-1".into(), cx);
@@ -2300,10 +2322,14 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
                 })
                 .unwrap();
             this.poll(window, cx);
-            assert!(this.runs[&1].expanded_approvals.is_empty());
+            assert!(this.session_control.runs[&1].expanded_approvals.is_empty());
             for id in [2, 3] {
-                assert!(this.runs[&id].expanded_approvals.contains("approval-1"));
-                assert_eq!(this.runs[&id].approvals.len(), 1);
+                assert!(
+                    this.session_control.runs[&id]
+                        .expanded_approvals
+                        .contains("approval-1")
+                );
+                assert_eq!(this.session_control.runs[&id].approvals.len(), 1);
             }
             this.finish_history_import(
                 &root,
@@ -2320,10 +2346,10 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
                 cx,
             );
             assert_eq!(this.session(1).unwrap().messages[0].text, "reply-1");
-            this.runs.get_mut(&1).unwrap().cancel();
-            assert!(this.runs[&1].runtime.is_cancelled());
+            this.session_control.runs.get_mut(&1).unwrap().cancel();
+            assert!(this.session_control.runs[&1].runtime.is_cancelled());
             for id in [2, 3] {
-                assert!(!this.runs[&id].runtime.is_cancelled());
+                assert!(!this.session_control.runs[&id].runtime.is_cancelled());
             }
             senders[&1]
                 .send(Event::Finished {
@@ -2338,12 +2364,12 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
                 })
                 .unwrap();
             this.poll(window, cx);
-            assert!(!this.runs.contains_key(&1));
+            assert!(!this.session_control.runs.contains_key(&1));
             assert!(
-                !this.unread_completed.contains(&1),
+                !this.session_control.unread_completed.contains(&1),
                 "cancellation is not a completed reply"
             );
-            assert_eq!(this.runs.len(), 2);
+            assert_eq!(this.session_control.runs.len(), 2);
             assert_eq!(
                 this.session(2).unwrap().messages[0].text,
                 "reply-2-continued"
@@ -2367,12 +2393,12 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
                 .unwrap();
             this.poll(window, cx);
             assert!(
-                this.unread_completed.contains(&2),
+                this.session_control.unread_completed.contains(&2),
                 "successful background replies become unread"
             );
             this.switch(0, Some(2), window, cx);
             assert!(
-                !this.unread_completed.contains(&2),
+                !this.session_control.unread_completed.contains(&2),
                 "opening a session acknowledges its reply"
             );
             senders[&3]
@@ -2383,7 +2409,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
                 .unwrap();
             this.poll(window, cx);
             assert!(
-                !this.unread_completed.contains(&3),
+                !this.session_control.unread_completed.contains(&3),
                 "failures are not marked as successful replies"
             );
             assert_eq!(
@@ -2392,7 +2418,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
             );
             this.selected_session = Some(1);
             this.selected_workspace = Some(0);
-            this.git_operation = Some(super::GitOperation {
+            this.git.operation = Some(super::GitOperation {
                 probe: crate::git::OperationProbe::test_pending(root.clone()),
                 worktree: root.clone(),
                 draft: String::new(),
@@ -2404,13 +2430,13 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
                 this.send_blocked(true).is_none(),
                 "Git writes cannot block another workspace"
             );
-            this.runs.clear();
+            this.session_control.runs.clear();
             assert!(
                 !this.workspace_busy(1),
                 "unrelated Git writes cannot block workspace removal"
             );
             assert!(this.workspace_busy(0));
-            this.git_operation = None;
+            this.git.operation = None;
         });
     });
 }
@@ -2429,21 +2455,23 @@ fn long_chat_virtualizes_real_rows_and_keeps_history_jump_on_append(cx: &mut Tes
         let app = cx.new(|cx| {
             let mut app = super::ConduitApp::new(window, cx, false, false);
             let messages = (0..10_000)
-                .map(|index| ChatItem {
-                    elapsed_ms: None,
-                    key: format!("message-{index}"),
-                    created_at: 0,
-                    kind: if index % 2 == 0 {
-                        ItemKind::User
-                    } else {
-                        ItemKind::Notice
-                    },
-                    text: format!("历史消息 {index}"),
-                    input: String::new(),
-                    detail: String::new(),
-                    status: String::new(),
-                    approval: None,
-                    model: None,
+                .map(|index| {
+                    ChatItem::from(crate::domain::ChatItemData {
+                        elapsed_ms: None,
+                        key: format!("message-{index}"),
+                        created_at: 0,
+                        kind: if index % 2 == 0 {
+                            ItemKind::User
+                        } else {
+                            ItemKind::Notice
+                        },
+                        text: format!("历史消息 {index}"),
+                        input: String::new(),
+                        detail: String::new(),
+                        status: Default::default(),
+                        approval: None,
+                        model: None,
+                    })
                 })
                 .collect();
             app.store = Store {
@@ -2798,17 +2826,19 @@ fn check_assistant_drag_selection(
     let (_, cx) = cx.add_window_view(|window, cx| {
         let app = cx.new(|cx| {
             let mut app = super::ConduitApp::new(window, cx, false, false);
-            let item = |key: &str, kind: ItemKind, text: &str| ChatItem {
-                elapsed_ms: None,
-                key: key.into(),
-                created_at: 0,
-                kind,
-                text: text.into(),
-                input: String::new(),
-                detail: String::new(),
-                status: String::new(),
-                approval: None,
-                model: None,
+            let item = |key: &str, kind: ItemKind, text: &str| {
+                ChatItem::from(crate::domain::ChatItemData {
+                    elapsed_ms: None,
+                    key: key.into(),
+                    created_at: 0,
+                    kind,
+                    text: text.into(),
+                    input: String::new(),
+                    detail: String::new(),
+                    status: Default::default(),
+                    approval: None,
+                    model: None,
+                })
             };
             app.store = Store {
                 workspaces: vec![Workspace {
@@ -3368,7 +3398,10 @@ fn composer_files_paste_drafts_removal_and_failed_send(cx: &mut TestAppContext) 
             std::fs::remove_file(&first).unwrap();
             this.send_prompt(window, cx);
             assert_eq!(this.selected_session, None);
-            assert!(this.runs.is_empty(), "invalid files must not start a CLI");
+            assert!(
+                this.session_control.runs.is_empty(),
+                "invalid files must not start a CLI"
+            );
             assert_eq!(
                 this.current_files().unwrap().references.len(),
                 2,
@@ -3643,7 +3676,7 @@ fn attachment_tags_size_to_names_and_stay_inside_the_user_bubble(cx: &mut TestAp
                         archived: false,
                         native_id: None,
                         model: None,
-                        messages: vec![ChatItem {
+                        messages: vec![ChatItem::from(crate::domain::ChatItemData {
                             elapsed_ms: None,
                             key: "user-files".into(),
                             created_at: 0,
@@ -3651,10 +3684,10 @@ fn attachment_tags_size_to_names_and_stay_inside_the_user_bubble(cx: &mut TestAp
                             text: prompt.clone(),
                             input: String::new(),
                             detail: String::new(),
-                            status: String::new(),
+                            status: Default::default(),
                             approval: None,
                             model: None,
-                        }],
+                        })],
                         interrupted: false,
                         channel: Default::default(),
                         reasoning_effort: Default::default(),
@@ -3762,7 +3795,7 @@ fn cli_error_details_expand_copy_raw_diagnostics_and_collapse(cx: &mut TestAppCo
     let (_, cx) = cx.add_window_view(|window, cx| {
         let app = cx.new(|cx| {
             let mut session = super::tests::session();
-            session.messages = vec![ChatItem {
+            session.messages = vec![ChatItem::from(crate::domain::ChatItemData {
                 elapsed_ms: None,
                 key: "error".into(),
                 created_at: 0,
@@ -3770,10 +3803,10 @@ fn cli_error_details_expand_copy_raw_diagnostics_and_collapse(cx: &mut TestAppCo
                 text: "执行失败：connection closed".into(),
                 detail: raw.clone(),
                 input: String::new(),
-                status: String::new(),
+                status: Default::default(),
                 approval: None,
                 model: None,
-            }];
+            })];
             let store = Store {
                 workspaces: vec![Workspace {
                     path: std::env::temp_dir().join("conduit-error-ui"),
@@ -3856,7 +3889,7 @@ fn deleting_blank_session_skips_confirmation(cx: &mut TestAppContext) {
     };
     let used = session(
         2,
-        vec![ChatItem {
+        vec![ChatItem::from(crate::domain::ChatItemData {
             elapsed_ms: None,
             key: "user".into(),
             created_at: 0,
@@ -3864,10 +3897,10 @@ fn deleting_blank_session_skips_confirmation(cx: &mut TestAppContext) {
             text: "hello".into(),
             input: String::new(),
             detail: String::new(),
-            status: String::new(),
+            status: Default::default(),
             approval: None,
             model: None,
-        }],
+        })],
     );
     cx.update(gpui_kit::init);
     let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -3996,17 +4029,19 @@ fn historical_reply_elapsed_footer_is_available_on_hover(cx: &mut TestAppContext
     let (_, cx) = cx.add_window_view(|window, cx| {
         let app = cx.new(|cx| {
             let mut session = super::tests::session();
-            let item = |kind, created_at, elapsed_ms, text: &str| ChatItem {
-                key: format!("history-{created_at}"),
-                created_at,
-                elapsed_ms,
-                kind,
-                text: text.into(),
-                input: String::new(),
-                detail: String::new(),
-                status: String::new(),
-                approval: None,
-                model: None,
+            let item = |kind, created_at, elapsed_ms, text: &str| {
+                ChatItem::from(crate::domain::ChatItemData {
+                    key: format!("history-{created_at}"),
+                    created_at,
+                    elapsed_ms,
+                    kind,
+                    text: text.into(),
+                    input: String::new(),
+                    detail: String::new(),
+                    status: Default::default(),
+                    approval: None,
+                    model: None,
+                })
             };
             session.model =
                 Some("provider-with-a-very-long-model-name-that-must-not-overlap-actions".into());
@@ -4158,7 +4193,7 @@ fn tabs_share_running_and_unread_dots_and_clear_on_open(cx: &mut TestAppContext)
             app.writable = false;
             app.selected_session = Some(1);
             app.open_tabs = vec![super::DocumentTab::Chat(1), super::DocumentTab::Chat(2)];
-            app.runs.insert(
+            app.session_control.runs.insert(
                 2,
                 super::ActiveRun::new(
                     runtime,
@@ -4332,17 +4367,19 @@ fn composer_recalls_sent_prompts_with_arrow_keys(cx: &mut TestAppContext) {
     };
     use gpui_kit::{AppContext as _, Focusable as _, VisualTestContext};
 
-    let item = |key: &str, text: &str| ChatItem {
-        elapsed_ms: None,
-        key: key.into(),
-        created_at: 0,
-        kind: ItemKind::User,
-        text: text.into(),
-        input: String::new(),
-        detail: String::new(),
-        status: String::new(),
-        approval: None,
-        model: None,
+    let item = |key: &str, text: &str| {
+        ChatItem::from(crate::domain::ChatItemData {
+            elapsed_ms: None,
+            key: key.into(),
+            created_at: 0,
+            kind: ItemKind::User,
+            text: text.into(),
+            input: String::new(),
+            detail: String::new(),
+            status: Default::default(),
+            approval: None,
+            model: None,
+        })
     };
     let root = std::env::temp_dir().join(format!("conduit-prompt-history-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
@@ -4661,7 +4698,7 @@ fn session_average_speed_survives_new_turns_and_counts_stream_updates_once(
                 Default::default(),
             );
             run.turn_started = std::time::Instant::now() - std::time::Duration::from_secs(1);
-            app.runs.insert(1, run);
+            app.session_control.runs.insert(1, run);
             app
         });
         *output.borrow_mut() = Some(app.clone());
@@ -4704,7 +4741,7 @@ fn session_average_speed_survives_new_turns_and_counts_stream_updates_once(
                 "starting a turn must keep the session average"
             );
             run.turn_started = std::time::Instant::now() - std::time::Duration::from_secs(9);
-            this.runs.insert(1, run);
+            this.session_control.runs.insert(1, run);
         })
     });
     for _ in 0..2 {
@@ -4720,7 +4757,7 @@ fn session_average_speed_survives_new_turns_and_counts_stream_updates_once(
     }
     cx.update(|window, cx| app.update(cx, |this, cx| this.poll(window, cx)));
     cx.update(|_, cx| {
-        let usage = app.read(cx).runs.get(&1).unwrap().usage;
+        let usage = app.read(cx).session_control.runs.get(&1).unwrap().usage;
         assert_eq!(
             usage.session_output_tokens, 1_000,
             "repeated snapshots must replace, not accumulate"
@@ -4866,8 +4903,8 @@ fn commit_generation_recovers_from_transient_errors_and_preserves_edited_drafts(
         cx.update(|window, cx| {
             app.update(cx, |this, cx| {
                 let path = this.selected_workspace_path().unwrap();
-                let original = this.commit_drafts[&path].input.read(cx).value().to_string();
-                this.commit_generation = Some(super::CommitGeneration {
+                let original = this.git.drafts[&path].input.read(cx).value().to_string();
+                this.git.generation = Some(super::CommitGeneration {
                     path: path.clone(),
                     runtime,
                     started: std::time::Instant::now(),
@@ -4877,7 +4914,7 @@ fn commit_generation_recovers_from_transient_errors_and_preserves_edited_drafts(
                     last_diagnostic: None,
                 });
                 if edited {
-                    this.commit_drafts[&path].input.update(cx, |input, cx| {
+                    this.git.drafts[&path].input.update(cx, |input, cx| {
                         input.set_value("manual message", window, cx)
                     });
                 }
@@ -4902,9 +4939,9 @@ fn commit_generation_recovers_from_transient_errors_and_preserves_edited_drafts(
         cx.update(|_, cx| {
             let this = app.read(cx);
             let path = this.selected_workspace_path().unwrap();
-            assert!(this.commit_generation.is_none());
-            let text = this.commit_drafts[&path].input.read(cx).value().to_string();
-            let feedback = &this.git_feedback[&path];
+            assert!(this.git.generation.is_none());
+            let text = this.git.drafts[&path].input.read(cx).value().to_string();
+            let feedback = &this.git.feedback[&path];
             if edited {
                 assert_eq!(text, "manual message");
                 assert!(feedback.text.contains("未覆盖"));

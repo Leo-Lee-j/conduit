@@ -70,19 +70,13 @@ pub(super) fn session_matches(session: &SessionRecord, query: &str) -> bool {
 
 impl ConduitApp {
     pub(super) fn session(&self, id: u64) -> Option<&SessionRecord> {
-        self.store
-            .workspaces
-            .iter()
-            .flat_map(|w| &w.sessions)
-            .find(|s| s.id == id)
+        let (w, s) = self.session_control.locate(&self.store.workspaces, id)?;
+        self.store.workspaces.get(w)?.sessions.get(s)
     }
-
     pub(super) fn session_mut(&mut self, id: u64) -> Option<&mut SessionRecord> {
-        self.store
-            .workspaces
-            .iter_mut()
-            .flat_map(|w| &mut w.sessions)
-            .find(|s| s.id == id)
+        let (w, s) = self.session_control.locate(&self.store.workspaces, id)?;
+        self.session_control.changed(id);
+        self.store.workspaces.get_mut(w)?.sessions.get_mut(s)
     }
 
     pub(super) fn select_fallback_session(&mut self) {
@@ -100,7 +94,8 @@ impl ConduitApp {
             .is_some_and(|id| self.session(id).is_some_and(|session| !session.archived))
         {
             self.push_tab(self.selected_session.unwrap());
-            self.unread_completed
+            self.session_control
+                .unread_completed
                 .remove(&self.selected_session.unwrap());
             return;
         }
@@ -108,7 +103,7 @@ impl ConduitApp {
             if let Some(session) = workspace.sessions.iter().find(|s| !s.archived) {
                 self.selected_workspace = Some(index);
                 self.selected_session = Some(session.id);
-                self.unread_completed.remove(&session.id);
+                self.session_control.unread_completed.remove(&session.id);
                 self.push_tab(session.id);
                 return;
             }
@@ -133,8 +128,9 @@ impl ConduitApp {
         let limit = self.store.ui.max_tabs.clamp(1, MAX_TAB_LIMIT);
         while self.open_tabs.iter().filter(|t| t.chat().is_some()).count() > limit {
             if let Some(position) = self.open_tabs.iter().position(|tab| {
-                tab.chat()
-                    .is_some_and(|other| other != id && !self.runs.contains_key(&other))
+                tab.chat().is_some_and(|other| {
+                    other != id && !self.session_control.runs.contains_key(&other)
+                })
             }) {
                 self.open_tabs.remove(position);
             } else {
@@ -249,10 +245,10 @@ impl ConduitApp {
             return;
         }
         // A manual rename wins over any title the naming engine still owes us.
-        if let Some(naming) = self.session_namings.remove(&id) {
+        if let Some(naming) = self.session_control.namings.remove(&id) {
             naming.runtime.cancel();
         }
-        self.naming_errors.remove(&id);
+        self.session_control.naming_errors.remove(&id);
         if let Some(session) = self.session_mut(id) {
             session.title = title.chars().take(80).collect();
         }
@@ -385,7 +381,7 @@ impl ConduitApp {
     }
 
     pub(super) fn delete_session(&mut self, id: u64, cx: &mut Context<Self>) {
-        if self.runs.contains_key(&id) {
+        if self.session_control.runs.contains_key(&id) {
             self.message = Some("该会话仍有任务运行，请先取消后再删除。".into());
             self.delete_target = None;
             cx.notify();
@@ -396,7 +392,7 @@ impl ConduitApp {
         }
         self.drafts.remove(&id);
         self.queued_messages.remove(&id);
-        self.unread_completed.remove(&id);
+        self.session_control.unread_completed.remove(&id);
         self.expanded_errors.retain(|(session, _)| *session != id);
         self.composer_files
             .retain(|target, _| target.session != Some(id));
@@ -483,7 +479,8 @@ impl ConduitApp {
         let usage = self
             .selected_session
             .and_then(|id| {
-                self.runs
+                self.session_control
+                    .runs
                     .get(&id)
                     .map(|run| run.usage)
                     .or_else(|| self.session(id).map(|session| session.usage))
@@ -713,14 +710,14 @@ impl ConduitApp {
         self.history_loading.remove(&removed.path);
         self.collapsed_workspaces.remove(&removed.path);
         self.workspace_drafts.remove(&removed.path);
-        self.selected_git_files.remove(&removed.path);
+        self.git.selected_files.remove(&removed.path);
         self.composer_files
             .retain(|target, _| target.workspace != removed.path);
         self.expanded_workspaces.clear();
         for session in &removed.sessions {
             self.drafts.remove(&session.id);
             self.queued_messages.remove(&session.id);
-            self.unread_completed.remove(&session.id);
+            self.session_control.unread_completed.remove(&session.id);
             self.expanded_errors.retain(|(id, _)| *id != session.id);
             self.expanded_tools.retain(|(id, _)| *id != session.id);
             self.expanded_reasoning.retain(|(id, _)| *id != session.id);
@@ -898,7 +895,7 @@ impl ConduitApp {
         }
         self.pending_model_selection = None;
         if activate_chat && let Some(id) = session {
-            self.unread_completed.remove(&id);
+            self.session_control.unread_completed.remove(&id);
             self.push_tab(id);
         }
         self.message_focus = None;
@@ -1007,14 +1004,33 @@ impl ConduitApp {
         if !self.history_loading.insert(path.clone()) {
             return;
         }
+        self.session_control.begin_import(workspace);
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.session_control
+            .scan_cancels
+            .insert(path.clone(), cancel.clone());
         cx.spawn_in(window, async move |this, cx| {
             let scan_path = path.clone();
+            let ticket = cancel.clone();
             let imported = cx
                 .background_executor()
-                .spawn(async move { crate::history::scan_workspace(&scan_path) })
+                .spawn(async move { crate::history::scan_cancellable(&[scan_path], &ticket) })
                 .await;
             let _ = this.update_in(cx, |this, window, cx| {
-                this.finish_history_import(&path, imported, true, window, cx);
+                this.history_loading.remove(&path);
+                this.session_control.scan_cancels.remove(&path);
+                if !cancel.load(std::sync::atomic::Ordering::Acquire) {
+                    if !imported.warnings.is_empty() {
+                        this.message = Some(imported.warnings.join("\n"));
+                    }
+                    this.finish_history_import(
+                        &path,
+                        imported.sessions.into_iter().next().unwrap_or_default(),
+                        true,
+                        window,
+                        cx,
+                    );
+                }
             });
         })
         .detach();
@@ -1037,18 +1053,31 @@ impl ConduitApp {
         if paths.is_empty() {
             return;
         }
-        for path in &paths {
-            self.history_loading.insert(path.clone());
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        for workspace in &self.store.workspaces {
+            self.session_control
+                .scan_cancels
+                .insert(workspace.path.clone(), cancel.clone());
+            self.session_control.begin_import(workspace);
+            self.history_loading.insert(workspace.path.clone());
         }
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
             let scan_paths = paths.clone();
+            let ticket = cancel.clone();
             let imported = cx
                 .background_executor()
-                .spawn(async move { crate::history::scan_workspaces(&scan_paths) })
+                .spawn(async move { crate::history::scan_cancellable(&scan_paths, &ticket) })
                 .await;
             let _ = this.update_in(cx, |this, window, cx| {
-                for (path, sessions) in paths.into_iter().zip(imported) {
+                if cancel.load(std::sync::atomic::Ordering::Acquire) {
+                    return;
+                }
+                if !imported.warnings.is_empty() {
+                    this.message = Some(imported.warnings.join("\n"));
+                }
+                for (path, sessions) in paths.into_iter().zip(imported.sessions) {
+                    this.session_control.scan_cancels.remove(&path);
                     this.finish_history_import(&path, sessions, false, window, cx);
                 }
                 // The whole batch merged; the poll tick releases the startup
@@ -1081,17 +1110,30 @@ impl ConduitApp {
         };
         // A scan can finish after a turn has started. Its older transcript must
         // never replace messages or invalidate the active run's message index.
+        let versions = self.session_control.imports.remove(path);
         let imported = imported
             .into_iter()
             .filter(|imported| {
                 !self.store.workspaces[index].sessions.iter().any(|session| {
                     session.provider == imported.provider
                         && session.native_id.as_deref() == Some(imported.native_id.as_str())
-                        && self.runs.contains_key(&session.id)
+                        && (self.session_control.runs.contains_key(&session.id)
+                            || versions.as_ref().is_some_and(|versions| {
+                                !self.session_control.unchanged(versions, session.id)
+                            }))
                 })
             })
             .collect::<Vec<_>>();
         let discovered = !imported.is_empty();
+        if discovered {
+            self.session_control.global_revision =
+                self.session_control.global_revision.wrapping_add(1);
+            // Native import can replace keys without changing message count.
+            self.outline = MessageOutlineCache::default();
+            self.timeline_session = None;
+            self.message_focus = None;
+            self.pending_message_jump = None;
+        }
         crate::history::merge_imported(
             &mut self.store.workspaces[index],
             &mut self.next_id,
@@ -1113,6 +1155,9 @@ impl ConduitApp {
                 .map(|session| session.id)
         {
             self.switch(index, Some(session), window, cx);
+        }
+        if discovered {
+            self.dirty = true;
         }
         if discovered && persist {
             self.persist();

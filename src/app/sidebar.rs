@@ -475,8 +475,8 @@ impl ConduitApp {
                 let id = session.id;
                 let native_id = session.native_id.clone();
                 let active = self.selected_session == Some(id);
-                let running = self.runs.contains_key(&id);
-                let unread = self.unread_completed.contains(&id);
+                let running = self.session_control.runs.contains_key(&id);
+                let unread = self.session_control.unread_completed.contains(&id);
                 let archived = session.archived;
                 let can_ai_rename = can_edit
                     && session
@@ -594,7 +594,7 @@ impl ConduitApp {
                                     single_line_title(&session.title)
                                 }),
                         )
-                        .when(self.session_namings.contains_key(&id), |row| {
+                        .when(self.session_control.namings.contains_key(&id), |row| {
                             row.child(Spinner::new().small().color(rgb(palette().muted).into()))
                         })
                         .when(archived, |row| {

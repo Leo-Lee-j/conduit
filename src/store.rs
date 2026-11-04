@@ -180,7 +180,7 @@ pub enum TagIncrement {
     Major,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GitSettings {
     #[serde(default = "default_tag_step")]
     pub tag_step: usize,
@@ -245,7 +245,7 @@ pub struct QueuedMessage {
     pub paused: Option<String>,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Store {
     pub version: u32,
     pub workspaces: Vec<Workspace>,
@@ -364,44 +364,53 @@ impl Store {
                 }
                 if legacy {
                     session.title = format!("旧终端会话 #{}", session.id);
-                    session.messages.push(crate::domain::ChatItem {
-                        elapsed_ms: None,
-                        key: "legacy-migration".into(),
-                        created_at: 0,
-                        kind: crate::domain::ItemKind::Notice,
-                        text: "从终端原型迁移，仅保留元数据；发送消息将建立新的 CLI 对话。".into(),
-                        input: String::new(),
-                        detail: String::new(),
-                        status: String::new(),
-                        approval: None,
-                        model: None,
-                    });
+                    session.messages.push(crate::domain::ChatItem::from(
+                        crate::domain::ChatItemData {
+                            elapsed_ms: None,
+                            key: "legacy-migration".into(),
+                            created_at: 0,
+                            kind: crate::domain::ItemKind::Notice,
+                            text: "从终端原型迁移，仅保留元数据；发送消息将建立新的 CLI 对话。"
+                                .into(),
+                            input: String::new(),
+                            detail: String::new(),
+                            status: Default::default(),
+                            approval: None,
+                            model: None,
+                        },
+                    ));
                 }
                 if session.interrupted {
                     for item in &mut session.messages {
                         if let Some(approval) = item.approval.as_mut()
-                            && approval.status == "等待中"
+                            && approval.status == crate::message_status::ApprovalStatus::Waiting
                         {
                             approval.status = "已中断".into();
                         }
                         if item.kind == crate::domain::ItemKind::Tool
-                            && matches!(item.status.as_str(), "运行中" | "输出中")
+                            && matches!(
+                                item.status,
+                                crate::message_status::ToolStatus::Running
+                                    | crate::message_status::ToolStatus::Output
+                            )
                         {
                             item.status = "已中断".into();
                         }
                     }
-                    session.messages.push(crate::domain::ChatItem {
-                        elapsed_ms: None,
-                        key: format!("restart-{}", session.messages.len()),
-                        created_at: 0,
-                        kind: crate::domain::ItemKind::Notice,
-                        text: "上次执行已中断，未自动重试；可以检查现有结果后继续。".into(),
-                        input: String::new(),
-                        detail: String::new(),
-                        status: String::new(),
-                        approval: None,
-                        model: None,
-                    });
+                    session.messages.push(crate::domain::ChatItem::from(
+                        crate::domain::ChatItemData {
+                            elapsed_ms: None,
+                            key: format!("restart-{}", session.messages.len()),
+                            created_at: 0,
+                            kind: crate::domain::ItemKind::Notice,
+                            text: "上次执行已中断，未自动重试；可以检查现有结果后继续。".into(),
+                            input: String::new(),
+                            detail: String::new(),
+                            status: Default::default(),
+                            approval: None,
+                            model: None,
+                        },
+                    ));
                     session.interrupted = false;
                 }
                 session.migrate_approval_notices();
@@ -411,17 +420,16 @@ impl Store {
         state.version = 2;
         Ok(state)
     }
-    pub fn save(&self) -> Result<()> {
-        let path = Self::path();
-        self.save_to(&path)
-    }
-    fn save_to(&self, path: &Path) -> Result<()> {
+    pub(crate) fn save_to(&self, path: &Path) -> Result<()> {
         fs::create_dir_all(path.parent().unwrap())?;
         let temp = path.with_extension("json.tmp");
-        let bytes = serde_json::to_vec_pretty(self)?;
         let mut file = fs::File::create(&temp)?;
         use std::io::Write;
-        file.write_all(&bytes)?;
+        {
+            let mut output = std::io::BufWriter::new(&mut file);
+            serde_json::to_writer(&mut output, self)?;
+            output.flush()?;
+        }
         file.sync_all()?;
         drop(file);
         #[cfg(windows)]

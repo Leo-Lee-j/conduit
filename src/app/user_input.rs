@@ -75,7 +75,7 @@ mod tests {
         let (runtime, sender) = ChatRuntime::test_channel();
         cx.update(|window, cx| {
             app.update(cx, |this, cx| {
-                this.runs.insert(
+                this.session_control.runs.insert(
                     1,
                     ActiveRun::new(
                         runtime,
@@ -90,9 +90,9 @@ mod tests {
                     .send(step.events.into_iter().next().unwrap())
                     .unwrap();
                 this.poll(window, cx);
-                assert_eq!(this.runs[&1].status, "等待你的回答");
+                assert_eq!(this.session_control.runs[&1].status, "等待你的回答");
                 assert!(
-                    this.runs[&1].question_drafts["question-1"]
+                    this.session_control.runs[&1].question_drafts["question-1"]
                         .iter()
                         .all(|d| d.answers(cx).is_empty())
                 );
@@ -111,13 +111,19 @@ mod tests {
             cx.run_until_parked();
         };
         click(cx, "cli-question-submit");
-        cx.update(|_, cx| assert!(!app.read(cx).runs[&1].approvals.is_submitted("question-1")));
+        cx.update(|_, cx| {
+            assert!(
+                !app.read(cx).session_control.runs[&1]
+                    .approvals
+                    .is_submitted("question-1")
+            )
+        });
         click(cx, "cli-option-0-1");
         cx.update(|window, cx| {
             app.update(cx, |this, cx| {
-                let draft = &this.runs[&1].question_drafts["question-1"][0];
+                let draft = &this.session_control.runs[&1].question_drafts["question-1"][0];
                 assert_eq!(draft.answers(cx), vec!["B"]);
-                this.runs[&1].question_drafts["question-1"][1]
+                this.session_control.runs[&1].question_drafts["question-1"][1]
                     .custom
                     .update(cx, |input, cx| input.set_value("中文项目", window, cx));
                 cx.notify();
@@ -130,9 +136,13 @@ mod tests {
         click(cx, "cli-question-submit");
         cx.update(|window, cx| {
             app.update(cx, |this, cx| {
-                assert!(this.runs[&1].approvals.is_submitted("question-1"));
+                assert!(
+                    this.session_control.runs[&1]
+                        .approvals
+                        .is_submitted("question-1")
+                );
                 assert_eq!(
-                    this.runs[&1].question_drafts["question-1"][1].answers(cx),
+                    this.session_control.runs[&1].question_drafts["question-1"][1].answers(cx),
                     vec!["中文项目"]
                 );
                 sender
@@ -142,8 +152,8 @@ mod tests {
                     })
                     .unwrap();
                 this.poll(window, cx);
-                assert!(this.runs[&1].question_drafts.is_empty());
-                assert!(this.runs[&1].approvals.is_empty());
+                assert!(this.session_control.runs[&1].question_drafts.is_empty());
+                assert!(this.session_control.runs[&1].approvals.is_empty());
                 assert_eq!(
                     this.session(1)
                         .unwrap()
@@ -190,7 +200,7 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let session = self.selected_session.unwrap();
-        let run = &self.runs[&session];
+        let run = &self.session_control.runs[&session];
         let submitted = run.approvals.is_submitted(&approval.id);
         let disabled = self.closing || submitted || run.runtime.is_cancelled();
         let mut column = v_flex()
@@ -269,7 +279,7 @@ impl ConduitApp {
                                 if this.closing {
                                     return;
                                 }
-                                let Some(run) = this.runs.get_mut(&session) else {
+                                let Some(run) = this.session_control.runs.get_mut(&session) else {
                                     return;
                                 };
                                 if run.runtime.is_cancelled()
@@ -336,7 +346,7 @@ impl ConduitApp {
                             if this.closing {
                                 return;
                             }
-                            let Some(run) = this.runs.get_mut(&session) else {
+                            let Some(run) = this.session_control.runs.get_mut(&session) else {
                                 return;
                             };
                             if run.runtime.is_cancelled()

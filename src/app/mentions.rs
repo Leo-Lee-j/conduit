@@ -408,7 +408,7 @@ mod tests {
                     ..Default::default()
                 };
                 let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
-                app.git_workspace = Some(root.clone());
+                app.git.workspace = Some(root.clone());
                 app
             });
             *slot.borrow_mut() = Some(app.clone());
@@ -455,7 +455,7 @@ mod tests {
                 "second.rs"
             );
             assert_eq!(app.input.read(cx).value().as_ref(), "检查 ");
-            assert!(app.runs.is_empty());
+            assert!(app.session_control.runs.is_empty());
             assert!(
                 app.store.workspaces[0].sessions.is_empty(),
                 "Enter must select without starting a turn"
@@ -568,7 +568,7 @@ mod tests {
                     path: root.join("docs"),
                     sessions: vec![],
                 });
-                this.git_workspace = Some(root.join("docs"));
+                this.git.workspace = Some(root.join("docs"));
                 this.switch(1, None, window, cx);
             })
         });

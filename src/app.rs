@@ -69,6 +69,7 @@ mod generation;
 mod git_branches;
 mod git_compare;
 mod git_diff;
+mod git_state;
 mod git_ui;
 mod mentions;
 mod mermaid;
@@ -79,13 +80,18 @@ mod opencode_models;
 mod outline;
 mod performance_view;
 mod queue;
+#[cfg(all(test, feature = "ui-tests"))]
+mod review_tests;
 mod runtime;
 mod search;
+mod search_worker;
+mod session_controller;
 mod sessions;
 mod settings;
 mod shell;
 mod sidebar;
 mod state;
+mod stream_events;
 mod theme;
 mod toolbar;
 mod tools;
@@ -134,6 +140,9 @@ actions!(
 
 pub struct ConduitApp {
     store: Store,
+    git: git_ui::GitUi,
+    persistence: crate::persistence::Persistence,
+    session_control: session_controller::SessionController,
     updater: update::UpdateUi,
     connection_settings: settings::ConnectionsUi,
     settings_ui: settings::SettingsUi,
@@ -160,9 +169,6 @@ pub struct ConduitApp {
     composer_files: HashMap<ComposerTarget, ComposerFiles>,
     file_mentions: mentions::FileMentions,
     queued_messages: HashMap<u64, queue::QueuedMessage>,
-    runs: HashMap<u64, ActiveRun>,
-    /// Successful background replies waiting for the user to open the session.
-    unread_completed: HashSet<u64>,
     probes: HashMap<Provider, VersionProbe>,
     diagnostics: HashMap<Provider, String>,
     catalogs: HashMap<Provider, ModelCatalog>,
@@ -190,31 +196,6 @@ pub struct ConduitApp {
     /// Measured width of the left workspace sidebar, used to cap the right one at
     /// half of the remaining content area.
     sidebar_width: f32,
-    /// Read-only Git snapshot for the selected workspace and its in-flight probe.
-    git_probe: Option<GitProbe>,
-    git_snapshot: Option<git::Snapshot>,
-    git_error: Option<String>,
-    git_workspace: Option<PathBuf>,
-    branch_probe: Option<BranchProbe>,
-    git_repository: Option<git::Repository>,
-    last_branch_check: Instant,
-    commit_drafts: HashMap<PathBuf, CommitDraft>,
-    commit_generation: Option<CommitGeneration>,
-    /// In-flight session naming requests, keyed by session id.
-    session_namings: HashMap<u64, SessionNaming>,
-    /// Last automatic naming failure per session; cleared on the next attempt
-    /// and shown in the conversation toolbar until then.
-    naming_errors: HashMap<u64, String>,
-    git_operation: Option<GitOperation>,
-    git_feedback: HashMap<PathBuf, GitFeedback>,
-    remote_tags_probe: Option<git::RemoteTagsProbe>,
-    remote_tags: HashMap<PathBuf, git::RemoteTags>,
-    pending_tag_retry: HashMap<PathBuf, git::TagRetry>,
-    /// Git sidebar groups the user collapsed; untracked files start collapsed.
-    collapsed_git_groups: HashSet<git_ui::GitChangeGroup>,
-    git_group_by_status: bool,
-    selected_git_files: HashMap<PathBuf, HashSet<String>>,
-    commit_and_push: bool,
     /// Workspaces whose session list was expanded past the configured limit.
     expanded_workspaces: HashSet<usize>,
     /// Workspace session lists explicitly collapsed in the sidebar.
@@ -227,6 +208,7 @@ pub struct ConduitApp {
     /// Sidebar session search filter.
     search: Entity<InputState>,
     search_query: String,
+    search_ui: search_worker::SearchUi,
     double_shift: file_picker::DoubleShift,
     show_archived: bool,
     /// Engine used by the sidebar + button and the search dialog's empty state.
@@ -258,8 +240,6 @@ pub struct ConduitApp {
     expanded_tool_groups: HashSet<(u64, String)>,
     expanded_reasoning: HashSet<(u64, String)>,
     expanded_errors: HashSet<(u64, String)>,
-    /// Live plan reported by the current turn, keyed by session.
-    plans: HashMap<u64, Vec<PlanStep>>,
     /// Last elapsed-label repaint: every second during turns, every minute idle.
     last_live_tick: Instant,
     tool_scrolls: HashMap<(u64, String), ScrollHandle>,
@@ -488,6 +468,7 @@ impl ConduitApp {
         let search_subscription = cx.subscribe(&search, |this, search, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 this.search_query = search.read(cx).value().to_string();
+                this.refresh_search(cx, true);
                 cx.notify();
             }
         });
@@ -546,26 +527,32 @@ impl ConduitApp {
                 if this.updater.preparing() {
                     return false;
                 }
-                this.git_probe = None;
-                this.branch_probe = None;
-                if !this.runs.is_empty()
+                this.closing = true;
+                this.session_control.cancel_imports();
+                this.history_loading.clear();
+                if this.dirty {
+                    this.persist();
+                }
+                this.git.probe = None;
+                this.git.branch_probe = None;
+                if !this.session_control.runs.is_empty()
                     || !this.probes.is_empty()
                     || !this.opencode_model_probes.is_empty()
-                    || this.git_operation.is_some()
-                    || this.commit_generation.is_some()
-                    || !this.session_namings.is_empty()
+                    || this.git.operation.is_some()
+                    || this.git.generation.is_some()
+                    || !this.session_control.namings.is_empty()
                 {
                     this.closing = true;
-                    if let Some(operation) = &this.git_operation {
+                    if let Some(operation) = &this.git.operation {
                         operation.probe.cancel();
                     }
-                    if let Some(generation) = &this.commit_generation {
+                    if let Some(generation) = &this.git.generation {
                         generation.runtime.cancel();
                     }
-                    for naming in this.session_namings.values_mut() {
+                    for naming in this.session_control.namings.values_mut() {
                         naming.runtime.cancel();
                     }
-                    for run in this.runs.values_mut() {
+                    for run in this.session_control.runs.values_mut() {
                         run.cancel();
                     }
                     for probe in this.probes.values() {
@@ -577,8 +564,8 @@ impl ConduitApp {
                     cx.notify();
                     false
                 } else {
-                    this.discard_composer_attachments();
-                    true
+                    cx.notify();
+                    false
                 }
             })
             .unwrap_or(true)
@@ -610,7 +597,10 @@ impl ConduitApp {
         let sidebar_view = cx.new(|cx| sidebar::SidebarView::new(app.clone(), cx));
         let file_view = cx.new(|cx| files::FileDocumentView::new(app, cx));
         let mut app = Self {
+            persistence: crate::persistence::Persistence::new(Store::path()),
+            session_control: session_controller::SessionController::default(),
             store,
+            git: git_ui::GitUi::default(),
             updater: update::UpdateUi::default(),
             connection_settings: settings::ConnectionsUi::new(new_session_provider),
             settings_ui: settings::SettingsUi {
@@ -639,8 +629,6 @@ impl ConduitApp {
             composer_files: HashMap::new(),
             file_mentions: mentions::FileMentions::default(),
             queued_messages: HashMap::new(),
-            runs: HashMap::new(),
-            unread_completed: HashSet::new(),
             probes: HashMap::new(),
             diagnostics: HashMap::new(),
             catalogs: Provider::ALL
@@ -664,32 +652,13 @@ impl ConduitApp {
             detail_width: 340.,
             detail_drag: None,
             sidebar_width: shell::NAVIGATION_DEFAULT_WIDTH,
-            git_probe: None,
-            git_snapshot: None,
-            git_error: None,
-            git_workspace: None,
-            branch_probe: None,
-            git_repository: None,
-            last_branch_check: Instant::now(),
-            commit_drafts: HashMap::new(),
-            commit_generation: None,
-            session_namings: HashMap::new(),
-            naming_errors: HashMap::new(),
-            git_operation: None,
-            remote_tags_probe: None,
-            remote_tags: HashMap::new(),
-            pending_tag_retry: HashMap::new(),
-            git_feedback: HashMap::new(),
-            collapsed_git_groups: HashSet::from([git_ui::GitChangeGroup::Untracked]),
-            git_group_by_status: false,
-            selected_git_files: HashMap::new(),
-            commit_and_push: false,
             expanded_workspaces: HashSet::new(),
             collapsed_workspaces: HashSet::new(),
             history_loading: HashSet::new(),
             startup: None,
             search,
             search_query: String::new(),
+            search_ui: search_worker::SearchUi::default(),
             double_shift: file_picker::DoubleShift::default(),
             show_archived: false,
             new_session_provider,
@@ -726,7 +695,6 @@ impl ConduitApp {
             expanded_tool_groups: HashSet::new(),
             expanded_reasoning: HashSet::new(),
             expanded_errors: HashSet::new(),
-            plans: HashMap::new(),
             last_live_tick: Instant::now(),
             tool_scrolls: HashMap::new(),
             tool_diffs: HashMap::new(),
@@ -776,17 +744,38 @@ impl ConduitApp {
             return false;
         }
         self.last_save = Instant::now();
+        self.session_control.global_revision = self.session_control.global_revision.wrapping_add(1);
         self.store.queued_messages = self.queued_messages.clone();
-        match self.store.save() {
-            Ok(()) => {
-                self.dirty = false;
-                self.last_save = Instant::now();
-                true
+        if !self.persistence.submit(&self.store) {
+            self.dirty = true;
+            self.message = self
+                .persistence
+                .error
+                .as_ref()
+                .map(|e| format!("保存失败：{e}"));
+            return false;
+        }
+        self.dirty = false;
+        // Existing UI fixtures assert disk state immediately. The writer itself
+        // is tested separately with blocked I/O and coalesced revisions.
+        #[cfg(test)]
+        {
+            self.persistence.flush();
+            if let Some(error) = &self.persistence.error {
+                self.dirty = true;
+                self.message = Some(format!("保存失败：{error}"));
+                return false;
             }
-            Err(error) => {
-                self.message = Some(format!("保存失败：{error:#}"));
-                false
+        }
+        true
+    }
+    fn poll_persistence(&mut self, cx: &mut Context<Self>) {
+        if self.persistence.poll() {
+            if let Some(error) = &self.persistence.error {
+                self.dirty = true;
+                self.message = Some(format!("保存失败：{error}"));
             }
+            cx.notify();
         }
     }
 }

@@ -10,7 +10,7 @@ use crate::{
 #[test]
 fn error_retry_preserves_partial_output_across_repeated_failures_and_restore() {
     let mut s = session();
-    let user = ChatItem {
+    let user = ChatItem::from(crate::domain::ChatItemData {
         elapsed_ms: None,
         key: "turn-0-user".into(),
         created_at: 0,
@@ -18,10 +18,10 @@ fn error_retry_preserves_partial_output_across_repeated_failures_and_restore() {
         text: "检查项目并说明结果".into(),
         input: String::new(),
         detail: String::new(),
-        status: String::new(),
+        status: Default::default(),
         approval: None,
         model: None,
-    };
+    });
     s.messages.push(user);
     apply_event(
         &mut s,
@@ -163,7 +163,7 @@ fn assistant_reply_combines_text_across_tools_within_user_boundaries() {
         ("next-user", ItemKind::User, "继续"),
         ("next", ItemKind::Assistant, "下一轮回复"),
     ] {
-        s.messages.push(ChatItem {
+        s.messages.push(ChatItem::from(crate::domain::ChatItemData {
             elapsed_ms: None,
             key: key.into(),
             created_at: 0,
@@ -171,10 +171,10 @@ fn assistant_reply_combines_text_across_tools_within_user_boundaries() {
             text: text.into(),
             input: String::new(),
             detail: String::new(),
-            status: String::new(),
+            status: Default::default(),
             approval: None,
             model: None,
-        });
+        }));
     }
     for index in [2, 6] {
         assert_eq!(super::chat::assistant_reply_range(&s, index), 2..8);
@@ -273,7 +273,7 @@ fn message_outline_keeps_real_indices_and_keys_amid_tools_and_replies() {
         ("notice", ItemKind::Notice, "notice"),
         ("user-3", ItemKind::User, ""),
     ] {
-        s.messages.push(ChatItem {
+        s.messages.push(ChatItem::from(crate::domain::ChatItemData {
             elapsed_ms: None,
             key: key.into(),
             created_at: 0,
@@ -281,10 +281,10 @@ fn message_outline_keeps_real_indices_and_keys_amid_tools_and_replies() {
             text: text.into(),
             input: String::new(),
             detail: String::new(),
-            status: String::new(),
+            status: Default::default(),
             approval: None,
             model: None,
-        });
+        }));
     }
     let entries = super::message_outline_entries(&s, 0);
     assert_eq!(
@@ -306,17 +306,19 @@ fn message_outline_keeps_real_indices_and_keys_amid_tools_and_replies() {
 fn message_outline_cache_only_indexes_appends_and_resets_with_session() {
     let mut session = session();
     let mut cache = super::MessageOutlineCache::default();
-    let item = |key: &str, kind| ChatItem {
-        elapsed_ms: None,
-        key: key.into(),
-        created_at: 0,
-        kind,
-        text: "用户消息".into(),
-        input: String::new(),
-        detail: String::new(),
-        status: String::new(),
-        approval: None,
-        model: None,
+    let item = |key: &str, kind| {
+        ChatItem::from(crate::domain::ChatItemData {
+            elapsed_ms: None,
+            key: key.into(),
+            created_at: 0,
+            kind,
+            text: "用户消息".into(),
+            input: String::new(),
+            detail: String::new(),
+            status: Default::default(),
+            approval: None,
+            model: None,
+        })
     };
     session.messages.push(item("user-1", ItemKind::User));
     cache.refresh(Some(&session));
@@ -526,17 +528,19 @@ fn composer_defaults_to_medium_and_preserves_explicit_effort_until_model_changes
 }
 #[test]
 fn contiguous_tool_groups_include_adjacent_completed_activity() {
-    let activity = |key: &str, kind: ItemKind, title: &str, status: &str| ChatItem {
-        elapsed_ms: None,
-        key: key.into(),
-        created_at: 0,
-        kind,
-        text: title.into(),
-        input: String::new(),
-        detail: String::new(),
-        status: status.into(),
-        approval: None,
-        model: None,
+    let activity = |key: &str, kind: ItemKind, title: &str, status: &str| {
+        ChatItem::from(crate::domain::ChatItemData {
+            elapsed_ms: None,
+            key: key.into(),
+            created_at: 0,
+            kind,
+            text: title.into(),
+            input: String::new(),
+            detail: String::new(),
+            status: status.into(),
+            approval: None,
+            model: None,
+        })
     };
     let mut s = session();
     s.messages = vec![
@@ -675,17 +679,19 @@ fn tool_group_waits_through_completed_tools_until_nonempty_reply_in_same_turn() 
 
 #[test]
 fn tool_groups_skip_file_edits() {
-    let tool = |key: &str, title: &str, input: &str| ChatItem {
-        elapsed_ms: None,
-        key: key.into(),
-        created_at: 0,
-        kind: ItemKind::Tool,
-        text: title.into(),
-        input: input.into(),
-        detail: String::new(),
-        status: "completed".into(),
-        approval: None,
-        model: None,
+    let tool = |key: &str, title: &str, input: &str| {
+        ChatItem::from(crate::domain::ChatItemData {
+            elapsed_ms: None,
+            key: key.into(),
+            created_at: 0,
+            kind: ItemKind::Tool,
+            text: title.into(),
+            input: input.into(),
+            detail: String::new(),
+            status: "completed".into(),
+            approval: None,
+            model: None,
+        })
     };
     let mut s = session();
     s.messages = vec![
@@ -756,17 +762,19 @@ fn approved_tools_share_normal_activity_layout_without_hiding_unresolved_decisio
 }
 #[test]
 fn activity_rows_classify_failures_and_summaries() {
-    let item = |kind: ItemKind, title: &str, input: &str, status: &str, detail: &str| ChatItem {
-        elapsed_ms: None,
-        key: "activity".into(),
-        created_at: 0,
-        kind,
-        text: title.into(),
-        input: input.into(),
-        detail: detail.into(),
-        status: status.into(),
-        approval: None,
-        model: None,
+    let item = |kind: ItemKind, title: &str, input: &str, status: &str, detail: &str| {
+        ChatItem::from(crate::domain::ChatItemData {
+            elapsed_ms: None,
+            key: "activity".into(),
+            created_at: 0,
+            kind,
+            text: title.into(),
+            input: input.into(),
+            detail: detail.into(),
+            status: status.into(),
+            approval: None,
+            model: None,
+        })
     };
     let command = item(
         ItemKind::Tool,
@@ -796,17 +804,19 @@ fn activity_rows_classify_failures_and_summaries() {
 }
 #[test]
 fn edit_diffs_parse_old_new_pairs_and_codex_patches() {
-    let item = |title: &str, input: &str| ChatItem {
-        elapsed_ms: None,
-        key: "edit".into(),
-        created_at: 0,
-        kind: ItemKind::Tool,
-        text: title.into(),
-        input: input.into(),
-        detail: String::new(),
-        status: "completed".into(),
-        approval: None,
-        model: None,
+    let item = |title: &str, input: &str| {
+        ChatItem::from(crate::domain::ChatItemData {
+            elapsed_ms: None,
+            key: "edit".into(),
+            created_at: 0,
+            kind: ItemKind::Tool,
+            text: title.into(),
+            input: input.into(),
+            detail: String::new(),
+            status: "completed".into(),
+            approval: None,
+            model: None,
+        })
     };
     let claude = super::edit_tool_diffs(&item(
         "Edit",
@@ -838,17 +848,19 @@ fn edit_diffs_parse_old_new_pairs_and_codex_patches() {
 }
 #[test]
 fn turn_file_stats_merge_repeated_edits_of_the_latest_turn() {
-    let item = |kind: ItemKind, title: &str, input: &str| ChatItem {
-        elapsed_ms: None,
-        key: format!("{title}-{}", input.len()),
-        created_at: 0,
-        kind,
-        text: title.into(),
-        input: input.into(),
-        detail: String::new(),
-        status: "completed".into(),
-        approval: None,
-        model: None,
+    let item = |kind: ItemKind, title: &str, input: &str| {
+        ChatItem::from(crate::domain::ChatItemData {
+            elapsed_ms: None,
+            key: format!("{title}-{}", input.len()),
+            created_at: 0,
+            kind,
+            text: title.into(),
+            input: input.into(),
+            detail: String::new(),
+            status: "completed".into(),
+            approval: None,
+            model: None,
+        })
     };
     let mut s = session();
     s.messages = vec![
@@ -892,17 +904,19 @@ fn plan_steps_follow_either_provider_shape_in_the_latest_turn() {
     assert_eq!(todo[0].status, super::PlanStatus::Completed);
     assert_eq!(todo[1].status, super::PlanStatus::InProgress);
 
-    let item = |title: &str, input: &str| ChatItem {
-        elapsed_ms: None,
-        key: title.into(),
-        created_at: 0,
-        kind: ItemKind::Tool,
-        text: title.into(),
-        input: input.into(),
-        detail: String::new(),
-        status: "completed".into(),
-        approval: None,
-        model: None,
+    let item = |title: &str, input: &str| {
+        ChatItem::from(crate::domain::ChatItemData {
+            elapsed_ms: None,
+            key: title.into(),
+            created_at: 0,
+            kind: ItemKind::Tool,
+            text: title.into(),
+            input: input.into(),
+            detail: String::new(),
+            status: "completed".into(),
+            approval: None,
+            model: None,
+        })
     };
     let mut s = session();
     s.messages = vec![
@@ -910,7 +924,7 @@ fn plan_steps_follow_either_provider_shape_in_the_latest_turn() {
             "update_plan",
             r#"{"plan":[{"step":"old step","status":"completed"}]}"#,
         ),
-        ChatItem {
+        ChatItem::from(crate::domain::ChatItemData {
             elapsed_ms: None,
             key: "prompt".into(),
             created_at: 0,
@@ -918,10 +932,10 @@ fn plan_steps_follow_either_provider_shape_in_the_latest_turn() {
             text: "new turn".into(),
             input: String::new(),
             detail: String::new(),
-            status: String::new(),
+            status: Default::default(),
             approval: None,
             model: None,
-        },
+        }),
         item(
             "update_plan",
             r#"{"plan":[{"step":"new step","status":"pending"}]}"#,
@@ -1081,7 +1095,7 @@ fn latest_naming_excerpt_prefers_recent_turns() {
     .into_iter()
     .enumerate()
     {
-        s.messages.push(ChatItem {
+        s.messages.push(ChatItem::from(crate::domain::ChatItemData {
             elapsed_ms: None,
             key: format!("m{index}"),
             created_at: 0,
@@ -1089,16 +1103,16 @@ fn latest_naming_excerpt_prefers_recent_turns() {
             text: text.into(),
             input: String::new(),
             detail: String::new(),
-            status: String::new(),
+            status: Default::default(),
             approval: None,
             model: None,
-        });
+        }));
     }
     assert_eq!(
         latest_naming_excerpt(&s).as_deref(),
         Some("旧问题\n\n旧回答\n\n新问题\n\n新回答")
     );
-    s.messages.push(ChatItem {
+    s.messages.push(ChatItem::from(crate::domain::ChatItemData {
         elapsed_ms: None,
         key: "long".into(),
         created_at: 0,
@@ -1106,10 +1120,10 @@ fn latest_naming_excerpt_prefers_recent_turns() {
         text: "长".repeat(1_000),
         input: String::new(),
         detail: String::new(),
-        status: String::new(),
+        status: Default::default(),
         approval: None,
         model: None,
-    });
+    }));
     assert_eq!(latest_naming_excerpt(&s).unwrap().chars().count(), 800);
 }
 #[test]
@@ -1141,7 +1155,7 @@ fn error_summary_extracts_json_and_bounds_multiline_diagnostics() {
 fn session_search_matches_title_and_message_text() {
     let mut s = session();
     s.title = "Rust 重构计划".into();
-    s.messages.push(ChatItem {
+    s.messages.push(ChatItem::from(crate::domain::ChatItemData {
         elapsed_ms: None,
         key: "m1".into(),
         created_at: 0,
@@ -1149,10 +1163,10 @@ fn session_search_matches_title_and_message_text() {
         text: "let me check the ALPHA dependency".into(),
         input: String::new(),
         detail: String::new(),
-        status: String::new(),
+        status: Default::default(),
         approval: None,
         model: None,
-    });
+    }));
     assert!(session_matches(&s, ""));
     assert!(session_matches(&s, "rust"));
     assert!(session_matches(&s, "alpha"));
@@ -1198,18 +1212,20 @@ fn historical_reply_timing_prefers_recorded_duration_and_bounds_estimates_to_a_t
     .into_iter()
     .enumerate()
     {
-        session.messages.push(ChatItem {
-            elapsed_ms: None,
-            key: format!("timed-{index}"),
-            created_at,
-            kind,
-            text: "历史内容".into(),
-            input: String::new(),
-            detail: String::new(),
-            status: String::new(),
-            approval: None,
-            model: None,
-        });
+        session
+            .messages
+            .push(ChatItem::from(crate::domain::ChatItemData {
+                elapsed_ms: None,
+                key: format!("timed-{index}"),
+                created_at,
+                kind,
+                text: "历史内容".into(),
+                input: String::new(),
+                detail: String::new(),
+                status: Default::default(),
+                approval: None,
+                model: None,
+            }));
     }
     assert_eq!(
         reply_elapsed_label(&session, 3, false).as_deref(),

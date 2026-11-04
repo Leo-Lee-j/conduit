@@ -11,7 +11,7 @@ impl ConduitApp {
             if self.queued_messages.contains_key(&id) {
                 return Some("已有 1 条待发送消息，请先发送或撤回；当前草稿会保留。");
             }
-            if let Some(run) = self.runs.get(&id) {
+            if let Some(run) = self.session_control.runs.get(&id) {
                 if !run.runtime.is_cancelled() {
                     return None;
                 }
@@ -32,6 +32,7 @@ impl ConduitApp {
             || !self.writable
             || self.queued_messages.contains_key(&id)
             || self
+                .session_control
                 .runs
                 .get(&id)
                 .is_none_or(|run| run.runtime.is_cancelled())
@@ -215,6 +216,7 @@ impl ConduitApp {
         Some(
             v_flex()
                 .id("queued-message")
+                .debug_selector(|| "queued-message".into())
                 .mx(px(4.))
                 .mt(px(4.))
                 .p(px(10.))

@@ -808,7 +808,11 @@ pub(super) fn tool_content(
             "output",
             "输出 / 结果",
             output,
-            if matches!(item.status.as_str(), "运行中" | "输出中") {
+            if matches!(
+                item.status,
+                crate::message_status::ToolStatus::Running
+                    | crate::message_status::ToolStatus::Output
+            ) {
                 "等待工具输出…"
             } else {
                 "没有输出内容"

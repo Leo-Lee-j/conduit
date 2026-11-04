@@ -896,6 +896,79 @@ fn commit_target(git: &Path, workspace: &Path, cancel: &AtomicBool) -> Result<Co
     })
 }
 
+#[derive(Clone, Copy)]
+enum IndexAction {
+    Stage,
+    Unstage,
+}
+
+fn update_index(
+    git: &Path,
+    workspace: &Path,
+    files: &[String],
+    target: &CommitTarget,
+    action: IndexAction,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    if files.is_empty() {
+        bail!("请选择需要操作的文件");
+    }
+    if commit_target(git, workspace, cancel)? != *target {
+        bail!("分支、HEAD 或暂存区已变化，请刷新后重试");
+    }
+    for path in files {
+        if path.is_empty()
+            || path.contains('\0')
+            || path.contains(':')
+            || Path::new(path)
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+            || path
+                .split(['/', '\\'])
+                .any(|c| c == ".." || c == "." || c.is_empty())
+        {
+            bail!("暂存路径必须是仓库内的文件：{path}");
+        }
+    }
+    let root = run_git(git, workspace, &["rev-parse", "--show-toplevel"], cancel)?;
+    let spec = std::env::temp_dir().join(format!(
+        "conduit-index-{}-{}.paths",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    ));
+    let result = (|| -> Result<()> {
+        use std::io::Write as _;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&spec)?;
+        for path in files {
+            file.write_all(path.as_bytes())?;
+            file.write_all(&[0])?;
+        }
+        drop(file);
+        let from = format!("--pathspec-from-file={}", spec.display());
+        let mut args = vec!["--literal-pathspecs"];
+        match action {
+            IndexAction::Stage => args.push("add"),
+            IndexAction::Unstage => args.extend(["restore", "--staged"]),
+        }
+        args.extend([from.as_str(), "--pathspec-file-nul"]);
+        run_git_with_timeout(
+            git,
+            Path::new(root.trim()),
+            &args,
+            cancel,
+            Duration::from_secs(120),
+        )?;
+        Ok(())
+    })();
+    let _ = std::fs::remove_file(spec);
+    result
+}
+
 fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> OperationResult {
     if let Operation::Branch(request) = operation {
         return branches::operate_branch(workspace, *request, cancel);
@@ -916,122 +989,18 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
         match operation {
             Operation::Branch(_) => unreachable!(),
             Operation::Stage { files, target } => {
-                if files.is_empty() {
-                    bail!("请选择需要暂存的文件");
-                }
-                if commit_target(&git, workspace, cancel)? != target {
-                    bail!("分支、HEAD 或暂存区已变化，请刷新后重新暂存");
-                }
-                // Porcelain paths are repository-relative, even from a nested workspace.
-                // Literal NUL-delimited pathspecs avoid wildcard expansion and Windows'
-                // command-line length limit, and never stage unselected files.
-                for file in &files {
-                    if file.is_empty()
-                        || file.contains('\0')
-                        || Path::new(file)
-                            .components()
-                            .any(|c| !matches!(c, std::path::Component::Normal(_)))
-                        || file
-                            .split(['/', '\\'])
-                            .any(|c| c == ".." || c == "." || c.is_empty())
-                        || file.contains(':')
-                    {
-                        bail!("暂存路径必须是仓库内的文件：{file}");
-                    }
-                }
-                let root = run_git(&git, workspace, &["rev-parse", "--show-toplevel"], cancel)?;
-                let root = PathBuf::from(root.trim());
-                let spec = std::env::temp_dir().join(format!(
-                    "conduit-stage-{}-{}.paths",
-                    std::process::id(),
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)?
-                        .as_nanos()
-                ));
-                let mut file = std::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&spec)?;
-                let result = (|| -> Result<String> {
-                    use std::io::Write as _;
-                    for path in &files {
-                        file.write_all(path.as_bytes())?;
-                        file.write_all(&[0])?;
-                    }
-                    drop(file);
-                    run_git_with_timeout(
-                        &git,
-                        &root,
-                        &[
-                            "--literal-pathspecs",
-                            "add",
-                            &format!("--pathspec-from-file={}", spec.display()),
-                            "--pathspec-file-nul",
-                        ],
-                        cancel,
-                        Duration::from_secs(120),
-                    )
-                })();
-                let _ = std::fs::remove_file(&spec);
-                result?;
+                update_index(&git, workspace, &files, &target, IndexAction::Stage, cancel)?;
                 Ok(format!("已暂存 {} 个文件", files.len()))
             }
             Operation::Unstage { files, target } => {
-                if files.is_empty() {
-                    bail!("请选择需要移出暂存区的文件");
-                }
-                if commit_target(&git, workspace, cancel)? != target {
-                    bail!("分支、HEAD 或暂存区已变化，请刷新后重新移出暂存");
-                }
-                for file in &files {
-                    if file.is_empty()
-                        || file.contains('\0')
-                        || Path::new(file)
-                            .components()
-                            .any(|c| !matches!(c, std::path::Component::Normal(_)))
-                        || file
-                            .split(['/', '\\'])
-                            .any(|c| c == ".." || c == "." || c.is_empty())
-                        || file.contains(':')
-                    {
-                        bail!("暂存路径必须是仓库内的文件：{file}");
-                    }
-                }
-                let root = run_git(&git, workspace, &["rev-parse", "--show-toplevel"], cancel)?;
-                let root = PathBuf::from(root.trim());
-                let spec = std::env::temp_dir().join(format!(
-                    "conduit-unstage-{}-{}.paths",
-                    std::process::id(),
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)?
-                        .as_nanos()
-                ));
-                let mut file = std::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&spec)?;
-                let result = (|| -> Result<String> {
-                    use std::io::Write as _;
-                    for path in &files {
-                        file.write_all(path.as_bytes())?;
-                        file.write_all(&[0])?;
-                    }
-                    drop(file);
-                    run_git_with_timeout(
-                        &git,
-                        &root,
-                        &[
-                            "restore",
-                            "--staged",
-                            &format!("--pathspec-from-file={}", spec.display()),
-                            "--pathspec-file-nul",
-                        ],
-                        cancel,
-                        Duration::from_secs(120),
-                    )
-                })();
-                let _ = std::fs::remove_file(&spec);
-                result?;
+                update_index(
+                    &git,
+                    workspace,
+                    &files,
+                    &target,
+                    IndexAction::Unstage,
+                    cancel,
+                )?;
                 Ok(format!("已将 {} 个文件移出暂存区", files.len()))
             }
             Operation::Commit {
@@ -1642,6 +1611,53 @@ mod tests {
         assert_eq!(worktree_root(&separate), separate);
         assert_ne!(worktree_root(&linked), worktree_root(&child));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn index_operations_treat_selected_paths_literally() {
+        let repo = TestRepository::new().expect("Git required for index regression");
+        for name in ["file[1].txt", "file1.txt"] {
+            std::fs::write(repo.path.join(name), "before\n").unwrap();
+        }
+        repo.run(&["add", "--all"]);
+        repo.run(&["commit", "-qm", "fixture"]);
+        for name in ["file[1].txt", "file1.txt"] {
+            std::fs::write(repo.path.join(name), "after\n").unwrap();
+        }
+        let cancel = AtomicBool::new(false);
+        let target = commit_target(&repo.git, &repo.path, &cancel).unwrap();
+        let staged = operate(
+            &repo.path,
+            Operation::Stage {
+                files: vec!["file[1].txt".into()],
+                target,
+            },
+            &cancel,
+        );
+        assert!(staged.error.is_none(), "{:?}", staged.error);
+        assert_eq!(
+            repo.run(&["diff", "--cached", "--name-only"]).trim(),
+            "file[1].txt"
+        );
+        repo.run(&["add", "--all"]);
+        let target = commit_target(&repo.git, &repo.path, &cancel).unwrap();
+        let unstaged = operate(
+            &repo.path,
+            Operation::Unstage {
+                files: vec!["file[1].txt".into()],
+                target,
+            },
+            &cancel,
+        );
+        assert!(unstaged.error.is_none(), "{:?}", unstaged.error);
+        assert_eq!(
+            repo.run(&["diff", "--cached", "--name-only"]).trim(),
+            "file1.txt"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.path.join("file[1].txt")).unwrap(),
+            "after\n"
+        );
     }
 
     struct TestRepository {

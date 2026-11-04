@@ -110,7 +110,7 @@ impl ConduitApp {
     /// in [`Self::turn_stats_tags`], pinned to the composer's top-right corner.
     pub(super) fn turn_activity_strip(&self, session_id: u64) -> Option<AnyElement> {
         let session = self.session(session_id)?;
-        let run = self.runs.get(&session_id)?;
+        let run = self.session_control.runs.get(&session_id)?;
         let model = run
             .model
             .as_deref()
@@ -189,6 +189,7 @@ impl ConduitApp {
     pub(super) fn turn_stats_tags(&self, session_id: u64) -> Option<AnyElement> {
         let session = self.session(session_id)?;
         let plan = self
+            .session_control
             .plans
             .get(&session_id)
             .cloned()
@@ -198,7 +199,7 @@ impl ConduitApp {
         if plan.is_empty() && stats.files.is_empty() {
             return None;
         }
-        let live = self.runs.contains_key(&session_id);
+        let live = self.session_control.runs.contains_key(&session_id);
         let completed = plan
             .iter()
             .filter(|step| step.status == PlanStatus::Completed)
@@ -434,6 +435,7 @@ impl ConduitApp {
             })
             .unwrap_or((0, false));
         let elapsed = self
+            .session_control
             .runs
             .get(&session_id)
             .map(|run| run.turn_started.elapsed())
@@ -631,7 +633,7 @@ impl ConduitApp {
                             .flex_shrink_0()
                             .text_size(px(11.))
                             .text_color(rgb(palette().muted))
-                            .child(approval.status.clone()),
+                            .child(approval.status.to_string()),
                     )
                 })
                 .when(running && !reasoning, |row| {
@@ -740,7 +742,7 @@ impl ConduitApp {
         let regenerable = item.kind == ItemKind::Assistant
             && self.writable
             && !self.closing
-            && !self.runs.contains_key(&session_id)
+            && !self.session_control.runs.contains_key(&session_id)
             && session.messages[..index]
                 .iter()
                 .any(|message| message.kind == ItemKind::User)
@@ -922,7 +924,7 @@ impl ConduitApp {
                 let link_app = cx.entity().downgrade();
                 let reply_range = assistant_reply_range(session, index);
                 let reply_in_progress = reply_range.end == session.messages.len()
-                    && (self.runs.contains_key(&session_id) || session.interrupted);
+                    && (self.session_control.runs.contains_key(&session_id) || session.interrupted);
                 let show_actions = !reply_in_progress
                     && !session.messages[index + 1..reply_range.end]
                         .iter()
@@ -1042,7 +1044,11 @@ impl ConduitApp {
                     .child(model_meta)
                     .child(timestamp_meta)
                     .when_some(
-                        reply_elapsed_label(session, index, self.runs.contains_key(&session_id)),
+                        reply_elapsed_label(
+                            session,
+                            index,
+                            self.session_control.runs.contains_key(&session_id),
+                        ),
                         |row, label| {
                             row.child(
                                 div()
@@ -1190,7 +1196,7 @@ impl ConduitApp {
                                             "已拒绝" => palette().diff_remove_text,
                                             _ => palette().muted,
                                         }))
-                                        .child(approval.status.clone()),
+                                        .child(approval.status.to_string()),
                                 )
                             })
                             .child(
@@ -1238,7 +1244,7 @@ impl ConduitApp {
                                 div()
                                     .text_size(px(11.))
                                     .text_color(rgb(palette().faint))
-                                    .child(item.status.clone()),
+                                    .child(item.status.to_string()),
                             )
                             .child(
                                 Icon::new(if expanded {
@@ -1300,6 +1306,7 @@ impl ConduitApp {
                 };
                 let repeats = failure_repeats(item);
                 let active = self
+                    .session_control
                     .runs
                     .get(&session_id)
                     .is_some_and(|run| item.key.starts_with(&format!("{}-", run.prefix)));
