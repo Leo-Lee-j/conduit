@@ -32,6 +32,7 @@ pub(super) struct NumberedCodeConfig {
     pub(super) copy: bool,
     pub(super) syntax_highlight: bool,
     pub(super) selectable: bool,
+    pub(super) search: Option<WeakEntity<super::file_preview::FilePreview>>,
 }
 
 /// Registers the parser and renderer that replace fenced code blocks.
@@ -137,6 +138,11 @@ fn render_numbered_code(
         code: data.code.clone(),
         top,
         selectable: config.selectable,
+        search: config
+            .search
+            .as_ref()
+            .and_then(WeakEntity::upgrade)
+            .and_then(|view| view.read(cx).block_search(node.source_range()?.clone())),
     };
 
     let actions = config.copy.then(|| {
@@ -214,6 +220,7 @@ pub(super) fn file_code(
     code: SharedString,
     names: &[(Range<usize>, &'static str)],
     wrap: bool,
+    search: Option<super::file_preview::CodeSearch>,
     cx: &mut App,
 ) -> AnyElement {
     let theme = Theme::global(cx);
@@ -242,6 +249,7 @@ pub(super) fn file_code(
             code,
             top: px(8.),
             selectable: true,
+            search,
         })
         .into_any_element()
 }
@@ -255,6 +263,7 @@ struct NumberedCode {
     code: SharedString,
     top: Pixels,
     selectable: bool,
+    search: Option<super::file_preview::CodeSearch>,
 }
 
 struct NumberedCodeState {
@@ -353,6 +362,9 @@ impl Element for NumberedCode {
         let text_bounds = window.layout_bounds(state.text_layout);
         self.text
             .prepaint(None, None, text_bounds, &mut (), window, cx);
+        if let Some(search) = &self.search {
+            search.reveal(self.text.layout(), window, cx);
+        }
         if let Some(handle) = &state.selection {
             let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
             let registration = TextSelectionRegistration::new(hitbox, bounds)
@@ -376,6 +388,16 @@ impl Element for NumberedCode {
         let text_bounds = *text_bounds;
         let layout = self.text.layout().clone();
 
+        if let Some(search) = &self.search {
+            for (range, active) in &search.ranges {
+                paint_selection(
+                    &layout,
+                    range.clone(),
+                    super::file_preview::match_color(*active),
+                    window,
+                );
+            }
+        }
         if let Some(handle) = &state.selection {
             let selected_before = TextSelection::selected_text(window, cx);
             let projection = handle.update_runs(

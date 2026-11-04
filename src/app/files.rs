@@ -1,7 +1,19 @@
 //! Contextual file navigation and mixed chat/file documents.
+use super::file_preview::FilePreview;
 use super::*;
 use crate::workspace_files::{self, Entry, FileKey, Stamp};
+use conduit::plugins::{builtins, ids::ViewId};
 use std::ops::Range;
+
+fn is_markdown(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            ["md", "markdown", "mdx"]
+                .iter()
+                .any(|kind| extension.eq_ignore_ascii_case(kind))
+        })
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DocumentTab {
@@ -18,15 +30,6 @@ impl DocumentTab {
         }
     }
 }
-#[derive(Clone, Copy, Default, Eq, PartialEq)]
-enum Navigation {
-    #[default]
-    Workspaces,
-    Files,
-    Git,
-    Branches,
-}
-
 #[derive(Default)]
 struct Directory {
     entries: Vec<Entry>,
@@ -53,7 +56,7 @@ struct Document {
     revision: u64,
     sequence: u64,
     wrap: bool,
-    scroll: gpui_kit::ScrollHandle,
+    preview: Entity<FilePreview>,
 }
 struct DiffDocument {
     workspace: PathBuf,
@@ -62,10 +65,8 @@ struct DiffDocument {
 }
 #[derive(Default)]
 pub(super) struct FileBrowser {
-    pub(super) sidebar_collapsed: bool,
     tab_scroll: ScrollHandle,
     tab_layout: std::cell::RefCell<(Vec<DocumentTab>, Option<DocumentTab>, Pixels)>,
-    mode: Navigation,
     explorers: HashMap<PathBuf, Explorer>,
     documents: HashMap<u64, Document>,
     diffs: HashMap<u64, DiffDocument>,
@@ -309,7 +310,11 @@ impl ConduitApp {
                     self.switch_context(index, session, false, window, cx);
                 }
                 self.active_file = Some(id);
-                self.chat_focus.focus(window, cx);
+                self.files.documents[&id]
+                    .preview
+                    .read(cx)
+                    .focus_handle(cx)
+                    .focus(window, cx);
                 cx.notify();
             }
             DocumentTab::Diff(id) => {
@@ -472,6 +477,9 @@ impl ConduitApp {
         }
         self.files.next_id += 1;
         let id = self.files.next_id;
+        let scroll = gpui_kit::ScrollHandle::new();
+        let markdown = is_markdown(&key.relative);
+        let preview = cx.new(|cx| FilePreview::new(markdown, scroll.clone(), window, cx));
         self.files.documents.insert(
             id,
             Document {
@@ -485,7 +493,7 @@ impl ConduitApp {
                 revision: 0,
                 sequence: 0,
                 wrap: false,
-                scroll: gpui_kit::ScrollHandle::new(),
+                preview,
             },
         );
         if let Some(position) = preview_position {
@@ -657,7 +665,7 @@ impl ConduitApp {
                 .filter(|d| !d.loading && d.error.is_none())
                 .map(|d| (id, d.key.clone(), d.stamp.clone()))
         });
-        let root = (self.files.mode == Navigation::Files)
+        let root = (self.plugins.is_selected(builtins::FILES))
             .then(|| {
                 self.selected_workspace
                     .map(|i| self.store.workspaces[i].path.clone())
@@ -715,192 +723,13 @@ impl ConduitApp {
         .detach();
     }
 
-    pub(super) fn render_navigation(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let mode = self.files.mode;
-        let pending = self.session_control.unread_completed.len() + self.session_control.runs.len();
-        let rail = v_flex()
-            .w(px(38.))
-            .h_full()
-            .flex_shrink_0()
-            .pt_1()
-            .gap_1()
-            .bg(rgb(palette().sidebar_bg))
-            .border_r_1()
-            .border_color(rgb(palette().border))
-            .child(
-                div()
-                    .relative()
-                    .w(px(36.))
-                    .h(px(36.))
-                    .child(
-                        Button::new("nav-workspaces")
-                            .debug_selector(|| "nav-workspaces".into())
-                            .ghost()
-                            .small()
-                            .compact()
-                            .w(px(36.))
-                            .h(px(36.))
-                            .icon(IconName::Folder)
-                            .selected(mode == Navigation::Workspaces)
-                            .tooltip(format!("工作区与会话 · {pending} 个运行中或未读任务"))
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.files.mode = Navigation::Workspaces;
-                                this.files.sidebar_collapsed = false;
-                                cx.notify();
-                            })),
-                    )
-                    .when(pending > 0, |button| {
-                        button.child(
-                            h_flex()
-                                .absolute()
-                                .top_0()
-                                .right_0()
-                                .min_w(px(14.))
-                                .h(px(14.))
-                                .px(px(3.))
-                                .items_center()
-                                .justify_center()
-                                .rounded_full()
-                                .bg(rgb(palette().text))
-                                .text_color(rgb(palette().on_text))
-                                .text_size(px(10.))
-                                .line_height(relative(1.))
-                                .child(if pending > 99 {
-                                    "99+".to_owned()
-                                } else {
-                                    pending.to_string()
-                                }),
-                        )
-                    }),
-            )
-            .child(
-                Button::new("nav-files")
-                    .debug_selector(|| "nav-files".into())
-                    .ghost()
-                    .small()
-                    .compact()
-                    .w(px(36.))
-                    .h(px(36.))
-                    .icon(IconName::File)
-                    .selected(mode == Navigation::Files)
-                    .tooltip("当前工作区文件")
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.files.mode = Navigation::Files;
-                        this.files.sidebar_collapsed = false;
-                        if let Some(i) = this.selected_workspace {
-                            this.refresh_tree(this.store.workspaces[i].path.clone(), cx);
-                        }
-                        cx.notify();
-                    })),
-            )
-            .child(
-                Button::new("nav-git")
-                    .debug_selector(|| "nav-git".into())
-                    .ghost()
-                    .small()
-                    .compact()
-                    .w(px(36.))
-                    .h(px(36.))
-                    .icon(gpui_kit::assets::IconName::GitFork)
-                    .selected(mode == Navigation::Git)
-                    .tooltip("当前工作区 Git 变更")
-                    .accessibility_label("Git 变更")
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _, cx| this.show_git_navigation(cx))),
-            )
-            .child(div().flex_1())
-            .child(
-                Button::new("nav-branches")
-                    .debug_selector(|| "git-branch-trigger".into())
-                    .ghost()
-                    .small()
-                    .compact()
-                    .w(px(36.))
-                    .h(px(34.))
-                    .icon(FullIconName::GitBranch)
-                    .selected(mode == Navigation::Branches)
-                    .tooltip("Git 分支与日志")
-                    .accessibility_label("Git 分支与日志")
-                    .cursor_pointer()
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.show_branch_navigation(window, cx)),
-                    ),
-            )
-            .child(
-                Button::new("nav-settings")
-                    .debug_selector(|| "nav-settings".into())
-                    .accessibility_label("设置")
-                    .ghost()
-                    .small()
-                    .compact()
-                    .w(px(36.))
-                    .h(px(34.))
-                    .icon(IconName::Settings)
-                    .tooltip("设置")
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
-            )
-            .child(
-                Button::new("nav-about")
-                    .debug_selector(|| "nav-about".into())
-                    .ghost()
-                    .small()
-                    .compact()
-                    .w(px(36.))
-                    .h(px(34.))
-                    .icon(IconName::Info)
-                    .tooltip("关于 Conduit")
-                    .accessibility_label("关于")
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_about_dialog(window, cx);
-                    })),
-            );
-        let rail = rail.child(
-            Button::new("nav-collapse")
-                .debug_selector(|| "nav-collapse".into())
-                .ghost()
-                .small()
-                .compact()
-                .w(px(36.))
-                .h(px(32.))
-                .icon(if self.files.sidebar_collapsed {
-                    IconName::ChevronRight
-                } else {
-                    IconName::ChevronLeft
-                })
-                .tooltip("展开 / 收起侧栏")
-                .cursor_pointer()
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.files.sidebar_collapsed = !this.files.sidebar_collapsed;
-                    cx.notify();
-                })),
-        );
-        if self.files.sidebar_collapsed {
-            return rail.into_any_element();
+    pub(super) fn activate_file_navigation(&mut self, cx: &mut Context<Self>) {
+        if let Some(root) = self.selected_workspace_path() {
+            self.refresh_tree(root, cx);
         }
-        let pane = match mode {
-            Navigation::Workspaces => self.render_sidebar(cx),
-            Navigation::Files => self.render_file_tree(cx),
-            Navigation::Git => self.render_git_navigation(cx),
-            Navigation::Branches => self
-                .branch_manager
-                .as_ref()
-                .map(|view| view.read(cx).tree.clone().into_any_element())
-                .unwrap_or_else(|| div().into_any_element()),
-        };
-        h_flex()
-            .id("navigation-panel")
-            .debug_selector(|| "navigation-panel".into())
-            .size_full()
-            .child(rail)
-            .child(div().flex_1().min_w_0().h_full().child(pane))
-            .into_any_element()
     }
 
-    fn render_file_tree(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_file_tree(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let Some(index) = self.selected_workspace else {
             return sidebar::navigation_pane()
                 .px_2()
@@ -911,8 +740,7 @@ impl ConduitApp {
                     Button::new("files-pick-workspace")
                         .label("查看工作区")
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.files.mode = Navigation::Workspaces;
-                            cx.notify();
+                            this.open_navigation(&ViewId::new(builtins::WORKSPACES).unwrap(), cx);
                         })),
                 )
                 .into_any_element();
@@ -1209,16 +1037,7 @@ impl ConduitApp {
             .map(|p| p.to_string_lossy().into_owned())
             .collect();
         let file_name = parts.pop().unwrap_or_default();
-        let markdown = matches!(
-            document
-                .key
-                .relative
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .map(str::to_ascii_lowercase)
-                .as_deref(),
-            Some("md" | "markdown" | "mdx")
-        );
+        let markdown = is_markdown(&document.key.relative);
         let parent_label = parts.join(" / ");
         let text = document.text.clone();
         let copy = text.clone();
@@ -1335,13 +1154,16 @@ impl ConduitApp {
                             .small()
                             .compact()
                             .icon(FullIconName::TextWrap)
-                            .tooltip(if wrap {
+                            .tooltip(if markdown {
+                                "Markdown 预览始终自动换行"
+                            } else if wrap {
                                 "自动换行已开启 · 点击关闭"
                             } else {
                                 "开启自动换行"
                             })
                             .accessibility_label("自动换行")
-                            .selected(wrap)
+                            .selected(wrap || markdown)
+                            .disabled(markdown)
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(d) = this.files.documents.get_mut(&id) {
@@ -1416,66 +1238,14 @@ impl ConduitApp {
                     .child("空文件"),
             );
         } else {
-            let theme = Theme::global(cx);
-            page = page.child(
-                div()
-                    .id(("file-content-scroll", id))
-                    .v_flex()
-                    .items_start()
-                    .debug_selector(|| "file-content-scroll".into())
-                    .track_scroll(&document.scroll)
-                    .flex_1()
-                    .min_h_0()
-                    .min_w_0()
-                    .overflow_scroll()
-                    .track_focus(&self.chat_focus)
-                    .on_action(cx.listener(
-                        |_, _: &gpui_kit::component::input::Copy, window, cx| {
-                            let text = TextSelection::selected_text(window, cx);
-                            if text.is_empty() {
-                                cx.propagate();
-                            } else {
-                                cx.write_to_clipboard(ClipboardItem::new_string(text));
-                            }
-                        },
-                    ))
-                    .on_mouse_up(MouseButton::Left, {
-                        let focus = self.chat_focus.clone();
-                        move |_, window, cx| focus.focus(window, cx)
-                    })
-                    .when(!markdown, |area| {
-                        area.font_family(theme.mono_font_family.clone())
-                            .text_size(theme.mono_font_size)
-                            .line_height(px(20.))
-                    })
-                    .when(markdown, |area| area.p(px(10.)))
-                    .child(if markdown {
-                        let mut typography = self.chat_typography();
-                        if typography.body_font.is_none() {
-                            typography.body_font = Some(theme.font_family.clone());
-                        }
-                        chat_markdown_view(
-                            SharedString::from(format!("file-markdown-{id}-{}", document.revision)),
-                            text,
-                            &typography,
-                            &format!("file-markdown-{id}"),
-                            true,
-                        )
-                        .into_any_element()
-                    } else {
-                        super::numbered_code::file_code(
-                            id,
-                            document.revision,
-                            text,
-                            &document.highlights,
-                            wrap,
-                            cx,
-                        )
-                        .into_any_element()
-                    })
-                    .vertical_scrollbar(&document.scroll)
-                    .when(!wrap, |area| area.horizontal_scrollbar(&document.scroll)),
-            );
+            let mut typography = self.chat_typography();
+            if typography.body_font.is_none() {
+                typography.body_font = Some(Theme::global(cx).font_family.clone());
+            }
+            document.preview.update(cx, |preview, cx| {
+                preview.sync(text, document.highlights.clone(), wrap, typography, cx);
+            });
+            page = page.child(document.preview.clone());
         }
         page = page.child(
             h_flex()
@@ -1765,12 +1535,15 @@ impl ConduitApp {
 impl ConduitApp {
     /// Git is navigation, not a second competing right-side detail dock.
     pub(super) fn git_navigation_open(&self) -> bool {
-        self.files.mode == Navigation::Git && !self.files.sidebar_collapsed
+        self.plugins.is_selected(builtins::GIT) && !self.plugins.collapsed()
     }
 
     pub(super) fn git_status_visible(&self) -> bool {
-        (!self.files.sidebar_collapsed
-            && matches!(self.files.mode, Navigation::Files | Navigation::Git))
+        (!self.plugins.collapsed()
+            && matches!(
+                self.plugins.selected().as_str(),
+                builtins::FILES | builtins::GIT
+            ))
             || self.active_diff.is_some()
     }
 
@@ -1830,17 +1603,17 @@ impl ConduitApp {
 
     pub(super) fn leave_branch_navigation(&mut self) {
         if self.branch_navigation_open() {
-            self.files.mode = Navigation::Workspaces;
+            let collapsed = self.plugins.collapsed();
+            let _ = self.select_navigation(&ViewId::new(builtins::WORKSPACES).unwrap());
+            self.plugins.set_collapsed(collapsed);
         }
     }
 
     pub(super) fn branch_navigation_open(&self) -> bool {
-        self.files.mode == Navigation::Branches
+        self.plugins.is_selected(builtins::BRANCHES)
     }
 
     pub(super) fn show_branch_navigation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.files.mode = Navigation::Branches;
-        self.files.sidebar_collapsed = false;
         if self.branch_manager.is_none() {
             let app = cx.weak_entity();
             let workspace = self.selected_workspace_path();
@@ -1855,24 +1628,19 @@ impl ConduitApp {
                 .focus_handle(cx)
                 .focus(window, cx);
         }
-        self.refresh_branches();
-        cx.notify();
+        self.open_navigation(&ViewId::new(builtins::BRANCHES).unwrap(), cx);
     }
 
     pub(super) fn toggle_git_navigation(&mut self, cx: &mut Context<Self>) {
         if self.git_navigation_open() {
-            self.files.mode = Navigation::Workspaces;
-            cx.notify();
+            self.open_navigation(&ViewId::new(builtins::WORKSPACES).unwrap(), cx);
         } else {
             self.show_git_navigation(cx);
         }
     }
 
     pub(super) fn show_git_navigation(&mut self, cx: &mut Context<Self>) {
-        self.files.mode = Navigation::Git;
-        self.files.sidebar_collapsed = false;
-        self.refresh_git(cx);
-        cx.notify();
+        self.open_navigation(&ViewId::new(builtins::GIT).unwrap(), cx);
     }
 
     pub(super) fn navigation_workspace_picker(
@@ -1924,20 +1692,13 @@ impl ConduitApp {
                                                 .find(|s| !s.archived)
                                                 .map(|s| s.id)
                                         });
-                                    let navigation = this.files.mode;
+                                    let navigation = this.plugins.selected().clone();
                                     if let Some(id) = session {
                                         this.select_document(DocumentTab::Chat(id), window, cx);
                                     } else {
                                         this.switch(i, None, window, cx);
                                     }
-                                    this.files.mode = navigation;
-                                    cx.notify();
-                                    match this.files.mode {
-                                        Navigation::Git => this.refresh_git(cx),
-                                        Navigation::Branches => this.refresh_branches(),
-                                        Navigation::Files => this.refresh_tree(path.clone(), cx),
-                                        Navigation::Workspaces => {}
-                                    }
+                                    this.open_navigation(&navigation, cx);
                                 }
                             });
                         },
@@ -1948,7 +1709,7 @@ impl ConduitApp {
             .into_any_element()
     }
 
-    fn render_git_navigation(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_git_navigation(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let app = cx.entity();
         let mut pane = sidebar::navigation_pane()
             .id("git-navigation")
@@ -2643,7 +2404,7 @@ mod tests {
         // Collapsing keeps the activity rail but releases sidebar space.
         cx.update(|_, cx| {
             app.update(cx, |a, cx| {
-                a.files.sidebar_collapsed = true;
+                a.plugins.set_collapsed(true);
                 cx.notify();
             })
         });
@@ -2682,6 +2443,7 @@ mod tests {
         let content = (0..500)
             .map(|i| format!("    // 第 {i} 行：{}\n", "long content ".repeat(25)))
             .collect::<String>();
+        let content = format!("{}\n{content}", "unbroken_identifier_".repeat(60));
         std::fs::write(fixture.0.join("alpha").join(&relative), content).unwrap();
         let mut store = fixture.store();
         store.workspaces[0].path = store.workspaces[0].path.canonicalize().unwrap();
@@ -2698,6 +2460,7 @@ mod tests {
                 let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
                 app.writable = false;
                 app.startup = None;
+                app.details = false;
                 app.selected_workspace = Some(0);
                 app.selected_session = Some(1);
                 app.open_tabs = vec![DocumentTab::Chat(1)];
@@ -2719,7 +2482,7 @@ mod tests {
             let a = app.read(cx);
             let d = &a.files.documents[&a.active_file.unwrap()];
             assert!(!d.loading && d.error.is_none());
-            d.scroll.clone()
+            d.preview.read(cx).scroll.clone()
         });
         assert!(scroll.bounds().size.height > px(100.));
         assert!(scroll.bounds().size.height < px(500.));
@@ -2739,6 +2502,11 @@ mod tests {
             let _ = window.draw(cx);
         });
         assert!(scroll.offset().y < px(0.), "wheel must scroll source text");
+        assert_eq!(
+            cx.debug_bounds("scrollbar-overlay").unwrap(),
+            scroll.bounds(),
+            "scrollbars must stay at the viewport edges after vertical scrolling"
+        );
         assert!(
             scroll.max_offset().x > px(100.),
             "unwrapped lines must overflow horizontally: {:?}",
@@ -2754,6 +2522,12 @@ mod tests {
             scroll.offset().x < px(0.),
             "horizontal wheel must scroll unwrapped text"
         );
+        assert_eq!(
+            cx.debug_bounds("scrollbar-overlay").unwrap(),
+            scroll.bounds(),
+            "scrollbars must stay at the viewport edges after horizontal scrolling"
+        );
+        let unwrapped_height = cx.debug_bounds("file-source-view").unwrap().size.height;
         let toolbar = cx.debug_bounds("file-document-toolbar").unwrap();
         let status = cx.debug_bounds("file-document-status").unwrap();
         let name = cx.debug_bounds("file-path-name").unwrap();
@@ -2782,6 +2556,16 @@ mod tests {
             "wrapped text fits the viewport"
         );
         assert_eq!(scroll.offset().x, px(0.));
+        assert!(cx.debug_bounds("file-source-view").unwrap().size.height > unwrapped_height);
+        for width in [1100., 850.] {
+            cx.simulate_resize(size(px(width), px(500.)));
+            draw(cx);
+            assert_eq!(scroll.max_offset().x, px(0.), "wrapping follows resize");
+            assert_eq!(
+                cx.debug_bounds("scrollbar-overlay").unwrap(),
+                scroll.bounds()
+            );
+        }
         let before = scroll.offset().y;
         cx.simulate_event(ScrollWheelEvent {
             position: scroll.bounds().center(),
@@ -2829,6 +2613,109 @@ mod tests {
             expected_path
         );
         assert!(!expected_path.starts_with(r"\\?\"));
+        cx.update(|window, _| window.remove_window());
+        slot.borrow_mut().take();
+        drop(app);
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn file_preview_markdown_wraps_inside_viewport(cx: &mut TestAppContext) {
+        use gpui_kit::{
+            ScrollDelta, ScrollWheelEvent, VisualTestContext, point, size, test::TestWindowExt as _,
+        };
+        fn draw(cx: &mut VisualTestContext) {
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                window.simulate_next_frame(cx);
+                let _ = window.draw(cx);
+            });
+        }
+        cx.update(gpui_kit::init);
+        let fixture = Fixture::new();
+        let content = format!(
+            "# Preview\n\n{}\n\n```rust\n// {}\n```\n\n{}",
+            "Long prose should wrap within the file preview. ".repeat(80),
+            "unbroken_identifier_".repeat(60),
+            "More content below the code block.\n\n".repeat(30),
+        );
+        std::fs::write(fixture.0.join("alpha/README.md"), content).unwrap();
+        let store = fixture.store();
+        let key = fixture.key("alpha", "README.md");
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
+                app.writable = false;
+                app.startup = None;
+                app.details = false;
+                app.selected_workspace = Some(0);
+                app.selected_session = Some(1);
+                app.open_tabs = vec![DocumentTab::Chat(1)];
+                app.open_workspace_file(key, false, window, cx);
+                app
+            });
+            *output.borrow_mut() = Some(app.clone());
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        let app = slot.borrow().as_ref().unwrap().clone();
+        cx.simulate_resize(size(px(850.), px(500.)));
+        draw(cx);
+        draw(cx);
+        let scroll = cx.update(|_, cx| {
+            let a = app.read(cx);
+            let d = &a.files.documents[&a.active_file.unwrap()];
+            assert!(!d.loading && d.error.is_none());
+            d.preview.read(cx).scroll.clone()
+        });
+        let id = cx.update(|_, cx| app.read(cx).active_file.unwrap());
+        cx.update(|window, _| {
+            let control = window.find(("file-wrap", id));
+            assert_eq!(control.disabled(), Some(true));
+        });
+        let mut narrow_height = None;
+        for width in [850., 1100., 850.] {
+            cx.simulate_resize(size(px(width), px(500.)));
+            draw(cx);
+            draw(cx);
+            assert_eq!(
+                scroll.max_offset().x,
+                px(0.),
+                "Markdown must fit the viewport: width={width}"
+            );
+            let content = cx.debug_bounds("file-markdown-content").unwrap();
+            assert!(content.size.width <= scroll.bounds().size.width);
+            if width == 850. {
+                narrow_height = Some(content.size.height);
+            } else {
+                assert!(content.size.height < narrow_height.unwrap());
+            }
+            assert!(scroll.max_offset().y > px(100.));
+            cx.simulate_event(ScrollWheelEvent {
+                position: scroll.bounds().center(),
+                delta: ScrollDelta::Pixels(point(px(0.), px(-60.))),
+                ..Default::default()
+            });
+            draw(cx);
+            assert_eq!(
+                cx.debug_bounds("scrollbar-overlay").unwrap(),
+                scroll.bounds(),
+                "Markdown scrollbars must stay at the viewport edges"
+            );
+            let before = scroll.offset();
+            cx.simulate_event(ScrollWheelEvent {
+                position: scroll.bounds().center(),
+                delta: ScrollDelta::Pixels(point(px(-60.), px(0.))),
+                ..Default::default()
+            });
+            draw(cx);
+            assert_eq!(
+                scroll.offset(),
+                before,
+                "horizontal gestures leave wrapped content in place"
+            );
+        }
         cx.update(|window, _| window.remove_window());
         slot.borrow_mut().take();
         drop(app);
@@ -3361,8 +3248,8 @@ mod git_navigation_tests {
         assert!(cx.debug_bounds("git-navigation").is_none());
         cx.update(|_, cx| {
             let app = app.read(cx);
-            assert!(app.files.mode == super::Navigation::Workspaces);
-            assert!(!app.files.sidebar_collapsed);
+            assert!(app.workspace_navigation_active());
+            assert!(!app.plugins.collapsed());
             assert_eq!(app.input.read(cx).value(), "keep this draft");
         });
         click(cx, "nav-git");

@@ -4,7 +4,7 @@ use super::*;
 
 /// Chat typography resolved from settings, clamped so a hand-edited
 /// `state.json` cannot push the layout to unusable values.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(super) struct ChatTypography {
     pub(super) body_font: Option<SharedString>,
     pub(super) body_size: f32,
@@ -79,7 +79,23 @@ pub(super) fn chat_markdown_view(
     copy_scope: &str,
     selectable: bool,
 ) -> TextView {
-    let mut view = TextView::markdown(id, text)
+    styled_markdown_view(
+        TextView::markdown(id, text),
+        typography,
+        copy_scope,
+        selectable,
+        None,
+    )
+}
+
+pub(super) fn styled_markdown_view(
+    view: TextView,
+    typography: &ChatTypography,
+    copy_scope: &str,
+    selectable: bool,
+    search: Option<WeakEntity<super::file_preview::FilePreview>>,
+) -> TextView {
+    let mut view = view
         .text_size(px(typography.body_size))
         .line_height(relative(typography.line_height))
         // Vertical padding switches the chip from its tight cap-height box to
@@ -106,6 +122,7 @@ pub(super) fn chat_markdown_view(
                 copy: typography.code_copy,
                 syntax_highlight: typography.syntax_highlight,
                 selectable,
+                search,
             },
         );
     } else if typography.code_copy {
