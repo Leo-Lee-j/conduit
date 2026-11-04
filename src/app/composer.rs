@@ -569,7 +569,7 @@ impl ConduitApp {
             .px(px(3.))
             .py(px(3.))
             .gap_1()
-            .rounded(px(22.))
+            .rounded(px(11.))
             .bg(rgb(palette().surface))
             .border_1()
             .border_color(if input_focused {
@@ -587,6 +587,14 @@ impl ConduitApp {
             .on_drop(cx.listener(|this, dropped: &ExternalPaths, window, cx| {
                 this.attach_paths(dropped.paths(), window, cx);
             }))
+            .on_drop(cx.listener(|this, dropped: &files::FileDrag, window, cx| {
+                this.attach_paths(std::slice::from_ref(&dropped.path), window, cx);
+            }))
+            .drag_over::<files::FileDrag>(|style, _, _, _| {
+                style
+                    .bg(rgb(palette().surface_hover))
+                    .border_color(rgb(palette().focus))
+            })
             .drag_over::<ExternalPaths>(|style, _, _, _| {
                 style
                     .bg(rgb(palette().surface_hover))

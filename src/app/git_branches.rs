@@ -30,7 +30,7 @@ impl Default for BranchMenuInteraction {
 pub(super) struct BranchMenuHost {
     pub(super) workspace: PathBuf,
     pub(super) interaction: Entity<BranchMenuInteraction>,
-    pub(super) popover: WeakEntity<gpui_kit::component::popover::PopoverState>,
+    pub(super) popover: Option<WeakEntity<gpui_kit::component::popover::PopoverState>>,
 }
 
 impl BranchMenuHost {
@@ -55,13 +55,16 @@ impl BranchMenuHost {
             .as_ref()
             .and_then(WeakEntity::upgrade)
             .is_none()
-            && let Some(popover) = self.popover.upgrade()
         {
-            self.interaction.update(cx, |state, _| {
+            self.interaction.update(cx, |state, cx| {
                 state.form = None;
                 state.form_bounds = None;
+                cx.notify();
             });
-            popover.update(cx, |state, cx| state.dismiss(window, cx));
+            if let Some(popover) = self.popover.as_ref().and_then(WeakEntity::upgrade) {
+                popover.update(cx, |state, cx| state.dismiss(window, cx));
+            }
+            window.refresh();
         }
     }
 
@@ -95,7 +98,7 @@ impl BranchMenuHost {
         )
     }
 
-    fn open_simple_form(
+    pub(super) fn open_simple_form(
         &self,
         app: Entity<ConduitApp>,
         repository: git::Repository,
@@ -104,7 +107,11 @@ impl BranchMenuHost {
         window: &mut Window,
         cx: &mut Context<ConduitApp>,
     ) {
-        let full_ref = request.selected.as_ref().unwrap().full_ref.clone();
+        let full_ref = request
+            .selected
+            .as_ref()
+            .map(|b| b.full_ref.clone())
+            .unwrap_or_else(|| "HEAD".into());
         let (_, form) = make_form(
             app,
             self.workspace.clone(),
@@ -117,10 +124,11 @@ impl BranchMenuHost {
         form.update(cx, |form, _| {
             form.popup_host = Some((self.interaction.downgrade(), self.popover.clone()));
         });
-        self.interaction.update(cx, |state, _| {
+        self.interaction.update(cx, |state, cx| {
             state.form = Some(form.clone());
             state.form_ref = Some(full_ref);
             state.form_bounds = None;
+            cx.notify();
         });
         window.refresh();
     }
@@ -142,7 +150,9 @@ impl BranchMenuHost {
                     }
                     false
                 });
-                if dismiss_parent && let Some(popover) = host.popover.upgrade() {
+                if dismiss_parent
+                    && let Some(popover) = host.popover.as_ref().and_then(WeakEntity::upgrade)
+                {
                     popover.update(cx, |state, cx| state.dismiss(window, cx));
                 }
                 window.refresh();
@@ -152,7 +162,7 @@ impl BranchMenuHost {
 }
 
 #[derive(Clone)]
-enum FormKind {
+pub(super) enum FormKind {
     Create,
     Rename,
     Push,
@@ -173,33 +183,15 @@ pub(super) fn branch_name_tag(name: String, max_width: f32) -> AnyElement {
 }
 
 pub(super) fn branch_tag(name: String, max_width: f32, current: bool) -> AnyElement {
-    branch_tag_element(name, Some(px(max_width)), current, None)
+    branch_tag_element(name, px(max_width), current)
 }
 
-/// Branch tag that stretches across its list row, revealing `action` while the
-/// row carrying `group` is hovered.
-pub(super) fn branch_row_tag(
-    name: String,
-    current: bool,
-    group: SharedString,
-    action: Option<AnyElement>,
-) -> AnyElement {
-    branch_tag_element(name, None, current, Some((group, action)))
-}
-
-fn branch_tag_element(
-    name: String,
-    max_width: Option<Pixels>,
-    current: bool,
-    hover_action: Option<(SharedString, Option<AnyElement>)>,
-) -> AnyElement {
+fn branch_tag_element(name: String, max_width: Pixels, current: bool) -> AnyElement {
     let tooltip = name.clone();
-    let fill = max_width.is_none();
-    let mut tag = h_flex()
+    let tag = h_flex()
         .id(SharedString::from(format!("git-branch-tag-{name}")))
         .min_w_0()
-        .when_some(max_width, |tag, width| tag.max_w(width))
-        .when(fill, |tag| tag.w_full())
+        .max_w(max_width)
         .items_center()
         .gap(px(4.))
         .px(px(7.))
@@ -227,24 +219,7 @@ fn branch_tag_element(
                 .flex_shrink_0()
                 .text_color(rgb(if current { 0x467397 } else { palette().muted })),
         )
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .when(fill, |name| name.flex_1())
-                .child(name),
-        );
-    if let Some((group, action)) = hover_action
-        && let Some(action) = action
-    {
-        tag = tag.child(
-            div()
-                .flex_shrink_0()
-                .opacity(0.)
-                .group_hover(group, |style| style.opacity(1.))
-                .child(action),
-        );
-    }
+        .child(div().min_w_0().truncate().child(name));
     tag.into_any_element()
 }
 
@@ -606,7 +581,9 @@ impl ConduitApp {
             cx.notify();
             return false;
         }
-        self.show_git_navigation(cx);
+        if !self.branch_navigation_open() {
+            self.show_git_navigation(cx);
+        }
         self.git.operation = Some(GitOperation {
             worktree: git::worktree_root(&path),
             probe: git::OperationProbe::start(
@@ -710,7 +687,7 @@ impl ConduitApp {
 }
 
 struct BranchForm {
-    app: Entity<ConduitApp>,
+    app: WeakEntity<ConduitApp>,
     workspace: PathBuf,
     request: git::BranchRequest,
     kind: FormKind,
@@ -718,7 +695,7 @@ struct BranchForm {
     focus: FocusHandle,
     popup_host: Option<(
         WeakEntity<BranchMenuInteraction>,
-        WeakEntity<gpui_kit::component::popover::PopoverState>,
+        Option<WeakEntity<gpui_kit::component::popover::PopoverState>>,
     )>,
     fields: Vec<(String, Entity<InputState>)>,
     toggle: bool,
@@ -765,7 +742,7 @@ fn make_form(
         .selected
         .as_ref()
         .map(|b| b.name.as_str())
-        .unwrap_or("");
+        .unwrap_or("HEAD");
     let (title, helper, fields, toggle) = match &kind {
         FormKind::Create => (
             "新建分支",
@@ -903,7 +880,7 @@ fn make_form(
             })
             .collect();
         BranchForm {
-            app,
+            app: app.downgrade(),
             workspace,
             request,
             kind,
@@ -926,11 +903,12 @@ fn make_form(
 impl BranchForm {
     fn close(&self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((interaction, popover)) = &self.popup_host {
-            let _ = interaction.update(cx, |state, _| {
+            let _ = interaction.update(cx, |state, cx| {
                 state.form = None;
                 state.form_bounds = None;
+                cx.notify();
             });
-            if let Some(popover) = popover.upgrade() {
+            if let Some(popover) = popover.as_ref().and_then(WeakEntity::upgrade) {
                 popover.focus_handle(cx).focus(window, cx);
             }
             window.refresh();
@@ -985,15 +963,18 @@ impl BranchForm {
             ..self.request.clone()
         };
         let inline = self.popup_host.is_some();
-        let started = self.app.update(cx, |this, cx| {
-            let details = (this.details, this.detail_view);
-            let started = this.start_branch_operation(self.workspace.clone(), request, cx);
-            if inline {
-                this.details = details.0;
-                this.detail_view = details.1;
-            }
-            started
-        });
+        let started = self
+            .app
+            .update(cx, |this, cx| {
+                let details = (this.details, this.detail_view);
+                let started = this.start_branch_operation(self.workspace.clone(), request, cx);
+                if inline {
+                    this.details = details.0;
+                    this.detail_view = details.1;
+                }
+                started
+            })
+            .unwrap_or(false);
         if !started {
             self.error = Some("操作未启动，请检查工作区是否已切换或仍有任务运行".into());
             cx.notify();

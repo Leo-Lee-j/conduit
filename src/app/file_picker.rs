@@ -231,7 +231,7 @@ impl Render for FilePicker {
             .child(
                 div()
                     .debug_selector(|| "file-search-input".into())
-                    .child(Input::new(&self.input).h(px(34.))),
+                    .child(Input::new(&self.input).h(px(34.)).focus_bordered(false)),
             )
             .child(
                 div()

@@ -17,6 +17,7 @@ pub(super) struct GitDiffDialog {
     focus: FocusHandle,
     last_patch: Option<String>,
     pub(super) comparison: Option<git::ComparisonRequest>,
+    pub(super) commit: Option<git::CommitDiffRequest>,
     pub(super) workspace: PathBuf,
     pub(super) file: git::ChangedFile,
     pub(super) state: Entity<DiffState>,
@@ -58,6 +59,27 @@ impl GitDiffDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::with_sources(workspace, file, comparison, None, window, cx)
+    }
+
+    pub(super) fn new_commit(
+        workspace: PathBuf,
+        file: git::ChangedFile,
+        commit: git::CommitDiffRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::with_sources(workspace, file, None, Some(commit), window, cx)
+    }
+
+    fn with_sources(
+        workspace: PathBuf,
+        file: git::ChangedFile,
+        comparison: Option<git::ComparisonRequest>,
+        commit: Option<git::CommitDiffRequest>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let state = cx.new(|cx| {
             DiffState::new(Vec::new(), cx)
                 .with_mode(DiffMode::Split)
@@ -69,6 +91,7 @@ impl GitDiffDialog {
             focus: cx.focus_handle(),
             last_patch: None,
             comparison,
+            commit,
             workspace,
             file,
             state,
@@ -100,12 +123,15 @@ impl GitDiffDialog {
         let workspace = self.workspace.clone();
         let file = self.file.clone();
         let comparison = self.comparison.clone();
+        let commit = self.commit.clone();
         let ticket = cancelled.clone();
         self._load_task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    if let Some(comparison) = comparison {
+                    if let Some(commit) = commit {
+                        git::load_commit_diff(&workspace, &commit, &file, &cancelled)
+                    } else if let Some(comparison) = comparison {
                         git::load_comparison_diff(&workspace, &comparison, &file, &cancelled)
                     } else {
                         git::load_file_diff(&workspace, &file, &cancelled)
@@ -201,6 +227,16 @@ impl GitDiffDialog {
     }
 
     pub(super) fn versions(&self) -> (String, String) {
+        if let Some(commit) = &self.commit {
+            return (
+                commit
+                    .parent
+                    .as_ref()
+                    .map(|oid| format!("父提交 · {}", &oid[..7]))
+                    .unwrap_or_else(|| "空树（首次提交）".into()),
+                format!("提交 · {}", &commit.oid[..7]),
+            );
+        }
         if let Some(request) = &self.comparison {
             let before = format!(
                 "{} · {}",

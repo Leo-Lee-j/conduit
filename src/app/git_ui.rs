@@ -144,6 +144,55 @@ impl ConduitApp {
         self.git_feedback(path, "正在将所选文件移出暂存区…", false, cx);
     }
 
+    fn confirm_git_discard(
+        &mut self,
+        workspace: PathBuf,
+        file: git::ChangedFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.can_stage_files() || self.selected_workspace_path().as_ref() != Some(&workspace) {
+            return;
+        }
+        let Some(snapshot) = self.git.snapshot.as_ref() else {
+            return;
+        };
+        let target = snapshot.target.clone();
+        let app = cx.entity();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let app = app.clone();
+            let workspace = workspace.clone();
+            let file = file.clone();
+            let target = target.clone();
+            let description = format!(
+                "回滚 {} 的全部修改（包括暂存区）？已跟踪文件将恢复到 HEAD，新增和未跟踪文件将被删除。此操作不可撤销。",
+                file.path
+            );
+            dialog
+                .title("回滚文件修改")
+                .content(move |content, _, _| content.child(description.clone()))
+                .on_ok(move |_, _, cx| {
+                    app.update(cx, |this, cx| {
+                        if !this.can_stage_files()
+                            || this.selected_workspace_path().as_ref() != Some(&workspace)
+                        {
+                            return false;
+                        }
+                        this.git.operation = Some(GitOperation {
+                            worktree: git::worktree_root(&workspace),
+                            probe: git::OperationProbe::start(workspace.clone(), git::Operation::Discard {
+                                file: file.clone(),
+                                target: target.clone(),
+                            }),
+                            draft: String::new(),
+                        });
+                        this.git_feedback(workspace.clone(), "正在回滚文件修改…", false, cx);
+                        true
+                    })
+                })
+        });
+    }
+
     fn git_staging_actions(&self, snapshot: &git::Snapshot, view: Entity<Self>) -> AnyElement {
         let path = self.selected_workspace_path().unwrap_or_default();
         let available: Vec<String> = snapshot
@@ -374,8 +423,20 @@ impl ConduitApp {
         if self.closing || self.git.operation.is_some() {
             return;
         }
+        self.git.local_tags.remove(&path);
+        self.refresh_git(cx);
+        if self
+            .git
+            .repository
+            .as_ref()
+            .is_some_and(|repo| repo.remotes.is_empty())
+        {
+            self.git_feedback(path, "正在刷新本地标签缓存…", false, cx);
+            return;
+        }
+        self.git.remote_tags_checked.insert(path.clone());
         self.git.remote_tags_probe = Some(git::RemoteTagsProbe::start(path.clone()));
-        self.git_feedback(path, "正在读取远程标签…", false, cx);
+        self.git_feedback(path, "正在刷新标签缓存…", false, cx);
     }
 
     fn retry_tag(&mut self, cx: &mut Context<Self>) {
@@ -581,6 +642,21 @@ impl ConduitApp {
 
     pub(super) fn poll_git_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.ensure_commit_draft(window, cx);
+        if self.git_navigation_open()
+            && !self.closing
+            && self.git.operation.is_none()
+            && self.git.remote_tags_probe.is_none()
+            && self
+                .git
+                .repository
+                .as_ref()
+                .is_some_and(|repo| !repo.remotes.is_empty())
+            && let Some(path) = self.selected_workspace_path()
+            && !self.git.remote_tags.contains_key(&path)
+            && self.git.remote_tags_checked.insert(path.clone())
+        {
+            self.git.remote_tags_probe = Some(git::RemoteTagsProbe::start(path));
+        }
         let remote_result =
             self.git
                 .remote_tags_probe
@@ -596,13 +672,7 @@ impl ConduitApp {
             self.git.remote_tags_probe = None;
             if self.selected_workspace_path().as_ref() == Some(&path) {
                 match result {
-                    Ok(tags)
-                        if self
-                            .git
-                            .repository
-                            .as_ref()
-                            .is_some_and(|repo| repo.current == tags.branch) =>
-                    {
+                    Ok(tags) => {
                         let count = tags.names.len();
                         let remote = tags.remote.clone();
                         self.git.remote_tags.insert(path.clone(), tags);
@@ -612,9 +682,6 @@ impl ConduitApp {
                             false,
                             cx,
                         );
-                    }
-                    Ok(_) => {
-                        self.git_feedback(path, "分支已变化，已丢弃旧的远程标签结果", true, cx)
                     }
                     Err(error) => {
                         self.git_feedback(path, format!("读取远程标签失败：{error}"), true, cx)
@@ -636,8 +703,18 @@ impl ConduitApp {
             let path = operation.probe.path.clone();
             match result {
                 Ok(result) => {
-                    if result.committed || result.retry_completed || result.retry_tag.is_some() {
+                    let tags_changed = result.retry_completed
+                        || result.retry_tag.is_some()
+                        || (result.committed
+                            && self
+                                .git
+                                .drafts
+                                .get(&path)
+                                .is_some_and(|draft| !draft.tag.read(cx).value().is_empty()));
+                    if tags_changed {
+                        self.git.local_tags.remove(&path);
                         self.git.remote_tags.remove(&path);
+                        self.git.remote_tags_checked.remove(&path);
                     }
                     if result.retry_completed {
                         self.git.pending_tag_retry.remove(&path);
@@ -660,6 +737,7 @@ impl ConduitApp {
                     }
                     if result.error.is_some()
                         && self.selected_workspace_path().as_ref() == Some(&path)
+                        && !self.branch_navigation_open()
                     {
                         self.show_git_navigation(cx);
                     }
@@ -869,86 +947,11 @@ impl ConduitApp {
         let generate_app = view.clone();
         let commit_app = view.clone();
         let alternate_commit_app = view.clone();
-        let primary_push = self.git.commit_and_push;
-        let alternate_push = !primary_push;
         let cancel_app = view.clone();
-        let action_label = if self.git.commit_and_push {
-            "Commit and Push"
-        } else {
-            "Commit"
-        };
-        let mode_app = view.clone();
-        let dropdown = Popover::new("git-commit-mode")
-            .anchor(Anchor::BottomRight)
-            .offset(px(6.))
-            .trigger(
-                Button::new("git-commit-mode-trigger")
-                    .debug_selector(|| "git-commit-mode-trigger".into())
-                    .ghost()
-                    .small()
-                    .compact()
-                    .h(px(26.))
-                    .icon(IconName::ChevronDown)
-                    .tooltip("选择提交操作")
-                    .disabled(busy || self.closing)
-                    .when(!busy && !self.closing, |button| button.cursor_pointer()),
-            )
-            .content(move |_, _, cx| {
-                let popover = cx.entity().downgrade();
-                let mut list = v_flex().w(px(180.)).gap_1();
-                for push in [false, true] {
-                    let app = mode_app.clone();
-                    let popover = popover.clone();
-                    list = list.child(
-                        Button::new(if push {
-                            "git-mode-commit-push"
-                        } else {
-                            "git-mode-commit"
-                        })
-                        .debug_selector(move || {
-                            if push {
-                                "git-mode-commit-push".into()
-                            } else {
-                                "git-mode-commit".into()
-                            }
-                        })
-                        .accessibility_label(if push { "Commit and Push" } else { "Commit" })
-                        .small()
-                        .ghost()
-                        .w_full()
-                        .child(div().w_full().text_left().child(if push {
-                            "Commit and Push"
-                        } else {
-                            "Commit"
-                        }))
-                        .cursor_pointer()
-                        .on_click(move |_, window, cx| {
-                            app.update(cx, |this, cx| {
-                                this.git.commit_and_push = push;
-                                cx.notify();
-                            });
-                            if let Some(popover) = popover.clone().upgrade() {
-                                popover.update(cx, |state, cx| state.dismiss(window, cx));
-                            }
-                        }),
-                    );
-                }
-                list
-            });
         let tag_input = draft.tag.clone();
         let tag_for_generate = tag_input.clone();
-        let local_tags = self
-            .git
-            .snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.tags.clone())
-            .unwrap_or_default();
-        let remote = self.git.remote_tags.get(&path).filter(|tags| {
-            self.git
-                .repository
-                .as_ref()
-                .is_some_and(|repo| repo.current == tags.branch)
-        });
+        let local_tags = self.git.local_tags.get(&path).cloned().unwrap_or_default();
+        let remote = self.git.remote_tags.get(&path);
         let remote_names = remote.map(|tags| tags.names.clone());
         let mut tags = local_tags.clone();
         if let Some(remote) = &remote_names {
@@ -967,9 +970,13 @@ impl ConduitApp {
                 .map(String::as_str)
                 .collect::<std::collections::HashSet<_>>()
         });
+        // A draft for a new tag must not hide every existing tag in the menu.
+        let has_matches = tags
+            .iter()
+            .any(|tag| tag.to_lowercase().contains(&tag_query));
         let filtered_tags: Vec<_> = tags
             .into_iter()
-            .filter(|tag| tag.to_lowercase().contains(&tag_query))
+            .filter(|tag| !has_matches || tag.to_lowercase().contains(&tag_query))
             .take(100)
             .map(|tag| {
                 let local = local_set.contains(tag.as_str());
@@ -1008,13 +1015,23 @@ impl ConduitApp {
                     .small()
                     .compact()
                     .icon(IconName::ChevronDown)
-                    .tooltip("查看前 100 个匹配标签，可输入关键字筛选；远程状态来自上次查询")
+                    .tooltip("查看已有标签（最多 100 项），可输入关键字筛选；列表使用缓存")
                     .accessibility_label("查看标签")
                     .disabled(busy || self.closing || !self.writable)
                     .dropdown_menu(move |mut menu, window, _| {
                         menu = menu
                             .scrollable(true)
                             .max_h((window.viewport_size().height - px(48.)).min(px(320.)));
+                        if filtered_tags.is_empty() {
+                            menu = menu.item(
+                                PopupMenuItem::new(if refreshing_tags {
+                                    "正在读取标签…"
+                                } else {
+                                    "暂无标签，可输入新标签或点击刷新"
+                                })
+                                .disabled(true),
+                            );
+                        }
                         for (tag, status) in &filtered_tags {
                             let input = tag_menu_input.clone();
                             let selected = tag.clone();
@@ -1050,7 +1067,7 @@ impl ConduitApp {
                     .tooltip(if refreshing_tags {
                         "取消查询远程标签"
                     } else {
-                        "从当前上游查询远程标签"
+                        "刷新本地和远程标签缓存"
                     })
                     .disabled(self.closing || (busy && !refreshing_tags))
                     .on_click(move |_, _, cx| {
@@ -1242,13 +1259,15 @@ impl ConduitApp {
             .child(
                 h_flex()
                     .debug_selector(|| "git-commit-actions".into())
+                    .w_full()
                     .h(px(30.))
                     .flex_shrink_0()
                     .gap_1()
+                    .justify_end()
                     .child(
                         Button::new("git-commit")
                             .debug_selector(|| "git-commit".into())
-                            .label(action_label)
+                            .label("Commit")
                             .tooltip(format!("仅提交勾选的 {checked_count} 个已暂存文件"))
                             .primary()
                             .small()
@@ -1262,29 +1281,22 @@ impl ConduitApp {
                             )
                             .when(can_commit, |button| button.cursor_pointer())
                             .on_click(move |_, _, cx| {
-                                commit_app
-                                    .update(cx, |this, cx| this.start_commit(primary_push, cx))
+                                commit_app.update(cx, |this, cx| this.start_commit(false, cx))
                             }),
                     )
                     .child(
                         Button::new("git-commit-alternate")
                             .debug_selector(|| "git-commit-alternate".into())
-                            .label(if alternate_push {
-                                "Commit and Push"
-                            } else {
-                                "Commit"
-                            })
+                            .label("Commit & Push")
                             .small()
                             .h(px(30.))
                             .disabled(!can_commit)
                             .when(can_commit, |button| button.cursor_pointer())
                             .on_click(move |_, _, cx| {
                                 alternate_commit_app
-                                    .update(cx, |this, cx| this.start_commit(alternate_push, cx))
+                                    .update(cx, |this, cx| this.start_commit(true, cx))
                             }),
-                    )
-                    .child(div().flex_1())
-                    .child(dropdown),
+                    ),
             )
             .into_any_element()
     }
@@ -1295,14 +1307,19 @@ impl ConduitApp {
             return;
         }
         self.git.workspace = path;
-        self.git.remote_tags_probe = None;
+        if let Some(probe) = self.git.remote_tags_probe.take()
+            && !self.git.remote_tags.contains_key(&probe.path)
+        {
+            self.git.remote_tags_checked.remove(&probe.path);
+        }
         self.git.branch_probe = None;
         self.git.repository = None;
         self.git.probe = None;
         self.git.snapshot = None;
+        self.clear_tree_git_status();
         self.git.error = None;
         self.refresh_branches();
-        if self.git_navigation_open() {
+        if self.git_status_visible() {
             self.refresh_git(cx);
         }
         cx.notify();
@@ -1335,7 +1352,7 @@ impl ConduitApp {
                         .as_ref()
                         .map(|repo| (&repo.current, repo.detached));
                 self.git.repository = repository;
-                if head_changed && self.git_navigation_open() && self.git.probe.is_none() {
+                if head_changed && self.git_status_visible() && self.git.probe.is_none() {
                     self.refresh_git(cx);
                 }
                 cx.notify();
@@ -1345,299 +1362,6 @@ impl ConduitApp {
         if self.git.last_branch_check.elapsed() >= Duration::from_secs(10) {
             self.refresh_branches();
         }
-    }
-
-    pub(super) fn branch_picker(&self, view: Entity<Self>) -> AnyElement {
-        let Some(repository) = self.git.repository.clone() else {
-            return div().into_any_element();
-        };
-        let label = if repository.detached {
-            format!("HEAD · {}", repository.current)
-        } else {
-            repository.current.clone()
-        };
-        let trigger = Button::new("git-branch-trigger")
-            .debug_selector(|| "git-branch-trigger".into())
-            .ghost()
-            .small()
-            .h(px(26.))
-            .px_2()
-            .cursor_pointer()
-            .tooltip(format!("当前分支：{label} · 分支操作"))
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(Icon::new(gpui_kit::assets::IconName::GitBranch).small())
-                    .child(
-                        div()
-                            .max_w(px(180.))
-                            .truncate()
-                            .text_size(px(11.))
-                            .child(label),
-                    )
-                    .child(
-                        Icon::new(IconName::ChevronDown)
-                            .small()
-                            .text_color(rgb(palette().faint)),
-                    ),
-            );
-        Popover::new(SharedString::from(format!(
-            "git-branch-picker-{}",
-            self.git
-                .workspace
-                .as_deref()
-                .map(display_path)
-                .unwrap_or_default()
-        )))
-        .anchor(Anchor::BottomLeft)
-        .offset(px(6.))
-        .p_1p5()
-        // Nested menus handle their own outside clicks. Dismissing this parent
-        // on a child's mouse-down would destroy the item before mouse-up.
-        .overlay_closable(false)
-        .trigger(trigger)
-        .content(move |_, window, cx| {
-            let popover = cx.entity().downgrade();
-            let app = view.clone();
-            let Some(repository) = app.read(cx).git.repository.clone() else {
-                return div().into_any_element();
-            };
-            let host = git_branches::BranchMenuHost {
-                workspace: app.read(cx).selected_workspace_path().unwrap_or_default(),
-                interaction: window.use_keyed_state("git-branch-menu-interaction", cx, |_, _| {
-                    git_branches::BranchMenuInteraction::default()
-                }),
-                popover: popover.clone(),
-            };
-            let outside_host = host.clone();
-            let (local_expanded, remote_expanded) = {
-                let interaction = host.interaction.read(cx);
-                (interaction.local_expanded, interaction.remote_expanded)
-            };
-            let mut list = v_flex()
-                .id("git-branches")
-                .on_mouse_down_out(move |event, window, cx| {
-                    outside_host.dismiss_unless_menu_open(event.position, window, cx)
-                })
-                .w(px(280.))
-                .max_h(px(320.))
-                .overflow_y_scroll()
-                .gap_0p5();
-            if let Some(banner) = app.read(cx).git_integration_banner(app.clone()) {
-                list = list.child(banner);
-            }
-            if repository.detached {
-                list = list.child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .text_size(px(11.))
-                        .text_color(rgb(palette().muted))
-                        .child(format!("分离 HEAD · {}", repository.current)),
-                );
-            }
-            let section_host = host.clone();
-            let section_app = app.clone();
-            let section_header =
-                move |label: &'static str, remote: bool, expanded: bool| -> AnyElement {
-                    let host = section_host.clone();
-                    let app = section_app.clone();
-                    h_flex()
-                        .id(if remote {
-                            "git-branches-remote-section"
-                        } else {
-                            "git-branches-local-section"
-                        })
-                        .debug_selector(move || {
-                            if remote {
-                                "git-branches-remote-section".to_string()
-                            } else {
-                                "git-branches-local-section".to_string()
-                            }
-                        })
-                        .w_full()
-                        .cursor_pointer()
-                        .items_center()
-                        .gap(px(2.))
-                        .px_2()
-                        .pt_2()
-                        .text_size(px(10.))
-                        .text_color(rgb(palette().faint))
-                        .hover(|style| style.text_color(rgb(palette().muted)))
-                        .child(
-                            Icon::new(if expanded {
-                                IconName::ChevronDown
-                            } else {
-                                IconName::ChevronRight
-                            })
-                            .size(px(10.))
-                            .flex_shrink_0(),
-                        )
-                        .child(label)
-                        .on_click(move |_, _, cx| {
-                            host.interaction.update(cx, |state, _| {
-                                if remote {
-                                    state.remote_expanded = !state.remote_expanded;
-                                } else {
-                                    state.local_expanded = !state.local_expanded;
-                                }
-                            });
-                            app.update(cx, |_, cx| cx.notify());
-                        })
-                        .into_any_element()
-                };
-            for remote in [false, true] {
-                if !repository
-                    .branches
-                    .iter()
-                    .any(|branch| branch.remote == remote)
-                {
-                    continue;
-                }
-                let expanded = if remote {
-                    remote_expanded
-                } else {
-                    local_expanded
-                };
-                list = list.child(section_header(
-                    if remote {
-                        "远程分支（本地记录）"
-                    } else {
-                        "本地分支"
-                    },
-                    remote,
-                    expanded,
-                ));
-                if !expanded {
-                    continue;
-                }
-                for (index, branch) in repository
-                    .branches
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, b)| b.remote == remote)
-                {
-                    let current =
-                        !repository.detached && !remote && branch.name == repository.current;
-                    let group = SharedString::from(format!("git-branch-row-{index}"));
-                    let row = h_flex()
-                        .id(("git-branch-row", index))
-                        .debug_selector(move || format!("git-branch-row-{index}"))
-                        .group(group.clone())
-                        .min_w_0()
-                        .px_2()
-                        .py_1();
-                    let info = repository
-                        .branch_info
-                        .iter()
-                        .find(|info| info.name == branch.name && info.remote == remote)
-                        .cloned();
-                    let action = info.as_ref().map(|info| {
-                        let button_app = app.clone();
-                        let button_host = host.clone();
-                        let button_info = info.clone();
-                        let name = button_info.name.clone();
-                        Button::new(("git-branch-actions", index))
-                            .debug_selector(move || format!("git-branch-actions-{index}"))
-                            .ghost()
-                            .small()
-                            .compact()
-                            .icon(FullIconName::Ellipsis)
-                            .tooltip(format!("{name} 的分支操作"))
-                            .accessibility_label(format!("{name} 的分支操作"))
-                            .dropdown_menu(move |menu, window, cx| {
-                                git_branches::branch_menu(
-                                    menu,
-                                    button_app.clone(),
-                                    button_info.clone(),
-                                    button_host.clone(),
-                                    window,
-                                    cx,
-                                )
-                            })
-                            .into_any_element()
-                    });
-                    let tag =
-                        git_branches::branch_row_tag(branch.name.clone(), current, group, action);
-                    if let Some(info) = info {
-                        let menu_app = app.clone();
-                        let menu_host = host.clone();
-                        let bounds_host = host.clone();
-                        let bounds_ref = info.full_ref.clone();
-                        let row = row
-                            .on_prepaint(move |bounds, _, cx| {
-                                bounds_host.record_branch_bounds(bounds_ref.clone(), bounds, cx)
-                            })
-                            .context_menu(move |menu, window, cx| {
-                                git_branches::branch_menu(
-                                    menu,
-                                    menu_app.clone(),
-                                    info.clone(),
-                                    menu_host.clone(),
-                                    window,
-                                    cx,
-                                )
-                            });
-                        list = list.child(row.child(tag));
-                    } else {
-                        list = list.child(row.child(tag));
-                    }
-                }
-            }
-            if repository.truncated {
-                list = list.child(
-                    div()
-                        .px_2()
-                        .text_size(px(10.))
-                        .text_color(rgb(palette().faint))
-                        .child("分支过多，列表已截断"),
-                );
-            }
-            if let Some(feedback) = app.read(cx).git.feedback.get(&host.workspace) {
-                list = list.child(
-                    div()
-                        .id("git-branch-feedback")
-                        .max_h(px(64.))
-                        .overflow_y_scroll()
-                        .px_2()
-                        .text_size(px(11.))
-                        .text_color(rgb(if feedback.error {
-                            palette().danger_text
-                        } else {
-                            palette().muted
-                        }))
-                        .child(feedback.text.clone()),
-                );
-            }
-            let side_form = host.side_form(cx);
-            div()
-                .child(
-                    list.child(
-                        h_flex()
-                            .pt_2()
-                            .border_t_1()
-                            .border_color(rgb(palette().border))
-                            .child(
-                                Button::new("git-branches-refresh")
-                                    .label("刷新分支")
-                                    .small()
-                                    .ghost()
-                                    .cursor_pointer()
-                                    .on_click(move |_, window, cx| {
-                                        app.update(cx, |this, _| this.refresh_branches());
-                                        if let Some(popover) = popover.clone().upgrade() {
-                                            popover
-                                                .update(cx, |state, cx| state.dismiss(window, cx));
-                                        }
-                                    }),
-                            ),
-                    ),
-                )
-                .children(side_form)
-                .into_any_element()
-        })
-        .into_any_element()
     }
 
     /// Open the read-only diff window for one file of the selected workspace.
@@ -1668,7 +1392,8 @@ impl ConduitApp {
             return;
         };
         self.git.error = None;
-        self.git.probe = Some(GitProbe::start(path));
+        let cached_tags = self.git.local_tags.get(&path).cloned();
+        self.git.probe = Some(GitProbe::start(path, cached_tags));
         cx.notify();
     }
 
@@ -1705,11 +1430,16 @@ impl ConduitApp {
                     });
                 }
                 self.refresh_diff_documents(&path, &snapshot, window, cx);
+                self.update_tree_git_status(&path, &snapshot);
+                self.git
+                    .local_tags
+                    .insert(path.clone(), snapshot.tags.clone());
                 self.git.snapshot = Some(snapshot);
                 self.git.error = None;
             }
             Err(error) => {
                 self.git.snapshot = None;
+                self.clear_tree_git_status();
                 self.git.error = Some(error);
             }
         }
@@ -2104,6 +1834,16 @@ impl ConduitApp {
                                         .unwrap_or_default();
                                     let batch_staged_app = menu_app.clone();
                                     let batch_staged_workspace = menu_workspace.clone();
+                                    let discard_app = menu_app.clone();
+                                    let discard_file = menu_file.clone();
+                                    let discard_workspace = menu_workspace.clone();
+                                    let can_discard = menu_app.read(cx).can_stage_files()
+                                        && !menu_app
+                                            .read(cx)
+                                            .git
+                                            .repository
+                                            .as_ref()
+                                            .is_some_and(|repo| repo.integration.is_some());
                                     let disabled = !can_stage;
                                     menu.item(
                                         PopupMenuItem::new("加入暂存区")
@@ -2181,6 +1921,21 @@ impl ConduitApp {
                                                 });
                                             },
                                         ),
+                                    )
+                                    .separator()
+                                    .item(
+                                        PopupMenuItem::new("回滚文件修改…")
+                                            .disabled(!can_discard)
+                                            .on_click(move |_, window, cx| {
+                                                discard_app.update(cx, |this, cx| {
+                                                    this.confirm_git_discard(
+                                                        discard_workspace.clone(),
+                                                        discard_file.clone(),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                });
+                                            }),
                                     )
                                 })
                                 .child(

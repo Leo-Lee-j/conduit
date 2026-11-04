@@ -865,6 +865,7 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.leave_branch_navigation();
         self.switch_context(workspace, session, true, window, cx);
     }
 

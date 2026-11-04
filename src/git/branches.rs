@@ -48,6 +48,7 @@ pub struct BranchRequest {
 #[derive(Clone, Debug)]
 pub enum BranchAction {
     Checkout,
+    Fetch,
     Create {
         name: String,
         checkout: bool,
@@ -360,6 +361,10 @@ pub(super) fn operate_branch(
             run_git_with_timeout(&git, workspace, args, cancel, Duration::from_secs(120))
         };
         match request.action {
+            BranchAction::Fetch => {
+                run(&["fetch", "--all", "--prune"])?;
+                Ok("已获取所有远程仓库并清理失效的远程分支记录".into())
+            }
             BranchAction::Checkout => {
                 let name = checkout(&git, workspace, selected()?, cancel)?;
                 Ok(format!("已切换到 {name}"))
@@ -369,7 +374,12 @@ pub(super) fn operate_branch(
                 checkout: switch,
             } => {
                 validate_name(&git, workspace, &name, cancel)?;
-                let source = selected()?.oid.as_str();
+                let source = request
+                    .selected
+                    .as_ref()
+                    .map(|b| b.oid.as_str())
+                    .or(actual.head.as_deref())
+                    .ok_or_else(|| anyhow!("当前仓库尚无提交"))?;
                 if switch {
                     run(&["switch", "-c", &name, source])?;
                 } else {

@@ -69,6 +69,7 @@ mod generation;
 mod git_branches;
 mod git_compare;
 mod git_diff;
+mod git_log;
 mod git_state;
 mod git_ui;
 mod mentions;
@@ -141,6 +142,7 @@ actions!(
 pub struct ConduitApp {
     store: Store,
     git: git_ui::GitUi,
+    branch_manager: Option<Entity<git_log::GitLogView>>,
     persistence: crate::persistence::Persistence,
     session_control: session_controller::SessionController,
     updater: update::UpdateUi,
@@ -601,6 +603,7 @@ impl ConduitApp {
             session_control: session_controller::SessionController::default(),
             store,
             git: git_ui::GitUi::default(),
+            branch_manager: None,
             updater: update::UpdateUi::default(),
             connection_settings: settings::ConnectionsUi::new(new_session_provider),
             settings_ui: settings::SettingsUi {

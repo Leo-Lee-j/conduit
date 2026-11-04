@@ -715,7 +715,7 @@ impl ConduitApp {
             );
         }
         // Mirrors the conversation toolbar height so the two bottom bars read
-        // as one strip; icons are packed right-to-left like the right side.
+        // as one strip.
         sidebar = sidebar.child(list).child(
             StatusBar::new()
                 .h(px(34.))
@@ -727,20 +727,7 @@ impl ConduitApp {
                 .gap_1()
                 .items_center()
                 .border_t_1()
-                .border_color(rgb(palette().border))
-                .right(
-                    Button::new("sidebar-about")
-                        .ghost()
-                        .small()
-                        .compact()
-                        .icon(IconName::Info)
-                        .tooltip("关于 Conduit")
-                        .accessibility_label("关于")
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_about_dialog(window, cx);
-                        })),
-                ),
+                .border_color(rgb(palette().border)),
         );
         sidebar.into_any_element()
     }

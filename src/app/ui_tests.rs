@@ -1079,7 +1079,7 @@ fn git_branch_menu_opens_create_form_and_remains_usable_after_repaint(cx: &mut T
             assert!(cx.debug_bounds("git-branch-actions-0").is_some());
             assert!(cx.debug_bounds("dialog-0").is_none());
         } else {
-            assert!(cx.debug_bounds("git-branch-actions-0").is_none());
+            assert!(cx.debug_bounds("git-branch-actions-0").is_some());
             for (width, height) in [(1200., 800.), (850., 500.)] {
                 cx.simulate_resize(gpui_kit::size(px(width), px(height)));
                 cx.run_until_parked();
@@ -1115,7 +1115,7 @@ fn git_branch_menu_opens_create_form_and_remains_usable_after_repaint(cx: &mut T
             });
         }
     }
-    // Outside clicks still dismiss an ordinary branch list.
+    // Outside clicks leave the persistent branch navigation visible.
     let trigger = cx.debug_bounds("git-branch-trigger").unwrap().center();
     cx.simulate_mouse_down(trigger, MouseButton::Left, Modifiers::default());
     cx.simulate_mouse_up(trigger, MouseButton::Left, Modifiers::default());
@@ -1130,7 +1130,7 @@ fn git_branch_menu_opens_create_form_and_remains_usable_after_repaint(cx: &mut T
     cx.update(|window, cx| {
         let _ = window.draw(cx);
     });
-    assert!(cx.debug_bounds("git-branch-actions-0").is_none());
+    assert!(cx.debug_bounds("git-branch-actions-0").is_some());
     // A long upstream submenu must scroll independently of the branch picker.
     cx.update(|_, cx| {
         slot.borrow().as_ref().unwrap().update(cx, |app, cx| {
@@ -3175,14 +3175,10 @@ fn check_assistant_drag_selection(
 fn sidebar_bottom_bar_matches_the_toolbar_and_opens_about(cx: &mut TestAppContext) {
     use gpui_kit::AppContext;
     cx.update(gpui_kit::init);
-    let app_slot = std::rc::Rc::new(std::cell::RefCell::new(None));
-    let slot = app_slot.clone();
     let (_, cx) = cx.add_window_view(|window, cx| {
         let app = cx.new(|cx| super::ConduitApp::new(window, cx, false, false));
-        *slot.borrow_mut() = Some(app.clone());
         gpui_kit::component::Root::new(app, window, cx)
     });
-    let app = app_slot.borrow().as_ref().unwrap().clone();
     cx.run_until_parked();
     cx.update(|window, cx| {
         let _ = window.draw(cx);
@@ -3221,9 +3217,19 @@ fn sidebar_bottom_bar_matches_the_toolbar_and_opens_about(cx: &mut TestAppContex
             "the bottom bars must reach the window edge: {bars:?} / {height}"
         );
     });
-    cx.update(|window, cx| {
-        app.update(cx, |this, cx| this.open_about_dialog(window, cx));
-    });
+    let about = cx
+        .debug_bounds("nav-about")
+        .expect("the navigation rail has an About button");
+    cx.simulate_mouse_down(
+        about.center(),
+        gpui_kit::MouseButton::Left,
+        Default::default(),
+    );
+    cx.simulate_mouse_up(
+        about.center(),
+        gpui_kit::MouseButton::Left,
+        Default::default(),
+    );
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(
@@ -4278,6 +4284,24 @@ fn historical_reply_elapsed_footer_is_available_on_hover(cx: &mut TestAppContext
             }
         }
     }
+    cx.update(|_, cx| {
+        app.update(cx, |this, cx| {
+            this.store.workspaces[0].sessions[0].model = Some("short-model".into());
+            cx.notify();
+        });
+    });
+    cx.simulate_resize(gpui_kit::size(px(1200.), px(900.)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let model = cx.debug_bounds("reply-model-3").unwrap();
+    let timestamp = cx.debug_bounds("reply-timestamp-3").unwrap();
+    assert!(
+        model.size.width < px(120.),
+        "short labels must not reserve a 240px gap"
+    );
+    assert!(timestamp.left() - model.right() <= px(9.));
     cx.update(|_, cx| app.update(cx, |this, _| this.writable = false));
 }
 

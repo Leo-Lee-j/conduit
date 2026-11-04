@@ -19,13 +19,14 @@ pub(super) struct GitUi {
     pub(super) generation: Option<CommitGeneration>,
     pub(super) operation: Option<GitOperation>,
     pub(super) feedback: HashMap<PathBuf, GitFeedback>,
+    pub(super) local_tags: HashMap<PathBuf, Vec<String>>,
+    pub(super) remote_tags_checked: HashSet<PathBuf>,
     pub(super) remote_tags_probe: Option<git::RemoteTagsProbe>,
     pub(super) remote_tags: HashMap<PathBuf, git::RemoteTags>,
     pub(super) pending_tag_retry: HashMap<PathBuf, git::TagRetry>,
     pub(super) collapsed_groups: HashSet<GitChangeGroup>,
     pub(super) group_by_status: bool,
     pub(super) selected_files: HashMap<PathBuf, HashSet<String>>,
-    pub(super) commit_and_push: bool,
 }
 impl Default for GitUi {
     fn default() -> Self {
@@ -41,13 +42,14 @@ impl Default for GitUi {
             generation: None,
             operation: None,
             feedback: HashMap::new(),
+            local_tags: HashMap::new(),
+            remote_tags_checked: HashSet::new(),
             remote_tags_probe: None,
             remote_tags: HashMap::new(),
             pending_tag_retry: HashMap::new(),
             collapsed_groups: HashSet::from([GitChangeGroup::Untracked]),
             group_by_status: false,
             selected_files: HashMap::new(),
-            commit_and_push: false,
         }
     }
 }

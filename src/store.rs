@@ -199,6 +199,8 @@ pub struct GitSettings {
     /// Independent commit-generation route, without changing global CLI settings.
     #[serde(default)]
     pub generation_channel: Option<crate::providers::ModelChannel>,
+    #[serde(default)]
+    pub favorite_branches: std::collections::HashMap<PathBuf, Vec<String>>,
 }
 
 fn default_tag_step() -> usize {
@@ -218,6 +220,7 @@ impl Default for GitSettings {
             generation_provider: None,
             generation_model: None,
             generation_channel: None,
+            favorite_branches: Default::default(),
         }
     }
 }
@@ -951,6 +954,7 @@ mod tests {
             generation_provider: None,
             generation_model: None,
             generation_channel: None,
+            favorite_branches: Default::default(),
         };
         let prompt = settings.generation_prompt(&["src/中文.rs"], "+a staged change");
         assert!(prompt.starts_with(&settings.commit_message_prompt));

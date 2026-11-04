@@ -423,7 +423,7 @@ impl ConduitApp {
             let height = (f32::from(window.viewport_size().height) - 180.).max(100.);
             dialog
                 .w(px(width))
-                .margin_top(px(48.))
+                .centered()
                 .title("关于")
                 .content(move |content, _, cx| {
                     content.child(

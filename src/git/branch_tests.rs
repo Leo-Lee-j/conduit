@@ -658,3 +658,57 @@ fn worktree_comparison_reads_recreated_untracked_file_against_selected_branch() 
             .contains("?? tracked.txt")
     );
 }
+
+#[test]
+fn branch_fetch_prunes_remote_refs_and_detached_head_can_create_branch() {
+    let repo = seeded_branch_repo();
+    let remote = repo.seed_remote();
+    repo.run(&["push", "origin", "main:obsolete"]);
+    repo.run(&[
+        "--git-dir",
+        remote.to_str().unwrap(),
+        "update-ref",
+        "-d",
+        "refs/heads/obsolete",
+    ]);
+    let head = repo.run(&["rev-parse", "HEAD"]);
+    assert!(
+        repo.metadata()
+            .branch_info
+            .iter()
+            .any(|b| b.name == "origin/obsolete")
+    );
+    let result = operate(
+        &repo.path,
+        Operation::Branch(Box::new(BranchRequest {
+            expected: repo.metadata().context,
+            selected: None,
+            action: BranchAction::Fetch,
+        })),
+        &AtomicBool::new(false),
+    );
+    assert_branch_ok(result);
+    assert!(
+        !repo
+            .metadata()
+            .branch_info
+            .iter()
+            .any(|b| b.name == "origin/obsolete")
+    );
+    assert_eq!(head, repo.run(&["rev-parse", "HEAD"]));
+    repo.run(&["switch", "--detach"]);
+    assert_branch_ok(operate(
+        &repo.path,
+        Operation::Branch(Box::new(BranchRequest {
+            expected: repo.metadata().context,
+            selected: None,
+            action: BranchAction::Create {
+                name: "from-detached".into(),
+                checkout: true,
+            },
+        })),
+        &AtomicBool::new(false),
+    ));
+    assert_eq!(repo.metadata().current, "from-detached");
+    assert_eq!(head, repo.run(&["rev-parse", "HEAD"]));
+}

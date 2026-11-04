@@ -24,6 +24,7 @@ enum Navigation {
     Workspaces,
     Files,
     Git,
+    Branches,
 }
 
 #[derive(Default)]
@@ -69,11 +70,68 @@ pub(super) struct FileBrowser {
     documents: HashMap<u64, Document>,
     diffs: HashMap<u64, DiffDocument>,
     last_git_refresh: Option<Instant>,
+    git_status: HashMap<PathBuf, TreeGitStatus>,
     preview: Option<u64>,
     next_id: u64,
     last_poll: Option<Instant>,
     polling: bool,
 }
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+enum TreeGitStatus {
+    Untracked,
+    Added,
+    Deleted,
+    Modified,
+    Conflict,
+}
+impl TreeGitStatus {
+    fn color(self) -> u32 {
+        match self {
+            Self::Untracked => palette().warning_text,
+            Self::Added => palette().git_added_text,
+            Self::Deleted => palette().git_deleted_text,
+            Self::Modified => palette().git_modified_text,
+            Self::Conflict => palette().error_text,
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::Untracked => "?",
+            Self::Added => "A",
+            Self::Deleted => "D",
+            Self::Modified => "M",
+            Self::Conflict => "!",
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct FileDrag {
+    pub(super) path: PathBuf,
+}
+impl Render for FileDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .rounded(px(6.))
+            .bg(rgb(palette().surface_strong))
+            .border_1()
+            .border_color(rgb(palette().border))
+            .text_color(rgb(palette().text))
+            .text_size(px(12.))
+            .child(Icon::new(file_ref::icon_for(&self.path)).small())
+            .child(
+                self.path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+    }
+}
+
 #[derive(Clone)]
 enum TreeRow {
     Entry(Entry, usize),
@@ -190,6 +248,7 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.leave_branch_navigation();
         match tab {
             DocumentTab::Chat(id) => {
                 self.active_diff = None;
@@ -574,6 +633,9 @@ impl ConduitApp {
         for path in paths {
             self.load_directory(root.clone(), path, cx);
         }
+        if self.git.probe.is_none() && self.git.operation.is_none() {
+            self.refresh_git(cx);
+        }
         cx.notify();
     }
 
@@ -750,6 +812,23 @@ impl ConduitApp {
             )
             .child(div().flex_1())
             .child(
+                Button::new("nav-branches")
+                    .debug_selector(|| "git-branch-trigger".into())
+                    .ghost()
+                    .small()
+                    .compact()
+                    .w(px(36.))
+                    .h(px(34.))
+                    .icon(FullIconName::GitBranch)
+                    .selected(mode == Navigation::Branches)
+                    .tooltip("Git 分支与日志")
+                    .accessibility_label("Git 分支与日志")
+                    .cursor_pointer()
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.show_branch_navigation(window, cx)),
+                    ),
+            )
+            .child(
                 Button::new("nav-settings")
                     .debug_selector(|| "nav-settings".into())
                     .accessibility_label("设置")
@@ -762,6 +841,22 @@ impl ConduitApp {
                     .tooltip("设置")
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
+            )
+            .child(
+                Button::new("nav-about")
+                    .debug_selector(|| "nav-about".into())
+                    .ghost()
+                    .small()
+                    .compact()
+                    .w(px(36.))
+                    .h(px(34.))
+                    .icon(IconName::Info)
+                    .tooltip("关于 Conduit")
+                    .accessibility_label("关于")
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_about_dialog(window, cx);
+                    })),
             );
         let rail = rail.child(
             Button::new("nav-collapse")
@@ -790,6 +885,11 @@ impl ConduitApp {
             Navigation::Workspaces => self.render_sidebar(cx),
             Navigation::Files => self.render_file_tree(cx),
             Navigation::Git => self.render_git_navigation(cx),
+            Navigation::Branches => self
+                .branch_manager
+                .as_ref()
+                .map(|view| view.read(cx).tree.clone().into_any_element())
+                .unwrap_or_else(|| div().into_any_element()),
         };
         h_flex()
             .id("navigation-panel")
@@ -904,6 +1004,8 @@ impl ConduitApp {
                                 };
                                 let click_key = key.clone();
                                 let pin_key = key.clone();
+                                let drag_path = key.workspace.join(&key.relative);
+                                let status = this.files.git_status.get(&drag_path).copied();
                                 let directory = entry.directory;
                                 let link = entry.link;
                                 let expanded = this
@@ -934,6 +1036,18 @@ impl ConduitApp {
                                     .cursor_pointer()
                                     .when(active, |row| row.bg(rgb(palette().surface_hover)))
                                     .hover(|s| s.bg(rgb(palette().surface_hover)))
+                                    .when_some(status, |row, status| {
+                                        row.text_color(rgb(status.color()))
+                                    })
+                                    .when(!directory && this.writable && !this.closing, |row| {
+                                        row.on_drag(
+                                            FileDrag { path: drag_path },
+                                            |drag, _, _, cx| {
+                                                cx.stop_propagation();
+                                                cx.new(|_| drag.clone())
+                                            },
+                                        )
+                                    })
                                     .child(
                                         Icon::new(if directory {
                                             if expanded {
@@ -945,11 +1059,30 @@ impl ConduitApp {
                                             IconName::File
                                         })
                                         .small()
-                                        .text_color(rgb(palette().muted)),
+                                        .text_color(rgb(
+                                            status.map_or(palette().muted, TreeGitStatus::color),
+                                        )),
                                     )
-                                    .child(div().min_w_0().truncate().text_size(px(12.)).child(
-                                        format!("{}{}", entry.name, if link { " ↗" } else { "" }),
-                                    ))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(px(12.))
+                                            .child(format!(
+                                                "{}{}",
+                                                entry.name,
+                                                if link { " ↗" } else { "" }
+                                            )),
+                                    )
+                                    .when_some(status.filter(|_| !directory), |row, status| {
+                                        row.child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .text_size(px(10.))
+                                                .child(status.label()),
+                                        )
+                                    })
                                     .tooltip({
                                         let label = workspace_files::display_path(
                                             &key.workspace.join(&key.relative),
@@ -1635,12 +1768,54 @@ impl ConduitApp {
         self.files.mode == Navigation::Git && !self.files.sidebar_collapsed
     }
 
+    pub(super) fn git_status_visible(&self) -> bool {
+        (!self.files.sidebar_collapsed
+            && matches!(self.files.mode, Navigation::Files | Navigation::Git))
+            || self.active_diff.is_some()
+    }
+
+    pub(super) fn clear_tree_git_status(&mut self) {
+        self.files.git_status.clear();
+    }
+
+    pub(super) fn update_tree_git_status(&mut self, workspace: &Path, snapshot: &git::Snapshot) {
+        self.clear_tree_git_status();
+        let root = git::worktree_root(workspace);
+        for file in &snapshot.files {
+            let status = if file.index == 'U'
+                || file.worktree == 'U'
+                || matches!((file.index, file.worktree), ('A', 'A') | ('D', 'D'))
+            {
+                TreeGitStatus::Conflict
+            } else if file.untracked() {
+                TreeGitStatus::Untracked
+            } else {
+                match file.kind() {
+                    git::ChangeKind::Added => TreeGitStatus::Added,
+                    git::ChangeKind::Modified => TreeGitStatus::Modified,
+                    git::ChangeKind::Deleted => TreeGitStatus::Deleted,
+                }
+            };
+            let path = root.join(&file.path);
+            for path in path
+                .ancestors()
+                .take_while(|path| *path != root && path.starts_with(&root))
+            {
+                self.files
+                    .git_status
+                    .entry(path.to_path_buf())
+                    .and_modify(|current| *current = (*current).max(status))
+                    .or_insert(status);
+            }
+        }
+    }
+
     pub(super) fn mark_git_refresh(&mut self) {
         self.files.last_git_refresh = Some(Instant::now());
     }
 
     pub(super) fn poll_git_navigation(&mut self, cx: &mut Context<Self>) {
-        if (self.git_navigation_open() || self.active_diff.is_some())
+        if self.git_status_visible()
             && self.git.probe.is_none()
             && self.git.operation.is_none()
             && self.git.generation.is_none()
@@ -1653,6 +1828,46 @@ impl ConduitApp {
         }
     }
 
+    pub(super) fn leave_branch_navigation(&mut self) {
+        if self.branch_navigation_open() {
+            self.files.mode = Navigation::Workspaces;
+        }
+    }
+
+    pub(super) fn branch_navigation_open(&self) -> bool {
+        self.files.mode == Navigation::Branches
+    }
+
+    pub(super) fn show_branch_navigation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.files.mode = Navigation::Branches;
+        self.files.sidebar_collapsed = false;
+        if self.branch_manager.is_none() {
+            let app = cx.weak_entity();
+            let workspace = self.selected_workspace_path();
+            let repository = self.git.repository.clone();
+            self.branch_manager =
+                Some(cx.new(|cx| git_log::GitLogView::new(app, workspace, repository, window, cx)));
+        }
+        if let Some(view) = &self.branch_manager {
+            view.read(cx)
+                .branch_search
+                .read(cx)
+                .focus_handle(cx)
+                .focus(window, cx);
+        }
+        self.refresh_branches();
+        cx.notify();
+    }
+
+    pub(super) fn toggle_git_navigation(&mut self, cx: &mut Context<Self>) {
+        if self.git_navigation_open() {
+            self.files.mode = Navigation::Workspaces;
+            cx.notify();
+        } else {
+            self.show_git_navigation(cx);
+        }
+    }
+
     pub(super) fn show_git_navigation(&mut self, cx: &mut Context<Self>) {
         self.files.mode = Navigation::Git;
         self.files.sidebar_collapsed = false;
@@ -1660,7 +1875,7 @@ impl ConduitApp {
         cx.notify();
     }
 
-    fn navigation_workspace_picker(
+    pub(super) fn navigation_workspace_picker(
         &self,
         id: &'static str,
         name: String,
@@ -1709,13 +1924,17 @@ impl ConduitApp {
                                                 .find(|s| !s.archived)
                                                 .map(|s| s.id)
                                         });
+                                    let navigation = this.files.mode;
                                     if let Some(id) = session {
                                         this.select_document(DocumentTab::Chat(id), window, cx);
                                     } else {
                                         this.switch(i, None, window, cx);
                                     }
+                                    this.files.mode = navigation;
+                                    cx.notify();
                                     match this.files.mode {
                                         Navigation::Git => this.refresh_git(cx),
+                                        Navigation::Branches => this.refresh_branches(),
                                         Navigation::Files => this.refresh_tree(path.clone(), cx),
                                         Navigation::Workspaces => {}
                                     }
@@ -2907,6 +3126,141 @@ mod git_navigation_tests {
     }
 
     #[gpui_kit::test]
+    fn file_tree_drag_git_status_tag_cache_and_discard(cx: &mut TestAppContext) {
+        use super::TreeGitStatus;
+        use gpui_kit::{point, px};
+        cx.update(gpui_kit::init);
+        let repo = Repo::new();
+        repo.git(&["tag", "v1.0.0"]);
+        std::fs::write(repo.0.join("added.txt"), "added\n").unwrap();
+        repo.git(&["add", "added.txt"]);
+        let store = repo.store();
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
+                app.writable = true;
+                app.startup = None;
+                app.selected_workspace = Some(0);
+                app.selected_session = Some(1);
+                app.open_tabs = vec![DocumentTab::Chat(1)];
+                app
+            });
+            *output.borrow_mut() = Some(app.clone());
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        let app = slot.borrow().as_ref().unwrap().clone();
+        draw(cx);
+        click(cx, "nav-files");
+        wait_git(cx, &app);
+        cx.update(|_, cx| {
+            let a = app.read(cx);
+            let statuses = &a.files.git_status;
+            assert!(statuses[&repo.0.join("src/main.rs")] == TreeGitStatus::Modified);
+            assert!(statuses[&repo.0.join("src")] == TreeGitStatus::Modified);
+            assert!(statuses[&repo.0.join("added.txt")] == TreeGitStatus::Added);
+            assert!(statuses[&repo.0.join("new file.txt")] == TreeGitStatus::Untracked);
+            assert_eq!(a.git.local_tags[&repo.0], vec!["v1.0.0"]);
+        });
+        let source = cx
+            .debug_bounds("file-tree-entry-new file.txt")
+            .unwrap()
+            .center();
+        let target = cx.debug_bounds("composer").unwrap().center();
+        cx.simulate_mouse_down(source, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(
+            point(source.x + px(12.), source.y),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        draw(cx);
+        cx.simulate_mouse_move(target, Some(MouseButton::Left), Modifiers::default());
+        draw(cx);
+        cx.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+        draw(cx);
+        cx.update(|_, cx| {
+            let a = app.read(cx);
+            assert_eq!(a.current_files().unwrap().references.len(), 1);
+            assert!(
+                a.current_files().unwrap().references[0]
+                    .path
+                    .ends_with("new file.txt")
+            );
+            assert!(a.input.read(cx).value().is_empty());
+            assert_eq!(a.selected_session, Some(1));
+        });
+        // Status refreshes and navigation reuse tags until explicit refresh.
+        repo.git(&["tag", "v1.0.1"]);
+        click(cx, "nav-git");
+        wait_git(cx, &app);
+        cx.update(|window, cx| {
+            app.update(cx, |a, cx| {
+                assert_eq!(a.git.local_tags[&repo.0], vec!["v1.0.0"]);
+                a.git.drafts[&repo.0]
+                    .tag
+                    .update(cx, |tag, cx| tag.set_value("v2.0.0", window, cx));
+                cx.notify();
+            });
+        });
+        draw(cx);
+        click(cx, "git-tag-list");
+        assert!(cx.update(|window, _| {
+            !window
+                .find_all_by_label("v1.0.0  ·  本地 · 未查询远程")
+                .is_empty()
+        }));
+        cx.simulate_keystrokes("escape");
+        draw(cx);
+        click(cx, "git-tag-refresh-remote");
+        wait_git(cx, &app);
+        cx.update(|_, cx| {
+            assert_eq!(
+                app.read(cx).git.local_tags[&repo.0],
+                vec!["v1.0.1", "v1.0.0"]
+            )
+        });
+        // The actual context menu must lead to a confirmation before any edit.
+        let row = cx
+            .debug_bounds("git-change-file-src/main.rs")
+            .unwrap()
+            .center();
+        cx.simulate_mouse_move(row, None, Modifiers::default());
+        cx.simulate_mouse_down(row, MouseButton::Right, Modifiers::default());
+        cx.simulate_mouse_up(row, MouseButton::Right, Modifiers::default());
+        draw(cx);
+        let rollback =
+            cx.update(|window, _| window.find_by_label("回滚文件修改…").bounds().center());
+        cx.simulate_mouse_down(rollback, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(rollback, MouseButton::Left, Modifiers::default());
+        draw(cx);
+        assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+        assert!(cx.update(|_, cx| app.read(cx).git.operation.is_none()));
+        assert!(
+            std::fs::read_to_string(repo.0.join("src/main.rs"))
+                .unwrap()
+                .contains("after")
+        );
+        cx.simulate_keystrokes("enter");
+        wait_git(cx, &app);
+        assert!(
+            std::fs::read_to_string(repo.0.join("src/main.rs"))
+                .unwrap()
+                .contains("before")
+        );
+        assert!(repo.0.join("new file.txt").exists());
+        cx.update(|_, cx| {
+            let a = app.read(cx);
+            assert_eq!(a.git.snapshot.as_ref().unwrap().staged_count(), 1);
+            assert!(!a.files.git_status.contains_key(&repo.0.join("src/main.rs")));
+        });
+        cx.update(|window, _| window.remove_window());
+        slot.borrow_mut().take();
+        drop(app);
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
     fn commit_button_requires_checks_and_commits_only_checked_staged_files(
         cx: &mut TestAppContext,
     ) {
@@ -2992,6 +3346,25 @@ mod git_navigation_tests {
             cx.update(|window, _| window.find_all_by_label("设置").len()),
             1
         );
+        cx.update(|window, cx| {
+            app.read(cx)
+                .input
+                .read(cx)
+                .focus_handle(cx)
+                .focus(window, cx)
+        });
+        cx.simulate_keystrokes("ctrl-k");
+        draw(cx);
+        assert!(cx.debug_bounds("git-navigation").is_some());
+        cx.simulate_keystrokes("ctrl-k");
+        draw(cx);
+        assert!(cx.debug_bounds("git-navigation").is_none());
+        cx.update(|_, cx| {
+            let app = app.read(cx);
+            assert!(app.files.mode == super::Navigation::Workspaces);
+            assert!(!app.files.sidebar_collapsed);
+            assert_eq!(app.input.read(cx).value(), "keep this draft");
+        });
         click(cx, "nav-git");
         wait_git(cx, &app);
         assert!(cx.debug_bounds("git-navigation").is_some());
@@ -3141,12 +3514,12 @@ mod git_navigation_tests {
         cx.update(|_, cx| assert_eq!(app.read(cx).git.selected_files[&repo.0].len(), 2));
         click(cx, "git-select-unstaged");
         cx.update(|_, cx| assert!(app.read(cx).git.selected_files[&repo.0].is_empty()));
-        click(cx, "git-commit-mode-trigger");
-        click(cx, "git-mode-commit-push");
-        cx.update(|_, cx| assert!(app.read(cx).git.commit_and_push));
-        click(cx, "git-commit-mode-trigger");
-        click(cx, "git-mode-commit");
-        cx.update(|_, cx| assert!(!app.read(cx).git.commit_and_push));
+        assert!(cx.debug_bounds("git-commit-mode-trigger").is_none());
+        let push = cx.debug_bounds("git-commit-alternate").unwrap();
+        let commit = cx.debug_bounds("git-commit").unwrap();
+        let actions = cx.debug_bounds("git-commit-actions").unwrap();
+        assert!(push.left() >= commit.right());
+        assert!((push.right() - actions.right()).abs() <= gpui_kit::px(1.));
         cx.update(|_, cx| {
             app.update(cx, |a, cx| {
                 a.git_feedback(

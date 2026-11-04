@@ -9,12 +9,18 @@ use crate::child::{Child, available};
 use anyhow::{Context, Result, anyhow, bail};
 mod branches;
 mod compare;
+mod discard;
+mod log;
 mod selected;
 pub use branches::{
     BranchAction, BranchContext, BranchInfo, BranchRequest, IntegrationState, repository_scope,
 };
 pub use compare::{
     Comparison, ComparisonKind, ComparisonRequest, load_comparison, load_comparison_diff,
+};
+pub use log::{
+    CommitDetails, CommitDiffRequest, History, HistoryQuery, LogCommit, load_commit_details,
+    load_commit_diff, load_history,
 };
 use std::{
     fs::{self, File},
@@ -241,6 +247,10 @@ pub enum Operation {
         files: Vec<String>,
         target: CommitTarget,
     },
+    Discard {
+        file: ChangedFile,
+        target: CommitTarget,
+    },
     Branch(Box<BranchRequest>),
     Commit {
         /// None commits the full index; Some commits only these staged paths.
@@ -351,8 +361,11 @@ impl<T: Send + 'static> Probe<T> {
 }
 
 impl GitProbe {
-    pub fn start(path: PathBuf) -> Self {
-        Self::start_with(path, load)
+    pub fn start(path: PathBuf, cached_tags: Option<Vec<String>>) -> Self {
+        Self::spawn(path, move |path, cancel| match cached_tags {
+            Some(tags) => load_with_tags(path, cancel, Some(tags)),
+            None => load(path, cancel),
+        })
     }
 }
 
@@ -540,6 +553,14 @@ pub fn resolve_git() -> Option<PathBuf> {
 
 /// Read a read-only snapshot for `workspace`. Never writes to the repository.
 pub fn load(workspace: &Path, cancel: &AtomicBool) -> Result<Snapshot> {
+    load_with_tags(workspace, cancel, None)
+}
+
+fn load_with_tags(
+    workspace: &Path,
+    cancel: &AtomicBool,
+    cached_tags: Option<Vec<String>>,
+) -> Result<Snapshot> {
     if !workspace.is_dir() {
         bail!("工作目录不存在：{}", workspace.display());
     }
@@ -627,7 +648,10 @@ pub fn load(workspace: &Path, cancel: &AtomicBool) -> Result<Snapshot> {
     if commit_target(&git, workspace, cancel)? != target {
         bail!("读取期间分支或暂存区发生变化，请刷新后重试");
     }
-    let tags = list_tags(&git, workspace, cancel)?;
+    let tags = match cached_tags {
+        Some(tags) => tags,
+        None => list_tags(&git, workspace, cancel)?,
+    };
     Ok(Snapshot {
         branch,
         tags,
@@ -1061,6 +1085,10 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
         }
         match operation {
             Operation::Branch(_) => unreachable!(),
+            Operation::Discard { file, target } => {
+                discard::discard_file(&git, workspace, &file, &target, cancel)?;
+                Ok(format!("已回滚 {} 的修改", file.path))
+            }
             Operation::Stage { files, target } => {
                 update_index(&git, workspace, &files, &target, IndexAction::Stage, cancel)?;
                 Ok(format!("已暂存 {} 个文件", files.len()))
@@ -1316,10 +1344,27 @@ fn load_remote_tags(workspace: &Path, cancel: &AtomicBool) -> Result<RemoteTags>
         workspace,
         &["symbolic-ref", "--quiet", "--short", "HEAD"],
         cancel,
-    )?
-    .trim()
-    .to_owned();
-    let (remote, _) = resolve_upstream(&git, workspace, &branch, None, cancel)?;
+    )
+    .map(|branch| branch.trim().to_owned())
+    .unwrap_or_else(|_| "HEAD".into());
+    // Reading tags does not require a tracking branch (or even an attached HEAD).
+    let configured = run_git(
+        &git,
+        workspace,
+        &["config", "--get", &format!("branch.{branch}.remote")],
+        cancel,
+    )
+    .ok();
+    let remotes = run_git(&git, workspace, &["remote"], cancel)?;
+    let remotes: Vec<_> = remotes.lines().collect();
+    let remote = configured
+        .as_deref()
+        .map(str::trim)
+        .filter(|remote| remotes.contains(remote))
+        .or_else(|| remotes.iter().copied().find(|remote| *remote == "origin"))
+        .or_else(|| (remotes.len() == 1).then(|| remotes[0]))
+        .ok_or_else(|| anyhow!("未找到可查询的远程仓库，请配置 origin 或当前分支的远程"))?
+        .to_owned();
     let push_url = single_push_url(&git, workspace, &remote, cancel)?;
     let output = run_git_with_timeout(
         &git,
@@ -2032,6 +2077,198 @@ mod tests {
     }
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    fn discard_test_file(repo: &TestRepository, path: &str) -> OperationResult {
+        let snapshot = load(&repo.path, &AtomicBool::new(false)).unwrap();
+        let file = snapshot
+            .files
+            .iter()
+            .find(|file| file.path == path)
+            .unwrap()
+            .clone();
+        operate(
+            &repo.path,
+            Operation::Discard {
+                file,
+                target: snapshot.target,
+            },
+            &AtomicBool::new(false),
+        )
+    }
+
+    #[test]
+    fn discard_restores_only_the_selected_file_and_handles_renames_and_deletions() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        repo.run(&["config", "core.autocrlf", "false"]);
+        repo.stage("original\n");
+        fs::write(repo.path.join("file[1].txt"), "literal original\n").unwrap();
+        fs::write(repo.path.join("file1.txt"), "other original\n").unwrap();
+        repo.run(&["add", "."]);
+        assert!(repo.commit("seed", false).committed);
+        repo.stage("staged edit\n");
+        fs::write(repo.path.join("tracked.txt"), "unstaged edit\n").unwrap();
+        fs::write(repo.path.join("file[1].txt"), "literal change\n").unwrap();
+        fs::write(repo.path.join("file1.txt"), "keep this edit\n").unwrap();
+        repo.run(&["add", "file1.txt"]);
+        let result = discard_test_file(&repo, "file[1].txt");
+        assert!(result.error.is_none(), "{:?}", result.error);
+        assert_eq!(
+            fs::read_to_string(repo.path.join("file[1].txt")).unwrap(),
+            "literal original\n"
+        );
+        let result = discard_test_file(&repo, "tracked.txt");
+        assert!(result.error.is_none(), "{:?}", result.error);
+        assert_eq!(
+            fs::read_to_string(repo.path.join("tracked.txt")).unwrap(),
+            "original\n"
+        );
+        assert_eq!(repo.run(&["show", ":file1.txt"]), "keep this edit\n");
+        assert_eq!(
+            fs::read_to_string(repo.path.join("file1.txt")).unwrap(),
+            "keep this edit\n"
+        );
+        repo.run(&["mv", "tracked.txt", "renamed.txt"]);
+        fs::write(repo.path.join("tracked.txt"), "new file at the old path\n").unwrap();
+        let result = discard_test_file(&repo, "renamed.txt");
+        assert!(result.error.is_some());
+        assert_eq!(
+            fs::read_to_string(repo.path.join("tracked.txt")).unwrap(),
+            "new file at the old path\n"
+        );
+        assert!(repo.path.join("renamed.txt").exists());
+        fs::remove_file(repo.path.join("tracked.txt")).unwrap();
+        let result = discard_test_file(&repo, "renamed.txt");
+        assert!(result.error.is_none(), "{:?}", result.error);
+        assert!(repo.path.join("tracked.txt").exists());
+        assert!(!repo.path.join("renamed.txt").exists());
+        repo.run(&["rm", "tracked.txt"]);
+        let result = discard_test_file(&repo, "tracked.txt");
+        assert!(result.error.is_none(), "{:?}", result.error);
+        assert_eq!(
+            fs::read_to_string(repo.path.join("tracked.txt")).unwrap(),
+            "original\n"
+        );
+        assert_eq!(
+            repo.run(&["diff", "--cached", "--name-only"]).trim(),
+            "file1.txt"
+        );
+    }
+
+    #[test]
+    fn discard_removes_only_selected_new_files_even_before_the_first_commit() {
+        for initial_commit in [false, true] {
+            let Some(repo) = TestRepository::new() else {
+                return;
+            };
+            repo.stage("keep\n");
+            if initial_commit {
+                assert!(repo.commit("seed", false).committed);
+            }
+            for path in ["new [1].txt", "untracked.txt", "keep.txt"] {
+                fs::write(repo.path.join(path), "new\n").unwrap();
+            }
+            repo.run(&["add", "--", "new [1].txt"]);
+            for path in ["new [1].txt", "untracked.txt"] {
+                let result = discard_test_file(&repo, path);
+                assert!(result.error.is_none(), "{:?}", result.error);
+                assert!(!repo.path.join(path).exists());
+            }
+            assert_eq!(
+                fs::read_to_string(repo.path.join("tracked.txt")).unwrap(),
+                "keep\n"
+            );
+            assert!(repo.path.join("keep.txt").exists());
+            if !initial_commit {
+                assert_eq!(
+                    repo.run(&["diff", "--cached", "--name-only"]).trim(),
+                    "tracked.txt"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn discard_rejects_stale_state_unsafe_paths_and_directories() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        repo.stage("original\n");
+        assert!(repo.commit("seed", false).committed);
+        fs::write(repo.path.join("tracked.txt"), "keep\n").unwrap();
+        let snapshot = load(&repo.path, &AtomicBool::new(false)).unwrap();
+        let file = snapshot.files[0].clone();
+        repo.run(&["add", "tracked.txt"]);
+        let result = operate(
+            &repo.path,
+            Operation::Discard {
+                file: file.clone(),
+                target: snapshot.target,
+            },
+            &AtomicBool::new(false),
+        );
+        assert!(result.error.is_some());
+        let target = commit_target(&repo.git, &repo.path, &AtomicBool::new(false)).unwrap();
+        // A fresh target must not make an outdated worktree status acceptable.
+        let result = operate(
+            &repo.path,
+            Operation::Discard {
+                file: file.clone(),
+                target: target.clone(),
+            },
+            &AtomicBool::new(false),
+        );
+        assert!(result.error.is_some());
+        fs::create_dir(repo.path.join("directory")).unwrap();
+        fs::write(repo.path.join("directory/keep.txt"), "keep\n").unwrap();
+        for path in ["../outside.txt", ":(glob)*", "directory", "missing.txt"] {
+            let file = ChangedFile {
+                path: path.into(),
+                ..file.clone()
+            };
+            let result = operate(
+                &repo.path,
+                Operation::Discard {
+                    file,
+                    target: target.clone(),
+                },
+                &AtomicBool::new(false),
+            );
+            assert!(result.error.is_some(), "accepted {path}");
+        }
+        assert_eq!(
+            fs::read_to_string(repo.path.join("tracked.txt")).unwrap(),
+            "keep\n"
+        );
+        assert!(repo.path.join("directory/keep.txt").exists());
+    }
+
+    #[test]
+    fn cached_tags_survive_status_refresh_until_explicitly_reloaded() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        repo.stage("seed\n");
+        assert!(repo.commit("seed", false).committed);
+        repo.run(&["tag", "v1.0.0"]);
+        let cancel = AtomicBool::new(false);
+        let snapshot = load(&repo.path, &cancel).unwrap();
+        repo.run(&["tag", "v1.0.1"]);
+        fs::write(repo.path.join("tracked.txt"), "modified\n").unwrap();
+        let cached = load_with_tags(&repo.path, &cancel, Some(snapshot.tags)).unwrap();
+        assert_eq!(cached.tags, vec!["v1.0.0"]);
+        assert!(
+            cached
+                .files
+                .iter()
+                .any(|file| file.path == "tracked.txt" && file.unstaged())
+        );
+        assert_eq!(
+            load(&repo.path, &cancel).unwrap().tags,
+            vec!["v1.0.1", "v1.0.0"]
+        );
+    }
+
     #[test]
     fn stage_selected_files_is_literal_supports_batches_and_preserves_other_changes() {
         let Some(repo) = TestRepository::new() else {
@@ -2341,6 +2578,16 @@ mod tests {
         assert_eq!(result.remote, "origin");
         assert_eq!(result.names, vec!["v1.0.0"]);
         assert_eq!(repo.run(&["tag", "-l"]).trim(), "local-only");
+        repo.run(&["branch", "--unset-upstream"]);
+        assert_eq!(
+            load_remote_tags(&repo.path, &cancel).unwrap().names,
+            vec!["v1.0.0"]
+        );
+        repo.run(&["checkout", "--detach", "HEAD"]);
+        assert_eq!(
+            load_remote_tags(&repo.path, &cancel).unwrap().names,
+            vec!["v1.0.0"]
+        );
         repo.run(&["--git-dir", remote.to_str().unwrap(), "tag", "-d", "v1.0.0"]);
         assert!(
             load_remote_tags(&repo.path, &cancel)

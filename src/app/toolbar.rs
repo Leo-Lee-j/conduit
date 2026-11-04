@@ -82,9 +82,6 @@ impl ConduitApp {
                         ),
                 )
             })
-            .when(self.git.repository.is_some(), |bar| {
-                bar.left(self.branch_picker(app_entity.clone()))
-            })
             .when_some(toolbar_hint, |bar, hint| {
                 bar.child(
                     div()

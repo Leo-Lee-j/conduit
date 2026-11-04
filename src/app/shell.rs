@@ -170,7 +170,14 @@ impl Render for ConduitApp {
             .sidebar_view
             .clone()
             .cached(StyleRefinement::default().size_full());
-        let mut conversation = if self.active_diff.is_some() {
+        let mut conversation = if self.branch_navigation_open() {
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .h_full()
+                .children(self.branch_manager.clone())
+        } else if self.active_diff.is_some() {
             v_flex()
                 .flex_1()
                 .min_w_0()
@@ -568,7 +575,11 @@ impl Render for ConduitApp {
                     ),
             );
         conversation = conversation.child(toolbar);
-        let (detail_panel, overlay) = self.render_detail_dock(selected.as_ref(), window, cx);
+        let (detail_panel, overlay) = if self.branch_navigation_open() {
+            (None, None)
+        } else {
+            self.render_detail_dock(selected.as_ref(), window, cx)
+        };
         // The left workspace rail stays a resizable group. The right sidebar is
         // laid out by hand so dragging its edge follows the pointer 1:1 and its
         // width can be capped at half of the remaining content area.
@@ -719,12 +730,7 @@ impl Render for ConduitApp {
             this.open_settings(window, cx);
         }))
         .on_action(cx.listener(|this, _: &ToggleGitNavigation, _, cx| {
-            if this.git_navigation_open() {
-                this.files.sidebar_collapsed = true;
-            } else {
-                this.show_git_navigation(cx);
-            }
-            cx.notify();
+            this.toggle_git_navigation(cx);
         }))
         .into_any_element()
     }

@@ -862,7 +862,7 @@ impl ConduitApp {
                             .max_w(px(680.))
                             .min_w_0()
                             .gap_2()
-                            .rounded(px(16.))
+                            .rounded(px(8.))
                             .px_4()
                             .py_3()
                             // A restrained prompt surface distinguishes the user
@@ -1001,10 +1001,9 @@ impl ConduitApp {
                     .debug_selector(move || format!("reply-model-{index}"))
                     .min_w_0()
                     .max_w(px(240.))
-                    // Share the remaining row with fixed hit targets and time
-                    // labels; a wider navigation panel must truncate the model
-                    // name rather than wrap it back underneath the buttons.
-                    .flex_1()
+                    // Keep short model names at their natural width so the timestamp
+                    // follows the label; long names can still shrink and truncate.
+                    .flex_shrink_1()
                     .items_center()
                     .gap_1()
                     .opacity(0.)
@@ -1035,7 +1034,6 @@ impl ConduitApp {
                     .w_full()
                     .min_w_0()
                     .justify_start()
-                    .flex_wrap()
                     .items_center()
                     .gap(px(8.))
                     .opacity(0.)
