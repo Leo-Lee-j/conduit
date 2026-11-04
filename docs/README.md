@@ -22,6 +22,10 @@
 
 以下文档记录特定阶段的评估或验收，日期和结果仅代表当时状态。
 
+- [通知中心与右侧历史面板评估](notification-center-evaluation.md)：铃铛入口、统一通知服务与 Alert / Notification 组件选型。
+- [工作台界面插件扩展性评估](ui-plugin-extensibility-evaluation.md)
+- [工作台插件分阶段设计](plugins/README.md)：界面贡献、Shell 候选 / 进程备选、安装管理与验收。
+- [GPUI Shell 复用评估](plugins/gpui-shell-reuse-assessment.md)：官网与锁定版本对照、三处扩展分工及接入验证条件。
 - [发布与更新评估](github-release-and-updater-evaluation.md)
 - [OpenCode 接入评估](opencode-cli-evaluation.md)
 - [M0 验证记录](m0-validation.md)

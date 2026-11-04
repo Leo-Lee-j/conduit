@@ -1,0 +1,80 @@
+# 工作台插件分阶段设计
+
+设计版本：0.2；日期：2026-11-04；状态：待实现。本文将[扩展性评估](../ui-plugin-extensibility-evaluation.md)细化为三个阶段，并纳入 [GPUI Shell 复用评估](gpui-shell-reuse-assessment.md)。Conduit 接口、模块和协议均为拟议设计；上游已有能力与尚未打通的公开接口在复用评估中分别列出。
+
+**当前建议：P1 建立统一贡献机制，并验证 Shell；P2 优先选择通过验证的 Shell 后端，独立进程作为备选；P3 完成安装管理。** 不把两套外部运行时同时实现作为首版要求。
+
+| 阶段 | 设计文档 | 可交付结果 | 前置条件 | 预算状态 |
+| --- | --- | --- | --- | --- |
+| P1 | [界面贡献与内置适配](phase-1-contributions.md) | 三处共用注册表、内置示例及 Shell 选型记录 | 现有行为回归基线 | 原贡献改造 6–10 人日；另列复用验证 2–3 人日时间盒 |
+| P2-A | [Shell 插件运行时](phase-2-shell-runtime.md) | 本地 JS 贡献原生视图，复用 Shell 执行与宿主模块机制 | 复用评估 G1–G6 通过 | 原型后重估，优先候选 |
+| P2-B | [独立进程运行时备选](phase-2-local-runtime.md) | 本地可执行程序、stdio 协议、有限原生模板 | P1 完成且选择进程路线 | 原估算 10–16 人日 |
+| P3 | [安装管理、存储与发布验收](phase-3-management.md) | 安装、信任、启停、升级回退、保存与开发文档 | 已选择的 P2 后端及完整清理屏障 | 原进程路线 5–8 人日；Shell 路线重估 |
+
+P2-A / P2-B 是同一阶段的互斥方案。原 21–34 人日总计只适用于进程路线，不含新增 Shell 验证，也不代表 Shell 路线预算。所有工期与性能目标均未经原型验证。公开市场、自动在线更新、WebView、WASM、操作系统沙箱、任意停靠与主编辑区扩展不在本轮范围。
+
+## 共同范围与约定
+
+左侧扩展包括图标入口及关联导航页；右侧沿用现有侧边栏与窄屏浮层，一次展示一个视图；底部仍属于中间内容区，开放左右状态项。数据作用域与物理位置分别定义。Shell Dock 的 bottom 面板不等同本需求的底部工具栏。
+
+外部插件首版只接受用户明确信任的本地包。宿主 `writable = false` 时禁止外部激活并停止已有实例；这与 CLI 会话 `PermissionLevel` 不同。Shell 的进程内能力限制与可执行插件的宿主 API 权限也不同，应使用对应后端的信任说明，不能统一声称提供操作系统沙箱。
+
+| 共同决策 | 具体约定 | 负责文档 |
+| --- | --- | --- |
+| 扩展身份 | PluginId、ViewId、CommandId、ActivityItemId、StatusItemId 独立；贡献 ID 以 pluginId 加点为前缀 | P1 / 所选 P2 |
+| 内置命名空间 | `conduit.*` 仅由宿主内部注册；示例为 `example.workspace-overview` | P1 |
+| 注册与执行分离 | 安装、发现、启用、恢复布局只读取声明；首次显式打开或执行才激活 | 所选 P2 / P3 |
+| 原生绘制 | 外框和状态项由宿主控制；Shell 通过 ScriptView 提供内容，进程路线通过有限模板提供内容 | P1 / 所选 P2 |
+| 命令边界 | 执行时验证 owner、作用域、上下文、授权和业务条件；保留用户动作与后台更新区分 | P1 / 所选 P2 |
+| 工作区身份 | 内部 WorkspaceKey 使用规范化绝对根路径身份；对外提供不含路径的稳定字符串 | P1 |
+| 视图作用域 | global、workspace、session；路径变化视为新工作区，v1 不承诺目录迁移跟随 | P1 |
+| 公开版本 | Conduit 清单、宿主 API、运行后端版本分别管理；JSON-RPC protocolVersion 仅属 P2-B | 所选 P2 / P3 |
+| 布局持久化 | `UiSettings.plugin_layout` 只保存隐藏、排序、选中视图及宽度，字段有默认值 | P3 |
+| 安装持久化 | `plugins/registry.json` 是版本、启用和授权的唯一持久化来源 | P3 |
+| 插件数据 | 宿主按插件 / 工作区管理数据与版本代次；Shell 首版关闭独立 localStorage | P2-A / P3 |
+
+工作区身份沿用宿主路径语义，不简单将完整路径转小写，不在 render 中同步访问文件系统。工作区重排、会话和文件标签切换不改变同一工作区 ID。只有会话确属当前工作区时才提供会话上下文，否则为 null；当前文档与当前会话分开保存。
+
+`contextVersion` 在工作区、会话、活动文档或可写状态切换时递增；主题和摘要使用另一个数据修订号。`generation` 表示每次外部运行实例的代次，进程与脚本都适用。异步结果须同时匹配 generation、contextVersion 和 ViewInstanceKey，不能因新上下文到来而更新旧实例。
+
+## 实现分层
+
+```mermaid
+flowchart LR
+    B[内置功能] --> R[贡献注册表与命令分发]
+    J[Shell 运行适配器：候选 A] --> R
+    P[进程协议适配器：备选 B] --> R
+    R --> L[左侧入口与导航]
+    R --> D[右侧视图容器]
+    R --> S[底部状态项]
+    R --> C[上下文与授权校验]
+```
+
+图中的 A / B 在选型后只实现一个。`src/plugins/` 的贡献、身份、授权、安装和存储模型保持纯数据；ShellRuntime / ScriptView 等 GPUI 对象放入拟议 `src/app/plugin_shell.rs`。`plugin_ui.rs` 管理 UI 接入，进程路线的 `plugin_views.rs` 才承担自定义模板渲染。外部脚本或进程均不能直接取得 ConduitApp / Window 引用。
+
+“工作区概览”始终贯通三处：左侧摘要、右侧详情、底栏打开动作，只读取宿主已有工作区及会话元数据。P1 与所选 P2 示例使用同一 PluginId，互斥登记；不能以两份不同插件绕过同插件多实例和命令路由验证。
+
+## 当前代码接入依据
+
+| 现有位置 | 当前职责 | 接入要求 |
+| --- | --- | --- |
+| [files.rs](../../src/app/files.rs)、[sidebar.rs](../../src/app/sidebar.rs) | 固定导航与导航缓存 | 提取视图身份；保留文件 / Git 业务对象 |
+| [dock.rs](../../src/app/dock.rs)、[state.rs](../../src/app/state.rs) | 工具详情、宽度与单一 DetailView | 分开通用容器与工具内容 |
+| [toolbar.rs](../../src/app/toolbar.rs)、[shell.rs](../../src/app/shell.rs) | 状态栏与三列布局 | 保持中间底栏、限宽与窄屏浮层 |
+| [main.rs](../../src/main.rs) | Kit 初始化和组件窗口根 | 仅 Shell 路线需验证组件 Root / ShellRoot 组合 |
+| [app.rs](../../src/app.rs)、[runtime.rs](../../src/app/runtime.rs) | 实体、轮询和退出 | 接入外部实例与清理屏障 |
+| [update.rs](../../src/app/update.rs) | 更新空闲判定与安装准备 | 主动停止插件，等待写入，避免早返回跳过清理 |
+| [child.rs](../../src/child.rs)、[event_queue.rs](../../src/event_queue.rs) | CLI 进程及有界队列 | 仅 P2-B 借鉴进程与队列；不改现有 CLI 环境语义 |
+| [store.rs](../../src/store.rs)、[persistence.rs](../../src/persistence.rs) | 数据目录与后台保存 | 布局、安装及数据代次分开 |
+| [settings/navigation.rs](../../src/app/settings/navigation.rs) | 设置页身份与顺序 | 增加应用插件，不改变 Skills / MCP 页身份 |
+
+源码包含已有未提交修改，实施时按符号复查行为与测试，不机械使用旧行号。Shell 不需要接管整个工作台；当前任务也不要求把宿主应用改写成 JavaScript。
+
+## 阶段推进与完成定义
+
+1. P1 贡献改造可独立完成并用于内部功能。复用验证要记录 G1–G6 的事实、实测、未覆盖项和需要的上游改动；尚未验证不等于通过。
+2. P2 开始前选定一个后端并冻结对应契约。Shell 优先验证；接口或资源缺口未解决时，保留进程备选。停止、异常和退出不能推迟到 P3。
+3. P3 实现安装与持久化闭环。Conduit 自有 API 可按验收结果版本化，但不能因此声称上游实验脚本 API 已稳定；SDK 必须记录已测试 Shell rev。
+4. [贡献指南](../../CONTRIBUTING.md)要求的格式、Clippy、测试及相关 UI 回归在实现时执行。当前只交付文档和源码评估，没有构建、运行插件或测量性能。
+
+界面身份以 P1 为准；运行细节以选定的 P2 为准；安装与持久化以 P3 为准。初始评估与 P2-B 的历史协议不覆盖 P2-A。后续变更应同步更新本总览和受影响阶段。
