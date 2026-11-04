@@ -164,8 +164,10 @@ pub struct SessionRecord {
     pub reasoning_effort: crate::providers::ReasoningEffort,
     #[serde(default)]
     pub opencode: crate::protocol::OpenCodeSettings,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub messages: Vec<ChatItem>,
+    #[serde(default)]
+    pub transcript: crate::transcript::Transcript,
     #[serde(default)]
     pub interrupted: bool,
     /// Permission level applied to the next turn of this session.
@@ -196,6 +198,12 @@ pub enum ItemKind {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ChatItem(std::sync::Arc<ChatItemData>);
+
+impl ChatItem {
+    pub(crate) fn identity(&self) -> std::sync::Weak<ChatItemData> {
+        std::sync::Arc::downgrade(&self.0)
+    }
+}
 
 impl From<ChatItemData> for ChatItem {
     fn from(item: ChatItemData) -> Self {
@@ -249,6 +257,15 @@ pub struct ToolApproval {
 impl SessionRecord {
     /// Restored transcripts carry activity timestamps even in older stores.
     pub fn last_activity_at(&self) -> u64 {
+        if !self.transcript.loaded {
+            return self
+                .transcript
+                .reference
+                .as_ref()
+                .map_or(self.created_at, |body| {
+                    body.last_activity_at.max(self.created_at)
+                });
+        }
         self.messages
             .iter()
             .rev()
@@ -256,6 +273,30 @@ impl SessionRecord {
             .map_or(self.created_at, |message| {
                 message.created_at.max(self.created_at)
             })
+    }
+
+    pub fn message_count(&self) -> usize {
+        if self.transcript.loaded {
+            self.messages.len()
+        } else {
+            self.transcript
+                .reference
+                .as_ref()
+                .map_or(0, |body| body.message_count)
+        }
+    }
+
+    pub fn has_user_messages(&self) -> bool {
+        if self.transcript.loaded {
+            self.messages
+                .iter()
+                .any(|message| message.kind == ItemKind::User)
+        } else {
+            self.transcript
+                .reference
+                .as_ref()
+                .is_some_and(|body| body.has_user)
+        }
     }
 
     /// Match exact provider item IDs first, then a matching Claude tool in this

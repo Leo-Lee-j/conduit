@@ -338,9 +338,28 @@ impl Store {
     }
     pub fn load() -> Result<Self> {
         let path = Self::path();
-        Self::load_from(&path)
+        Self::load_migrating_from(&path)
     }
-    fn load_from(path: &Path) -> Result<Self> {
+    pub(crate) fn load_migrating_from(path: &Path) -> Result<Self> {
+        let state = Self::load_from(path)?;
+        if state.version < 3 && path.exists() {
+            // Keep the pre-migration manifest recoverable until the new format is durable.
+            let backup = path.with_extension("v2.json");
+            if !backup.exists() {
+                let mut output = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&backup)?;
+                use std::io::Write;
+                output.write_all(&fs::read(path)?)?;
+                output.sync_all()?;
+            }
+            state.save_to(path)?;
+            return Self::load_from(path);
+        }
+        Ok(state)
+    }
+    pub(crate) fn load_from(path: &Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self {
                 version: 2,
@@ -356,7 +375,7 @@ impl Store {
         }
         let mut state: Self = serde_json::from_slice(&fs::read(path)?)
             .with_context(|| format!("无法读取 {}；原文件不会被覆盖", path.display()))?;
-        if state.version != 1 && state.version != 2 {
+        if !matches!(state.version, 1..=3) {
             bail!("不支持的数据版本 {}", state.version);
         }
         let legacy = state.version == 1;
@@ -376,6 +395,15 @@ impl Store {
                 if session.id == 0 || session.id == u64::MAX || !sessions.insert(session.id) {
                     bail!("会话 ID 无效或重复，请修复 state.json");
                 }
+                if state.version == 3 {
+                    if !session.messages.is_empty() {
+                        bail!("会话同时包含正文和引用，请修复 state.json");
+                    }
+                    session
+                        .transcript
+                        .bind(&crate::transcript::directory(path))?;
+                    continue;
+                }
                 if legacy {
                     session.title = format!("旧终端会话 #{}", session.id);
                     session.messages.push(crate::domain::ChatItem::from(
@@ -394,81 +422,105 @@ impl Store {
                         },
                     ));
                 }
-                if session.interrupted {
-                    for item in &mut session.messages {
-                        if let Some(approval) = item.approval.as_mut()
-                            && approval.status == crate::message_status::ApprovalStatus::Waiting
-                        {
-                            approval.status = "已中断".into();
-                        }
-                        if item.kind == crate::domain::ItemKind::Tool
-                            && matches!(
-                                item.status,
-                                crate::message_status::ToolStatus::Running
-                                    | crate::message_status::ToolStatus::Output
-                            )
-                        {
-                            item.status = "已中断".into();
-                        }
-                    }
-                    session.messages.push(crate::domain::ChatItem::from(
-                        crate::domain::ChatItemData {
-                            elapsed_ms: None,
-                            key: format!("restart-{}", session.messages.len()),
-                            created_at: 0,
-                            kind: crate::domain::ItemKind::Notice,
-                            text: "上次执行已中断，未自动重试；可以检查现有结果后继续。".into(),
-                            input: String::new(),
-                            detail: String::new(),
-                            status: Default::default(),
-                            approval: None,
-                            model: None,
-                        },
-                    ));
-                    session.interrupted = false;
-                }
-                session.migrate_approval_notices();
-                dedupe_restored_messages(session);
+                restore_session(session);
             }
         }
-        state.version = 2;
+        state.version = state.version.max(2);
         Ok(state)
     }
     pub(crate) fn save_to(&self, path: &Path) -> Result<()> {
         fs::create_dir_all(path.parent().unwrap())?;
+        let mut manifest = self.clone();
+        manifest.version = 3;
+        let directory = crate::transcript::directory(path);
+        for workspace in &mut manifest.workspaces {
+            for session in &mut workspace.sessions {
+                let reference = crate::transcript::save(session, &directory)?;
+                session.messages.clear();
+                session.transcript.reference = reference;
+            }
+        }
         let temp = path.with_extension("json.tmp");
         let mut file = fs::File::create(&temp)?;
         use std::io::Write;
         {
             let mut output = std::io::BufWriter::new(&mut file);
-            serde_json::to_writer(&mut output, self)?;
+            serde_json::to_writer(&mut output, &manifest)?;
             output.flush()?;
         }
         file.sync_all()?;
         drop(file);
-        #[cfg(windows)]
-        {
-            use std::os::windows::ffi::OsStrExt;
-            use windows_sys::Win32::Storage::FileSystem::{
-                MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
-            };
-            let from: Vec<u16> = temp.as_os_str().encode_wide().chain(Some(0)).collect();
-            let to: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-            if unsafe {
-                MoveFileExW(
-                    from.as_ptr(),
-                    to.as_ptr(),
-                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-                )
-            } == 0
-            {
-                return Err(std::io::Error::last_os_error().into());
-            }
-        }
-        #[cfg(not(windows))]
-        fs::rename(temp, path)?;
+        replace_file(&temp, path)?;
+        // The manifest still owns all current references until collection finishes.
+        crate::transcript::collect_periodically(&directory);
         Ok(())
     }
+}
+
+pub(crate) fn replace_file(temp: &Path, path: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+        };
+        let from: Vec<u16> = temp.as_os_str().encode_wide().chain(Some(0)).collect();
+        let to: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        if unsafe {
+            MoveFileExW(
+                from.as_ptr(),
+                to.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error().into());
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(temp, path)?;
+        fs::File::open(path.parent().unwrap())?.sync_all()?;
+    }
+    Ok(())
+}
+
+pub(crate) fn restore_session(session: &mut crate::domain::SessionRecord) {
+    if session.interrupted {
+        for item in &mut session.messages {
+            if let Some(approval) = item.approval.as_mut()
+                && approval.status == crate::message_status::ApprovalStatus::Waiting
+            {
+                approval.status = "已中断".into();
+            }
+            if item.kind == crate::domain::ItemKind::Tool
+                && matches!(
+                    item.status,
+                    crate::message_status::ToolStatus::Running
+                        | crate::message_status::ToolStatus::Output
+                )
+            {
+                item.status = "已中断".into();
+            }
+        }
+        session
+            .messages
+            .push(crate::domain::ChatItem::from(crate::domain::ChatItemData {
+                elapsed_ms: None,
+                key: format!("restart-{}", session.messages.len()),
+                created_at: 0,
+                kind: crate::domain::ItemKind::Notice,
+                text: "上次执行已中断，未自动重试；可以检查现有结果后继续。".into(),
+                input: String::new(),
+                detail: String::new(),
+                status: Default::default(),
+                approval: None,
+                model: None,
+            }));
+        session.interrupted = false;
+    }
+    session.migrate_approval_notices();
+    dedupe_restored_messages(session);
 }
 
 /// Older builds keyed Claude stream deltas by the raw stream block index while
@@ -523,6 +575,15 @@ fn same_failure_text(message: &str, error: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    fn remove_transcripts(path: &std::path::Path) {
+        let directory = crate::transcript::directory(path);
+        if let Ok(entries) = std::fs::read_dir(&directory) {
+            for entry in entries {
+                std::fs::remove_file(entry.unwrap().path()).unwrap();
+            }
+            std::fs::remove_dir(directory).unwrap();
+        }
+    }
     use super::*;
     use crate::domain::{Provider, SessionRecord};
 
@@ -680,11 +741,15 @@ mod tests {
         assert!(!session.interrupted);
         restored.save_to(&path).unwrap();
         assert_eq!(
-            Store::load_from(&path).unwrap().workspaces[0].sessions[0]
-                .messages
-                .len(),
+            crate::transcript::load(
+                Store::load_from(&path).unwrap().workspaces[0].sessions[0].clone()
+            )
+            .unwrap()
+            .messages
+            .len(),
             3
         );
+        remove_transcripts(&path);
         fs::remove_file(path).unwrap();
         fs::remove_dir(directory).unwrap();
     }
@@ -715,6 +780,7 @@ mod tests {
         };
         store.save_to(&path).unwrap();
         store.workspaces[0].sessions.push(SessionRecord {
+            transcript: Default::default(),
             id: 1,
             provider: Provider::Codex,
             created_at: 1,
@@ -825,9 +891,15 @@ mod tests {
         restored.save_to(&path).unwrap();
         let reloaded = Store::load_from(&path).unwrap();
         assert_eq!(
-            serde_json::to_value(&restored).unwrap(),
-            serde_json::to_value(&reloaded).unwrap()
+            serde_json::to_value(&restored.workspaces[0].sessions[0].messages).unwrap(),
+            serde_json::to_value(
+                crate::transcript::load(reloaded.workspaces[0].sessions[0].clone())
+                    .unwrap()
+                    .messages
+            )
+            .unwrap()
         );
+        remove_transcripts(&path);
         fs::remove_file(path).unwrap();
         fs::remove_dir(directory).unwrap();
     }

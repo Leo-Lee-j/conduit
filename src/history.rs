@@ -47,6 +47,7 @@ pub fn scan_workspaces(workspaces: &[PathBuf]) -> Vec<Vec<ImportedSession>> {
 
 /// Applies an already-scanned batch to a workspace. Kept separate from the
 /// scan so the UI can scan off the main thread and merge on it.
+#[cfg(test)]
 pub fn merge_imported(
     workspace: &mut crate::domain::Workspace,
     next_id: &mut u64,
@@ -61,6 +62,45 @@ pub fn merge_imported(
         .sessions
         .sort_by_key(|session| std::cmp::Reverse((session.last_activity_at(), session.id)));
     imported
+}
+
+/// Merge one batch on a worker. Cold bodies are read one at a time and leave the
+/// worker as references; locally recorded messages/timings survive every import.
+pub(crate) fn prepare_imported(
+    workspace: &crate::domain::Workspace,
+    incoming: Vec<ImportedSession>,
+    directory: &Path,
+) -> (Vec<crate::domain::SessionRecord>, Vec<String>) {
+    let mut prepared = Vec::new();
+    let mut warnings = Vec::new();
+    for imported in incoming {
+        let previous = workspace.sessions.iter().find(|session| {
+            session.provider == imported.provider
+                && session.native_id.as_deref() == Some(imported.native_id.as_str())
+        });
+        let keep_loaded = previous.is_some_and(|session| session.transcript.loaded);
+        let result = (|| -> anyhow::Result<crate::domain::SessionRecord> {
+            let mut staging = crate::domain::Workspace {
+                path: workspace.path.clone(),
+                sessions: match previous {
+                    Some(session) => vec![crate::transcript::load(session.clone())?],
+                    None => vec![],
+                },
+            };
+            merge_session(&mut staging, &mut 0, imported);
+            let mut record = staging.sessions.pop().unwrap();
+            if !keep_loaded {
+                crate::transcript::save(&record, directory)?;
+                crate::transcript::unload(&mut record);
+            }
+            Ok(record)
+        })();
+        match result {
+            Ok(record) => prepared.push(record),
+            Err(error) => warnings.push(format!("历史导入未覆盖原会话：{error:#}")),
+        }
+    }
+    (prepared, warnings)
 }
 
 /// Merges one imported session: refreshes an existing record with the same
@@ -88,6 +128,7 @@ fn merge_session(
     let id = *next_id;
     *next_id += 1;
     workspace.sessions.push(crate::domain::SessionRecord {
+        transcript: Default::default(),
         id,
         provider: session.provider,
         created_at: session.created_at,
@@ -1618,6 +1659,7 @@ mod tests {
         // Simulate an existing GUI session that shares a native id with one
         // imported session plus one completely new import.
         workspace.sessions.push(crate::domain::SessionRecord {
+            transcript: Default::default(),
             id: 7,
             provider: Provider::Claude,
             created_at: 0,

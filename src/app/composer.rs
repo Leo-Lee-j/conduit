@@ -58,20 +58,23 @@ impl ConduitApp {
         );
         for workspace in &self.store.workspaces {
             for session in &workspace.sessions {
-                for message in &session.messages {
-                    if message.kind == ItemKind::User {
-                        referenced.extend(file_ref::split_prompt(&message.text).1.into_iter().map(
-                            |path| {
-                                let path = PathBuf::from(path);
-                                if path.is_absolute() {
-                                    path
-                                } else {
-                                    workspace.path.join(path)
-                                }
-                            },
-                        ));
+                let paths = if session.transcript.loaded {
+                    crate::transcript::attachment_paths(&session.messages)
+                } else {
+                    session
+                        .transcript
+                        .reference
+                        .as_ref()
+                        .map(|body| body.attachments.clone())
+                        .unwrap_or_default()
+                };
+                referenced.extend(paths.into_iter().map(|path| {
+                    if path.is_absolute() {
+                        path
+                    } else {
+                        workspace.path.join(path)
                     }
-                }
+                }));
             }
         }
         if let Err(error) = file_ref::prune_clipboard_images(

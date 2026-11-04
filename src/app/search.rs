@@ -137,10 +137,13 @@ impl ConduitApp {
     }
 
     pub(super) fn refresh_search(&mut self, cx: &mut Context<Self>, debounce: bool) {
+        self.search_ui.cancel.store(true, Ordering::Release);
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.search_ui.cancel = cancel.clone();
+        self.search_ui.errors = 0;
         self.search_ui.generation = self.search_ui.generation.wrapping_add(1);
         let generation = self.search_ui.generation;
         let query = self.search_query.trim().to_lowercase();
-        let workspaces = self.store.workspaces.clone();
         let revision = self.session_control.global_revision;
         self.search_ui.requested = Instant::now();
         self.search_ui.revision = revision;
@@ -153,15 +156,31 @@ impl ConduitApp {
                     .timer(Duration::from_millis(150))
                     .await;
             }
-            let hits = cx
+            // Snapshot after debounce so intermediate keystrokes don't clone the library.
+            let Ok(workspaces) = this.update(cx, |this, _| this.store.workspaces.clone()) else {
+                return;
+            };
+            let result_query = query.clone();
+            let results = cx
                 .background_executor()
-                .spawn(async move { super::search_worker::collect(&workspaces, &query) })
+                .spawn(async move {
+                    super::search_worker::collect_cancellable(&workspaces, &query, &cancel)
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.search_ui.generation == generation
                     && this.session_control.global_revision == revision
                 {
-                    this.search_ui.hits = hits;
+                    if this.search_ui.result_query != result_query
+                        || this.search_ui.matches != results.matches
+                    {
+                        this.search_ui.result_generation =
+                            this.search_ui.result_generation.wrapping_add(1);
+                    }
+                    this.search_ui.errors = results.errors;
+                    this.search_ui.hits = results.hits;
+                    this.search_ui.matches = results.matches;
+                    this.search_ui.result_query = result_query;
                     cx.notify();
                 }
             });
@@ -194,6 +213,17 @@ impl ConduitApp {
                                 .text_color(rgb(palette().faint)),
                         ),
                     );
+                    if this.search_ui.errors > 0 {
+                        body = body.child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(rgb(palette().warning_text))
+                                .child(format!(
+                                    "{} 个会话的正文无法读取，搜索结果可能不完整；打开会话可重试。",
+                                    this.search_ui.errors
+                                )),
+                        );
+                    }
                     if hits.is_empty() {
                         body = body.child(
                             div()

@@ -109,6 +109,13 @@ impl ConduitApp {
     pub(super) fn send_blocked(&self, append_user: bool) -> Option<&'static str> {
         if self
             .send_target(append_user)
+            .and_then(|id| self.session(id))
+            .is_some_and(|session| !session.transcript.loaded)
+        {
+            return Some("会话正文尚未加载，请等待加载完成或重试。");
+        }
+        if self
+            .send_target(append_user)
             .is_some_and(|id| self.session_busy(id))
         {
             return Some("该会话已有任务运行，请等待完成或取消后发送。");
@@ -264,6 +271,20 @@ impl ConduitApp {
                 true
             }
             Err(error) => {
+                let destination = target
+                    .and_then(|id| self.session_notice_target(id))
+                    .unwrap_or(NoticeTarget::Settings);
+                self.notify_user(
+                    Notice::new(
+                        NoticeSource::Session,
+                        NoticeLevel::Error,
+                        "会话无法启动",
+                        error.clone(),
+                    )
+                    .target(destination)
+                    .presentation(NoticePresentation::History),
+                    cx,
+                );
                 self.message = Some(error);
                 cx.notify();
                 false
@@ -286,6 +307,15 @@ impl ConduitApp {
         }
         if target.is_some_and(|id| self.session_busy(id)) {
             return Err("该会话已有任务运行，请等待完成或取消后发送。".into());
+        }
+        if target
+            .and_then(|id| self.session(id))
+            .is_some_and(|session| !session.transcript.loaded)
+        {
+            if let Some(id) = target {
+                self.request_transcript(id, cx);
+            }
+            return Err("会话正文尚未加载，请等待加载完成或重试。".into());
         }
         let cwd = self.store.workspaces[index].path.clone();
         if self.git.operation.as_ref().is_some_and(|operation| {
@@ -529,6 +559,8 @@ impl ConduitApp {
             self.refresh_search(cx, false);
         }
         self.poll_updates(window, cx);
+        self.publish_update_notification(cx);
+        self.poll_notifications(window, cx);
         if self.updater.exiting || self.updater.preparing() {
             return;
         }
@@ -546,6 +578,15 @@ impl ConduitApp {
                 self.session_control.cancel_imports();
                 self.history_loading.clear();
                 self.message = Some("历史读取超时，已保留现有对话；可重新导入。".into());
+                self.notify_user(
+                    Notice::new(
+                        NoticeSource::App,
+                        NoticeLevel::Warning,
+                        "历史读取超时",
+                        "已保留现有对话，可在工作区重新导入历史。",
+                    ),
+                    cx,
+                );
             }
             self.startup = None;
             cx.notify();
@@ -588,6 +629,11 @@ impl ConduitApp {
         }
         for (provider, path, result) in completed {
             self.probes.remove(&provider);
+            let diagnostic_level = if result.is_err() {
+                NoticeLevel::Error
+            } else {
+                NoticeLevel::Success
+            };
             let text = if cli::resolve(provider, &self.store.cli)
                 .ok()
                 .is_none_or(|cli| cli.path != path)
@@ -608,6 +654,17 @@ impl ConduitApp {
                     Err(error) => format!("检测失败：{error}"),
                 }
             };
+            self.notify_user(
+                Notice::new(
+                    NoticeSource::Settings,
+                    diagnostic_level,
+                    format!("{} CLI 检测", provider.label()),
+                    text.clone(),
+                )
+                .target(NoticeTarget::Settings)
+                .presentation(NoticePresentation::History),
+                cx,
+            );
             self.diagnostics.insert(provider, text);
             cx.notify();
         }
@@ -635,6 +692,7 @@ impl ConduitApp {
             && !self.dirty
             && !self.persistence.busy()
             && self.persistence.error.is_none()
+            && self.notifications.finish()
         {
             self.discard_composer_attachments();
             window.remove_window();

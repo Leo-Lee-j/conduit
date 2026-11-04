@@ -56,18 +56,6 @@ pub(super) fn naming_failure_text(error: &str) -> String {
     }
 }
 
-/// Whether a session matches the sidebar search query (title or message text).
-pub(super) fn session_matches(session: &SessionRecord, query: &str) -> bool {
-    if query.is_empty() {
-        return true;
-    }
-    session.title.to_lowercase().contains(query)
-        || session
-            .messages
-            .iter()
-            .any(|message| message.text.to_lowercase().contains(query))
-}
-
 impl ConduitApp {
     pub(super) fn session(&self, id: u64) -> Option<&SessionRecord> {
         let (w, s) = self.session_control.locate(&self.store.workspaces, id)?;
@@ -76,6 +64,7 @@ impl ConduitApp {
     pub(super) fn session_mut(&mut self, id: u64) -> Option<&mut SessionRecord> {
         let (w, s) = self.session_control.locate(&self.store.workspaces, id)?;
         self.session_control.changed(id);
+        self.sidebar.dirty_sessions.insert(id);
         self.store.workspaces.get_mut(w)?.sessions.get_mut(s)
     }
 
@@ -261,7 +250,7 @@ impl ConduitApp {
             return;
         };
         // Empty sessions have no history to protect; keep drafts protected.
-        if session.messages.is_empty() && !self.session_has_unsent_content(id, cx) {
+        if session.message_count() == 0 && !self.session_has_unsent_content(id, cx) {
             self.delete_session(id, cx);
         } else {
             self.delete_target = Some(id);
@@ -386,6 +375,10 @@ impl ConduitApp {
             self.delete_target = None;
             cx.notify();
             return;
+        }
+        if let Some((index, _)) = self.session_control.locate(&self.store.workspaces, id) {
+            self.sidebar
+                .invalidate_workspace(&self.store.workspaces[index].path);
         }
         for workspace in &mut self.store.workspaces {
             workspace.sessions.retain(|session| session.id != id);
@@ -888,6 +881,8 @@ impl ConduitApp {
         self.active_diff = None;
         self.selected_workspace = Some(workspace);
         self.selected_session = session;
+        self.ensure_selected_transcript(cx);
+        self.trim_transcripts();
         if activate_chat && let Some(id) = session {
             self.store.ui.recent_sessions.retain(|recent| *recent != id);
             self.store.ui.recent_sessions.insert(0, id);
@@ -1068,14 +1063,66 @@ impl ConduitApp {
                     .await;
                 scanner = next_scanner;
                 let done = batch.done;
+                let Ok(workspaces) = this.update(cx, |this, _| {
+                    paths
+                        .iter()
+                        .zip(&batch.sessions)
+                        .map(|(path, incoming)| {
+                            let keys: HashSet<_> = incoming
+                                .iter()
+                                .map(|session| (session.provider, session.native_id.as_str()))
+                                .collect();
+                            let sessions = this
+                                .store
+                                .workspaces
+                                .iter()
+                                .find(|workspace| &workspace.path == path)
+                                .into_iter()
+                                .flat_map(|workspace| &workspace.sessions)
+                                .filter(|session| {
+                                    session.native_id.as_deref().is_some_and(|native| {
+                                        keys.contains(&(session.provider, native))
+                                    })
+                                })
+                                .cloned()
+                                .collect();
+                            Workspace {
+                                path: path.clone(),
+                                sessions,
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                }) else {
+                    break;
+                };
+                let incoming = batch.sessions;
+                let ticket = cancel.clone();
+                let (prepared, warnings) = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let mut prepared = Vec::new();
+                        let mut warnings = batch.warnings;
+                        let directory = crate::transcript::directory(&Store::path());
+                        for (workspace, incoming) in workspaces.into_iter().zip(incoming) {
+                            if ticket.load(std::sync::atomic::Ordering::Acquire) {
+                                break;
+                            }
+                            let (records, errors) =
+                                crate::history::prepare_imported(&workspace, incoming, &directory);
+                            prepared.push(records);
+                            warnings.extend(errors);
+                        }
+                        (prepared, warnings)
+                    })
+                    .await;
                 let updated = this.update_in(cx, |this, window, cx| {
                     if cancel.load(std::sync::atomic::Ordering::Acquire) {
                         return false;
                     }
-                    if !batch.warnings.is_empty() {
-                        this.message = Some(batch.warnings.join("\n"));
+                    if !warnings.is_empty() {
+                        this.message = Some(warnings.join("\n"));
                     }
-                    for (path, sessions) in paths.iter().zip(batch.sessions) {
+                    for (path, sessions) in paths.iter().zip(prepared) {
                         if !this
                             .session_control
                             .scan_cancels
@@ -1085,7 +1132,7 @@ impl ConduitApp {
                             continue;
                         }
                         if !sessions.is_empty() || done {
-                            this.finish_history_import(
+                            this.finish_prepared_history_import(
                                 path,
                                 sessions,
                                 persist && done,
@@ -1121,10 +1168,39 @@ impl ConduitApp {
         .detach();
     }
 
+    #[cfg(all(test, feature = "ui-tests"))]
     pub(super) fn finish_history_import(
         &mut self,
         path: &Path,
         imported: Vec<crate::history::ImportedSession>,
+        persist: bool,
+        complete: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(workspace) = self
+            .store
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.path == path)
+        else {
+            return;
+        };
+        let (records, warnings) = crate::history::prepare_imported(
+            workspace,
+            imported,
+            &crate::transcript::directory(&Store::path()),
+        );
+        if !warnings.is_empty() {
+            self.message = Some(warnings.join("\n"));
+        }
+        self.finish_prepared_history_import(path, records, persist, complete, window, cx);
+    }
+
+    fn finish_prepared_history_import(
+        &mut self,
+        path: &Path,
+        imported: Vec<SessionRecord>,
         persist: bool,
         complete: bool,
         window: &mut Window,
@@ -1150,7 +1226,7 @@ impl ConduitApp {
             .filter(|imported| {
                 !self.store.workspaces[index].sessions.iter().any(|session| {
                     session.provider == imported.provider
-                        && session.native_id.as_deref() == Some(imported.native_id.as_str())
+                        && session.native_id == imported.native_id
                         && (self.session_control.runs.contains_key(&session.id)
                             || versions.is_some_and(|versions| {
                                 !self.session_control.unchanged(versions, session.id)
@@ -1163,6 +1239,7 @@ impl ConduitApp {
         }
         let discovered = !imported.is_empty();
         if discovered {
+            self.sidebar.invalidate_workspace(path);
             self.session_control.global_revision =
                 self.session_control.global_revision.wrapping_add(1);
             // Native import can replace keys without changing message count.
@@ -1171,11 +1248,31 @@ impl ConduitApp {
             self.message_focus = None;
             self.pending_message_jump = None;
         }
-        crate::history::merge_imported(
-            &mut self.store.workspaces[index],
-            &mut self.next_id,
-            imported,
-        );
+        for mut record in imported {
+            if let Some(existing) =
+                self.store.workspaces[index]
+                    .sessions
+                    .iter_mut()
+                    .find(|session| {
+                        session.provider == record.provider && session.native_id == record.native_id
+                    })
+            {
+                // A deleted/recreated native conversation is a different identity.
+                if record.id != existing.id {
+                    continue;
+                }
+                *existing = record;
+            } else if record.id == 0 {
+                record.id = self.next_id;
+                self.next_id += 1;
+                self.store.workspaces[index].sessions.push(record);
+            }
+        }
+        self.store.workspaces[index]
+            .sessions
+            .sort_by_key(|session| std::cmp::Reverse((session.last_activity_at(), session.id)));
+        self.ensure_selected_transcript(cx);
+        self.trim_transcripts();
         // Open the newest session on the workspace the user just added, unless
         // they already picked one or started typing while history loaded.
         let follow = self.selected_workspace == Some(index)
@@ -1248,6 +1345,7 @@ impl ConduitApp {
         self.store.workspaces[index].sessions.insert(
             0,
             SessionRecord {
+                transcript: Default::default(),
                 id,
                 provider,
                 created_at: SystemTime::now()
@@ -1284,6 +1382,8 @@ impl ConduitApp {
         {
             selection.apply(&mut self.store.workspaces[index].sessions[0]);
         }
+        self.sidebar
+            .invalidate_workspace(&self.store.workspaces[index].path);
         self.push_tab(id);
         self.new_session_provider = provider;
         self.remember_provider(provider);

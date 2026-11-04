@@ -1,10 +1,23 @@
 //! Query work runs on snapshots. Rendering only reads completed results.
 use super::search::SearchHit;
 use crate::domain::{ItemKind, Workspace};
-use std::{collections::VecDeque, ops::Range, time::Instant};
+use std::{
+    collections::{HashSet, VecDeque},
+    ops::Range,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Instant,
+};
 
 pub(super) struct SearchUi {
     pub hits: Vec<SearchHit>,
+    pub errors: usize,
+    pub cancel: Arc<AtomicBool>,
+    pub matches: HashSet<u64>,
+    pub result_query: String,
+    pub result_generation: u64,
     pub generation: u64,
     pub revision: u64,
     pub requested: Instant,
@@ -14,11 +27,22 @@ impl Default for SearchUi {
     fn default() -> Self {
         Self {
             hits: Vec::new(),
+            errors: 0,
+            cancel: Arc::default(),
+            matches: HashSet::new(),
+            result_query: String::new(),
+            result_generation: 0,
             generation: 0,
             revision: 0,
             requested: Instant::now(),
             task: None,
         }
+    }
+}
+
+impl Drop for SearchUi {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Release);
     }
 }
 
@@ -106,16 +130,56 @@ pub(super) fn snippet(text: &str, query: &str) -> String {
     snippet_at(text, Matcher::new(query).first(text))
 }
 
-pub(super) fn collect(workspaces: &[Workspace], query: &str) -> Vec<SearchHit> {
+pub(super) struct Results {
+    pub hits: Vec<SearchHit>,
+    pub errors: usize,
+    pub matches: HashSet<u64>,
+}
+
+#[cfg(test)]
+pub(super) fn collect(workspaces: &[Workspace], query: &str) -> Results {
+    collect_cancellable(workspaces, query, &AtomicBool::new(false))
+}
+
+pub(super) fn collect_cancellable(
+    workspaces: &[Workspace],
+    query: &str,
+    cancel: &AtomicBool,
+) -> Results {
     let matcher = Matcher::new(query);
     let mut hits = Vec::new();
+    let mut matches = HashSet::new();
+    let mut errors = 0;
     for workspace in workspaces {
         let name = workspace.name();
         for session in &workspace.sessions {
+            if cancel.load(Ordering::Acquire) {
+                return Results {
+                    hits,
+                    matches,
+                    errors,
+                };
+            }
             let title_match = matcher.first(&session.title).is_some();
+            // No body I/O is needed for title-only matches past the snippet limit.
+            let disk_messages;
+            let messages = if session.transcript.loaded {
+                &session.messages
+            } else if (title_match || query.is_empty()) && hits.len() >= 40 {
+                matches.insert(session.id);
+                continue;
+            } else {
+                disk_messages = match crate::transcript::read(session) {
+                    Ok(messages) => messages,
+                    Err(_) => {
+                        errors += 1;
+                        Vec::new()
+                    }
+                };
+                &disk_messages
+            };
             let message = if !title_match && !query.is_empty() {
-                session
-                    .messages
+                messages
                     .iter()
                     .find_map(|m| matcher.first(&m.text).map(|range| (m, Some(range))))
             } else {
@@ -124,12 +188,15 @@ pub(super) fn collect(workspaces: &[Workspace], query: &str) -> Vec<SearchHit> {
             if !query.is_empty() && !title_match && message.is_none() {
                 continue;
             }
+            matches.insert(session.id);
+            if hits.len() == 40 {
+                continue;
+            }
             let source = message.or_else(|| {
-                session
-                    .messages
+                messages
                     .iter()
                     .find(|m| m.kind == ItemKind::User)
-                    .or_else(|| session.messages.first())
+                    .or_else(|| messages.first())
                     .map(|m| (m, None))
             });
             hits.push(SearchHit {
@@ -144,12 +211,13 @@ pub(super) fn collect(workspaces: &[Workspace], query: &str) -> Vec<SearchHit> {
                 archived: session.archived,
                 snippet: source.map_or_else(String::new, |(m, range)| snippet_at(&m.text, range)),
             });
-            if hits.len() == 40 {
-                return hits;
-            }
         }
     }
-    hits
+    Results {
+        hits,
+        matches,
+        errors,
+    }
 }
 
 #[cfg(test)]
@@ -164,5 +232,35 @@ mod tests {
         assert!(preview.contains("needle"));
         assert!(preview.chars().count() <= 168);
         assert!(preview.starts_with('…') && preview.ends_with('…'));
+    }
+    #[test]
+    fn cold_search_is_complete_beyond_snippet_limit_without_warming_sessions() {
+        let fixture = crate::transcript::tests::Fixture::new();
+        fixture.store(65).save_to(&fixture.state).unwrap();
+        let store = crate::store::Store::load_from(&fixture.state).unwrap();
+        let results = collect(&store.workspaces, "original reply");
+        assert_eq!(results.matches.len(), 65);
+        assert_eq!(results.hits.len(), 40);
+        assert_eq!(results.errors, 0);
+        assert!(
+            store.workspaces[0]
+                .sessions
+                .iter()
+                .all(|session| !session.transcript.loaded && session.messages.is_empty())
+        );
+        assert!(
+            collect_cancellable(&store.workspaces, "original", &AtomicBool::new(true))
+                .matches
+                .is_empty()
+        );
+        let reference = store.workspaces[0].sessions[0]
+            .transcript
+            .reference
+            .as_ref()
+            .unwrap();
+        std::fs::remove_file(reference.directory.join(format!("{}.json", reference.hash))).unwrap();
+        let results = collect(&store.workspaces, "original reply");
+        assert_eq!(results.errors, 65);
+        assert!(results.matches.is_empty());
     }
 }
