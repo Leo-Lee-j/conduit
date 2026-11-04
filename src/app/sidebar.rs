@@ -456,7 +456,7 @@ impl ConduitApp {
             if collapsed {
                 continue;
             }
-            if importing && sessions.is_empty() {
+            if importing {
                 list = list.child(
                     h_flex()
                         .h(px(30.))
@@ -468,7 +468,15 @@ impl ConduitApp {
                         .text_size(px(12.))
                         .text_color(rgb(palette().faint))
                         .child(Spinner::new().small().color(rgb(palette().faint).into()))
-                        .child("正在加载会话历史…"),
+                        .child(
+                            self.session_control
+                                .scan_progress
+                                .get(&workspace.path)
+                                .map(|(completed, total)| {
+                                    format!("正在加载会话历史：{completed}/{total}")
+                                })
+                                .unwrap_or_else(|| "正在发现会话历史…".into()),
+                        ),
                 );
             }
             for session in sessions.iter().take(if expanded { total } else { limit }) {

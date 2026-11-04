@@ -62,6 +62,7 @@ fn stale_history_cannot_replace_messages_after_a_turn_completes(cx: &mut TestApp
                 &path,
                 vec![imported(vec![item("import-0", "first")])],
                 false,
+                true,
                 window,
                 cx,
             );
@@ -88,6 +89,7 @@ fn native_replacement_invalidates_outline_keys_even_with_same_message_count(
                 &path,
                 vec![imported(vec![item("import-99", "same prompt")])],
                 false,
+                true,
                 window,
                 cx,
             );
@@ -124,5 +126,44 @@ fn search_discards_results_after_transcript_changes(cx: &mut TestAppContext) {
         let app = app.read(cx);
         assert_eq!(app.search_ui.hits.len(), 1);
         assert_eq!(app.search_ui.hits[0].snippet, "new prompt");
+    });
+}
+
+#[gpui_kit::test]
+fn history_batches_keep_the_original_revision_until_the_import_finishes(cx: &mut TestAppContext) {
+    let (app, cx, path) = fixture(cx);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.session_mut(1).unwrap().messages = vec![item("user", "first")];
+            app.session_control.begin_import(&app.store.workspaces[0]);
+            app.history_loading.insert(path.clone());
+            let initial = app.session_control.imports[&path].clone();
+            app.finish_history_import(
+                &path,
+                vec![imported(vec![item("import-0", "first")])],
+                false,
+                false,
+                window,
+                cx,
+            );
+            assert!(app.history_loading.contains(&path));
+            assert_eq!(app.session_control.imports[&path], initial);
+            app.session_mut(1)
+                .unwrap()
+                .messages
+                .push(item("new-user", "completed turn"));
+            app.finish_history_import(
+                &path,
+                vec![imported(vec![item("import-0", "first")])],
+                false,
+                true,
+                window,
+                cx,
+            );
+            assert!(!app.history_loading.contains(&path));
+            assert!(!app.session_control.imports.contains_key(&path));
+            assert_eq!(app.session(1).unwrap().messages.len(), 2);
+            assert_eq!(app.session(1).unwrap().messages[1].text, "completed turn");
+        });
     });
 }

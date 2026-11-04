@@ -1265,62 +1265,124 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires installed Codex; custom provider handshake only, no model request"]
+    #[ignore = "requires installed Codex; custom provider start/resume only, no model request"]
     fn installed_custom_codex_route_initializes_without_model_request() {
         use crate::providers::{ReasoningEffort, RuntimeRoute};
         let executable = Provider::Codex.executable().expect("Codex not installed");
+        let directory = std::env::temp_dir().join(format!(
+            "conduit-provider-resume-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        // Reproduce a process whose inherited provider differs from the route.
+        std::fs::write(
+            directory.join("config.toml"),
+            concat!(
+                "model_provider = \"custom\"\nmodel = \"inherited-model\"\n",
+                "[model_providers.custom]\nname = \"custom\"\n",
+                "base_url = \"http://127.0.0.1:1/v1\"\n",
+                "wire_api = \"responses\"\nrequires_openai_auth = false\n"
+            ),
+        )
+        .unwrap();
+        let thread_id = "019a4d00-0000-7000-8000-000000000001";
+        let rollout = directory.join("rollout.jsonl");
+        let timestamp = "2026-11-04T00:00:00Z";
+        std::fs::write(
+            &rollout,
+            format!(
+                "{}\n{}\n",
+                serde_json::json!({"timestamp":timestamp,"type":"session_meta","payload":{
+                    "id":thread_id,"timestamp":timestamp,"cwd":directory,"originator":"conduit-test",
+                    "cli_version":"0.166.0","source":"cli","model_provider":"conduit"
+                }}),
+                serde_json::json!({"timestamp":timestamp,"type":"response_item","payload":{
+                    "type":"message","role":"user","content":[{"type":"input_text","text":"fixture"}]
+                }})
+            ),
+        )
+        .unwrap();
         for permission in [
             PermissionLevel::ReadOnly,
             PermissionLevel::WorkspaceWrite,
             PermissionLevel::FullAccess,
         ] {
-            let route = RuntimeRoute::endpoint(
-                Provider::Codex,
-                "Conduit fixture",
-                "http://127.0.0.1:1/v1",
-                Some("fixture-key".into()),
-            );
-            let mut protocol = Protocol::new(
-                Provider::Codex,
-                std::env::temp_dir().to_string_lossy().into_owned(),
-                "unused".into(),
-                None,
-            )
-            .with_model(Some("fixture-model".into()))
-            .with_permission(permission)
-            .with_options(ReasoningEffort::High, route);
-            let (program, args) = crate::cli::command_for(&executable, &protocol.args());
-            let (child, mut pipes) = Child::spawn_with_env(
-                &program,
-                &args,
-                &std::env::temp_dir(),
-                protocol.environment(),
-            )
-            .unwrap();
-            writeln!(pipes.stdin, "{}", protocol.initialize()).unwrap();
-            let deadline = Instant::now() + Duration::from_secs(20);
-            let mut lines = Lines::new();
-            let mut ready = false;
-            while Instant::now() < deadline && !ready {
-                for value in lines.poll(&mut pipes.stdout).unwrap() {
-                    if value["id"] == 1 {
-                        assert!(value.get("error").is_none(), "{value}");
-                        for mut write in protocol.accept(value).writes {
-                            if write["id"] == 2 {
-                                write["params"]["ephemeral"] = serde_json::json!(true);
+            for native in [None, Some(thread_id.to_string())] {
+                let mut route = RuntimeRoute::endpoint(
+                    Provider::Codex,
+                    "Conduit fixture",
+                    "http://127.0.0.1:1/v1",
+                    Some("fixture-key".into()),
+                );
+                route.env.insert(
+                    "CODEX_HOME".into(),
+                    directory.to_string_lossy().into_owned(),
+                );
+                let mut protocol = Protocol::new(
+                    Provider::Codex,
+                    directory.to_string_lossy().into_owned(),
+                    "unused".into(),
+                    native.clone(),
+                )
+                .with_model(Some("fixture-model".into()))
+                .with_permission(permission)
+                .with_options(ReasoningEffort::High, route);
+                let (program, args) = crate::cli::command_for(&executable, &protocol.args());
+                let (child, mut pipes) =
+                    Child::spawn_with_env(&program, &args, &directory, protocol.environment())
+                        .unwrap();
+                writeln!(pipes.stdin, "{}", protocol.initialize()).unwrap();
+                let deadline = Instant::now() + Duration::from_secs(20);
+                let mut lines = Lines::new();
+                let mut ready = false;
+                while Instant::now() < deadline && !ready {
+                    for value in lines.poll(&mut pipes.stdout).unwrap() {
+                        if value["id"] == 1 {
+                            assert!(value.get("error").is_none(), "{value}");
+                            for mut write in protocol.accept(value).writes {
+                                if write["id"] == 2 {
+                                    if native.is_some() {
+                                        write["params"]["path"] = serde_json::json!(rollout);
+                                    } else {
+                                        write["params"]["ephemeral"] = serde_json::json!(true);
+                                    }
+                                }
+                                writeln!(pipes.stdin, "{write}").unwrap();
                             }
-                            writeln!(pipes.stdin, "{write}").unwrap();
+                        } else if value["id"] == 2 {
+                            assert!(value.get("error").is_none(), "{permission:?}: {value}");
+                            assert_eq!(value["result"]["modelProvider"], "conduit");
+                            assert_eq!(value["result"]["model"], "fixture-model");
+                            if native.is_some() {
+                                assert_eq!(value["result"]["thread"]["id"], thread_id);
+                            }
+                            ready = true;
                         }
-                    } else if value["id"] == 2 {
-                        assert!(value.get("error").is_none(), "{permission:?}: {value}");
-                        assert_eq!(value["result"]["modelProvider"], "conduit");
-                        ready = true;
                     }
+                    thread::sleep(Duration::from_millis(10));
                 }
-                thread::sleep(Duration::from_millis(10));
+                child.terminate().unwrap();
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while child.active_processes().unwrap() != 0 {
+                    assert!(Instant::now() < deadline, "Codex fixture did not exit");
+                    thread::sleep(Duration::from_millis(10));
+                }
+                assert!(ready, "{permission:?} route handshake timed out");
             }
-            child.terminate().unwrap();
-            assert!(ready, "{permission:?} route handshake timed out");
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match std::fs::remove_dir_all(&directory) {
+                Ok(()) => break,
+                Err(error) if Instant::now() >= deadline => {
+                    panic!("temporary Codex home could not be removed: {directory:?}: {error}");
+                }
+                Err(_) => thread::sleep(Duration::from_millis(50)),
+            }
         }
     }
     #[test]

@@ -18,6 +18,7 @@ pub(super) struct SessionController {
     revisions: HashMap<u64, u64>,
     pub(super) scan_cancels: HashMap<PathBuf, std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub(super) imports: HashMap<PathBuf, HashMap<u64, u64>>,
+    pub(super) scan_progress: HashMap<PathBuf, (usize, usize)>,
 }
 
 impl SessionController {
@@ -27,6 +28,7 @@ impl SessionController {
         }
         self.scan_cancels.clear();
         self.imports.clear();
+        self.scan_progress.clear();
     }
     pub(super) fn locate(&self, workspaces: &[Workspace], id: u64) -> Option<(usize, usize)> {
         if let Some(&(w, s)) = self.positions.borrow().get(&id)

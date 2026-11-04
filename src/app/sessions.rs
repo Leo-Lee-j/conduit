@@ -1009,31 +1009,7 @@ impl ConduitApp {
         self.session_control
             .scan_cancels
             .insert(path.clone(), cancel.clone());
-        cx.spawn_in(window, async move |this, cx| {
-            let scan_path = path.clone();
-            let ticket = cancel.clone();
-            let imported = cx
-                .background_executor()
-                .spawn(async move { crate::history::scan_cancellable(&[scan_path], &ticket) })
-                .await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.history_loading.remove(&path);
-                this.session_control.scan_cancels.remove(&path);
-                if !cancel.load(std::sync::atomic::Ordering::Acquire) {
-                    if !imported.warnings.is_empty() {
-                        this.message = Some(imported.warnings.join("\n"));
-                    }
-                    this.finish_history_import(
-                        &path,
-                        imported.sessions.into_iter().next().unwrap_or_default(),
-                        true,
-                        window,
-                        cx,
-                    );
-                }
-            });
-        })
-        .detach();
+        self.run_history_import(vec![path], cancel, true, window, cx);
     }
 
     /// Imports CLI history for every known workspace once after startup, off
@@ -1062,30 +1038,84 @@ impl ConduitApp {
             self.history_loading.insert(workspace.path.clone());
         }
         cx.notify();
+        self.run_history_import(paths, cancel, false, window, cx);
+    }
+
+    fn run_history_import(
+        &mut self,
+        paths: Vec<PathBuf>,
+        cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        persist: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         cx.spawn_in(window, async move |this, cx| {
             let scan_paths = paths.clone();
             let ticket = cancel.clone();
-            let imported = cx
+            let mut scanner = cx
                 .background_executor()
-                .spawn(async move { crate::history::scan_cancellable(&scan_paths, &ticket) })
+                .spawn(async move { crate::history::Scanner::new(scan_paths, &ticket) })
                 .await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                if cancel.load(std::sync::atomic::Ordering::Acquire) {
-                    return;
+            loop {
+                let ticket = cancel.clone();
+                let (next_scanner, batch) = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let batch = scanner.next(&ticket);
+                        (scanner, batch)
+                    })
+                    .await;
+                scanner = next_scanner;
+                let done = batch.done;
+                let updated = this.update_in(cx, |this, window, cx| {
+                    if cancel.load(std::sync::atomic::Ordering::Acquire) {
+                        return false;
+                    }
+                    if !batch.warnings.is_empty() {
+                        this.message = Some(batch.warnings.join("\n"));
+                    }
+                    for (path, sessions) in paths.iter().zip(batch.sessions) {
+                        if !this
+                            .session_control
+                            .scan_cancels
+                            .get(path)
+                            .is_some_and(|ticket| std::sync::Arc::ptr_eq(ticket, &cancel))
+                        {
+                            continue;
+                        }
+                        if !sessions.is_empty() || done {
+                            this.finish_history_import(
+                                path,
+                                sessions,
+                                persist && done,
+                                done,
+                                window,
+                                cx,
+                            );
+                        }
+                        if done {
+                            this.session_control.scan_cancels.remove(path);
+                            this.session_control.scan_progress.remove(path);
+                        } else {
+                            this.history_loading.insert(path.clone());
+                            this.session_control
+                                .scan_progress
+                                .insert(path.clone(), (batch.completed, batch.total));
+                        }
+                    }
+                    if done && persist && this.dirty {
+                        this.persist();
+                    }
+                    if let Some(startup) = &mut this.startup {
+                        startup.imports_done = true;
+                    }
+                    cx.notify();
+                    true
+                });
+                if done || !matches!(updated, Ok(true)) {
+                    break;
                 }
-                if !imported.warnings.is_empty() {
-                    this.message = Some(imported.warnings.join("\n"));
-                }
-                for (path, sessions) in paths.into_iter().zip(imported.sessions) {
-                    this.session_control.scan_cancels.remove(&path);
-                    this.finish_history_import(&path, sessions, false, window, cx);
-                }
-                // The whole batch merged; the poll tick releases the startup
-                // page once its minimum display has passed.
-                if let Some(startup) = &mut this.startup {
-                    startup.imports_done = true;
-                }
-            });
+            }
         })
         .detach();
     }
@@ -1095,10 +1125,13 @@ impl ConduitApp {
         path: &Path,
         imported: Vec<crate::history::ImportedSession>,
         persist: bool,
+        complete: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.history_loading.remove(path);
+        if complete {
+            self.history_loading.remove(path);
+        }
         // The workspace may have been removed while the scan was running.
         let Some(index) = self
             .store
@@ -1110,7 +1143,7 @@ impl ConduitApp {
         };
         // A scan can finish after a turn has started. Its older transcript must
         // never replace messages or invalidate the active run's message index.
-        let versions = self.session_control.imports.remove(path);
+        let versions = self.session_control.imports.get(path);
         let imported = imported
             .into_iter()
             .filter(|imported| {
@@ -1118,12 +1151,15 @@ impl ConduitApp {
                     session.provider == imported.provider
                         && session.native_id.as_deref() == Some(imported.native_id.as_str())
                         && (self.session_control.runs.contains_key(&session.id)
-                            || versions.as_ref().is_some_and(|versions| {
+                            || versions.is_some_and(|versions| {
                                 !self.session_control.unchanged(versions, session.id)
                             }))
                 })
             })
             .collect::<Vec<_>>();
+        if complete {
+            self.session_control.imports.remove(path);
+        }
         let discovered = !imported.is_empty();
         if discovered {
             self.session_control.global_revision =

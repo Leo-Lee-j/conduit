@@ -2342,6 +2342,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
                     messages: vec![],
                 }],
                 true,
+                true,
                 window,
                 cx,
             );

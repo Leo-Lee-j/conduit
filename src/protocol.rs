@@ -382,7 +382,23 @@ impl Protocol {
                 "--cwd".into(),
                 self.cwd.clone(),
             ],
-            Provider::Codex => vec!["app-server".into(), "--stdio".into()],
+            Provider::Codex => {
+                let mut args = vec!["app-server".into(), "--stdio".into()];
+                // Resume checks the process provider before applying request
+                // overrides, so the selected route must also be set at startup.
+                for (key, value) in &self.route.config {
+                    let value = toml::Value::try_from(value)
+                        .expect("runtime route config must contain TOML-compatible values");
+                    args.extend(["-c".into(), format!("{key}={value}")]);
+                }
+                if let Some(model) = &self.model {
+                    args.extend([
+                        "-c".into(),
+                        format!("model={}", toml::Value::String(model.clone())),
+                    ]);
+                }
+                args
+            }
             Provider::Claude => {
                 let mut args: Vec<String> = [
                     "--print",
@@ -1171,6 +1187,51 @@ impl Protocol {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_startup_uses_selected_route_and_model_for_new_and_resumed_threads() {
+        use crate::providers::RuntimeRoute;
+        for native in [None, Some("known-thread".into())] {
+            let mut route = RuntimeRoute::endpoint(
+                Provider::Codex,
+                "Proxy \"测试\" \\ route",
+                "http://127.0.0.1:1/v1",
+                Some("fixture-key".into()),
+            );
+            route.default_model = Some("provider-default".into());
+            let mut protocol =
+                Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), native)
+                    .with_model(Some("selected-model".into()))
+                    .with_options(Default::default(), route.clone());
+            let args = protocol.args();
+            assert_eq!(&args[..2], ["app-server", "--stdio"]);
+            assert!(!args.iter().any(|arg| arg.contains("fixture-key")));
+            let mut config = serde_json::Map::new();
+            let (overrides, remainder) = args[2..].as_chunks::<2>();
+            assert!(remainder.is_empty());
+            for pair in overrides {
+                assert_eq!(pair[0], "-c");
+                let parsed: toml::Table = pair[1].parse().unwrap();
+                config.extend(
+                    serde_json::to_value(parsed)
+                        .unwrap()
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                );
+            }
+            assert_eq!(config["model_provider"], "conduit");
+            assert_eq!(config["model_providers"], route.config["model_providers"]);
+            assert_eq!(config["model"], "selected-model");
+            let step = protocol.accept(json!({"id":1,"result":{}}));
+            let params = &step.writes[1]["params"];
+            assert_eq!(params["modelProvider"], config["model_provider"]);
+            assert_eq!(params["model"], config["model"]);
+            assert_eq!(params["config"], json!(route.config));
+        }
+        let native = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
+        assert_eq!(native.args(), ["app-server", "--stdio"]);
+    }
 
     #[test]
     fn full_access_and_effort_override_resumed_thread_and_turn_defaults() {

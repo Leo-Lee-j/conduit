@@ -10,7 +10,9 @@
 //! `native_id`, so sending a message in an imported session continues the very
 //! same conversation the terminal CLI sees.
 
+mod index;
 mod scan;
+pub(crate) use scan::Scanner;
 
 use crate::domain::{ChatItem, ItemKind, Provider};
 use serde_json::Value;
@@ -40,18 +42,7 @@ pub fn scan_workspace(workspace: &Path) -> Vec<ImportedSession> {
 /// session file is read once and assigned to every workspace whose cwd it
 /// matches, instead of rescanning the whole history per workspace.
 pub fn scan_workspaces(workspaces: &[PathBuf]) -> Vec<Vec<ImportedSession>> {
-    scan::run(
-        home().as_deref(),
-        workspaces,
-        &std::sync::atomic::AtomicBool::new(false),
-    )
-    .sessions
-}
-pub(crate) fn scan_cancellable(
-    workspaces: &[PathBuf],
-    cancel: &std::sync::atomic::AtomicBool,
-) -> scan::Batch {
-    scan::run(home().as_deref(), workspaces, cancel)
+    scan::run(workspaces, &std::sync::atomic::AtomicBool::new(false)).sessions
 }
 
 /// Applies an already-scanned batch to a workspace. Kept separate from the
@@ -269,21 +260,46 @@ fn parse_claude(text: &str, workspace: &Path) -> Option<ImportedSession> {
 fn parse_claude_any(text: &str) -> Option<(Vec<String>, ImportedSession)> {
     parse_claude_lines(text.lines().map(str::to_owned))
 }
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+struct ClaudeState {
+    native_id: Option<String>,
+    created_at: u64,
+    model: Option<String>,
+    messages: Vec<ChatItem>,
+    title: String,
+    cwds: Vec<String>,
+    next_line: usize,
+}
+
+#[cfg(test)]
 fn parse_claude_lines(
     lines: impl Iterator<Item = String>,
 ) -> Option<(Vec<String>, ImportedSession)> {
-    let mut native_id: Option<String> = None;
-    let mut created_at = 0u64;
-    let mut model: Option<String> = None;
-    let mut messages: Vec<ChatItem> = Vec::new();
-    let mut title = String::new();
-    let mut cwds: Vec<String> = Vec::new();
+    extend_claude(lines, ClaudeState::default()).finish()
+}
 
-    for (index, line) in lines.enumerate() {
+fn extend_claude(lines: impl Iterator<Item = String>, state: ClaudeState) -> ClaudeState {
+    let ClaudeState {
+        mut native_id,
+        mut created_at,
+        mut model,
+        mut messages,
+        mut title,
+        mut cwds,
+        mut next_line,
+    } = state;
+    let start_line = next_line;
+    for (index, line) in lines
+        .enumerate()
+        .map(|(index, line)| (index + start_line, line))
+    {
+        next_line = index + 1;
         let Ok(value) = serde_json::from_str::<Value>(&line) else {
             continue; // Tolerate malformed or partial trailing lines.
         };
-        if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
+        if let Some(cwd) = value.get("cwd").and_then(Value::as_str)
+            && !cwds.iter().any(|known| known == cwd)
+        {
             cwds.push(cwd.to_owned());
         }
         if value.get("isSidechain").and_then(Value::as_bool) == Some(true) {
@@ -400,24 +416,47 @@ fn parse_claude_lines(
         }
     }
 
-    if messages.is_empty() {
-        return None;
-    }
-    let native_id = native_id?;
-    if title.is_empty() {
-        title = format!("Claude 会话 {native_id}");
-    }
-    Some((
+    ClaudeState {
+        native_id,
+        created_at,
+        model,
+        messages,
+        title,
         cwds,
-        ImportedSession {
-            provider: Provider::Claude,
+        next_line,
+    }
+}
+
+impl ClaudeState {
+    fn finish(self) -> Option<(Vec<String>, ImportedSession)> {
+        let Self {
             native_id,
             created_at,
-            title,
             model,
             messages,
-        },
-    ))
+            mut title,
+            cwds,
+            ..
+        } = self;
+        if messages.is_empty() {
+            return None;
+        }
+        let native_id = native_id?;
+        if title.is_empty() {
+            title = format!("Claude 会话 {native_id}");
+        }
+        Some((
+            cwds,
+            ImportedSession {
+                provider: Provider::Claude,
+                native_id,
+                created_at,
+                title,
+                model,
+                messages,
+            },
+        ))
+    }
 }
 
 fn user_text(value: &Value) -> Option<String> {
@@ -466,60 +505,102 @@ fn parse_codex(text: &str, workspace: &Path) -> Option<ImportedSession> {
 fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, ImportedSession)> {
     parse_codex_lines(text.lines().map(str::to_owned), workspace)
 }
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+struct CodexState {
+    native_id: Option<String>,
+    created_at: u64,
+    cwd: String,
+    model: Option<String>,
+    current_model: Option<String>,
+    event_rows: Vec<(usize, usize, ChatItem)>,
+    response_rows: Vec<(usize, usize, ChatItem)>,
+    event_reasoning: Vec<(usize, String, String)>,
+    response_reasoning: Vec<(usize, String, String)>,
+    event_users: usize,
+    event_assistants: usize,
+    event_tools: usize,
+    turn_starts: HashMap<String, (usize, Option<i64>)>,
+    timings: Vec<(usize, usize, u64)>,
+    previous_end: usize,
+    timestamps: Vec<u64>,
+    pending: Vec<(usize, Value)>,
+    next_index: usize,
+}
+
+#[cfg(test)]
 fn parse_codex_lines(
     lines: impl Iterator<Item = String>,
     workspace: Option<&Path>,
 ) -> Option<(String, ImportedSession)> {
+    extend_codex(lines, workspace, CodexState::default()).finish()
+}
+
+fn extend_codex(
+    lines: impl Iterator<Item = String>,
+    workspace: Option<&Path>,
+    mut state: CodexState,
+) -> CodexState {
+    let start_index = state.next_index;
     let mut values = lines
         .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
-        .enumerate();
-    let mut prelude = Vec::new();
-    let meta = loop {
-        let (index, value) = values.next()?;
-        let found = value.get("type").and_then(Value::as_str) == Some("session_meta");
-        prelude.push((index, value));
-        if found {
-            break prelude.last()?.1.clone();
+        .enumerate()
+        .map(|(index, value)| (index + start_index, value));
+    if state.native_id.is_none() {
+        for (index, value) in values.by_ref() {
+            state.next_index = index + 1;
+            let found = value.get("type").and_then(Value::as_str) == Some("session_meta");
+            if found {
+                let meta = value.get("payload").unwrap_or(&value);
+                state.native_id = meta
+                    .get("id")
+                    .or_else(|| meta.get("session_id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                state.created_at = meta
+                    .get("timestamp")
+                    .and_then(Value::as_str)
+                    .and_then(rfc3339_to_unix_opt)
+                    .unwrap_or(0);
+                state.cwd = meta
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned();
+            }
+            state.pending.push((index, value));
+            if state.native_id.is_some() {
+                break;
+            }
         }
-    };
-    let meta = meta.get("payload").unwrap_or(&meta);
-    let native_id = meta
-        .get("id")
-        .or_else(|| meta.get("session_id"))
-        .and_then(Value::as_str)?
-        .to_owned();
-    let created_at = meta
-        .get("timestamp")
-        .and_then(Value::as_str)
-        .and_then(rfc3339_to_unix_opt)
-        .unwrap_or(0);
-    let cwd = meta
-        .get("cwd")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_owned();
-    if workspace.is_none() && cwd.is_empty() {
-        return None;
+        if state.native_id.is_none() {
+            return state;
+        }
     }
+    let CodexState {
+        native_id,
+        created_at,
+        cwd,
+        mut model,
+        mut current_model,
+        mut event_rows,
+        mut response_rows,
+        mut event_reasoning,
+        mut response_reasoning,
+        mut event_users,
+        mut event_assistants,
+        mut event_tools,
+        mut turn_starts,
+        mut timings,
+        mut previous_end,
+        mut timestamps,
+        pending,
+        mut next_index,
+    } = state;
     let base = workspace
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from(&cwd));
-
-    let mut model: Option<String> = None;
-    let mut current_model: Option<String> = None;
-    let mut event_rows: Vec<(usize, usize, ChatItem)> = Vec::new();
-    let mut response_rows: Vec<(usize, usize, ChatItem)> = Vec::new();
-    let mut event_reasoning: Vec<(usize, String, String)> = Vec::new();
-    let mut response_reasoning: Vec<(usize, String, String)> = Vec::new();
-    let mut event_users = 0usize;
-    let mut event_assistants = 0usize;
-    let mut event_tools = 0usize;
-    let mut turn_starts = HashMap::new();
-    let mut timings = Vec::new();
-    let mut previous_end = 0;
-    let mut timestamps = Vec::new();
-
-    for (index, value) in prelude.into_iter().chain(values) {
+    for (index, value) in pending.into_iter().chain(values) {
+        next_index = index + 1;
         let value = &value;
         let payload = value.get("payload").unwrap_or(value);
         let event_created_at = value
@@ -928,78 +1009,120 @@ fn parse_codex_lines(
         }
     }
 
-    let mut rows = event_rows;
-    rows.extend(
-        response_rows
-            .into_iter()
-            .filter(|(_, _, item)| match item.kind {
-                ItemKind::User => event_users == 0,
-                ItemKind::Assistant => event_assistants == 0,
-                ItemKind::Tool => event_tools == 0,
-                _ => true,
-            }),
-    );
-
-    let known_reasoning: HashSet<String> = event_reasoning
-        .iter()
-        .map(|(_, id, _)| id.clone())
-        .collect();
-    let mut reasoning = event_reasoning;
-    reasoning.extend(
-        response_reasoning
-            .into_iter()
-            .filter(|(_, id, _)| !known_reasoning.contains(id)),
-    );
-    for (index, id, text) in reasoning {
-        rows.push((
-            index,
-            0,
-            ChatItem::from(crate::domain::ChatItemData {
-                elapsed_ms: None,
-                key: format!("import-{index}-{id}"),
-                created_at: timestamps.get(index).copied().unwrap_or(created_at),
-                kind: ItemKind::Reasoning,
-                text,
-                input: String::new(),
-                detail: String::new(),
-                status: Default::default(),
-                approval: None,
-                model: None,
-            }),
-        ));
-    }
-
-    rows.sort_by_key(|(index, part, _)| (*index, *part));
-    for (start, end, elapsed) in timings {
-        for (index, _, item) in &mut rows {
-            if *index >= start && *index <= end && item.kind == ItemKind::Assistant {
-                item.elapsed_ms = Some(elapsed);
-            }
-        }
-    }
-    let messages: Vec<ChatItem> = rows.into_iter().map(|(_, _, item)| item).collect();
-    if messages.is_empty() {
-        return None;
-    }
-    if model.is_none() {
-        model = messages.iter().find_map(|item| item.model.clone());
-    }
-    let title = messages
-        .iter()
-        .find(|item| item.kind == ItemKind::User)
-        .map(|item| truncate_title(&item.text))
-        .unwrap_or_else(|| format!("Codex 会话 {native_id}"));
-    Some((
+    CodexState {
+        native_id,
+        created_at,
         cwd,
-        ImportedSession {
-            provider: Provider::Codex,
+        model,
+        current_model,
+        event_rows,
+        response_rows,
+        event_reasoning,
+        response_reasoning,
+        event_users,
+        event_assistants,
+        event_tools,
+        turn_starts,
+        timings,
+        previous_end,
+        timestamps,
+        pending: Vec::new(),
+        next_index,
+    }
+}
+
+impl CodexState {
+    fn finish(self) -> Option<(String, ImportedSession)> {
+        let Self {
             native_id,
             created_at,
-            title,
-            model,
-            messages,
-        },
-    ))
+            cwd,
+            mut model,
+            event_rows,
+            response_rows,
+            event_reasoning,
+            response_reasoning,
+            event_users,
+            event_assistants,
+            event_tools,
+            timings,
+            timestamps,
+            ..
+        } = self;
+        let native_id = native_id?;
+        let mut rows = event_rows;
+        rows.extend(
+            response_rows
+                .into_iter()
+                .filter(|(_, _, item)| match item.kind {
+                    ItemKind::User => event_users == 0,
+                    ItemKind::Assistant => event_assistants == 0,
+                    ItemKind::Tool => event_tools == 0,
+                    _ => true,
+                }),
+        );
+
+        let known_reasoning: HashSet<String> = event_reasoning
+            .iter()
+            .map(|(_, id, _)| id.clone())
+            .collect();
+        let mut reasoning = event_reasoning;
+        reasoning.extend(
+            response_reasoning
+                .into_iter()
+                .filter(|(_, id, _)| !known_reasoning.contains(id)),
+        );
+        for (index, id, text) in reasoning {
+            rows.push((
+                index,
+                0,
+                ChatItem::from(crate::domain::ChatItemData {
+                    elapsed_ms: None,
+                    key: format!("import-{index}-{id}"),
+                    created_at: timestamps.get(index).copied().unwrap_or(created_at),
+                    kind: ItemKind::Reasoning,
+                    text,
+                    input: String::new(),
+                    detail: String::new(),
+                    status: Default::default(),
+                    approval: None,
+                    model: None,
+                }),
+            ));
+        }
+
+        rows.sort_by_key(|(index, part, _)| (*index, *part));
+        for (start, end, elapsed) in timings {
+            for (index, _, item) in &mut rows {
+                if *index >= start && *index <= end && item.kind == ItemKind::Assistant {
+                    item.elapsed_ms = Some(elapsed);
+                }
+            }
+        }
+        let messages: Vec<ChatItem> = rows.into_iter().map(|(_, _, item)| item).collect();
+        if messages.is_empty() {
+            return None;
+        }
+        if model.is_none() {
+            model = messages.iter().find_map(|item| item.model.clone());
+        }
+        let title = messages
+            .iter()
+            .find(|item| item.kind == ItemKind::User)
+            .map(|item| truncate_title(&item.text))
+            .unwrap_or_else(|| format!("Codex 会话 {native_id}"));
+        Some((
+            cwd,
+            ImportedSession {
+                provider: Provider::Codex,
+                native_id,
+                created_at,
+                title,
+                model,
+                messages,
+            },
+        ))
+    }
 }
 
 fn codex_event_text(item: &Value) -> Option<String> {
@@ -1452,11 +1575,14 @@ mod tests {
         let dir = tmpdir("scan-empty");
         // USERPROFILE is inherited on the test host; scanning a workspace no
         // CLI session ever used yields nothing instead of failing.
-        let result = scan::run(
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let result = scan::Scanner::open(
             Some(&dir),
-            &[dir.join("nope")],
-            &std::sync::atomic::AtomicBool::new(false),
-        );
+            vec![dir.join("nope")],
+            &dir.join("index.sqlite3"),
+            &cancel,
+        )
+        .next(&cancel);
         assert!(result.sessions[0].is_empty());
         assert!(result.warnings.is_empty());
     }

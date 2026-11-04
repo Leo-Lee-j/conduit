@@ -20,7 +20,7 @@ Conduit 使用 Rust、GPUI 和 GPUI Kit 构建 Windows 原生界面，通过本�
 
 ## CLI 协议与生命周期
 
-- Codex 使用 `app-server --stdio`。
+- Codex 使用 `app-server --stdio`；显式选择的 Provider 配置和模型同时通过启动参数 `-c` 与会话请求传入，避免恢复会话时被进程继承的其他 Provider 配置误拦截。
 - Claude Code 使用 stream-json 与 stdio 控制协议。
 - OpenCode 使用 ACP；自动命名与提交说明使用独立文本任务。
 
