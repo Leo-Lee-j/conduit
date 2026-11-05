@@ -12,7 +12,7 @@ const SEARCH_DELAY: Duration = Duration::from_millis(70);
 
 actions!(
     file_preview,
-    [OpenFind, NextMatch, PreviousMatch, CloseFind]
+    [ToggleFind, NextMatch, PreviousMatch, CloseFind]
 );
 
 pub(super) fn init(cx: &mut App) {
@@ -22,7 +22,7 @@ pub(super) fn init(cx: &mut App) {
         "ConduitFilePreview > TextView",
     ] {
         cx.bind_keys([
-            KeyBinding::new("ctrl-f", OpenFind, Some(context)),
+            KeyBinding::new("ctrl-f", ToggleFind, Some(context)),
             KeyBinding::new("f3", NextMatch, Some(context)),
             KeyBinding::new("shift-f3", PreviousMatch, Some(context)),
             KeyBinding::new("escape", CloseFind, Some(context)),
@@ -86,6 +86,18 @@ pub(super) struct CodeSearch {
     horizontal: bool,
 }
 impl CodeSearch {
+    pub(super) fn reveal_block(&self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
+        if self.target.is_none() || !self.pending.replace(false) {
+            return;
+        }
+        // TextView drops custom-block reveals before calling on_reveal when its
+        // parent owns scrolling. Use the block's laid-out bounds in that case.
+        let scroll = self.scroll.clone();
+        window.defer(cx, move |window, cx| {
+            reveal_bounds(&scroll, bounds, false, window, cx)
+        });
+    }
+
     pub(super) fn reveal(&self, layout: &TextLayout, window: &mut Window, cx: &mut App) {
         let Some(target) = &self.target else { return };
         if !self.pending.get() {
@@ -129,6 +141,7 @@ pub(super) struct FilePreview {
     current: usize,
     truncated: bool,
     searching: bool,
+    results_valid: bool,
     generation: u64,
     task: Option<Task<()>>,
     pending: Rc<Cell<bool>>,
@@ -187,6 +200,7 @@ impl FilePreview {
             current: 0,
             truncated: false,
             searching: false,
+            results_valid: false,
             generation: 0,
             task: None,
             pending: Rc::new(Cell::new(false)),
@@ -226,22 +240,44 @@ impl FilePreview {
         }
     }
 
+    fn toggle_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open {
+            self.close_find(window, cx);
+        } else {
+            self.open_find(window, cx);
+        }
+    }
+
     pub(super) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let selection = (!self.open).then(|| TextSelection::selected_text(window, cx));
+        let was_open = self.open;
+        let selection = (!was_open).then(|| TextSelection::selected_text(window, cx));
+        let mut query_changed = false;
         self.open = true;
         if let Some(selection) = selection.filter(|s| {
             !s.trim().is_empty()
                 && !s.contains(['\n', '\r'])
                 && s.chars().count() <= search::MAX_QUERY_CHARS
         }) {
-            self.input
-                .update(cx, |input, cx| input.set_value(selection, window, cx));
+            query_changed = self.input.read(cx).value().as_ref() != selection;
+            if query_changed {
+                self.input
+                    .update(cx, |input, cx| input.set_value(selection, window, cx));
+            }
         }
         self.input.update(cx, |input, cx| {
             input.focus_handle(cx).focus(window, cx);
             input.select_all(window, cx);
         });
-        self.search(cx);
+        if query_changed || !was_open {
+            // Closing keeps completed results, but any query/source change or
+            // cancelled search invalidates them. Refocusing never restarts work.
+            if !query_changed && self.results_valid {
+                self.apply_highlights(cx);
+                self.reveal(cx);
+            } else {
+                self.search(cx);
+            }
+        }
         cx.notify();
     }
 
@@ -292,6 +328,7 @@ impl FilePreview {
     fn search(&mut self, cx: &mut Context<Self>) {
         self.generation += 1;
         self.task = None;
+        self.results_valid = false;
         self.pending.set(false);
         self.hits.clear();
         self.current = 0;
@@ -333,6 +370,7 @@ impl FilePreview {
                 this.hits = results.hits;
                 this.truncated = results.truncated;
                 this.searching = false;
+                this.results_valid = true;
                 this.apply_highlights(cx);
                 this.reveal(cx);
                 cx.notify();
@@ -412,16 +450,16 @@ impl FilePreview {
         self.code_search(block)
     }
 
-    fn find_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn find_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let query = self.input.read(cx).value();
         let label = if query.chars().count() > search::MAX_QUERY_CHARS {
-            "最多 256 字符".into()
+            Some("最多 256 字符".to_owned())
         } else if self.searching {
-            "搜索中…".into()
+            Some("搜索中…".to_owned())
         } else if query.trim().is_empty() {
-            "输入关键词".into()
+            None
         } else {
-            format!(
+            Some(format!(
                 "{} / {}{}",
                 if self.hits.is_empty() {
                     0
@@ -430,8 +468,28 @@ impl FilePreview {
                 },
                 self.hits.len(),
                 if self.truncated { "+" } else { "" }
-            )
+            ))
         };
+        let focused = self.input.read(cx).focus_handle(cx).is_focused(window);
+        let fuzzy = Button::new("file-find-fuzzy")
+            .ghost()
+            .xsmall()
+            .compact()
+            .icon(FullIconName::ListFilter)
+            .accessibility_label("模糊匹配")
+            .selected(self.fuzzy)
+            .toggled(self.fuzzy)
+            .tooltip(if self.fuzzy {
+                "模糊匹配已开启 · 点击切换为精确匹配"
+            } else {
+                "模糊匹配已关闭 · 点击按顺序匹配字符"
+            })
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.fuzzy = !this.fuzzy;
+                this.search(cx);
+                this.input.read(cx).focus_handle(cx).focus(window, cx);
+                cx.stop_propagation();
+            }));
         h_flex()
             .id("file-find-bar")
             .debug_selector(|| "file-find-bar".into())
@@ -449,29 +507,24 @@ impl FilePreview {
                     .flex_1()
                     .min_w_0()
                     .debug_selector(|| "file-find-input".into())
-                    .child(Input::new(&self.input).h(px(28.))),
+                    .child(
+                        Input::new(&self.input)
+                            .small()
+                            .focus_bordered(false)
+                            .when(focused, |input| input.border_color(Theme::global(cx).ring))
+                            .suffix(fuzzy),
+                    ),
             )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_size(px(11.))
-                    .text_color(rgb(palette().muted))
-                    .child(label),
-            )
-            .child(
-                Button::new("file-find-fuzzy")
-                    .ghost()
-                    .small()
-                    .compact()
-                    .label("模糊")
-                    .selected(self.fuzzy)
-                    .toggled(self.fuzzy)
-                    .tooltip("按顺序匹配字符；忽略大小写")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.fuzzy = !this.fuzzy;
-                        this.search(cx);
-                    })),
-            )
+            .when_some(label, |bar, label| {
+                bar.child(
+                    div()
+                        .debug_selector(|| "file-find-count".into())
+                        .flex_shrink_0()
+                        .text_size(px(11.))
+                        .text_color(rgb(palette().muted))
+                        .child(label),
+                )
+            })
             .child(
                 Button::new("file-find-previous")
                     .ghost()
@@ -498,7 +551,7 @@ impl FilePreview {
                     .small()
                     .compact()
                     .icon(FullIconName::X)
-                    .tooltip("关闭查找 · Esc")
+                    .tooltip("关闭查找 · Ctrl+F / Esc")
                     .on_click(cx.listener(|this, _, window, cx| this.close_find(window, cx))),
             )
             .into_any_element()
@@ -516,7 +569,7 @@ impl Focusable for FilePreview {
 }
 
 impl Render for FilePreview {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let horizontal = self.markdown.is_none() && !self.wrap;
         let viewport_size = self.viewport_size.clone();
         let owner = cx.entity().downgrade();
@@ -566,7 +619,7 @@ impl Render for FilePreview {
             .min_h_0()
             .min_w_0()
             .overflow_hidden()
-            .on_action(cx.listener(|this, _: &OpenFind, window, cx| this.open_find(window, cx)))
+            .on_action(cx.listener(|this, _: &ToggleFind, window, cx| this.toggle_find(window, cx)))
             .on_action(
                 cx.listener(|this, _: &NextMatch, window, cx| this.navigate(false, window, cx)),
             )
@@ -584,7 +637,7 @@ impl Render for FilePreview {
                     }
                 }),
             )
-            .when(self.open, |view| view.child(self.find_bar(cx)))
+            .when(self.open, |view| view.child(self.find_bar(window, cx)))
             .child(
                 div()
                     .on_children_prepainted(move |children, window, cx| {

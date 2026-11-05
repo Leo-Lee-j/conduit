@@ -119,7 +119,12 @@ fn parse(node: &markdown_ast::Node, cx: &MarkdownParseContext<'_>) -> Option<Mar
     )
 }
 
-pub(super) fn mermaid_blocks(view: TextView, scope: &str, selectable: bool) -> TextView {
+pub(super) fn mermaid_blocks(
+    view: TextView,
+    scope: &str,
+    selectable: bool,
+    search: Option<WeakEntity<super::file_preview::FilePreview>>,
+) -> TextView {
     let scope = scope.to_string();
     view.markdown_block_parser(parse)
         .markdown_block_renderer(NODE, move |node, window, cx| {
@@ -144,7 +149,24 @@ pub(super) fn mermaid_blocks(view: TextView, scope: &str, selectable: bool) -> T
                 preview.selectable = selectable;
                 preview.sync(key, node.data::<bool>().copied().unwrap_or(false), cx);
             });
-            preview.into_any_element()
+            let reveal = search
+                .as_ref()
+                .and_then(WeakEntity::upgrade)
+                .and_then(|view| view.read(cx).block_search(node.source_range()?.clone()));
+            if let Some(reveal) = reveal {
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .child(preview)
+                    .on_children_prepainted(move |children, window, cx| {
+                        if let Some(bounds) = children.first() {
+                            reveal.reveal_block(*bounds, window, cx);
+                        }
+                    })
+                    .into_any_element()
+            } else {
+                preview.into_any_element()
+            }
         })
 }
 

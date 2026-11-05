@@ -45,11 +45,11 @@ fn hit(chars: &[(char, Range<usize>)], indices: impl Iterator<Item = usize>) -> 
 }
 
 pub(super) fn search(text: &str, query: &str, fuzzy: bool) -> Results {
-    let query: Vec<_> = query.trim().chars().flat_map(char::to_lowercase).collect();
     let mut results = Results::default();
-    if query.is_empty() || query.len() > MAX_QUERY_CHARS * 3 {
+    if query.trim().is_empty() || query.chars().count() > MAX_QUERY_CHARS {
         return results;
     }
+    let query: Vec<_> = query.chars().flat_map(char::to_lowercase).collect();
     let mut failure = vec![0; query.len()];
     let mut matched = 0;
     for i in 1..query.len() {
@@ -183,5 +183,39 @@ mod tests {
                 .windows(2)
                 .all(|pair| pair[0].range.start < pair[1].range.start)
         );
+    }
+
+    #[test]
+    fn queries_preserve_whitespace_and_enforce_the_character_limit() {
+        let text = "a target b\r\ntarget\r\na target b\n";
+        let hits = search(text, " target ", false).hits;
+        assert_eq!(hits.len(), 2);
+        for found in hits {
+            assert_eq!(&text[found.range], " target ");
+        }
+        let query = "İ".repeat(MAX_QUERY_CHARS);
+        assert_eq!(search(&query, &query, false).hits.len(), 1);
+        let query = format!("{query}İ");
+        assert!(search(&query, &query, false).hits.is_empty());
+    }
+
+    #[test]
+    fn exact_limit_and_unicode_expansions_do_not_report_extra_matches() {
+        let results = search(&"a ".repeat(LIMIT), "a", true);
+        assert_eq!(results.hits.len(), LIMIT);
+        assert!(!results.truncated);
+        let text = "İİ\r\n中文\r\n😀 中文\n";
+        assert_eq!(
+            search(text, "i\u{307}", false)
+                .hits
+                .iter()
+                .map(|hit| hit.range.clone())
+                .collect::<Vec<_>>(),
+            [0..2, 2..4]
+        );
+        for hit in search(text, "中文", true).hits {
+            assert_eq!(&text[hit.range], "中文");
+        }
+        assert!(search(text, "文中", true).hits.is_empty());
     }
 }

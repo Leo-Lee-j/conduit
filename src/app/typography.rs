@@ -110,6 +110,7 @@ pub(super) fn styled_markdown_view(
         view.style(typography.text_view_style()),
         copy_scope,
         selectable,
+        search.clone(),
     );
     if typography.code_line_numbers {
         // The numbered renderer replaces fenced blocks wholesale, so it draws
