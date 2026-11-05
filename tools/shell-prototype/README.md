@@ -1,5 +1,7 @@
 # Conduit GPUI Shell 验证原型
 
+2026-11-05 G4 后续：开发夹具的摘要、dialog、sheet 新增原生输入框，显示输入值和当前主题。桌面回归覆盖组合输入接口、粘贴、主题、Tab / Esc、设置页返回与窄窗状态保留；真实 Windows IME 尚未验收，详见 [G4 进度](../../docs/plugins/p2-input-focus-2026-11-05.md)。
+
 2026-11-05 G6 后续：增加运行时浮层所有权补丁，停止时撤销 dialog / sheet / toast / HUD / tooltip，保留其他 owner，修复焦点恢复。桌面停用、关闭与更新准备支持同步清理，详见 [G6 实现及验证](../../docs/plugins/p2-overlay-cleanup-2026-11-05.md)。真实 IME、完整浮层交互、生产性能和未来插件存储写入屏障继续验收。
 
 2026-11-05 桌面接入：新增 `conduit-shell-desktop` 验证入口，直接编译真实 ConduitApp，

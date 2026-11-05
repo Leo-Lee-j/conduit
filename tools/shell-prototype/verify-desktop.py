@@ -41,6 +41,7 @@ def main():
         format_files = [REPO / name for name in [
             "build.rs", "src/main.rs", "src/app/plugin_ui.rs",
             "src/app/plugin_ui/plugin_shell.rs", "src/app/plugin_ui/plugin_shell/tests.rs",
+            "src/app/plugin_ui/plugin_shell/tests/interaction.rs",
             "tools/shell-prototype/desktop/build.rs", "tools/shell-prototype/desktop/args.rs",
             "tools/shell-prototype/src/lib.rs", "tools/shell-prototype/src/adapter.rs",
         ]]

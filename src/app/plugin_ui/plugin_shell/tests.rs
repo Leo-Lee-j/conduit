@@ -5,6 +5,9 @@ use gpui_kit::component::WindowExt;
 use gpui_kit::{AppContext, Entity, Focusable, TestAppContext, VisualTestContext, px, size};
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
+#[path = "tests/interaction.rs"]
+mod interaction;
+
 fn package() -> ApprovedPackage {
     let source =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/development-overview");
@@ -110,7 +113,7 @@ fn desktop_disable_cleans_script_overlays_and_preserves_settings(cx: &mut TestAp
     cx.update(|window, cx| {
         let focus = window.focused(cx).unwrap();
         app.update(cx, |app, cx| app.disable_shell(window, cx));
-        assert!(window.has_active_dialog(cx));
+        assert!(app.read(cx).settings_ui.open);
         assert!(focus.is_focused(window));
     });
     assert_no_overlays(cx);
@@ -336,12 +339,12 @@ fn desktop_narrow_dock_keeps_toolbar_and_host_dialog_focus(cx: &mut TestAppConte
     cx.update(|window, cx| app.update(cx, |app, cx| app.open_settings(window, cx)));
     draw(cx);
     cx.update(|window, cx| {
-        assert!(window.has_active_dialog(cx));
+        assert!(app.read(cx).settings_ui.open);
         assert_eq!(
             gpui_shell::ShellRoot::update(window, cx, |root, _, _| root.dialog_count()),
             Some(0)
         );
-        window.close_dialog(cx);
+        app.update(cx, |app, cx| app.close_settings(window, cx));
     });
     draw(cx);
     cx.update(|window, cx| {

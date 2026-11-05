@@ -481,18 +481,52 @@
      /// Return a mounted toast value by id.
 --- a/crates/base/src/tooltip.rs
 +++ b/crates/base/src/tooltip.rs
-@@ -210,6 +210,11 @@
+@@ -208,7 +208,20 @@
+     }
+ 
      fn next_epoch(&mut self) -> usize {
-         self.epoch += 1;
-         self.epoch
+-        self.epoch += 1;
++        self.epoch = self
++            .epoch
++            .checked_add(1)
++            .expect("tooltip request revision exhausted");
++        self.epoch
 +    }
 +
 +    /// Whether tooltip content is currently displayed (excludes a pending show).
 +    pub fn is_visible(&self) -> bool {
 +        self.content.is_some()
++    }
++
++    /// Identity of the current show/hide request, for an embedding overlay owner.
++    pub fn request_revision(&self) -> usize {
+         self.epoch
      }
  
-     pub fn request_show(
+@@ -223,6 +236,7 @@
+         if !self.enabled {
+             return;
+         }
++        let epoch = self.next_epoch();
+         self.hide_task = None;
+         let show_delay = content
+             .show_delay
+@@ -238,7 +252,6 @@
+             return;
+         }
+ 
+-        let epoch = self.next_epoch();
+         self.show_task = Some(cx.spawn_in(window, async move |this, cx| {
+             cx.background_executor().timer(show_delay).await;
+             let _ = this.update_in(cx, |this, _, cx| {
+@@ -275,6 +288,7 @@
+     }
+ 
+     pub fn hide(&mut self, cx: &mut Context<Self>) {
++        self.next_epoch();
+         let changed = self.content.is_some()
+             || self.previous_bounds.is_some()
+             || self.had_recent_tooltip
 --- a/crates/shell/src/materialize.rs
 +++ b/crates/shell/src/materialize.rs
 @@ -1205,7 +1205,8 @@
@@ -639,7 +673,7 @@
 +}
 --- /dev/null
 +++ b/crates/shell/src/root/owned_overlays.rs
-@@ -0,0 +1,230 @@
+@@ -0,0 +1,241 @@
 +//! Ownership and stop cleanup, separate from overlay presentation.
 +use super::*;
 +use std::collections::HashMap;
@@ -649,7 +683,7 @@
 +    watches: Vec<(OverlayOwner, gpui::Task<()>)>,
 +    pub(super) toasts: HashMap<SharedString, OverlayOwner>,
 +    pub(super) fps: Option<OverlayOwner>,
-+    tooltip: Option<OverlayOwner>,
++    tooltip: Option<(OverlayOwner, usize)>,
 +}
 +
 +impl ShellRoot {
@@ -736,10 +770,13 @@
 +            .ownership
 +            .tooltip
 +            .as_ref()
-+            .is_some_and(OverlayOwner::is_stopped)
++            .is_some_and(|(owner, _)| owner.is_stopped())
 +        {
-+            self.tooltip_overlay
-+                .update(cx, |overlay, cx| overlay.hide(cx));
++            let (_, revision) = self.ownership.tooltip.as_ref().unwrap();
++            if self.tooltip_overlay.read(cx).request_revision() == *revision {
++                self.tooltip_overlay
++                    .update(cx, |overlay, cx| overlay.hide(cx));
++            }
 +            self.ownership.tooltip = None;
 +            changed = true;
 +        }
@@ -766,10 +803,10 @@
 +                removed.push((dialog.focus_handle.clone(), dialog.restore_focus.clone()));
 +            }
 +        }
-+        if let Some(sheet) = &self.sheet {
-+            if remove(&sheet.owner, &sheet.focus_handle) {
-+                removed.push((sheet.focus_handle.clone(), sheet.restore_focus.clone()));
-+            }
++        if let Some(sheet) = &self.sheet
++            && remove(&sheet.owner, &sheet.focus_handle)
++        {
++            removed.push((sheet.focus_handle.clone(), sheet.restore_focus.clone()));
 +        }
 +        if removed.is_empty() {
 +            return;
@@ -843,9 +880,11 @@
 +            return;
 +        }
 +        self.observe_overlay_owner(owner.clone(), window, cx);
-+        self.ownership.tooltip = Some(owner);
-+        self.tooltip_overlay
-+            .update(cx, |overlay, cx| overlay.request_show(request, window, cx));
++        let revision = self.tooltip_overlay.update(cx, |overlay, cx| {
++            overlay.request_show(request, window, cx);
++            overlay.request_revision()
++        });
++        self.ownership.tooltip = Some((owner, revision));
 +    }
 +
 +    pub(crate) fn hide_owned_tooltip(
@@ -855,18 +894,24 @@
 +        window: &mut Window,
 +        cx: &mut Context<Self>,
 +    ) {
-+        if self.ownership.tooltip.as_ref() != Some(owner) {
++        let Some((current, revision)) = &self.ownership.tooltip else {
++            return;
++        };
++        if current != owner || self.tooltip_overlay.read(cx).request_revision() != *revision {
 +            return;
 +        }
-+        self.tooltip_overlay.update(cx, |overlay, cx| {
++        let revision = self.tooltip_overlay.update(cx, |overlay, cx| {
 +            if immediate {
 +                overlay.hide(cx);
 +            } else {
 +                overlay.request_hide(window, cx);
 +            }
++            overlay.request_revision()
 +        });
-+        if immediate {
-+            self.ownership.tooltip = None;
-+        }
++        self.ownership.tooltip = if immediate {
++            None
++        } else {
++            Some((owner.clone(), revision))
++        };
 +    }
 +}

@@ -1,5 +1,7 @@
 # GPUI Shell 复用评估
 
+2026-11-05 G4 后续见[输入、焦点与主题回归](p2-input-focus-2026-11-05.md)：已补桌面自动化交互验证，真实 Windows IME 与原生视觉验收仍待完成。
+
 源码评估基线：2026-11-04；后续更新：2026-11-05，已实现独立验证原型，实测见[原型验证记录](shell-prototype-validation.md)。本文保留未打补丁的源码评估依据；后续 G2/G5 宿主控制与 G1 Fast 兼容补丁见 [本轮进度](p2-host-controls-2026-11-05.md)，构建与运行结论以后续记录为准。本文补充并修正[初始评估](../ui-plugin-extensibility-evaluation.md)，影响[阶段总览](README.md)中的 P2 选型。
 
 G3 后续候选补丁已验证具体视图的定向命令、双 owner / 多视图停止、工作区和代次失效，

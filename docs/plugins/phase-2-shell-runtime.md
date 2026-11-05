@@ -1,6 +1,8 @@
 # P2-A：GPUI Shell 插件运行时候选设计
 
-设计版本：0.9；日期：2026-11-05；状态：独立原型、G2/G5 宿主控制、G1 Fast 兼容、G3 定向命令和开发加载适配器已验证，真实桌面开发入口及 G6 浮层清理已接入，生产后端准入仍为候选。前置：[P1 界面贡献](phase-1-contributions.md)、[共同约定](README.md)与[Shell 复用评估](gpui-shell-reuse-assessment.md)。补丁和运行时契约见 [G2/G5 进度](p2-host-controls-2026-11-05.md)、[G3 进度](p2-targeted-commands-2026-11-05.md)、[开发加载器进度](p2-development-loader-2026-11-05.md)、[桌面接入记录](p2-desktop-integration-2026-11-05.md)和[G6 浮层清理](p2-overlay-cleanup-2026-11-05.md)。已实现的开发契约以下述记录为准，其余生产接口仍为拟议设计。
+2026-11-05 后续：[G4 输入、焦点与主题回归](p2-input-focus-2026-11-05.md)已增加桌面交互测试和可手工验收的原生输入夹具。设置现为独立工作区，宿主模态与设置往返分别验证；真实 Windows IME 尚未验收。
+
+设计版本：0.10；日期：2026-11-05；状态：独立原型、G2/G5 宿主控制、G1 Fast 兼容、G3 定向命令和开发加载适配器已验证，真实桌面开发入口及 G6 浮层清理已接入，生产后端准入仍为候选。前置：[P1 界面贡献](phase-1-contributions.md)、[共同约定](README.md)与[Shell 复用评估](gpui-shell-reuse-assessment.md)。补丁和运行时契约见 [G2/G5 进度](p2-host-controls-2026-11-05.md)、[G3 进度](p2-targeted-commands-2026-11-05.md)、[开发加载器进度](p2-development-loader-2026-11-05.md)、[桌面接入记录](p2-desktop-integration-2026-11-05.md)和[G6 浮层清理](p2-overlay-cleanup-2026-11-05.md)。已实现的开发契约以下述记录为准，其余生产接口仍为拟议设计。
 
 ## 选择条件与交付
 

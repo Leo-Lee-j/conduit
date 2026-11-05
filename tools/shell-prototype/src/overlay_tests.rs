@@ -171,6 +171,9 @@ fn stop_preserves_other_owners_and_repairs_interleaved_focus(cx: &mut TestAppCon
     open(&host, OTHER, "extras", cx);
     let b_focus = cx.update(|window, cx| window.focused(cx).unwrap());
     open(&host, OWNER, "dialog", cx);
+    // A removed layer may own focus through one of its child controls.
+    cx.simulate_keystrokes("tab");
+    draw(cx);
     let old = weak(&host, OWNER, cx);
     assert_eq!(counts(cx), (4, true, 3, true));
     cx.update(|_, cx| {
@@ -335,5 +338,40 @@ fn stopping_a_hovered_plugin_clears_tooltip_without_waiting_for_mouse_move(
         )
     });
     assert!(old.upgrade().is_none());
+    close(host, cx);
+}
+
+#[gpui_kit::test]
+fn stopping_plugin_preserves_a_host_replacement_tooltip(cx: &mut TestAppContext) {
+    let a = source(OWNER);
+    let (host, cx) = fixture(vec![approve(snapshot(a.path()))], cx);
+    click(cx, &format!("dev-status-{OWNER}.status"));
+    let trigger = bounds(cx, "plugin-open-overlays").unwrap();
+    cx.simulate_mouse_move(trigger.center(), None, gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(1));
+    draw(cx);
+    cx.update(|window, cx| {
+        let overlay = ShellRoot::tooltip_overlay(window, cx).unwrap();
+        assert!(overlay.read(cx).is_visible());
+        let label = cx.new(|_| Native);
+        let request =
+            gpui_kit::base::TooltipRequest::new(trigger, move |_, _| label.clone().into())
+                .with_show_delay(Duration::ZERO);
+        overlay.update(cx, |overlay, cx| overlay.request_show(request, window, cx));
+        host.update(cx, |host, cx| {
+            host.stop();
+            cx.notify();
+        });
+    });
+    draw(cx);
+    cx.update(|window, cx| {
+        assert!(
+            ShellRoot::tooltip_overlay(window, cx)
+                .unwrap()
+                .read(cx)
+                .is_visible()
+        )
+    });
     close(host, cx);
 }

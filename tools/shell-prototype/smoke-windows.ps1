@@ -155,12 +155,18 @@ try {
                 if (-not [ShellProbeWindow]::PostMessage($handle, $message, [IntPtr]27, [IntPtr]::Zero)) { throw 'Escape key rejected' }
             }
             Start-Sleep -Milliseconds 400
+            # Toasts sit above modal content. Dismiss this fixture's toast so
+            # the sheet's title can be inspected without occlusion.
+            Click-ProbeWindow $handle ([int]($client.Right - 170 * $scale)) ([int](40 * $scale))
+            Start-Sleep -Milliseconds 400
             Save-ProbeWindow $handle "$taskPrefix-sheet.png"
             $report.screenshots += "$taskPrefix-sheet.png"
             foreach ($message in @(0x0100, 0x0101)) {
                 if (-not [ShellProbeWindow]::PostMessage($handle, $message, [IntPtr]27, [IntPtr]::Zero)) { throw 'Escape key rejected' }
             }
             Start-Sleep -Milliseconds 400
+            Save-ProbeWindow $handle "$taskPrefix-dismissed.png"
+            $report.screenshots += "$taskPrefix-dismissed.png"
             Click-ProbeWindow $handle ([int]($client.Right - 170 * $scale)) ([int](260 * $scale))
             Start-Sleep -Milliseconds 500
             Save-ProbeWindow $handle "$taskPrefix-before-close.png"
