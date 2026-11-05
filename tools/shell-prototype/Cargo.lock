@@ -1257,7 +1257,7 @@ dependencies = [
 
 [[package]]
 name = "conduit"
-version = "0.1.6"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1285,7 +1285,7 @@ dependencies = [
 
 [[package]]
 name = "conduit-shell-desktop"
-version = "0.1.6"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
