@@ -9,6 +9,9 @@ pub const FILES: &str = "conduit.core.files";
 pub const GIT: &str = "conduit.core.git";
 pub const BRANCHES: &str = "conduit.core.branches";
 pub const TOOL_DETAILS: &str = "conduit.core.tool-details";
+pub const NOTIFICATIONS: &str = "conduit.core.notifications";
+pub const SHOW_TOOL_DETAILS: &str = "conduit.core.show-tool-details";
+pub const WORKSPACE_STATUS: &str = "conduit.core.workspace-status";
 pub const EXAMPLE: &str = "example.workspace-overview";
 pub const EXAMPLE_INDEX: &str = "example.workspace-overview.index";
 pub const EXAMPLE_SUMMARY: &str = "example.workspace-overview.summary";
@@ -57,6 +60,7 @@ pub fn core() -> Result<ContributionSet> {
             Scope::Global,
         )?,
         view(TOOL_DETAILS, "工具详情", Location::Right, Scope::Session)?,
+        view(NOTIFICATIONS, "通知", Location::Right, Scope::Global)?,
     ];
     set.activity_items = vec![
         activity(
@@ -70,7 +74,7 @@ pub fn core() -> Result<ContributionSet> {
         activity("conduit.core.git-entry", "Git 变更", "git-fork", GIT, 20)?,
     ];
     set.commands.push(CommandDescriptor {
-        id: CommandId::new("conduit.core.show-tool-details")?,
+        id: CommandId::new(SHOW_TOOL_DETAILS)?,
         title: "打开工具详情".into(),
         scope: Scope::Session,
         arguments: ArgumentPolicy::None,
@@ -78,7 +82,7 @@ pub fn core() -> Result<ContributionSet> {
         requires_writable: false,
     });
     set.status_items.push(StatusItem {
-        id: ItemId::new("conduit.core.workspace-status")?,
+        id: ItemId::new(WORKSPACE_STATUS)?,
         scope: Scope::Workspace,
         alignment: Alignment::Left,
         priority: 100,

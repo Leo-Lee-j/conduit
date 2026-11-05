@@ -1,11 +1,21 @@
-//! Backend-independent workbench contributions. No GPUI entities, I/O or plugin code
-//! are stored here. App adapters own rendering, business checks and cleanup.
+//! Backend-independent workbench contributions with no concrete GPUI or I/O dependency.
+//! App adapters instantiate the generic cache and own rendering and task resources.
+// Explicit paths also let the isolated Shell prototype compile the exact P1 core.
+#[path = "plugins/builtins.rs"]
 pub mod builtins;
+#[path = "plugins/commands.rs"]
 pub mod commands;
+#[path = "plugins/context.rs"]
 pub mod context;
+#[path = "plugins/contributions.rs"]
 pub mod contributions;
+#[path = "plugins/ids.rs"]
 pub mod ids;
+#[path = "plugins/instances.rs"]
+pub mod instances;
+#[path = "plugins/registry.rs"]
 pub mod registry;
+#[path = "plugins/state.rs"]
 pub mod state;
 
 use std::fmt;
@@ -28,4 +38,5 @@ pub(super) fn require(ok: bool, message: impl Into<String>) -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "plugins/tests.rs"]
 mod tests;

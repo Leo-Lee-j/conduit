@@ -16,7 +16,7 @@ impl WorkspaceKey {
         &self.0
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SessionKey {
     pub workspace: WorkspaceKey,
     pub id: u64,

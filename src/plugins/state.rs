@@ -112,6 +112,13 @@ impl WorkbenchState {
     pub fn close_right(&mut self) {
         self.right_open = false;
     }
+    /// The host uses this when a selected instance's workspace or session is removed.
+    pub fn reset_right(&mut self, registry: &Registry, cx: &PluginContext) -> Result<()> {
+        self.right = Selection::fallback(registry, self.fallback_right.clone(), Location::Right)?;
+        self.right.reconcile(registry, cx);
+        self.right_open = false;
+        Ok(())
+    }
     pub fn open(
         &mut self,
         registry: &Registry,
@@ -146,10 +153,7 @@ impl WorkbenchState {
             self.navigation.reconcile(registry, cx);
         }
         if !self.right.reconcile(registry, cx) {
-            self.right =
-                Selection::fallback(registry, self.fallback_right.clone(), Location::Right)?;
-            self.right.reconcile(registry, cx);
-            self.right_open = false;
+            self.reset_right(registry, cx)?;
         }
         Ok(())
     }
