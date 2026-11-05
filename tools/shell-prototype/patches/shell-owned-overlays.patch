@@ -1,0 +1,872 @@
+--- a/crates/shell/src/lib.rs
++++ b/crates/shell/src/lib.rs
+@@ -85,6 +85,7 @@
+ mod limits;
+ pub(crate) mod materialize;
+ pub mod metrics;
++mod overlay_owner;
+ pub use limits::RuntimeLimits;
+ pub(crate) mod path;
+ pub mod plugin;
+--- a/crates/shell/src/limits.rs
++++ b/crates/shell/src/limits.rs
+@@ -89,6 +89,7 @@
+ pub(crate) struct Resources {
+     pub limits: RuntimeLimits,
+     pub enabled: Cell<bool>,
++    pub(crate) overlays: crate::overlay_owner::OverlayOwner,
+     fault: Cell<Option<&'static str>>,
+     active: Cell<Option<(Instant, Duration)>>,
+     samples: RefCell<VecDeque<(Instant, Duration)>>,
+@@ -104,6 +105,7 @@
+         Rc::new(Self {
+             limits,
+             enabled: Cell::new(false),
++            overlays: Default::default(),
+             fault: Cell::new(None),
+             active: Cell::new(None),
+             samples: RefCell::new(VecDeque::new()),
+@@ -117,6 +119,7 @@
+ 
+     pub fn fail(&self, reason: &'static str) -> anyhow::Error {
+         self.fault.set(self.fault.get().or(Some(reason)));
++        self.overlays.stop();
+         anyhow::anyhow!("script runtime disabled: {}", self.fault.get().unwrap())
+     }
+ 
+--- a/crates/shell/src/engine/quickjs/mod.rs
++++ b/crates/shell/src/engine/quickjs/mod.rs
+@@ -1365,6 +1365,7 @@
+ }
+ 
+ pub struct ShellRuntime {
++    overlays: crate::overlay_owner::OverlayOwner,
+     resources: Option<Rc<crate::limits::Resources>>,
+     /// Declared first because fields drop in declaration order and every
+     /// `Persistent` handle must be released while the context still exists.
+@@ -1487,6 +1488,7 @@
+ 
+ impl Drop for ShellRuntime {
+     fn drop(&mut self) {
++        self.overlays.stop();
+         self.flush_component_state_releases();
+         // Both hold `Persistent` script values, and a persistent handle
+         // released after its runtime aborts the process.
+@@ -1659,12 +1661,17 @@
+ 
+     /// Revokes tasks and prevents subsequent entry, even if a view is retained.
+     pub fn stop(&self) {
++        self.overlays.stop();
+         if let Some(resources) = &self.resources {
+             let _ = resources.fail("stopped by host");
+         } else if self.terminal_job_error.borrow().is_none() {
+             *self.terminal_job_error.borrow_mut() = Some("script runtime stopped by host".into());
+         }
+         scheduler::shutdown(self);
++    }
++
++    pub(crate) fn overlay_owner(&self) -> crate::overlay_owner::OverlayOwner {
++        self.overlays.clone()
+     }
+ 
+     pub fn heap_usage_bytes(&self) -> usize {
+@@ -1830,6 +1837,10 @@
+         }
+ 
+         let runtime = Rc::new(Self {
++            overlays: resources
++                .as_ref()
++                .map(|r| r.overlays.clone())
++                .unwrap_or_default(),
+             resources,
+             callbacks: RefCell::new(CallbackArena::default()),
+             components,
+@@ -2294,6 +2305,7 @@
+ 
+     /// Permanently quarantines a runtime with an opaque unfinished job wave.
+     fn fail_job_queue(&self) -> anyhow::Error {
++        self.overlays.stop();
+         let message = "the QuickJS job queue exceeded gpui-shell's transactional limit; the \
+                        script runtime was disabled so pending work cannot cross view authority"
+             .to_owned();
+--- a/crates/shell/src/engine/quickjs/overlay.rs
++++ b/crates/shell/src/engine/quickjs/overlay.rs
+@@ -170,9 +170,9 @@
+                 // Read before clearing: the root reports nothing, and "how many
+                 // did I close?" is the same question `close_dialog`'s `bool`
+                 // answers for one.
+-                let closed = root.dialog_count() as u32;
++                let before = root.dialog_count();
+                 root.close_all_dialogs(window, cx);
+-                Ok(closed)
++                Ok((before - root.dialog_count()) as u32)
+             })
+         }),
+     )?;
+@@ -192,14 +192,28 @@
+     globals.set(
+         "__open_sheet",
+         Func::from(
+-            |ctx: Ctx<'_>, placement: Opt<String>, content: ViewInstance| -> JsResult<()> {
+-                let api = if placement.0.is_some() {
++            |ctx: Ctx<'_>, placement: Opt<Value<'_>>, content: ViewInstance| -> JsResult<()> {
++                // Opt distinguishes missing arguments, not an explicit undefined.
++                // The public open_sheet wrapper passes undefined for the default.
++                let placement = placement
++                    .0
++                    .filter(|value| !value.is_undefined())
++                    .map(|value| {
++                        value
++                            .as_string()
++                            .ok_or_else(|| {
++                                js_error::type_error(&ctx, "sheet placement must be a string")
++                            })?
++                            .to_string()
++                    })
++                    .transpose()?;
++                let api = if placement.is_some() {
+                     OPEN_SHEET_AT
+                 } else {
+                     OPEN_SHEET
+                 };
+                 guard(&ctx, api)?;
+-                let placement = match placement.0 {
++                let placement = match placement {
+                     Some(name) => parse_placement(&ctx, &name)?,
+                     None => Placement::Right,
+                 };
+@@ -344,8 +358,22 @@
+     api: &str,
+     body: impl FnOnce(&mut ShellRoot, &mut Window, &mut Context<ShellRoot>) -> JsResult<R>,
+ ) -> JsResult<R> {
+-    let Some(reached) = scope::with_current(|window, app| ShellRoot::update(window, app, body))
+-    else {
++    let owner = crate::overlay_owner::OverlayOwner::current();
++    if owner
++        .as_ref()
++        .is_some_and(crate::overlay_owner::OverlayOwner::is_stopped)
++    {
++        return Err(js_error::type_error(ctx, "overlay runtime stopped"));
++    }
++    let Some(reached) = scope::with_current(|window, app| {
++        ShellRoot::update(window, app, |root, window, cx| {
++            root.clear_stopped_overlays(window, cx);
++            if let Some(owner) = owner {
++                root.observe_overlay_owner(owner, window, cx);
++            }
++            body(root, window, cx)
++        })
++    }) else {
+         return Err(js_error::type_error(
+             ctx,
+             &format!(
+--- a/crates/shell/src/root.rs
++++ b/crates/shell/src/root.rs
+@@ -30,7 +30,10 @@
+     v_flex,
+ };
+ 
+-use crate::{scope, view::ScriptView};
++use crate::{overlay_owner::OverlayOwner, scope, view::ScriptView};
++
++mod owned_overlays;
++use owned_overlays::OverlayState;
+ 
+ actions!(shell_root, [Tab, TabPrev, Copy]);
+ 
+@@ -134,6 +137,7 @@
+ /// of what goes *inside* an overlay belongs to the script.
+ pub struct ShellRoot {
+     content: AnyView,
++    ownership: OverlayState,
+     application: Option<MountedApplication>,
+     /// Retains a script application's policy and cancels its work when this
+     /// window root is dropped. Ordinary Rust content leaves it empty.
+@@ -187,6 +191,7 @@
+ }
+ 
+ struct ActiveDialog {
++    owner: Option<OverlayOwner>,
+     content: AnyView,
+     focus_handle: FocusHandle,
+     /// What was focused when this dialog opened, to be restored when it closes.
+@@ -196,6 +201,7 @@
+ }
+ 
+ struct ActiveSheet {
++    owner: Option<OverlayOwner>,
+     content: AnyView,
+     placement: Placement,
+     focus_handle: FocusHandle,
+@@ -223,6 +229,7 @@
+ 
+         Self {
+             content,
++            ownership: OverlayState::default(),
+             application: None,
+             application_policy: None,
+             application_generation: None,
+@@ -339,6 +346,10 @@
+         if !overlay_mutation_allowed("show_fps_monitor") {
+             return false;
+         }
++        if self.fps_hud.is_some() && !Self::caller_owns(&self.ownership.fps) {
++            return false;
++        }
++        self.ownership.fps = OverlayOwner::current();
+         self.fps_hud = Some(request);
+         cx.notify();
+         true
+@@ -349,6 +360,10 @@
+         if !overlay_mutation_allowed("hide_fps_monitor") {
+             return false;
+         }
++        if !Self::caller_owns(&self.ownership.fps) {
++            return false;
++        }
++        self.ownership.fps = None;
+         let was_visible = self.fps_hud.take().is_some();
+         if was_visible {
+             cx.notify();
+@@ -406,7 +421,9 @@
+         let restore_focus = window.focused(cx).map(|handle| handle.downgrade());
+         focus_handle.focus(window, cx);
+ 
++        let owner = self.content_owner(&content, window, cx);
+         self.dialogs.push(ActiveDialog {
++            owner,
+             content,
+             focus_handle,
+             restore_focus,
+@@ -425,11 +442,14 @@
+             return false;
+         }
+ 
+-        let Some(dialog) = self.dialogs.pop() else {
++        let Some(dialog) = self.dialogs.last() else {
+             return false;
+         };
+-        restore_focus(dialog.restore_focus, window, cx);
+-        cx.notify();
++        if !Self::caller_owns(&dialog.owner) {
++            return false;
++        }
++        let focus = dialog.focus_handle.clone();
++        self.remove_owned_views(|_, handle| handle == &focus, window, cx);
+         true
+     }
+ 
+@@ -449,13 +469,12 @@
+             return;
+         }
+ 
+-        let restore = self
+-            .dialogs
+-            .first()
+-            .and_then(|dialog| dialog.restore_focus.clone());
+-        self.dialogs.clear();
+-        restore_focus(restore, window, cx);
+-        cx.notify();
++        let sheet = self.sheet.as_ref().map(|sheet| sheet.focus_handle.clone());
++        self.remove_owned_views(
++            |owner, focus| Some(focus) != sheet.as_ref() && Self::caller_owns(owner),
++            window,
++            cx,
++        );
+     }
+ 
+     /// Opens a sheet on the given edge, replacing any sheet already open.
+@@ -471,7 +490,12 @@
+         window: &mut Window,
+         cx: &mut Context<Self>,
+     ) {
+-        if !overlay_mutation_allowed("open_sheet") {
++        if !overlay_mutation_allowed("open_sheet")
++            || self
++                .sheet
++                .as_ref()
++                .is_some_and(|sheet| !Self::caller_owns(&sheet.owner))
++        {
+             return;
+         }
+ 
+@@ -483,7 +507,9 @@
+             .or_else(|| window.focused(cx).map(|handle| handle.downgrade()));
+         focus_handle.focus(window, cx);
+ 
++        let owner = self.content_owner(&content, window, cx);
+         self.sheet = Some(ActiveSheet {
++            owner,
+             content,
+             placement,
+             focus_handle,
+@@ -498,11 +524,14 @@
+             return false;
+         }
+ 
+-        let Some(sheet) = self.sheet.take() else {
++        let Some(sheet) = self.sheet.as_ref() else {
+             return false;
+         };
+-        restore_focus(sheet.restore_focus, window, cx);
+-        cx.notify();
++        if !Self::caller_owns(&sheet.owner) {
++            return false;
++        }
++        let focus = sheet.focus_handle.clone();
++        self.remove_owned_views(|_, handle| handle == &focus, window, cx);
+         true
+     }
+ 
+@@ -514,12 +543,7 @@
+     /// `&mut Window` is what makes this operation legal at all — it can only be
+     /// reached from an `Event` or `Task` call scope (`docs/gpui-shell.md`
+     /// §16.2).
+-    pub fn push_toast(
+-        &mut self,
+-        toast: ToastRequest,
+-        _window: &mut Window,
+-        cx: &mut Context<Self>,
+-    ) {
++    pub fn push_toast(&mut self, toast: ToastRequest, window: &mut Window, cx: &mut Context<Self>) {
+         if !overlay_mutation_allowed("push_toast") {
+             return;
+         }
+@@ -528,6 +552,14 @@
+             self.next_toast_ordinal += 1;
+             SharedString::from(format!("shell-toast-{}", self.next_toast_ordinal))
+         });
++        let id = if let Some(owner) = OverlayOwner::current() {
++            self.observe_overlay_owner(owner.clone(), window, cx);
++            let id = owner.toast_id(&id);
++            self.ownership.toasts.insert(id.clone(), owner);
++            id
++        } else {
++            id
++        };
+         let options = ToastOptions {
+             timeout: toast.timeout,
+         };
+@@ -542,9 +574,14 @@
+     /// this reports "started closing" rather than "removed": a caller that
+     /// wants to know when it is gone should read [`ShellRoot::toast_count`].
+     pub fn remove_toast(&mut self, id: impl Into<SharedString>, cx: &mut Context<Self>) -> bool {
+-        let dismissed = self
+-            .toasts
+-            .dismiss(&id.into(), cx.background_executor().now());
++        if !overlay_mutation_allowed("remove_toast") {
++            return false;
++        }
++        let id = id.into();
++        let id = OverlayOwner::current()
++            .map(|owner| owner.toast_id(&id))
++            .unwrap_or(id);
++        let dismissed = self.toasts.dismiss(&id, cx.background_executor().now());
+         if dismissed {
+             cx.notify();
+         }
+@@ -554,13 +591,19 @@
+     /// Begins the exit of every active toast, for a script clearing its own
+     /// notifications.
+     pub fn clear_toasts(&mut self, cx: &mut Context<Self>) {
+-        if !self
++        if !overlay_mutation_allowed("clear_toasts") {
++            return;
++        }
++        let ids: Vec<_> = self
+             .toasts
+-            .dismiss_all(cx.background_executor().now())
+-            .is_empty()
+-        {
+-            cx.notify();
+-        }
++            .iter()
++            .filter(|(id, _, _)| Self::caller_owns(&self.ownership.toasts.get(*id).cloned()))
++            .map(|(id, _, _)| id.clone())
++            .collect();
++        for id in ids {
++            self.toasts.dismiss(&id, cx.background_executor().now());
++        }
++        cx.notify();
+     }
+ 
+     /// Samples the toast lifecycle clock forever, until the root is dropped.
+@@ -580,6 +623,9 @@
+     }
+ 
+     fn advance_toasts(&mut self, cx: &mut Context<Self>) {
++        self.ownership
++            .toasts
++            .retain(|id, _| self.toasts.get(id).is_some());
+         // Timers pause while the user is reading the stack, not while the window
+         // is inactive: a visible side-by-side window would hold its toasts forever.
+         let paused = self.toast_state.is_expanded();
+@@ -622,6 +668,7 @@
+             .map(|(index, dialog)| {
+                 let topmost = index == topmost_index;
+                 let root = root.clone();
++                let closing_focus = dialog.focus_handle.clone();
+                 rebuild_script_overlay(&dialog.content, cx);
+ 
+                 Dialog::new(cx)
+@@ -636,7 +683,13 @@
+                     .on_ok(|_, _, _| false)
+                     .request_close(move |_, window, cx| {
+                         root.update(cx, |root, cx| {
+-                            root.close_dialog(window, cx);
++                            if root
++                                .dialogs
++                                .last()
++                                .is_some_and(|dialog| dialog.focus_handle == closing_focus)
++                            {
++                                root.close_dialog(window, cx);
++                            }
+                         });
+                     })
+                     .when(topmost, |this| {
+@@ -674,6 +727,7 @@
+         let sheet = self.sheet.as_ref()?;
+         let root = cx.entity();
+         let placement = sheet.placement;
++        let closing_focus = sheet.focus_handle.clone();
+         rebuild_script_overlay(&sheet.content, cx);
+ 
+         Some(
+@@ -681,7 +735,13 @@
+                 .focus_handle(sheet.focus_handle.clone())
+                 .request_close(move |window, cx| {
+                     root.update(cx, |root, cx| {
+-                        root.close_sheet(window, cx);
++                        if root
++                            .sheet
++                            .as_ref()
++                            .is_some_and(|sheet| sheet.focus_handle == closing_focus)
++                        {
++                            root.close_sheet(window, cx);
++                        }
+                     });
+                 })
+                 .overlay(div().absolute().inset_0().bg(backdrop_color()))
+@@ -822,6 +882,7 @@
+ 
+ impl Render for ShellRoot {
+     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
++        self.clear_stopped_overlays(window, cx);
+         let tokens = Theme::global(cx).tokens;
+         let (colors, radius, spacing) = (tokens.colors, tokens.radius, tokens.spacing);
+ 
+@@ -1138,6 +1199,9 @@
+ }
+ 
+ fn overlay_mutation_allowed(operation: &str) -> bool {
++    if OverlayOwner::current().is_some_and(|owner| owner.is_stopped()) {
++        return false;
++    }
+     match scope::current_phase() {
+         None => true,
+         Some(phase) if phase.allows_notify() => true,
+--- a/crates/base/src/toast.rs
++++ b/crates/base/src/toast.rs
+@@ -161,6 +161,11 @@
+             };
+             visible.then_some((&entry.id, &entry.value, entry.status))
+         })
++    }
++
++    /// Immediately discard matching lifecycle entries, e.g. when their owner stops.
++    pub fn retain(&mut self, mut keep: impl FnMut(&I, &T) -> bool) {
++        self.entries.retain(|entry| keep(&entry.id, &entry.value));
+     }
+ 
+     /// Return a mounted toast value by id.
+--- a/crates/base/src/tooltip.rs
++++ b/crates/base/src/tooltip.rs
+@@ -210,6 +210,11 @@
+     fn next_epoch(&mut self) -> usize {
+         self.epoch += 1;
+         self.epoch
++    }
++
++    /// Whether tooltip content is currently displayed (excludes a pending show).
++    pub fn is_visible(&self) -> bool {
++        self.content.is_some()
+     }
+ 
+     pub fn request_show(
+--- a/crates/shell/src/materialize.rs
++++ b/crates/shell/src/materialize.rs
+@@ -1205,7 +1205,8 @@
+ 
+             let button = with_hover(button, &states);
+             let button = with_active_and_focus(button, &states);
+-            let button = components::tooltip::with_tooltip(button, &behavior);
++            let button =
++                components::tooltip::with_tooltip(button, &behavior, runtime.overlay_owner());
+             let button = with_input_handlers(button, &behavior, runtime);
+             finish(button, refinement, children)
+         }
+@@ -2226,7 +2227,7 @@
+             }
+         });
+     }
+-    let stateful = components::tooltip::with_tooltip(stateful, &behavior);
++    let stateful = components::tooltip::with_tooltip(stateful, &behavior, runtime.overlay_owner());
+     if behavior.scrollbar {
+         let mut stateful = stateful;
+         stateful.style().refine(&refinement);
+--- a/crates/shell/src/materialize/components/tooltip.rs
++++ b/crates/shell/src/materialize/components/tooltip.rs
+@@ -92,7 +92,11 @@
+ /// Takes the whole [`Behavior`] rather than the text so that an element with no
+ /// `tooltip` pays nothing: the listeners, the prepaint canvas and the shared
+ /// cell are all built only on the branch that has something to show.
+-pub(in crate::materialize) fn with_tooltip<E>(element: E, behavior: &Behavior) -> E
++pub(in crate::materialize) fn with_tooltip<E>(
++    element: E,
++    behavior: &Behavior,
++    owner: crate::overlay_owner::OverlayOwner,
++) -> E
+ where
+     E: StatefulInteractiveElement + ParentElement,
+ {
+@@ -106,18 +110,18 @@
+     // frames later.
+     let trigger_bounds: Rc<Cell<Bounds<Pixels>>> = Rc::new(Cell::new(Bounds::default()));
+     let writer = Rc::clone(&trigger_bounds);
++    let click_owner = owner.clone();
+ 
+     element
+         .on_prepaint(move |bounds, _, _| writer.set(bounds))
+         .on_hover(move |hovered, window, cx| {
+-            let Some(overlay) = ShellRoot::tooltip_overlay(window, cx) else {
+-                // No overlay layer means the window has no `ShellRoot`, which
+-                // is a host wiring mistake rather than a script one — and one
+-                // the window announces loudly elsewhere.
++            if owner.is_stopped() {
+                 return;
+-            };
++            }
+             if !*hovered {
+-                overlay.update(cx, |overlay, cx| overlay.request_hide(window, cx));
++                ShellRoot::update(window, cx, |root, window, cx| {
++                    root.hide_owned_tooltip(&owner, false, window, cx)
++                });
+                 return;
+             }
+ 
+@@ -128,16 +132,14 @@
+             let label = cx.new(|_| TooltipLabel { text: text.clone() });
+             let request =
+                 TooltipRequest::new(trigger_bounds.get(), move |_, _| label.clone().into());
+-            overlay.update(cx, |overlay, cx| overlay.request_show(request, window, cx));
++            ShellRoot::update(window, cx, |root, window, cx| {
++                root.show_owned_tooltip(owner.clone(), request, window, cx)
++            });
+         })
+-        .on_mouse_down(MouseButton::Left, |_, window, cx| {
+-            if let Some(overlay) = ShellRoot::tooltip_overlay(window, cx) {
+-                // `hide`, not `request_hide`: the grace period exists so that
+-                // moving between two triggers does not flash, and a press is
+-                // not that. The label has served its purpose the moment the
+-                // control is used.
+-                overlay.update(cx, |overlay, cx| overlay.hide(cx));
+-            }
++        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
++            ShellRoot::update(window, cx, |root, window, cx| {
++                root.hide_owned_tooltip(&click_owner, true, window, cx)
++            });
+         })
+ }
+ 
+--- /dev/null
++++ b/crates/shell/src/overlay_owner.rs
+@@ -0,0 +1,56 @@
++//! A runtime incarnation's revocable overlay identity. It never retains the VM.
++use std::{
++    rc::Rc,
++    sync::atomic::{AtomicU64, Ordering},
++};
++
++static NEXT_ID: AtomicU64 = AtomicU64::new(1);
++
++#[derive(Clone, Debug)]
++pub(crate) struct OverlayOwner(Rc<Signal>);
++
++#[derive(Debug)]
++struct Signal {
++    id: u64,
++    sender: async_channel::Sender<()>,
++    receiver: async_channel::Receiver<()>,
++}
++
++impl Default for OverlayOwner {
++    fn default() -> Self {
++        let (sender, receiver) = async_channel::bounded(1);
++        let id = NEXT_ID
++            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
++            .expect("overlay owner IDs exhausted");
++        Self(Rc::new(Signal {
++            id,
++            sender,
++            receiver,
++        }))
++    }
++}
++
++impl PartialEq for OverlayOwner {
++    fn eq(&self, other: &Self) -> bool {
++        Rc::ptr_eq(&self.0, &other.0)
++    }
++}
++impl Eq for OverlayOwner {}
++
++impl OverlayOwner {
++    pub(crate) fn current() -> Option<Self> {
++        crate::scope::current_runtime().map(|runtime| runtime.overlay_owner())
++    }
++    pub(crate) fn stop(&self) {
++        self.0.sender.close();
++    }
++    pub(crate) fn is_stopped(&self) -> bool {
++        self.0.sender.is_closed()
++    }
++    pub(crate) fn stopped(&self) -> async_channel::Receiver<()> {
++        self.0.receiver.clone()
++    }
++    pub(crate) fn toast_id(&self, id: &str) -> gpui::SharedString {
++        format!("shell-owner-{}:{id}", self.0.id).into()
++    }
++}
+--- /dev/null
++++ b/crates/shell/src/root/owned_overlays.rs
+@@ -0,0 +1,230 @@
++//! Ownership and stop cleanup, separate from overlay presentation.
++use super::*;
++use std::collections::HashMap;
++
++#[derive(Default)]
++pub(super) struct OverlayState {
++    watches: Vec<(OverlayOwner, gpui::Task<()>)>,
++    pub(super) toasts: HashMap<SharedString, OverlayOwner>,
++    pub(super) fps: Option<OverlayOwner>,
++    tooltip: Option<OverlayOwner>,
++}
++
++impl ShellRoot {
++    pub(crate) fn observe_overlay_owner(
++        &mut self,
++        owner: OverlayOwner,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        if self
++            .ownership
++            .watches
++            .iter()
++            .any(|(seen, _)| seen == &owner)
++        {
++            return;
++        }
++        let stopped = owner.stopped();
++        let task = cx.spawn_in(window, async move |root, cx| {
++            let _ = stopped.recv().await;
++            let _ = root.update_in(cx, |root, window, cx| {
++                root.clear_stopped_overlays(window, cx)
++            });
++        });
++        self.ownership.watches.push((owner, task));
++    }
++
++    pub(super) fn content_owner(
++        &mut self,
++        content: &AnyView,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) -> Option<OverlayOwner> {
++        let owner = OverlayOwner::current().or_else(|| {
++            content
++                .clone()
++                .downcast::<ScriptView>()
++                .ok()
++                .map(|view| view.read(cx).runtime().overlay_owner())
++        });
++        if let Some(owner) = &owner {
++            self.observe_overlay_owner(owner.clone(), window, cx);
++        }
++        owner
++    }
++
++    pub(super) fn caller_owns(owner: &Option<OverlayOwner>) -> bool {
++        OverlayOwner::current().is_none_or(|caller| owner.as_ref() == Some(&caller))
++    }
++
++    /// Synchronously release stopped VMs' overlays before a host shutdown/update
++    /// barrier. Stop also schedules this on the foreground executor; render
++    /// checks it again so a queued frame never draws a stopped script overlay.
++    pub fn clear_stopped_overlays(&mut self, window: &mut Window, cx: &mut Context<Self>) {
++        self.remove_owned_views(
++            |owner, _| owner.as_ref().is_some_and(OverlayOwner::is_stopped),
++            window,
++            cx,
++        );
++        let mut changed = false;
++        self.toasts.retain(|id, _| {
++            let keep = !self
++                .ownership
++                .toasts
++                .get(id)
++                .is_some_and(OverlayOwner::is_stopped);
++            changed |= !keep;
++            keep
++        });
++        self.ownership
++            .toasts
++            .retain(|id, _| self.toasts.get(id).is_some());
++        if self
++            .ownership
++            .fps
++            .as_ref()
++            .is_some_and(OverlayOwner::is_stopped)
++        {
++            self.fps_hud = None;
++            self.ownership.fps = None;
++            changed = true;
++        }
++        if self
++            .ownership
++            .tooltip
++            .as_ref()
++            .is_some_and(OverlayOwner::is_stopped)
++        {
++            self.tooltip_overlay
++                .update(cx, |overlay, cx| overlay.hide(cx));
++            self.ownership.tooltip = None;
++            changed = true;
++        }
++        self.ownership
++            .watches
++            .retain(|(owner, _)| !owner.is_stopped());
++        if changed {
++            cx.notify();
++        }
++    }
++
++    pub(super) fn remove_owned_views(
++        &mut self,
++        remove: impl Fn(&Option<OverlayOwner>, &FocusHandle) -> bool,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        // Keep removed handles alive while repairing targets, including a
++        // focused descendant of a removed dialog. Iterate through the whole
++        // chain: interleaved owners can point through several retired layers.
++        let mut removed = Vec::new();
++        for dialog in &self.dialogs {
++            if remove(&dialog.owner, &dialog.focus_handle) {
++                removed.push((dialog.focus_handle.clone(), dialog.restore_focus.clone()));
++            }
++        }
++        if let Some(sheet) = &self.sheet {
++            if remove(&sheet.owner, &sheet.focus_handle) {
++                removed.push((sheet.focus_handle.clone(), sheet.restore_focus.clone()));
++            }
++        }
++        if removed.is_empty() {
++            return;
++        }
++        let resolve = |mut target: Option<WeakFocusHandle>| {
++            for _ in 0..=removed.len() {
++                let Some(handle) = target.as_ref().and_then(|handle| handle.upgrade()) else {
++                    return None;
++                };
++                let Some((_, restore)) = removed
++                    .iter()
++                    .find(|(focus, _)| focus == &handle || focus.contains(&handle, window))
++                else {
++                    return target;
++                };
++                target = restore.clone();
++            }
++            None // A corrupt/cyclic focus record must not focus retired content.
++        };
++        let focused = window.focused(cx);
++        let lost_focus = focused.as_ref().is_some_and(|handle| {
++            removed
++                .iter()
++                .any(|(focus, _)| focus == handle || focus.contains(handle, window))
++        });
++        let restore = if lost_focus {
++            resolve(focused.map(|focus| focus.downgrade()))
++        } else {
++            None
++        };
++        self.dialogs
++            .retain(|dialog| !remove(&dialog.owner, &dialog.focus_handle));
++        for dialog in &mut self.dialogs {
++            dialog.restore_focus = resolve(dialog.restore_focus.take());
++        }
++        if self
++            .sheet
++            .as_ref()
++            .is_some_and(|sheet| remove(&sheet.owner, &sheet.focus_handle))
++        {
++            self.sheet = None;
++        }
++        if let Some(sheet) = &mut self.sheet {
++            sheet.restore_focus = resolve(sheet.restore_focus.take());
++        }
++        if lost_focus {
++            if restore.is_some() {
++                restore_focus(restore, window, cx);
++            } else if let Some(focus) = self
++                .dialogs
++                .last()
++                .map(|d| &d.focus_handle)
++                .or_else(|| self.sheet.as_ref().map(|s| &s.focus_handle))
++            {
++                focus.focus(window, cx);
++            } else {
++                window.blur(cx);
++            }
++        }
++        cx.notify();
++    }
++
++    pub(crate) fn show_owned_tooltip(
++        &mut self,
++        owner: OverlayOwner,
++        request: gpui_base::TooltipRequest,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        if owner.is_stopped() {
++            return;
++        }
++        self.observe_overlay_owner(owner.clone(), window, cx);
++        self.ownership.tooltip = Some(owner);
++        self.tooltip_overlay
++            .update(cx, |overlay, cx| overlay.request_show(request, window, cx));
++    }
++
++    pub(crate) fn hide_owned_tooltip(
++        &mut self,
++        owner: &OverlayOwner,
++        immediate: bool,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        if self.ownership.tooltip.as_ref() != Some(owner) {
++            return;
++        }
++        self.tooltip_overlay.update(cx, |overlay, cx| {
++            if immediate {
++                overlay.hide(cx);
++            } else {
++                overlay.request_hide(window, cx);
++            }
++        });
++        if immediate {
++            self.ownership.tooltip = None;
++        }
++    }
++}

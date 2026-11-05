@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "hostApi": "^0.1.0",
+  "permissions": ["workspace.metadata.read", "session.summary.read"],
+  "contributes": {
+    "views": [
+      {"id":"example.workspace-overview.index","title":"Workspace overview","location":"navigation","scope":"workspace","entry":"navigation.js","when":"workspace.open"},
+      {"id":"example.workspace-overview.summary","title":"Workspace summary","location":"right","scope":"workspace","entry":"summary.js","when":"workspace.open"}
+    ],
+    "commands": [
+      {"id":"example.workspace-overview.increment","title":"Increment summary","scope":"workspace","binding":{"view":"example.workspace-overview.summary","command":"increment"}},
+      {"id":"example.workspace-overview.read-delayed","title":"Read after one second","scope":"workspace","requiredPermissions":["workspace.metadata.read"],"binding":{"view":"example.workspace-overview.summary","command":"read-after-delay"}},
+      {"id":"example.workspace-overview.overlays","title":"Open plugin overlays","scope":"workspace","binding":{"view":"example.workspace-overview.summary","command":"overlays"}}
+    ],
+    "activityItems": [
+      {"id":"example.workspace-overview.activity","title":"Workspace overview","icon":"layout-dashboard","action":{"kind":"openView","view":"example.workspace-overview.index"}}
+    ],
+    "statusItems": [
+      {"id":"example.workspace-overview.status","scope":"workspace","alignment":"left","text":"Increment summary","command":"example.workspace-overview.increment","when":"workspace.open"}
+    ]
+  }
+}

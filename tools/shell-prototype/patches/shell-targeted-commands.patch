@@ -1,0 +1,452 @@
+--- a/crates/shell/src/engine/mod.rs
++++ b/crates/shell/src/engine/mod.rs
+@@ -135,7 +135,9 @@
+ #[cfg(test)]
+ pub(crate) use quickjs::ViewType;
+ #[cfg(feature = "quickjs")]
+-pub use quickjs::{LoadedApplication, ShellRuntime, ViewObject};
++pub use quickjs::{
++    CommandCall, CommandReply, CommandTarget, LoadedApplication, ShellRuntime, ViewObject,
++};
+ 
+ /// Points the script-visible store at its backing file.
+ ///
+--- /dev/null
++++ b/crates/shell/src/engine/quickjs/commands.rs
+@@ -0,0 +1,347 @@
++//! Host-to-view commands. No JavaScript handles escape the call or retain a VM.
++
++use super::*;
++use async_channel::{Receiver, TryRecvError};
++
++const MAX_DEPTH: usize = 16;
++const MAX_VALUES: usize = 4096;
++const MAX_BYTES: usize = 256 * 1024;
++const MAX_ERROR_BYTES: usize = 4096;
++pub(super) type Reply = std::result::Result<HostValue, String>;
++
++/// A weak reference to one view incarnation, independent of keyboard focus.
++/// A reload, release, or VM stop permanently invalidates an existing target.
++#[derive(Clone)]
++pub struct CommandTarget {
++    runtime: std::rc::Weak<ShellRuntime>,
++    view: WeakEntity<ScriptView>,
++    application: Option<Rc<ApplicationGeneration>>,
++}
++
++/// One pending result. Dropping this handle abandons the reply; it does not
++/// undo script effects. Stop the owning VM to cancel its tasks as a group.
++pub struct CommandCall {
++    target: CommandTarget,
++    receiver: Receiver<Reply>,
++    consumed: bool,
++}
++
++/// A resolved result that must still be accepted against the current UI state.
++/// Hosts must additionally validate their own workspace/context ticket.
++pub struct CommandReply {
++    target: CommandTarget,
++    value: Reply,
++}
++
++impl ShellRuntime {
++    /// Bind a command target without retaining the view or executing JavaScript.
++    /// Commands require the interpreter and limits installed before evaluation.
++    pub fn command_target(
++        self: &Rc<Self>,
++        view: &Entity<ScriptView>,
++        cx: &App,
++    ) -> anyhow::Result<CommandTarget> {
++        anyhow::ensure!(
++            self.resources.is_some(),
++            "commands require a bounded runtime"
++        );
++        let target = CommandTarget {
++            runtime: Rc::downgrade(self),
++            view: view.downgrade(),
++            application: view.read(cx).application_generation(),
++        };
++        target.live(cx)?;
++        Ok(target)
++    }
++}
++
++impl CommandTarget {
++    fn live(&self, cx: &App) -> anyhow::Result<(Rc<ShellRuntime>, Entity<ScriptView>)> {
++        let runtime = self
++            .runtime
++            .upgrade()
++            .ok_or_else(|| anyhow!("command runtime released"))?;
++        if let Some(error) = runtime.job_queue_error() {
++            return Err(error);
++        }
++        let view = self
++            .view
++            .upgrade()
++            .ok_or_else(|| anyhow!("command view released"))?;
++        let state = view.read(cx);
++        anyhow::ensure!(
++            Rc::ptr_eq(&runtime, &state.runtime()),
++            "command target belongs to another runtime"
++        );
++        anyhow::ensure!(!state.is_retired(), "command view retired");
++        let current = state.application_generation();
++        let valid = match (&self.application, &current) {
++            (Some(expected), Some(current)) => Rc::ptr_eq(expected, current) && current.is_active(),
++            (None, None) => true,
++            _ => false,
++        };
++        anyhow::ensure!(valid, "command application generation retired");
++        Ok((runtime, view))
++    }
++
++    /// Call `view.on_command(name, payload, cx)` under that view's authority.
++    /// The handler may return data or a Promise of data. Its call-scoped `cx`
++    /// cannot be used after await; use `cx.spawn` for an async context as usual.
++    /// Inputs and replies allow finite numbers, booleans, strings, null, arrays
++    /// and records, bounded to depth 16, 4096 values and 256 KiB of strings/keys.
++    pub fn dispatch(
++        &self,
++        name: &str,
++        payload: HostValue,
++        window: &mut Window,
++        cx: &mut App,
++    ) -> anyhow::Result<CommandCall> {
++        anyhow::ensure!(
++            scope::current_runtime().is_none(),
++            "commands cannot reenter a script call"
++        );
++        anyhow::ensure!(
++            !name.is_empty()
++                && name.len() <= 128
++                && name
++                    .bytes()
++                    .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b)),
++            "invalid command name"
++        );
++        DataBudget::default()
++            .input(&payload, 0)
++            .map_err(anyhow::Error::msg)?;
++        let (runtime, view) = self.live(cx)?;
++        let object = view.read(cx).object().clone();
++        let policy = view.read(cx).policy();
++        let (sender, receiver) = async_channel::bounded(1);
++        let (_guard, generation) = scope::enter_with_application(
++            &runtime,
++            window,
++            cx,
++            ScopePhase::Event,
++            Some(view),
++            policy,
++            self.application.clone(),
++        );
++        let result = runtime.with_js(|ctx| {
++            let instance = object.restore(ctx)?;
++            let handler: Function = instance.get("on_command")?;
++            let value: Value = handler.call((
++                This(instance),
++                name,
++                host_modules::into_js(ctx, payload)?,
++                context_object(ctx, ContextBinding::Call(generation))?,
++            ))?;
++            if let Some(promise) = value.as_promise() {
++                scheduler::observe_command(ctx, promise, sender.clone())?;
++            } else {
++                let reply = CommandValue::from_js(ctx, value)?.0;
++                let _ = sender.try_send(reply);
++            }
++            Ok(())
++        });
++        // Keep the target scope alive while promises and nested view operations run.
++        scheduler::drain_runtime_jobs(&runtime, window, cx);
++        result.map_err(|error| anyhow!(bounded_error(error.to_string())))?;
++        if let Some(error) = runtime.job_queue_error() {
++            return Err(error);
++        }
++        Ok(CommandCall {
++            target: self.clone(),
++            receiver,
++            consumed: false,
++        })
++    }
++}
++
++impl CommandCall {
++    /// Consume a ready reply, rejecting even buffered results after invalidation.
++    pub fn try_take(&mut self, cx: &App) -> Option<anyhow::Result<HostValue>> {
++        if self.consumed {
++            return None;
++        }
++        let value = match self.receiver.try_recv() {
++            Ok(value) => value,
++            Err(TryRecvError::Empty) => {
++                if let Err(error) = self.target.live(cx) {
++                    self.consumed = true;
++                    return Some(Err(error));
++                }
++                return None;
++            }
++            Err(TryRecvError::Closed) => Err("command reply cancelled".into()),
++        };
++        self.consumed = true;
++        Some(
++            CommandReply {
++                target: self.target.clone(),
++                value,
++            }
++            .accept(cx),
++        )
++    }
++
++    /// Wait without retaining JavaScript values or a runtime. Call `accept` on
++    /// the UI thread, then validate the host's context ticket before publishing.
++    pub async fn wait(self) -> CommandReply {
++        let value = if self.consumed {
++            Err("command reply already consumed".into())
++        } else {
++            self.receiver
++                .recv()
++                .await
++                .unwrap_or_else(|_| Err("command reply cancelled".into()))
++        };
++        CommandReply {
++            target: self.target,
++            value,
++        }
++    }
++}
++
++impl CommandReply {
++    pub fn accept(self, cx: &App) -> anyhow::Result<HostValue> {
++        self.target.live(cx)?;
++        self.value.map_err(anyhow::Error::msg)
++    }
++}
++
++#[derive(Default)]
++struct DataBudget {
++    values: usize,
++    bytes: usize,
++}
++
++impl DataBudget {
++    fn value(&mut self, depth: usize) -> std::result::Result<(), String> {
++        self.values += 1;
++        if depth > MAX_DEPTH || self.values > MAX_VALUES {
++            return Err("command data exceeds depth/value limit".into());
++        }
++        Ok(())
++    }
++
++    fn text(&mut self, value: &str) -> std::result::Result<(), String> {
++        self.bytes = self.bytes.saturating_add(value.len());
++        if self.bytes > MAX_BYTES {
++            return Err("command data exceeds string/key byte limit".into());
++        }
++        Ok(())
++    }
++
++    fn input(&mut self, value: &HostValue, depth: usize) -> std::result::Result<(), String> {
++        self.value(depth)?;
++        match value {
++            HostValue::Number(n) if !n.is_finite() => {
++                return Err("command numbers must be finite".into());
++            }
++            HostValue::Str(text) => self.text(text)?,
++            HostValue::Array(values) => {
++                for value in values {
++                    self.input(value, depth + 1)?;
++                }
++            }
++            HostValue::Object(fields) => {
++                for (key, value) in fields {
++                    self.text(key)?;
++                    self.input(value, depth + 1)?;
++                }
++            }
++            _ => {}
++        }
++        Ok(())
++    }
++
++    fn output<'js>(
++        &mut self,
++        ctx: &Ctx<'js>,
++        value: Value<'js>,
++        depth: usize,
++    ) -> JsResult<HostValue> {
++        ShellRuntime::check_bridge(ctx)?;
++        self.value(depth)
++            .map_err(|error| js_error::type_error(ctx, &error))?;
++        if value.is_null() || value.is_undefined() {
++            return Ok(HostValue::Null);
++        }
++        if let Some(value) = value.as_bool() {
++            return Ok(HostValue::Bool(value));
++        }
++        if let Some(value) = value.as_number() {
++            if !value.is_finite() {
++                return Err(js_error::type_error(ctx, "command numbers must be finite"));
++            }
++            return Ok(HostValue::Number(value));
++        }
++        if let Some(value) = value.as_string() {
++            let text = value.to_string()?;
++            self.string(ctx, &text)?;
++            return Ok(HostValue::Str(text));
++        }
++        if let Some(array) = value.as_array() {
++            if array.len() > MAX_VALUES.saturating_sub(self.values) {
++                return Err(js_error::type_error(
++                    ctx,
++                    "command array exceeds value limit",
++                ));
++            }
++            let mut values = Vec::new();
++            for index in 0..array.len() {
++                values.push(self.output(ctx, array.get(index)?, depth + 1)?);
++            }
++            return Ok(HostValue::Array(values));
++        }
++        if value.is_function() || value.is_promise() {
++            return Err(js_error::type_error(
++                ctx,
++                "command replies must contain data, not handles",
++            ));
++        }
++        if let Some(object) = value.as_object() {
++            let mut fields = Vec::new();
++            for entry in object.props::<String, Value>() {
++                let (key, value) = entry?;
++                self.string(ctx, &key)?;
++                fields.push((key, self.output(ctx, value, depth + 1)?));
++            }
++            return Ok(HostValue::Object(fields));
++        }
++        Err(js_error::type_error(ctx, "unsupported command data"))
++    }
++
++    fn string(&mut self, ctx: &Ctx<'_>, value: &str) -> JsResult<()> {
++        self.text(value)
++            .map_err(|error| js_error::type_error(ctx, &error))?;
++        ShellRuntime::check_bridge_bytes(ctx, value.len())
++    }
++}
++
++pub(super) fn bounded_error(mut message: String) -> String {
++    if message.len() > MAX_ERROR_BYTES {
++        let mut end = MAX_ERROR_BYTES;
++        while !message.is_char_boundary(end) {
++            end -= 1;
++        }
++        message.truncate(end);
++    }
++    message
++}
++
++/// Conversion failure is a settled error, never a thrown callback that leaves
++/// the Rust caller waiting forever. Conversion stays within the execution budget.
++pub(super) struct CommandValue(pub(super) Reply);
++impl<'js> FromJs<'js> for CommandValue {
++    fn from_js(ctx: &Ctx<'js>, value: Value<'js>) -> JsResult<Self> {
++        Ok(Self(DataBudget::default().output(ctx, value, 0).map_err(
++            |error| bounded_error(describe(ctx, error).to_string()),
++        )))
++    }
++}
++
++pub(super) struct CommandFailure(pub(super) String);
++impl<'js> FromJs<'js> for CommandFailure {
++    fn from_js(ctx: &Ctx<'js>, value: Value<'js>) -> JsResult<Self> {
++        Ok(Self(bounded_error(describe_value(ctx, &value))))
++    }
++}
+--- a/crates/shell/src/engine/quickjs/mod.rs
++++ b/crates/shell/src/engine/quickjs/mod.rs
+@@ -1065,6 +1065,8 @@
+     }
+ }
+ 
++mod commands;
++pub use commands::{CommandCall, CommandReply, CommandTarget};
+ mod dock_api;
+ mod entity_api;
+ pub(crate) mod host;
+--- a/crates/shell/src/engine/quickjs/scheduler.rs
++++ b/crates/shell/src/engine/quickjs/scheduler.rs
+@@ -731,6 +731,51 @@
+             finish(&failed);
+         }),
+     ))
++}
++
++/// A rejection value, already rendered as a message.
++pub(super) fn observe_command<'js>(
++    ctx: &Ctx<'js>,
++    promise: &Promise<'js>,
++    sender: async_channel::Sender<super::commands::Reply>,
++) -> JsResult<()> {
++    let cancelled = sender.clone();
++    let task = register(
++        ctx,
++        TaskState::new(
++            "view.on_command",
++            scope::current_view().map(|view| view.downgrade()),
++            None,
++        )
++        .with_cancellation(move || {
++            let _ = cancelled.try_send(Err("command cancelled".into()));
++        }),
++    )?;
++    let settled = task.clone();
++    let failed = task.clone();
++    let rejected = sender.clone();
++    let result = promise.then().and_then(|then| {
++        then.call::<_, ()>((
++            This(promise.clone()),
++            Func::from(move |reply: super::commands::CommandValue| {
++                let value = if matches!(settled.readiness(), Readiness::Ready(_)) {
++                    reply.0
++                } else {
++                    Err("command cancelled".into())
++                };
++                let _ = sender.try_send(value);
++                finish(&settled);
++            }),
++            Func::from(move |failure: super::commands::CommandFailure| {
++                let _ = rejected.try_send(Err(failure.0));
++                finish(&failed);
++            }),
++        ))
++    });
++    if result.is_err() {
++        finish(&task);
++    }
++    result
+ }
+ 
+ /// A rejection value, already rendered as a message.
+--- a/crates/shell/src/lib.rs
++++ b/crates/shell/src/lib.rs
+@@ -122,7 +122,7 @@
+     MethodDescriptor, RegistryError, StateDescriptor, StateMethodDescriptor,
+ };
+ pub(crate) use component_registry::{ComponentCallbackValue, ComponentId, RecordedComponentMethod};
+-pub use engine::{LoadedApplication, ShellRuntime};
++pub use engine::{CommandCall, CommandReply, CommandTarget, LoadedApplication, ShellRuntime};
+ pub use error::ShellError;
+ #[cfg(not(feature = "gpui-fast"))]
+ pub use gpui;
+--- a/crates/shell/src/view.rs
++++ b/crates/shell/src/view.rs
+@@ -228,6 +228,10 @@
+         !self.retired && self.dirty
+     }
+ 
++    pub(crate) fn is_retired(&self) -> bool {
++        self.retired
++    }
++
+     /// Makes a retained entity inert before its store handle is removed.
+     /// A rendered GPUI frame may still retain the entity after script release.
+     pub(crate) fn retire(&mut self) {

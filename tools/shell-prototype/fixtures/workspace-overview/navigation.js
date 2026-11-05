@@ -5,6 +5,13 @@ import { snapshot, request_summary, publish_status } from "conduit-probe";
 
 export default class Navigation extends View {
   init() { this.clicks = 0; this.feedback = ""; }
+  on_command(name, payload, cx) {
+    if (name !== "increment" || !Number.isSafeInteger(payload) || Math.abs(payload) > 100)
+      throw new Error("invalid navigation command");
+    this.clicks += payload;
+    cx.notify();
+    return this.clicks;
+  }
   render(cx) {
     const data = snapshot("example.workspace-overview.index");
     return v_flex().size_full().p(16).gap(12)

@@ -1,0 +1,104 @@
+--- a/crates/component/src/kbd.rs
++++ b/crates/component/src/kbd.rs
+@@ -238,7 +238,13 @@
+         div()
+             // Lets a test ask whether a given shortcut hint was painted this
+             // frame; a no-op outside test-support builds.
+-            .debug_selector(|| format!("kbd:{}", self.stroke.unparse()))
++            .debug_selector(|| {
++                #[cfg(feature = "gpui-fast")]
++                let stroke = self.stroke.unparse(cx.platform_info().os);
++                #[cfg(not(feature = "gpui-fast"))]
++                let stroke = self.stroke.unparse();
++                format!("kbd:{stroke}")
++            })
+             .text_color(cx.theme().muted_foreground)
+             .bg(cx.theme().tokens.muted)
+             .when(self.outline, |this| {
+--- a/crates/component/src/list/list.rs
++++ b/crates/component/src/list/list.rs
+@@ -508,13 +508,11 @@
+                 this.on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                     this.set_right_clicked_index(None, window, cx);
+                     this.selected_index = Some(ix);
+-                    this.on_action_confirm(
+-                        &Confirm {
+-                            secondary: e.modifiers().secondary(),
+-                        },
+-                        window,
+-                        cx,
+-                    );
++                    #[cfg(feature = "gpui-fast")]
++                    let secondary = e.modifiers().secondary(cx);
++                    #[cfg(not(feature = "gpui-fast"))]
++                    let secondary = e.modifiers().secondary();
++                    this.on_action_confirm(&Confirm { secondary }, window, cx);
+                 }))
+                 .on_mouse_down(
+                     MouseButton::Right,
+--- a/crates/component/src/questionnaire/components.rs
++++ b/crates/component/src/questionnaire/components.rs
+@@ -940,11 +940,17 @@
+             })
+             .children(self.children);
+ 
++        #[cfg(feature = "gpui-fast")]
++        let shortcut_os = cx.platform_info().os;
+         let default_shortcut = || {
+             let Some(shortcut) = shortcut.clone() else {
+                 return gpui::Empty.into_any_element();
+             };
+-            let Ok(keystroke) = gpui::Keystroke::parse(&shortcut.to_lowercase()) else {
++            #[cfg(feature = "gpui-fast")]
++            let keystroke = gpui::Keystroke::parse_with_os(&shortcut.to_lowercase(), shortcut_os);
++            #[cfg(not(feature = "gpui-fast"))]
++            let keystroke = gpui::Keystroke::parse(&shortcut.to_lowercase());
++            let Ok(keystroke) = keystroke else {
+                 return gpui::Empty.into_any_element();
+             };
+             Kbd::new(keystroke)
+--- a/crates/component/src/table/state.rs
++++ b/crates/component/src/table/state.rs
+@@ -858,7 +858,7 @@
+         }
+ 
+         cx.stop_propagation();
+-        if self.selects_row_on_click(e) {
++        if self.selects_row_on_click(e, cx) {
+             self.set_selected_row(row_ix, cx);
+         }
+ 
+@@ -868,9 +868,13 @@
+     }
+ 
+     /// Whether a click on a row selects it, see `select_on_modifier_click`.
+-    fn selects_row_on_click(&self, e: &ClickEvent) -> bool {
++    fn selects_row_on_click(&self, e: &ClickEvent, _cx: &gpui::App) -> bool {
+         let modifiers = e.modifiers();
+-        self.select_on_modifier_click || !(modifiers.secondary() || modifiers.shift)
++        #[cfg(feature = "gpui-fast")]
++        let secondary = modifiers.secondary(_cx);
++        #[cfg(not(feature = "gpui-fast"))]
++        let secondary = modifiers.secondary();
++        self.select_on_modifier_click || !(secondary || modifiers.shift)
+     }
+ 
+     fn on_col_head_click(&mut self, col_ix: usize, _: &mut Window, cx: &mut Context<Self>) {
+@@ -915,7 +919,7 @@
+             && self.row_selectable
+             && is_reselect
+             && !is_double_click
+-            && self.selects_row_on_click(e);
++            && self.selects_row_on_click(e, cx);
+         if should_escalate_to_row {
+             self.set_selected_row(row_ix, cx);
+             return;
+@@ -1762,7 +1766,7 @@
+                 this.when(self.row_selectable, |this| {
+                     this.on_click(cx.listener(move |table, e: &ClickEvent, _window, cx| {
+                         cx.stop_propagation();
+-                        if table.selects_row_on_click(e) {
++                        if table.selects_row_on_click(e, cx) {
+                             table.set_selected_row(row_ix, cx);
+                         }
+                     }))

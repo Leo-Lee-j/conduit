@@ -1,0 +1,46 @@
+--- a/crates/base/src/input/editor/lsp/definitions.rs
++++ b/crates/base/src/input/editor/lsp/definitions.rs
+@@ -143,7 +143,11 @@
+         window: &mut Window,
+         cx: &mut Context<InputBaseState<EditorMode>>,
+     ) -> bool {
+-        if !event.modifiers.secondary() || event.modifiers.alt {
++        #[cfg(feature = "gpui-fast")]
++        let secondary = event.modifiers.secondary(cx);
++        #[cfg(not(feature = "gpui-fast"))]
++        let secondary = event.modifiers.secondary();
++        if !secondary || event.modifiers.alt {
+             return false;
+         }
+ 
+--- a/crates/base/src/input/editor/lsp/hover.rs
++++ b/crates/base/src/input/editor/lsp/hover.rs
+@@ -96,7 +96,11 @@
+             self.clear_hover_state(cx);
+             return;
+         }
+-        if event.modifiers.secondary() {
++        #[cfg(feature = "gpui-fast")]
++        let secondary = event.modifiers.secondary(cx);
++        #[cfg(not(feature = "gpui-fast"))]
++        let secondary = event.modifiers.secondary();
++        if secondary {
+             self.handle_hover_definition(offset, window, cx);
+         } else {
+             // Repaint only when the definition underline goes away; the hover
+--- a/crates/base/src/questionnaire/keyboard.rs
++++ b/crates/base/src/questionnaire/keyboard.rs
+@@ -33,8 +33,11 @@
+             && state.focused_current_choice(window).is_some()
+     };
+ 
+-    let handled = if key == "enter" && modifiers.secondary() && modifiers.number_of_modifiers() == 1
+-    {
++    #[cfg(feature = "gpui-fast")]
++    let secondary = modifiers.secondary(cx);
++    #[cfg(not(feature = "gpui-fast"))]
++    let secondary = modifiers.secondary();
++    let handled = if key == "enter" && secondary && modifiers.number_of_modifiers() == 1 {
+         state.update(cx, |state, cx| state.confirm_current(window, cx))
+     } else if modifiers.number_of_modifiers() != 0 {
+         false

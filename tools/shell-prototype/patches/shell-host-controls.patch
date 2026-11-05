@@ -1,0 +1,1012 @@
+--- a/crates/shell/src/lib.rs
++++ b/crates/shell/src/lib.rs
+@@ -82,8 +82,10 @@
+ pub(crate) mod error;
+ pub mod host;
+ pub mod host_modules;
++mod limits;
+ pub(crate) mod materialize;
+ pub mod metrics;
++pub use limits::RuntimeLimits;
+ pub(crate) mod path;
+ pub mod plugin;
+ pub mod policy;
+--- /dev/null
++++ b/crates/shell/src/limits.rs
+@@ -0,0 +1,314 @@
++//! Host-selected limits for one isolated interpreter. Native host work must
++//! still be bounded by the embedding application; it cannot be preempted here.
++use std::{
++    cell::{Cell, RefCell},
++    collections::VecDeque,
++    rc::Rc,
++    time::{Duration, Instant},
++};
++
++use crate::ScopePhase;
++
++/// A resource envelope for a single plugin VM. Use a separate VM per owner.
++#[derive(Clone, Debug)]
++pub struct RuntimeLimits {
++    pub heap_bytes: usize,
++    pub stack_bytes: usize,
++    pub render: Duration,
++    pub event: Duration,
++    pub module: Duration,
++    pub window: Duration,
++    pub execution_per_window: Duration,
++    pub calls_per_window: usize,
++    pub native_calls_per_entry: usize,
++    pub snapshot_nodes: usize,
++    pub snapshot_depth: usize,
++    pub bridge_values_per_entry: usize,
++    pub bridge_bytes_per_entry: usize,
++    pub logs_per_window: usize,
++    pub log_bytes_per_window: usize,
++}
++
++impl Default for RuntimeLimits {
++    fn default() -> Self {
++        Self {
++            heap_bytes: 64 << 20,
++            stack_bytes: 512 << 10,
++            render: Duration::from_millis(25),
++            event: Duration::from_millis(50),
++            module: Duration::from_millis(100),
++            window: Duration::from_secs(1),
++            execution_per_window: Duration::from_millis(200),
++            calls_per_window: 4096,
++            native_calls_per_entry: 20_000,
++            snapshot_nodes: 2048,
++            snapshot_depth: 64,
++            bridge_values_per_entry: 20_000,
++            bridge_bytes_per_entry: 1 << 20,
++            logs_per_window: 100,
++            log_bytes_per_window: 64 << 10,
++        }
++    }
++}
++
++impl RuntimeLimits {
++    pub(crate) fn validate(&self) -> anyhow::Result<()> {
++        anyhow::ensure!(
++            self.heap_bytes >= 4 << 20 && self.stack_bytes >= 64 << 10,
++            "heap/stack limits are too small to initialize the interpreter"
++        );
++        anyhow::ensure!(
++            !self.render.is_zero()
++                && !self.event.is_zero()
++                && !self.module.is_zero()
++                && !self.window.is_zero()
++                && !self.execution_per_window.is_zero()
++                && self.execution_per_window <= self.window
++                && self.calls_per_window > 0
++                && self.native_calls_per_entry > 0
++                && self.snapshot_nodes > 0
++                && self.snapshot_depth > 0
++                && self.bridge_values_per_entry > 0
++                && self.bridge_bytes_per_entry > 0
++                && self.logs_per_window > 0
++                && self.log_bytes_per_window > 0,
++            "runtime limits must be positive and bounded"
++        );
++        Ok(())
++    }
++
++    fn deadline(&self) -> Duration {
++        match crate::scope::current_phase() {
++            Some(ScopePhase::Render | ScopePhase::Layout) => self.render,
++            Some(ScopePhase::Event | ScopePhase::Task) => self.event,
++            None => self.module,
++        }
++    }
++}
++
++pub(crate) struct Resources {
++    pub limits: RuntimeLimits,
++    pub enabled: Cell<bool>,
++    fault: Cell<Option<&'static str>>,
++    active: Cell<Option<(Instant, Duration)>>,
++    samples: RefCell<VecDeque<(Instant, Duration)>>,
++    used: Cell<Duration>,
++    native_calls: Cell<usize>,
++    bridge_values: Cell<usize>,
++    bridge_bytes: Cell<usize>,
++    logs: RefCell<VecDeque<(Instant, usize)>>,
++}
++
++impl Resources {
++    pub fn new(limits: RuntimeLimits) -> Rc<Self> {
++        Rc::new(Self {
++            limits,
++            enabled: Cell::new(false),
++            fault: Cell::new(None),
++            active: Cell::new(None),
++            samples: RefCell::new(VecDeque::new()),
++            used: Cell::new(Duration::ZERO),
++            native_calls: Cell::new(0),
++            bridge_values: Cell::new(0),
++            bridge_bytes: Cell::new(0),
++            logs: RefCell::new(VecDeque::new()),
++        })
++    }
++
++    pub fn fail(&self, reason: &'static str) -> anyhow::Error {
++        self.fault.set(self.fault.get().or(Some(reason)));
++        anyhow::anyhow!("script runtime disabled: {}", self.fault.get().unwrap())
++    }
++
++    pub fn error(&self) -> Option<anyhow::Error> {
++        self.fault
++            .get()
++            .map(|reason| anyhow::anyhow!("script runtime disabled: {reason}"))
++    }
++
++    pub fn check(&self) -> anyhow::Result<()> {
++        if !self.enabled.get() {
++            return Ok(());
++        }
++        if let Some(error) = self.error() {
++            return Err(error);
++        }
++        if let Some((started, deadline)) = self.active.get() {
++            let elapsed = started.elapsed();
++            if elapsed >= deadline {
++                return Err(self.fail("execution deadline exceeded"));
++            }
++            if self.used.get().saturating_add(elapsed) >= self.limits.execution_per_window {
++                return Err(self.fail("cumulative execution budget exceeded"));
++            }
++        }
++        Ok(())
++    }
++
++    pub fn enter(self: &Rc<Self>) -> anyhow::Result<Execution> {
++        self.enter_with_limit(self.limits.deadline())
++    }
++
++    pub fn enter_module(self: &Rc<Self>) -> anyhow::Result<Execution> {
++        self.enter_with_limit(self.limits.module)
++    }
++
++    pub fn enter_materialize(self: &Rc<Self>) -> anyhow::Result<Execution> {
++        self.enter_with_limit(self.limits.render)
++    }
++
++    pub fn validate_tree(
++        &self,
++        arena: &crate::spec::SpecArena,
++        root: crate::spec::SpecId,
++    ) -> anyhow::Result<()> {
++        let mut pending = vec![(root, 0)];
++        let mut expanded = 0usize;
++        let mut operations = 0usize;
++        while let Some((id, depth)) = pending.pop() {
++            self.check()?;
++            expanded += 1;
++            if expanded > self.limits.snapshot_nodes || depth > self.limits.snapshot_depth {
++                return Err(self.fail("snapshot expansion/depth limit exceeded"));
++            }
++            let Some(node) = arena.node(id) else {
++                continue;
++            };
++            operations = operations.saturating_add(node.ops().len());
++            if operations > self.limits.native_calls_per_entry {
++                return Err(self.fail("snapshot operation limit exceeded"));
++            }
++            for child in node
++                .children()
++                .iter()
++                .copied()
++                .chain(node.ops().iter().filter_map(|op| match op {
++                    crate::spec::SpecOp::StateStyle(_, child)
++                    | crate::spec::SpecOp::Slot(_, child) => Some(*child),
++                    _ => None,
++                }))
++            {
++                if pending.len() + expanded >= self.limits.snapshot_nodes {
++                    return Err(self.fail("snapshot expansion/depth limit exceeded"));
++                }
++                pending.push((child, depth + 1));
++            }
++        }
++        Ok(())
++    }
++
++    fn enter_with_limit(self: &Rc<Self>, limit: Duration) -> anyhow::Result<Execution> {
++        self.check()?;
++        let outer = self.enabled.get() && self.active.get().is_none();
++        if outer {
++            let now = Instant::now();
++            let mut samples = self.samples.borrow_mut();
++            while samples
++                .front()
++                .is_some_and(|(at, _)| now.duration_since(*at) >= self.limits.window)
++            {
++                let (_, duration) = samples.pop_front().unwrap();
++                self.used.set(self.used.get().saturating_sub(duration));
++            }
++            if samples.len() >= self.limits.calls_per_window {
++                return Err(self.fail("entry rate exceeded"));
++            }
++            if self.used.get() >= self.limits.execution_per_window {
++                return Err(self.fail("cumulative execution budget exceeded"));
++            }
++            self.native_calls.set(0);
++            self.bridge_values.set(0);
++            self.bridge_bytes.set(0);
++            self.active.set(Some((now, limit)));
++        }
++        Ok(Execution {
++            resources: self.clone(),
++            outer,
++        })
++    }
++
++    pub fn native_call(&self, nodes: usize) -> anyhow::Result<()> {
++        self.check()?;
++        if !self.enabled.get() {
++            return Ok(());
++        }
++        let count = self.native_calls.get().saturating_add(1);
++        self.native_calls.set(count);
++        if count > self.limits.native_calls_per_entry || nodes >= self.limits.snapshot_nodes {
++            return Err(self.fail("native description limit exceeded"));
++        }
++        Ok(())
++    }
++
++    pub fn bridge_value(&self) -> anyhow::Result<()> {
++        self.check()?;
++        if !self.enabled.get() {
++            return Ok(());
++        }
++        let count = self.bridge_values.get().saturating_add(1);
++        self.bridge_values.set(count);
++        if count > self.limits.bridge_values_per_entry {
++            return Err(self.fail("host data conversion limit exceeded"));
++        }
++        Ok(())
++    }
++
++    pub fn log(&self, bytes: usize) -> anyhow::Result<()> {
++        self.check()?;
++        if !self.enabled.get() {
++            return Ok(());
++        }
++        let now = Instant::now();
++        let mut logs = self.logs.borrow_mut();
++        while logs
++            .front()
++            .is_some_and(|(at, _)| now.duration_since(*at) >= self.limits.window)
++        {
++            logs.pop_front();
++        }
++        if logs.len() >= self.limits.logs_per_window
++            || bytes.saturating_add(logs.iter().map(|(_, bytes)| bytes).sum())
++                > self.limits.log_bytes_per_window
++        {
++            return Err(self.fail("script log limit exceeded"));
++        }
++        logs.push_back((now, bytes));
++        Ok(())
++    }
++
++    pub fn bridge_bytes(&self, bytes: usize) -> anyhow::Result<()> {
++        self.check()?;
++        if !self.enabled.get() {
++            return Ok(());
++        }
++        let count = self.bridge_bytes.get().saturating_add(bytes);
++        self.bridge_bytes.set(count);
++        if count > self.limits.bridge_bytes_per_entry {
++            return Err(self.fail("host data byte limit exceeded"));
++        }
++        Ok(())
++    }
++}
++
++pub(crate) struct Execution {
++    resources: Rc<Resources>,
++    outer: bool,
++}
++
++impl Drop for Execution {
++    fn drop(&mut self) {
++        if self.outer {
++            let _ = self.resources.check();
++            if let Some((started, _)) = self.resources.active.take() {
++                let duration = started.elapsed();
++                self.resources
++                    .used
++                    .set(self.resources.used.get().saturating_add(duration));
++                self.resources
++                    .samples
++                    .borrow_mut()
++                    .push_back((Instant::now(), duration));
++            }
++        }
++    }
++}
+--- a/crates/shell/src/plugin.rs
++++ b/crates/shell/src/plugin.rs
+@@ -1340,8 +1340,8 @@
+         &self.store_path
+     }
+ 
+-    /// The grant in force while this plugin runs. It comes from the manifest
+-    /// and nowhere else.
++    /// The grant in force while this plugin runs, approved by the host before
++    /// evaluation. `load_with_policy` may restrict the manifest's request.
+     pub fn capabilities(&self) -> &Capabilities {
+         self.policy.capabilities()
+     }
+@@ -1365,6 +1365,7 @@
+     manifest: PluginManifest,
+     root: PathBuf,
+     data_dir: PathBuf,
++    policy: Policy,
+     window: &mut Window,
+     cx: &mut App,
+ ) -> Result<Plugin> {
+@@ -1378,14 +1379,12 @@
+     }
+ 
+     let policy = Rc::new(
+-        Policy::default()
++        policy
+             // The manifest id is already unique among loaded plugins, which is
+             // exactly what a dock layout needs to keep two plugins' panels of
+             // the same name apart.
+             .with_application(&id)
+-            .with_capabilities(manifest.capabilities(&root, &data_dir))
+-            .with_data_dir(data_dir.clone())
+-            .with_storage_path(store_path.clone()),
++            .with_data_dir(data_dir.clone()),
+     );
+ 
+     let view = load_view_with_policy(runtime, &root, manifest.entry(), policy.clone(), window, cx)
+@@ -1412,6 +1411,7 @@
+     window: &mut Window,
+     cx: &mut App,
+ ) -> Result<Entity<ScriptView>> {
++    let execution = runtime.loading_execution()?;
+     let loaded = {
+         let (_scope, _) =
+             scope::enter_with_runtime(runtime, window, cx, ScopePhase::Task, None, policy.clone());
+@@ -1420,6 +1420,14 @@
+         })
+     };
+ 
++    drop(execution);
++    let loaded = match runtime.resource_error() {
++        Some(error) => {
++            runtime.stop();
++            Err(anyhow::anyhow!(error))
++        }
++        None => loaded,
++    };
+     if loaded.is_err() {
+         crate::engine::quickjs::cancel_policy_tasks(&policy);
+     }
+@@ -1443,6 +1451,19 @@
+ }
+ 
+ impl ShellRuntime {
++    /// Loads and mounts an entry under host-selected authority, including module
++    /// evaluation, initialization, callbacks and asynchronous continuations.
++    /// The host owns the returned view and must release it when stopping.
++    pub fn load_view_with_policy(
++        self: &Rc<Self>,
++        root: &Path,
++        entry: &str,
++        policy: Rc<Policy>,
++        window: &mut Window,
++        cx: &mut App,
++    ) -> Result<Entity<ScriptView>> {
++        load_view_with_policy(self, root, entry, policy, window, cx)
++    }
+     /// Loads one application as this window's root view.
+     ///
+     /// The common single-application host needs no plugin discovery or id
+@@ -1694,6 +1715,34 @@
+         window: &mut Window,
+         cx: &mut App,
+     ) -> Result<()> {
++        self.load_with_policy(
++            runtime,
++            id,
++            |manifest, root, data_dir| {
++                anyhow::ensure!(
++                    authorize(manifest),
++                    "capabilities for plugin `{id}` were not approved"
++                );
++                Ok(Policy::new()
++                    .with_capabilities(manifest.capabilities(root, data_dir))
++                    .with_storage_path(data_dir.join("store.json")))
++            },
++            window,
++            cx,
++        )
++    }
++
++    /// Authorizes an inert manifest and supplies its host-built grant and
++    /// modules before any code executes. An error denies loading. The manager
++    /// fixes application/data identity; capabilities and storage are explicit.
++    pub fn load_with_policy(
++        &mut self,
++        runtime: &Rc<ShellRuntime>,
++        id: &str,
++        authorize: impl FnOnce(&PluginManifest, &Path, &Path) -> Result<Policy>,
++        window: &mut Window,
++        cx: &mut App,
++    ) -> Result<()> {
+         if !self.discovered {
+             bail!(
+                 "plugin discovery has not run; call PluginManager::discover() and handle every result before loading `{id}`"
+@@ -1708,12 +1757,10 @@
+             bail!("no plugin `{id}`{}", self.known_ids_hint());
+         };
+         let manifest = entry.manifest.clone();
+-        if !authorize(&manifest) {
+-            bail!("capabilities for plugin `{id}` were not approved");
+-        }
+         let root = entry.root.clone();
+         let data_dir = self.data_dir(id);
+-        let plugin = load_plugin(runtime, manifest, root, data_dir, window, cx)?;
++        let policy = authorize(&manifest, &root, &data_dir)?;
++        let plugin = load_plugin(runtime, manifest, root, data_dir, policy, window, cx)?;
+         self.loaded.insert(id.to_owned(), plugin);
+ 
+         Ok(())
+--- a/crates/shell/src/materialize.rs
++++ b/crates/shell/src/materialize.rs
+@@ -112,6 +112,7 @@
+     window: &mut Window,
+     cx: &mut App,
+ ) -> anyhow::Result<AnyElement> {
++    let _execution = runtime.materializing_execution(snapshot.arena(), root)?;
+     with_error_frame(|| {
+         materialize_node(
+             runtime,
+@@ -688,12 +689,19 @@
+     window: &mut Window,
+     cx: &mut App,
+ ) -> AnyElement {
++    let _execution = match runtime.materializing_execution(snapshot.arena(), snapshot.root()) {
++        Ok(execution) => execution,
++        Err(error) => {
++            runtime.stop();
++            return div().child(error.to_string()).into_any_element();
++        }
++    };
+     let ambient = window.text_style().color;
+     // Counted and timed because this is the native half of rebuilding a dirty
+     // script view. Clean window frames reuse ShellRoot's cached subtree and do
+     // not enter here at all.
+     let metrics = runtime.metrics();
+-    metrics.time_materialize(|| {
++    let element = metrics.time_materialize(|| {
+         materialize_node(
+             runtime,
+             Some(snapshot),
+@@ -703,7 +711,12 @@
+             window,
+             cx,
+         )
+-    })
++    });
++    drop(_execution);
++    if runtime.resource_error().is_some() {
++        runtime.stop();
++    }
++    element
+ }
+ 
+ /// Builds the same eager element tree as a view render, preserving registered
+@@ -735,8 +748,20 @@
+     window: &mut Window,
+     cx: &mut App,
+ ) -> AnyElement {
++    let _execution = match runtime.materializing_execution(arena, root) {
++        Ok(execution) => execution,
++        Err(error) => {
++            runtime.stop();
++            return div().child(error.to_string()).into_any_element();
++        }
++    };
+     let ambient = window.text_style().color;
+-    materialize_node(runtime, None, arena, root, ambient, window, cx)
++    let element = materialize_node(runtime, None, arena, root, ambient, window, cx);
++    drop(_execution);
++    if runtime.resource_error().is_some() {
++        runtime.stop();
++    }
++    element
+ }
+ 
+ pub(crate) fn try_materialize_subtree(
+@@ -766,6 +791,9 @@
+     window: &mut Window,
+     cx: &mut App,
+ ) -> AnyElement {
++    if let Err(error) = runtime.check_materializing() {
++        return div().child(error.to_string()).into_any_element();
++    }
+     let Some(node) = arena.node(id) else {
+         return div().into_any_element();
+     };
+--- a/crates/shell/src/engine/quickjs/mod.rs
++++ b/crates/shell/src/engine/quickjs/mod.rs
+@@ -1363,6 +1363,7 @@
+ }
+ 
+ pub struct ShellRuntime {
++    resources: Option<Rc<crate::limits::Resources>>,
+     /// Declared first because fields drop in declaration order and every
+     /// `Persistent` handle must be released while the context still exists.
+     /// QuickJS aborts the process if a value outlives its runtime.
+@@ -1626,6 +1627,112 @@
+         )
+     }
+ 
++    /// Creates a plugin VM with host-selected limits. Uses the interpreter so
++    /// generated native JIT code cannot allocate outside the JS heap ceiling.
++    /// Trusted bootstrap is not charged to script time; its heap is bounded.
++    pub fn new_isolated_with_components_and_limits(
++        components: FrozenComponentRegistry,
++        limits: crate::RuntimeLimits,
++    ) -> Result<Rc<Self>> {
++        limits.validate()?;
++        let js_runtime = JitRuntime::builder()
++            .build_interpreter()
++            .map_err(|error| anyhow!("failed to start limited interpreter: {error}"))?;
++        Self::new_isolated_with_resources(
++            components,
++            GitDependencyStore::for_user()?,
++            js_runtime,
++            Some(crate::limits::Resources::new(limits)),
++        )
++    }
++
++    /// A terminal resource fault. Discard this VM and explicitly reactivate to
++    /// recover; no reset can revive old callbacks or captured host authority.
++    pub fn resource_error(&self) -> Option<String> {
++        self.resources
++            .as_ref()
++            .and_then(|resources| resources.error())
++            .map(|e| e.to_string())
++    }
++
++    /// Revokes tasks and prevents subsequent entry, even if a view is retained.
++    pub fn stop(&self) {
++        if let Some(resources) = &self.resources {
++            let _ = resources.fail("stopped by host");
++        } else if self.terminal_job_error.borrow().is_none() {
++            *self.terminal_job_error.borrow_mut() = Some("script runtime stopped by host".into());
++        }
++        scheduler::shutdown(self);
++    }
++
++    pub fn heap_usage_bytes(&self) -> usize {
++        self.js_runtime.memory_usage().memory_used_size.max(0) as usize
++    }
++
++    fn execution(&self) -> Result<Option<crate::limits::Execution>> {
++        let result = self
++            .resources
++            .as_ref()
++            .map(|resources| resources.enter())
++            .transpose();
++        if result.is_err() {
++            scheduler::shutdown(self);
++        }
++        result
++    }
++
++    pub(crate) fn loading_execution(&self) -> Result<Option<crate::limits::Execution>> {
++        self.resources
++            .as_ref()
++            .map(|resources| resources.enter_module())
++            .transpose()
++    }
++
++    pub(crate) fn materializing_execution(
++        &self,
++        arena: &SpecArena,
++        root: SpecId,
++    ) -> Result<Option<crate::limits::Execution>> {
++        let execution = self
++            .resources
++            .as_ref()
++            .map(|resources| resources.enter_materialize())
++            .transpose()?;
++        if let Some(resources) = &self.resources {
++            resources.validate_tree(arena, root)?;
++        }
++        Ok(execution)
++    }
++
++    pub(crate) fn check_materializing(&self) -> Result<()> {
++        if let Some(resources) = &self.resources {
++            resources.check()?;
++        }
++        Ok(())
++    }
++
++    fn check_bridge(ctx: &Ctx<'_>) -> JsResult<()> {
++        if let Some(runtime) = scope::current_runtime()
++            && let Some(resources) = &runtime.resources
++        {
++            resources
++                .bridge_value()
++                .map_err(|e| js_error::range_error(ctx, &e.to_string()))?;
++        }
++        Ok(())
++    }
++
++    fn check_bridge_bytes(ctx: &Ctx<'_>, bytes: usize) -> JsResult<()> {
++        if let Some(runtime) = scope::current_runtime()
++            && let Some(resources) = &runtime.resources
++        {
++            resources
++                .bridge_bytes(bytes)
++                .map_err(|e| js_error::range_error(ctx, &e.to_string()))?;
++        }
++        Ok(())
++    }
++
+     #[cfg(test)]
+     fn new_isolated_with_dependency_store(
+         dependency_store: GitDependencyStore,
+@@ -1658,12 +1765,24 @@
+         dependency_store: GitDependencyStore,
+         js_runtime: JitRuntime,
+     ) -> Result<Rc<Self>> {
++        Self::new_isolated_with_resources(components, dependency_store, js_runtime, None)
++    }
++
++    fn new_isolated_with_resources(
++        components: FrozenComponentRegistry,
++        dependency_store: GitDependencyStore,
++        js_runtime: JitRuntime,
++        resources: Option<Rc<crate::limits::Resources>>,
++    ) -> Result<Rc<Self>> {
+         let jit_enabled = js_runtime.has_jit();
+         if jit_enabled {
+             js_runtime.jit().suspend()?;
+         }
+         let entities = EntityStore::try_new()
+             .ok_or_else(|| anyhow!("gpui-shell entity store id space is exhausted"))?;
++        if let Some(resources) = &resources {
++            js_runtime.set_memory_limit(resources.limits.heap_bytes);
++        }
+         let context = JsContext::full(&js_runtime).map_err(js_setup_error)?;
+ 
+         let app_modules = AppModules::default();
+@@ -1699,10 +1818,17 @@
+         // owns the runtime handle, so the policy hands out values and this is
+         // where they are applied. A runaway script must not be able to hold the
+         // UI thread (§19.3). The heap is deliberately unbounded; see `sandbox`.
+-        js_runtime.set_max_stack_size(sandbox::max_stack_size_bytes());
+-        js_runtime.set_interrupt_handler(Some(Box::new(sandbox::interrupt_handler())));
++        if let Some(resources) = &resources {
++            js_runtime.set_max_stack_size(resources.limits.stack_bytes);
++            let resources = resources.clone();
++            js_runtime.set_interrupt_handler(Some(Box::new(move || resources.check().is_err())));
++        } else {
++            js_runtime.set_max_stack_size(sandbox::max_stack_size_bytes());
++            js_runtime.set_interrupt_handler(Some(Box::new(sandbox::interrupt_handler())));
++        }
+ 
+         let runtime = Rc::new(Self {
++            resources,
+             callbacks: RefCell::new(CallbackArena::default()),
+             components,
+             component_state_proof,
+@@ -1740,6 +1866,9 @@
+             runtime.js_runtime.jit().resume()?;
+         }
+         installed?;
++        if let Some(resources) = &runtime.resources {
++            resources.enabled.set(true);
++        }
+         Ok(runtime)
+     }
+ 
+@@ -2150,6 +2279,11 @@
+     }
+ 
+     fn job_queue_error(&self) -> Option<anyhow::Error> {
++        if let Some(resources) = &self.resources
++            && let Some(error) = resources.error()
++        {
++            return Some(error);
++        }
+         self.terminal_job_error
+             .borrow()
+             .as_ref()
+@@ -5173,6 +5307,7 @@
+         if let Some(error) = self.job_queue_error() {
+             return Err(error);
+         }
++        let execution = self.execution()?;
+         let pending_checkpoint = self.pending_nested.borrow().len();
+         sandbox::begin_host_execution();
+         let result = self.context.with(|ctx| {
+@@ -5186,6 +5321,23 @@
+             self.active_context.set(outer);
+             produced
+         });
++        drop(execution);
++        if let Some(resources) = &self.resources {
++            if result
++                .as_ref()
++                .err()
++                .is_some_and(|error| error.to_string().to_lowercase().contains("out of memory"))
++            {
++                let _ = resources.fail("JavaScript heap limit exceeded");
++            }
++            if let Some(error) = resources.error() {
++                self.pending_nested
++                    .borrow_mut()
++                    .truncate(pending_checkpoint);
++                scheduler::shutdown(self);
++                return Err(error);
++            }
++        }
+         match result {
+             Ok(value) => Ok(value),
+             Err(error) => {
+@@ -8959,6 +9111,7 @@
+     globals.set(
+         name,
+         Func::from(move |ctx: Ctx<'_>, value: String| -> JsResult<SpecId> {
++            ShellRuntime::check_bridge_bytes(&ctx, value.len())?;
+             Ok(upgrade(&runtime, &ctx)?.push_node(build(value)))
+         }),
+     )
+@@ -10574,9 +10727,15 @@
+ }
+ 
+ fn upgrade(runtime: &Weak<ShellRuntime>, ctx: &Ctx<'_>) -> JsResult<Rc<ShellRuntime>> {
+-    runtime
++    let runtime = runtime
+         .upgrade()
+-        .ok_or_else(|| js_error::error(ctx, "the shell runtime has already shut down"))
++        .ok_or_else(|| js_error::error(ctx, "the shell runtime has already shut down"))?;
++    if let Some(resources) = &runtime.resources {
++        resources
++            .native_call(runtime.arena.borrow().len())
++            .map_err(|e| js_error::range_error(ctx, &e.to_string()))?;
++    }
++    Ok(runtime)
+ }
+ 
+ /// Turns a QuickJS error into a message that includes the script's own stack,
+--- a/crates/shell/src/engine/quickjs/host.rs
++++ b/crates/shell/src/engine/quickjs/host.rs
+@@ -978,6 +978,7 @@
+ /// Shared with the dock binding, which reads a persisted layout back out of
+ /// script: a layout is plain data under exactly these rules.
+ pub(super) fn to_json(ctx: &Ctx<'_>, value: &Value<'_>, depth: usize) -> JsResult<Json> {
++    super::ShellRuntime::check_bridge(ctx)?;
+     if depth > MAX_JSON_DEPTH {
+         return Err(js_error::type_error(
+             ctx,
+@@ -1015,7 +1016,9 @@
+             });
+     }
+     if let Some(text) = value.as_string() {
+-        return Ok(Json::String(text.to_string()?));
++        let text = text.to_string()?;
++        super::ShellRuntime::check_bridge_bytes(ctx, text.len())?;
++        return Ok(Json::String(text));
+     }
+     if let Some(array) = value.as_array() {
+         let length = bridge_array_len(ctx, &array)?;
+@@ -1111,33 +1114,53 @@
+     // logging would only cost the author their diagnostics.
+     log.set(
+         "debug",
+-        Func::from(|message: Printable, rest: Rest<Printable>| {
+-            tracing::debug!(target: SCRIPT_TARGET, "{}", line(message, rest));
+-        }),
++        Func::from(
++            |ctx: Ctx<'_>, message: Printable, rest: Rest<Printable>| -> JsResult<()> {
++                let line = checked_line(&ctx, message, rest)?;
++                tracing::debug!(target: SCRIPT_TARGET, "{}", line);
++                Ok(())
++            },
++        ),
+     )?;
+     log.set(
+         "info",
+-        Func::from(|message: Printable, rest: Rest<Printable>| {
+-            tracing::info!(target: SCRIPT_TARGET, "{}", line(message, rest));
+-        }),
++        Func::from(
++            |ctx: Ctx<'_>, message: Printable, rest: Rest<Printable>| -> JsResult<()> {
++                let line = checked_line(&ctx, message, rest)?;
++                tracing::info!(target: SCRIPT_TARGET, "{}", line);
++                Ok(())
++            },
++        ),
+     )?;
+     log.set(
+         "log",
+-        Func::from(|message: Printable, rest: Rest<Printable>| {
+-            tracing::info!(target: SCRIPT_TARGET, "{}", line(message, rest));
+-        }),
++        Func::from(
++            |ctx: Ctx<'_>, message: Printable, rest: Rest<Printable>| -> JsResult<()> {
++                let line = checked_line(&ctx, message, rest)?;
++                tracing::info!(target: SCRIPT_TARGET, "{}", line);
++                Ok(())
++            },
++        ),
+     )?;
+     log.set(
+         "warn",
+-        Func::from(|message: Printable, rest: Rest<Printable>| {
+-            tracing::warn!(target: SCRIPT_TARGET, "{}", line(message, rest));
+-        }),
++        Func::from(
++            |ctx: Ctx<'_>, message: Printable, rest: Rest<Printable>| -> JsResult<()> {
++                let line = checked_line(&ctx, message, rest)?;
++                tracing::warn!(target: SCRIPT_TARGET, "{}", line);
++                Ok(())
++            },
++        ),
+     )?;
+     log.set(
+         "error",
+-        Func::from(|message: Printable, rest: Rest<Printable>| {
+-            tracing::error!(target: SCRIPT_TARGET, "{}", line(message, rest));
+-        }),
++        Func::from(
++            |ctx: Ctx<'_>, message: Printable, rest: Rest<Printable>| -> JsResult<()> {
++                let line = checked_line(&ctx, message, rest)?;
++                tracing::error!(target: SCRIPT_TARGET, "{}", line);
++                Ok(())
++            },
++        ),
+     )?;
+ 
+     Ok(log)
+@@ -1145,6 +1168,23 @@
+ 
+ /// Script output is separable from host output in a log filter.
+ const SCRIPT_TARGET: &str = "gpui_shell::script";
++
++fn checked_line(ctx: &Ctx<'_>, message: Printable, rest: Rest<Printable>) -> JsResult<String> {
++    let bytes = message.0.len().saturating_add(
++        rest.0
++            .iter()
++            .map(|arg| arg.0.len().saturating_add(1))
++            .sum::<usize>(),
++    );
++    if let Some(runtime) = scope::current_runtime()
++        && let Some(resources) = &runtime.resources
++    {
++        resources
++            .log(bytes)
++            .map_err(|e| js_error::range_error(ctx, &e.to_string()))?;
++    }
++    Ok(line(message, rest))
++}
+ 
+ /// Extra arguments are appended space-separated after the message, the way
+ /// `console.log` behaves — JS authors write `console.info("loaded", count)` without
+@@ -1167,8 +1207,11 @@
+ 
+ impl<'js> FromJs<'js> for Printable {
+     fn from_js(ctx: &Ctx<'js>, value: Value<'js>) -> JsResult<Self> {
++        super::ShellRuntime::check_bridge(ctx)?;
+         if let Some(text) = value.as_string() {
+-            return Ok(Self(text.to_string()?));
++            let text = text.to_string()?;
++            super::ShellRuntime::check_bridge_bytes(ctx, text.len())?;
++            return Ok(Self(text));
+         }
+         if value.is_undefined() {
+             return Ok(Self("undefined".into()));
+--- a/crates/shell/src/engine/quickjs/host_modules.rs
++++ b/crates/shell/src/engine/quickjs/host_modules.rs
+@@ -143,6 +143,7 @@
+     function: String,
+     arguments: Rest<Argument>,
+ ) -> JsResult<Promise<'js>> {
++    ShellRuntime::check_bridge(&ctx)?;
+     let arguments = HostArguments::new(arguments.0.into_iter().map(|it| it.0));
+     // Argument checking happens here, on the main thread and inside the calling
+     // script's scope, so a refusal is a thrown `TypeError` at the call site
+@@ -311,6 +312,7 @@
+         let Self { module, function } = self;
+         Func::from(
+             move |ctx: Ctx<'_>, arguments: Rest<Argument>| -> JsResult<Bridged> {
++                ShellRuntime::check_bridge(&ctx)?;
+                 let arguments = HostArguments::new(arguments.0.into_iter().map(|it| it.0));
+                 // Timed so a script render can be told apart from the host work
+                 // inside it: `quotes()` reading a board out of an entity is not
+@@ -352,6 +354,7 @@
+ }
+ 
+ pub(super) fn from_js<'js>(ctx: &Ctx<'js>, value: Value<'js>, depth: usize) -> JsResult<HostValue> {
++    ShellRuntime::check_bridge(ctx)?;
+     if depth > MAX_DEPTH {
+         return Err(js_error::type_error(
+             ctx,
+@@ -369,7 +372,9 @@
+         return Ok(HostValue::Number(number));
+     }
+     if let Some(text) = value.as_string() {
+-        return Ok(HostValue::Str(text.to_string()?));
++        let text = text.to_string()?;
++        ShellRuntime::check_bridge_bytes(ctx, text.len())?;
++        return Ok(HostValue::Str(text));
+     }
+     // Before the object case: an array is an object too.
+     if let Some(array) = value.as_array() {
+@@ -397,6 +402,7 @@
+         let mut fields = Vec::new();
+         for entry in object.props::<String, Value>() {
+             let (key, value) = entry?;
++            ShellRuntime::check_bridge_bytes(ctx, key.len())?;
+             fields.push((key, from_js(ctx, value, depth + 1)?));
+         }
+         return Ok(HostValue::Object(fields));
+@@ -419,11 +425,15 @@
+ }
+ 
+ pub(super) fn into_js<'js>(ctx: &Ctx<'js>, value: HostValue) -> JsResult<Value<'js>> {
++    ShellRuntime::check_bridge(ctx)?;
+     Ok(match value {
+         HostValue::Null => Value::new_null(ctx.clone()),
+         HostValue::Bool(flag) => Value::new_bool(ctx.clone(), flag),
+         HostValue::Number(number) => Value::new_number(ctx.clone(), number),
+-        HostValue::Str(text) => rquickjs::String::from_str(ctx.clone(), &text)?.into_value(),
++        HostValue::Str(text) => {
++            ShellRuntime::check_bridge_bytes(ctx, text.len())?;
++            rquickjs::String::from_str(ctx.clone(), &text)?.into_value()
++        }
+         HostValue::Array(values) => {
+             let array = Array::new(ctx.clone())?;
+             for (index, value) in values.into_iter().enumerate() {
+--- a/crates/shell/src/engine/quickjs/scheduler.rs
++++ b/crates/shell/src/engine/quickjs/scheduler.rs
+@@ -172,7 +172,19 @@
+     window: &mut gpui::Window,
+     cx: &mut gpui::App,
+ ) -> bool {
++    let Ok(_execution) = runtime.execution() else {
++        shutdown(runtime);
++        return true;
++    };
+     for _ in 0..MAX_JOBS_PER_DRAIN {
++        if runtime
++            .resources
++            .as_ref()
++            .is_some_and(|resources| resources.check().is_err())
++        {
++            shutdown(runtime);
++            return true;
++        }
+         let pending_checkpoint = runtime.pending_nested.borrow().len();
+         match runtime.js_runtime.execute_pending_job() {
+             Ok(true) => {
+@@ -236,7 +248,14 @@
+     if let Some(error) = runtime.job_queue_error() {
+         return Err(error);
+     }
++    let _execution = runtime.execution()?;
+     for _ in 0..MAX_TRANSACTIONAL_JOBS {
++        if let Some(resources) = &runtime.resources
++            && let Err(error) = resources.check()
++        {
++            shutdown(runtime);
++            return Err(error);
++        }
+         let pending_checkpoint = runtime.pending_nested.borrow().len();
+         match runtime.js_runtime.execute_pending_job() {
+             Ok(true) => {

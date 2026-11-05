@@ -5,6 +5,19 @@ import { snapshot } from "conduit-probe";
 
 export default class Summary extends View {
   init() { this.clicks = 0; }
+  on_command(name, payload, cx) {
+    if (name === "increment") {
+      if (!Number.isSafeInteger(payload) || Math.abs(payload) > 100) throw new Error("invalid increment");
+      this.clicks += payload;
+      cx.notify();
+      return this.clicks;
+    }
+    if (name === "read-after-delay") {
+      const data = snapshot("example.workspace-overview.summary");
+      return cx.sleep(1000).then(() => ({ workspace: data.workspace_id, count: this.clicks }));
+    }
+    throw new Error("unknown summary command");
+  }
   render(cx) {
     const data = snapshot("example.workspace-overview.summary");
     if (data.fail_render) throw new Error("intentional prototype render failure");

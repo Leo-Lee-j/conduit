@@ -1,0 +1,67 @@
+--- a/crates/kit/src/test.rs
++++ b/crates/kit/src/test.rs
+@@ -411,8 +411,7 @@
+         mouse_up(self, to, MouseButton::Left, 1, modifiers, cx);
+     }
+     fn press(&mut self, key: &str, cx: &mut App) {
+-        let key =
+-            Keystroke::parse(key).unwrap_or_else(|error| panic!("invalid test keystroke: {error}"));
++        let key = events::parse_key(key, cx);
+         self.render_frame(cx);
+         press_key(self, key, cx);
+         self.render_frame(cx);
+@@ -507,8 +506,7 @@
+     /// Dispatches to current focus, requiring an observed focus binding inside this scope.
+     /// Does not move focus; click a scoped input first.
+     pub fn press(&mut self, key: &str, cx: &mut App) {
+-        let key =
+-            Keystroke::parse(key).unwrap_or_else(|error| panic!("invalid test keystroke: {error}"));
++        let key = events::parse_key(key, cx);
+         self.window.render_frame(cx);
+         require_scope_focus(self.window, &self.scope);
+         press_key(self.window, key, cx);
+@@ -560,8 +558,7 @@
+             require_scope_focus(window, scope);
+         }
+         let text = character.to_string();
+-        let mut key =
+-            Keystroke::parse(&text).expect("a Unicode character is a valid GPUI keystroke");
++        let mut key = events::parse_key(&text, cx);
+         key.key_char = Some(text);
+         window.dispatch_keystroke(key, cx);
+         window.render_frame(cx);
+--- a/crates/kit/src/test/events.rs
++++ b/crates/kit/src/test/events.rs
+@@ -29,8 +29,12 @@
+     fn key_up(&mut self, key: &str, cx: &mut App);
+ }
+ 
+-fn parse_key(key: &str) -> Keystroke {
+-    Keystroke::parse(key).unwrap_or_else(|error| panic!("invalid test keystroke: {error}"))
++pub(super) fn parse_key(key: &str, _cx: &App) -> Keystroke {
++    #[cfg(feature = "gpui-fast")]
++    let parsed = Keystroke::parse_with_os(key, _cx.platform_info().os);
++    #[cfg(not(feature = "gpui-fast"))]
++    let parsed = Keystroke::parse(key);
++    parsed.unwrap_or_else(|error| panic!("invalid test keystroke: {error}"))
+ }
+ 
+ impl TestEventExt for Window {
+@@ -94,7 +98,7 @@
+         self.render_frame(cx);
+     }
+     fn key_down(&mut self, key: &str, is_held: bool, cx: &mut App) {
+-        let mut keystroke = parse_key(key);
++        let mut keystroke = parse_key(key, cx);
+         self.render_frame(cx);
+         keystroke.modifiers |= self.modifiers();
+         self.dispatch_event(
+@@ -109,7 +113,7 @@
+         self.render_frame(cx);
+     }
+     fn key_up(&mut self, key: &str, cx: &mut App) {
+-        let mut keystroke = parse_key(key);
++        let mut keystroke = parse_key(key, cx);
+         self.render_frame(cx);
+         keystroke.modifiers |= self.modifiers();
+         self.dispatch_event(KeyUpEvent { keystroke }.to_platform_input(), cx);

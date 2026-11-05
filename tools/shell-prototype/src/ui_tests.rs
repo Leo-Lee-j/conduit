@@ -218,7 +218,7 @@ fn late_script_status_is_rejected_after_context_switch_and_cancelled_on_stop(
 }
 
 #[gpui_kit::test]
-fn manager_does_not_inherit_the_host_module_registry(cx: &mut TestAppContext) {
+fn legacy_manager_requires_explicit_host_module_policy(cx: &mut TestAppContext) {
     let (host, cx) = fixture(cx);
     let mut manager = gpui_shell::plugin::PluginManager::new(vec![fixture_root()])
         .with_data_home(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("artifacts/manager-data"));
@@ -247,9 +247,7 @@ fn manager_does_not_inherit_the_host_module_registry(cx: &mut TestAppContext) {
         "unexpected failure: {error}"
     );
     assert_eq!(manager.loaded().count(), 0);
-    println!(
-        "G2 reproduced: approved PluginManager load cannot import the configured host module: {error}"
-    );
+    println!("Legacy load cannot import a module absent from its own Policy: {error}");
     drop(manager);
     drop(runtime);
     close(host, cx);
@@ -261,10 +259,15 @@ fn dropping_publicly_mounted_root_cancels_ownerless_application_tasks(cx: &mut T
     click(cx, "probe-status");
     let extra = cx.update(|window, cx| {
         let runtime = host.read(cx).runtime.as_ref().unwrap().clone();
-        let loaded = runtime
-            .load_application(&fixture_root(), "lifecycle.js")
-            .unwrap();
-        runtime.mount_application(&loaded, window, cx).unwrap()
+        runtime
+            .load_view_with_policy(
+                &fixture_root(),
+                "lifecycle.js",
+                host.read(cx).policy.clone(),
+                window,
+                cx,
+            )
+            .unwrap()
     });
     cx.run_until_parked();
     drop(extra);
@@ -275,10 +278,15 @@ fn dropping_publicly_mounted_root_cancels_ownerless_application_tasks(cx: &mut T
     // Positive control: the same task must run while its root stays alive.
     let alive = cx.update(|window, cx| {
         let runtime = host.read(cx).runtime.as_ref().unwrap().clone();
-        let loaded = runtime
-            .load_application(&fixture_root(), "lifecycle.js")
-            .unwrap();
-        runtime.mount_application(&loaded, window, cx).unwrap()
+        runtime
+            .load_view_with_policy(
+                &fixture_root(),
+                "lifecycle.js",
+                host.read(cx).policy.clone(),
+                window,
+                cx,
+            )
+            .unwrap()
     });
     cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_millis(1100));
@@ -295,10 +303,17 @@ fn fixture_policy_denies_filesystem_and_shell_storage(cx: &mut TestAppContext) {
     cx.update(|window, cx| {
         host.update(cx, |host, cx| {
             let runtime = host.runtime.as_ref().unwrap().clone();
-            let loaded = runtime
-                .load_application(&fixture_root(), "capabilities.js")
-                .unwrap();
-            host.summary = Some(runtime.mount_application(&loaded, window, cx).unwrap());
+            host.summary = Some(
+                runtime
+                    .load_view_with_policy(
+                        &fixture_root(),
+                        "capabilities.js",
+                        host.policy.clone(),
+                        window,
+                        cx,
+                    )
+                    .unwrap(),
+            );
             cx.notify();
         });
     });
@@ -312,7 +327,7 @@ fn fixture_policy_denies_filesystem_and_shell_storage(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-#[ignore = "deliberately blocks the UI thread until the upstream watchdog interrupts; run in an isolated test process"]
+#[ignore = "intentional runaway script; run with the isolated watchdog phase"]
 fn render_watchdog_interrupts_an_infinite_loop(cx: &mut TestAppContext) {
     let (host, cx) = fixture(cx);
     click(cx, "probe-status");
@@ -321,10 +336,17 @@ fn render_watchdog_interrupts_an_infinite_loop(cx: &mut TestAppContext) {
     cx.update(|window, cx| {
         host.update(cx, |host, cx| {
             let runtime = host.runtime.as_ref().unwrap().clone();
-            let loaded = runtime
-                .load_application(&fixture_root(), "watchdog.js")
-                .unwrap();
-            host.summary = Some(runtime.mount_application(&loaded, window, cx).unwrap());
+            host.summary = Some(
+                runtime
+                    .load_view_with_policy(
+                        &fixture_root(),
+                        "watchdog.js",
+                        host.policy.clone(),
+                        window,
+                        cx,
+                    )
+                    .unwrap(),
+            );
             cx.notify();
         });
     });
@@ -344,13 +366,9 @@ fn render_watchdog_interrupts_an_infinite_loop(cx: &mut TestAppContext) {
         "G5 render watchdog: elapsed_ms={}, error={error}",
         elapsed.as_millis()
     );
-    assert!(error.contains("was stopped"), "{error}");
+    assert!(error.contains("execution deadline exceeded"), "{error}");
     assert!(
-        elapsed >= Duration::from_millis(500),
-        "not evidence of an interactive frame budget"
-    );
-    assert!(
-        elapsed < Duration::from_secs(15),
+        elapsed < Duration::from_millis(500),
         "watchdog exceeded outer expectation"
     );
     click(cx, "probe-stop");
@@ -358,3 +376,12 @@ fn render_watchdog_interrupts_an_infinite_loop(cx: &mut TestAppContext) {
     assert!(text(&host, true, cx).contains("Script summary"));
     close(host, cx);
 }
+
+#[path = "controls_tests.rs"]
+mod controls;
+
+#[path = "commands_tests.rs"]
+mod commands;
+
+#[path = "development_tests.rs"]
+mod development;

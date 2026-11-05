@@ -1,0 +1,44 @@
+# Compile the real desktop source against the isolated candidate lockfile.
+# Keep dependencies in sync with the root manifest; verify-desktop.py checks this.
+[package]
+name = "conduit-shell-desktop"
+version = "0.1.6"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "conduit-shell-desktop"
+path = "../../../src/main.rs"
+
+[dependencies]
+anyhow = "1"
+ignore = "0.4"
+image = { version = "0.25.10", default-features = false }
+mermaid-rs-renderer = { version = "=0.3.1", default-features = false }
+gpui-kit = { git = "https://github.com/longbridge/gpui-kit.git", rev = "11345ec002d9f182a266b5d5dd3a217090700a87", features = ["syntect"] }
+raw-window-handle = "0.6"
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive", "rc"] }
+serde_json = "1.0.154"
+syntect = { version = "5.3.0", default-features = false, features = ["parsing", "default-syntaxes", "regex-fancy"] }
+toml = "0.8"
+two-face = { version = "0.4.5", default-features = false, features = ["syntect-fancy"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_Console", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_ProcessStatus", "Win32_Security", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_UI_WindowsAndMessaging"] }
+ureq = { version = "3", default-features = false, features = ["json", "rustls"] }
+base64 = "0.22"
+ed25519-dalek = "2.2"
+semver = "1"
+sha2 = "0.10"
+url = "2"
+winreg = "0.55"
+
+conduit = { path = "../../.." }
+conduit-shell-prototype = { path = "..", features = ["desktop"] }
+gpui-shell = { git = "https://github.com/longbridge/gpui-kit.git", rev = "11345ec002d9f182a266b5d5dd3a217090700a87", default-features = false, features = ["quickjs", "components"] }
+
+[features]
+default = []
+gpui-fast = ["gpui-kit/gpui-fast", "conduit/gpui-fast", "conduit-shell-prototype/gpui-fast"]
+ui-tests = ["gpui-kit/test-support", "conduit/ui-tests"]
+plugin-example = []

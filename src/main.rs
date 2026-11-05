@@ -24,6 +24,10 @@ mod store;
 mod transcript;
 mod workspace_files;
 
+#[cfg(conduit_shell_desktop)]
+#[path = "../tools/shell-prototype/desktop/args.rs"]
+mod development_args;
+
 use app::ConduitApp;
 use gpui_kit::component::TitleBar;
 use gpui_kit::*;
@@ -44,6 +48,14 @@ fn main() {
     if std::env::args_os().any(|arg| arg == "--history") {
         return print_history();
     }
+    #[cfg(conduit_shell_desktop)]
+    let development_package = match development_args::parse(std::env::args_os().skip(1)) {
+        Ok(package) => package,
+        Err(error) => {
+            eprintln!("{error:#}");
+            std::process::exit(2);
+        }
+    };
     let _instance = match single_instance() {
         Ok(instance) => instance,
         Err(error) => {
@@ -76,6 +88,8 @@ fn main() {
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            #[cfg(conduit_shell_desktop)]
+            gpui_shell::init(cx);
             gpui_kit::component::set_locale("zh-CN");
             app::install_theme_packs(cx);
             let initial_mode = match appearance {
@@ -99,18 +113,39 @@ fn main() {
                 show: false,
                 ..TitleBar::window_options()
             };
-            let (window, app) = gpui_kit::open_window(options, cx, move |window, cx| {
+            #[cfg(conduit_shell_desktop)]
+            let app_slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+            #[cfg(conduit_shell_desktop)]
+            let app_output = app_slot.clone();
+            let (window, _content) = gpui_kit::open_window(options, cx, move |window, cx| {
                 window.set_window_title("Conduit");
-                cx.new(|cx| {
+                let app = cx.new(|cx| {
                     let mut app =
                         ConduitApp::with_store(window, cx, loaded, start_in_settings, start_in_git);
+                    #[cfg(conduit_shell_desktop)]
+                    if let Some(packages) = development_package
+                        && let Err(error) = app.install_development_packages(packages, cx)
+                    {
+                        eprintln!("开发插件加载失败：{error:#}");
+                    }
                     // The loading page is the window's very first frame; the
                     // initial history import below releases it once merged.
                     app.begin_startup_loading();
                     app
-                })
+                });
+                #[cfg(conduit_shell_desktop)]
+                {
+                    *app_output.borrow_mut() = Some(app.clone());
+                    cx.new(|cx| gpui_shell::ShellRoot::new(app.into(), window, cx))
+                }
+                #[cfg(not(conduit_shell_desktop))]
+                app
             })
             .expect("failed to open Conduit window");
+            #[cfg(conduit_shell_desktop)]
+            let app = app_slot.borrow_mut().take().expect("desktop app created");
+            #[cfg(not(conduit_shell_desktop))]
+            let app = _content;
             // Ask to activate only after launch; the request is dropped while
             // the application is still starting. The first frame has already
             // been drawn, so the window appears with content instead of a

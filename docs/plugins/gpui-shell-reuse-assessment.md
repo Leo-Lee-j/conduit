@@ -1,6 +1,10 @@
 # GPUI Shell 复用评估
 
-源码评估基线：2026-11-04；后续更新：2026-11-05，已实现独立验证原型，实测见[原型验证记录](shell-prototype-validation.md)。本文保留源码评估依据，构建与运行结论以后续记录为准。本文补充并修正[初始评估](../ui-plugin-extensibility-evaluation.md)，影响[阶段总览](README.md)中的 P2 选型。
+源码评估基线：2026-11-04；后续更新：2026-11-05，已实现独立验证原型，实测见[原型验证记录](shell-prototype-validation.md)。本文保留未打补丁的源码评估依据；后续 G2/G5 宿主控制与 G1 Fast 兼容补丁见 [本轮进度](p2-host-controls-2026-11-05.md)，构建与运行结论以后续记录为准。本文补充并修正[初始评估](../ui-plugin-extensibility-evaluation.md)，影响[阶段总览](README.md)中的 P2 选型。
+
+G3 后续候选补丁已验证具体视图的定向命令、双 owner / 多视图停止、工作区和代次失效，
+见 [G3 进度](p2-targeted-commands-2026-11-05.md)。清单实现绑定和开发加载适配器已完成，见[开发加载器记录](p2-development-loader-2026-11-05.md)；后续已接入真实 ConduitApp 验证入口，见[桌面接入记录](p2-desktop-integration-2026-11-05.md)。[G6 浮层清理](p2-overlay-cleanup-2026-11-05.md)已补按运行时撤销浮层、焦点恢复与更新前同步清理。下一步为真实 IME / 浮层焦点和完整应用性能验收，未来插件存储写入屏障仍待实现。
+此结果不改变下文未打补丁源码的事实，也不代表正式应用 G1–G6 全部通过。
 
 ## 结论与决策
 
@@ -53,7 +57,7 @@ Base 的 `PanelRegistry` 负责按名称恢复停靠面板；Shell 的 `Componen
 | G5 资源与响应 | VM 与 App 共用 UI 线程；默认无 JS 堆上限；默认 render / event / detached 看门狗分别为 2 / 5 / 10 秒；未发现公开宿主配置这些限额的入口 | 秒级中断不足以满足聊天交互目标。需要可配置资源边界及可测故障恢复；未解决前不开放普通第三方脚本安装。每插件 VM 也不隔离 UI 线程或进程崩溃 |
 | G6 静态发现与关闭 | Shell 清单不提供 Conduit 的静态贡献与激活声明；unload 会取消 Policy 任务，但 Conduit 还有注册表、数据写入与更新流程 | 发现时只读数据，首次点击才执行 JS；停用须撤销贡献和任务、完成写入屏障，不能将 drop 视为全部清理完成 |
 
-G1–G6 的源码依据分别见 U1–U9，阅读源码本身不构成通过。2026-11-05 的实测状态见[准入结果](shell-prototype-validation.md#准入结果)：部分路径已验证，G2 与 G5 仍为明确阻塞项，G1 的 Fast 编译也未通过。
+G1–G6 的源码依据分别见 U1–U9，阅读源码本身不构成通过。2026-11-05 的未打补丁实测见[初版验证记录](shell-prototype-validation.md)。后续本地候选补丁提供 G2 的公开 Policy 注入和 G5 的资源限制入口，G1 Fast 原型全目标类型检查已通过；故障实测、补丁范围及生产验收边界见 [G2/G5/G1 进度](p2-host-controls-2026-11-05.md)。
 
 特别需要纠正文档与源码的差异：官网 Capabilities / Engine 页面写有 256 MiB 堆上限，但锁定提交的 `sandbox.rs` 明确移除了堆上限，runtime 构造也未调用堆限额设置。长篇架构文档仍写 Dock 无脚本绑定，实际 `DockArea` / `dock_area` / `register_panel` 已在引擎中绑定。因此不能只读概览或架构文档判断实现状态，也不能引用官网基准作为 Conduit 的测量结果。[W2、W3、U7、U8、U9]
 

@@ -1,6 +1,9 @@
+mod commands;
+mod development;
 mod model;
 
 use anyhow::{Context as _, Result};
+use commands::ViewCommandTarget;
 use gpui_kit::{
     component::{button::Button, *},
     *,
@@ -50,9 +53,14 @@ fn schedule_host_refresh(host: WeakEntity<Probe>) {
 
 struct Probe {
     model: Rc<RefCell<Model>>,
+    policy: Rc<gpui_shell::policy::Policy>,
     runtime: Option<Rc<ShellRuntime>>,
     navigation: Option<Entity<ScriptView>>,
     summary: Option<Entity<ScriptView>>,
+    navigation_command: Option<ViewCommandTarget>,
+    summary_command: Option<ViewCommandTarget>,
+    content_focus: FocusHandle,
+    command_result: String,
     error: Option<String>,
 }
 
@@ -107,18 +115,21 @@ impl Probe {
                 schedule_host_refresh(status_host.clone());
                 Ok(HostValue::Null)
             });
-        // A single trusted fixture for the lifetime of this experimental window.
-        // This is NOT a per-plugin Policy injection solution; G2 remains blocked.
-        gpui_shell::policy::set_default(
+        let policy = Rc::new(
             gpui_shell::policy::Policy::new()
                 .with_application(OWNER)
                 .with_host_module(module)?,
         );
         Ok(Self {
             model,
+            policy,
             runtime: None,
             navigation: None,
             summary: None,
+            navigation_command: None,
+            summary_command: None,
+            content_focus: cx.focus_handle(),
+            command_result: "No view command yet".into(),
             error: None,
         })
     }
@@ -126,13 +137,40 @@ impl Probe {
     fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
         self.model.borrow_mut().activate()?;
         let result = (|| {
-            let runtime = gpui_shell::components::new_isolated_runtime()?;
+            let runtime = ShellRuntime::new_isolated_with_components_and_limits(
+                gpui_shell::components::components()?,
+                gpui_shell::RuntimeLimits::default(),
+            )?;
             runtime.set_editor_files(false);
             let root = fixture_root();
-            let navigation = runtime.load_application(&root, "navigation.js")?;
-            let navigation = runtime.mount_application(&navigation, window, cx)?;
-            let summary = runtime.load_application(&root, "summary.js")?;
-            let summary = runtime.mount_application(&summary, window, cx)?;
+            let navigation = runtime.load_view_with_policy(
+                &root,
+                "navigation.js",
+                self.policy.clone(),
+                window,
+                cx,
+            )?;
+            let summary = runtime.load_view_with_policy(
+                &root,
+                "summary.js",
+                self.policy.clone(),
+                window,
+                cx,
+            )?;
+            self.navigation_command = Some(ViewCommandTarget::bind(
+                &self.model,
+                model::INDEX,
+                &runtime,
+                &navigation,
+                cx,
+            )?);
+            self.summary_command = Some(ViewCommandTarget::bind(
+                &self.model,
+                model::SUMMARY,
+                &runtime,
+                &summary,
+                cx,
+            )?);
             self.navigation = Some(navigation);
             self.summary = Some(summary);
             self.runtime = Some(runtime);
@@ -153,8 +191,14 @@ impl Probe {
 
     fn stop(&mut self, cx: &mut Context<Self>) {
         self.model.borrow_mut().stop();
+        if let Some(runtime) = &self.runtime {
+            runtime.stop();
+        }
         self.navigation = None;
         self.summary = None;
+        self.navigation_command = None;
+        self.summary_command = None;
+        self.command_result = "No view command yet".into();
         self.runtime = None;
         cx.notify();
     }
@@ -194,13 +238,38 @@ impl Probe {
         self.error = result.err().map(|e| format!("{e:#}"));
         cx.notify();
     }
+
+    fn increment_summary(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
+        self.show_summary(window, cx)?;
+        let call = self
+            .summary_command
+            .as_ref()
+            .context("summary command unavailable")?
+            .dispatch("increment", HostValue::Number(1.), window, cx)?;
+        cx.spawn(async move |host, cx| {
+            let reply = call.wait().await;
+            let _ = host.update(cx, |host, cx| {
+                // An obsolete result must not change either the result or error UI.
+                if let Ok(value) = reply.accept(cx) {
+                    host.command_result = format!(
+                        "Summary command result: {}",
+                        value.as_number().unwrap_or_default()
+                    );
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        Ok(())
+    }
 }
 
 impl Drop for Probe {
     fn drop(&mut self) {
         self.model.borrow_mut().stop();
-        gpui_shell::clear_exported_modules();
-        gpui_shell::policy::set_default(gpui_shell::policy::Policy::new());
+        if let Some(runtime) = &self.runtime {
+            runtime.stop();
+        }
     }
 }
 
@@ -256,10 +325,14 @@ impl Render for Probe {
                     }))))
             .child(navigation)
             .child(v_flex().flex_1().min_w_0().h_full()
-                .child(v_flex().flex_1().p_4().gap_3()
+                .child(v_flex().flex_1().p_4().gap_3().track_focus(&self.content_focus)
                     .child("Conduit Shell integration fixture")
                     .child(div().text_color(muted).child("Synthetic workspaces; no chat history or credentials are read."))
-                    .child(div().text_color(muted).child("Single trusted Policy. Multi-plugin isolation and resource limits remain unproven."))
+                    .child(div().text_color(muted).child("Explicit plugin authority; bounded interpreter with host-controlled stop."))
+                    .child(Button::new("probe-host-focus").label("Focus host content").on_click(cx.listener(|this, _, window, cx| {
+                        window.focus(&this.content_focus, cx);
+                    })))
+                    .child(div().child(self.command_result.clone()))
                     .child(Button::new("probe-host-dialog").label("Host dialog").on_click(|_, window, cx| {
                         window.open_dialog(cx, |dialog, _, _| dialog.title("Host dialog").child("Component Root remains available"));
                     }))
@@ -272,6 +345,10 @@ impl Render for Probe {
                     .debug_selector(|| "probe-footer".into()).child(
                         Button::new("probe-status").label(status).on_click(cx.listener(|this, _, window, cx| {
                             let result = this.show_summary(window, cx);
+                            this.record(result, cx);
+                        })))
+                        .child(Button::new("probe-command-summary").label("Increment summary").on_click(cx.listener(|this, _, window, cx| {
+                            let result = this.increment_summary(window, cx);
                             this.record(result, cx);
                         })))))
             ;
@@ -351,11 +428,56 @@ fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "--help") {
         println!(
-            "Conduit Shell prototype: run without arguments for the synthetic UI fixture.\nUse cargo test --features ui-tests for automated integration probes."
+            "Conduit Shell prototype: run without arguments for the G3 synthetic fixture.\n--inspect-plugin <directory>: validate declarations and print requested permissions without executing JS.\n--dev-plugin <directory> [--allow-permission <permission>]...: approve a session-only snapshot and open the manifest-driven development window.\nUse cargo test --features ui-tests for automated integration probes."
         );
         return Ok(());
     }
-    anyhow::ensure!(args.is_empty(), "unknown arguments; use --help");
+    if !args.is_empty() {
+        use conduit_shell_prototype::{
+            adapter::ApprovedPackage, package::PackageSnapshot, plugins::commands::Capability,
+        };
+        use std::collections::BTreeSet;
+        anyhow::ensure!(
+            args.len() >= 2 && matches!(args[0].as_str(), "--inspect-plugin" | "--dev-plugin"),
+            "unknown arguments; use --help"
+        );
+        let source = PathBuf::from(&args[1]);
+        if args[0] == "--inspect-plugin" {
+            anyhow::ensure!(args.len() == 2, "inspection accepts only a directory");
+            let (manifest, digest) = PackageSnapshot::inspect(&source)?;
+            println!(
+                "{} ({}) {}\nDigest: {}\nPermissions: {:?}\nViews: {}\nCommands: {}",
+                manifest.name(),
+                manifest.owner(),
+                manifest.version(),
+                digest,
+                manifest.permissions(),
+                manifest.contributions().views.len(),
+                manifest.contributions().commands.len()
+            );
+        } else {
+            let mut grants = BTreeSet::new();
+            for pair in args[2..].chunks(2) {
+                anyhow::ensure!(
+                    pair.len() == 2 && pair[0] == "--allow-permission",
+                    "expected --allow-permission <permission>"
+                );
+                let grant = match pair[1].as_str() {
+                    "workspace.metadata.read" => Capability::WorkspaceSummary,
+                    "session.summary.read" => Capability::SessionSummary,
+                    _ => anyhow::bail!("unsupported permission"),
+                };
+                anyhow::ensure!(grants.insert(grant), "duplicate permission argument");
+            }
+            let snapshot = PackageSnapshot::prepare(
+                &source,
+                &std::env::temp_dir().join("conduit-shell-development"),
+            )?;
+            let approved = ApprovedPackage::new(snapshot, grants)?;
+            development::run(vec![approved]);
+        }
+        return Ok(());
+    }
     let manifest = gpui_shell::plugin::PluginManifest::read(&fixture_root())
         .context("read trusted fixture manifest without executing code")?;
     anyhow::ensure!(

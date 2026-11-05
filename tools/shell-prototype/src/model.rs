@@ -113,8 +113,7 @@ impl Model {
     }
 
     pub fn snapshot(&self, owner: &str, view: &str) -> Result<Snapshot> {
-        self.check(owner, self.stamp)?;
-        ensure!(view == INDEX || view == SUMMARY, "unknown view");
+        self.check_view(owner, view, self.stamp)?;
         let (id, name, sessions) = if self.workspace == 0 {
             ("workspace-a", "Workspace A", 3)
         } else {
@@ -134,6 +133,12 @@ impl Model {
         self.check(owner, stamp)?;
         ensure!(command == SHOW_SUMMARY, "unknown fixture command");
         self.right_open = true;
+        Ok(())
+    }
+
+    pub fn check_view(&self, owner: &str, view: &str, stamp: Stamp) -> Result<()> {
+        self.check(owner, stamp)?;
+        ensure!(view == INDEX || view == SUMMARY, "unknown view");
         Ok(())
     }
 
