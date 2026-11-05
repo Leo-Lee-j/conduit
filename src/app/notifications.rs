@@ -697,6 +697,9 @@ impl ConduitApp {
                 let index = self.notification_session_index(&target);
                 if let Some(index) = index {
                     window.close_all_dialogs(cx);
+                    if self.settings_ui.open {
+                        self.close_settings(window, cx);
+                    }
                     self.switch(index, Some(session), window, cx);
                     true
                 } else {
@@ -711,6 +714,9 @@ impl ConduitApp {
                     .position(|workspace| workspace.path == path)
                 {
                     window.close_all_dialogs(cx);
+                    if self.settings_ui.open {
+                        self.close_settings(window, cx);
+                    }
                     self.switch(index, None, window, cx);
                     self.show_git_navigation(cx);
                     true

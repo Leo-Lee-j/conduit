@@ -3638,8 +3638,8 @@ mod git_navigation_tests {
         });
         draw(cx);
         click(cx, "title-settings");
-        assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
-        cx.update(|window, cx| window.close_dialog(cx));
+        assert!(app.read_with(cx, |app, _| app.settings_ui.open));
+        cx.update(|window, cx| app.update(cx, |app, cx| app.close_settings(window, cx)));
         app.update(cx, |a, _| a.writable = false);
         cx.update(|window, _| window.remove_window());
         slot.borrow_mut().take();

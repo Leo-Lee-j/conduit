@@ -137,16 +137,21 @@ impl ConduitApp {
     }
 
     pub(super) fn refresh_search(&mut self, cx: &mut Context<Self>, debounce: bool) {
+        let query = self.search_query.trim().to_lowercase();
+        // A content refresh must let the current snapshot finish. Only a new
+        // query cancels work; the next poll incrementally catches up changes.
+        if self.search_ui.running && self.search_ui.requested_query == query {
+            return;
+        }
         self.search_ui.cancel.store(true, Ordering::Release);
         let cancel = Arc::new(AtomicBool::new(false));
         self.search_ui.cancel = cancel.clone();
         self.search_ui.errors = 0;
         self.search_ui.generation = self.search_ui.generation.wrapping_add(1);
         let generation = self.search_ui.generation;
-        let query = self.search_query.trim().to_lowercase();
-        let revision = self.session_control.global_revision;
+        self.search_ui.requested_query = query.clone();
+        self.search_ui.running = true;
         self.search_ui.requested = Instant::now();
-        self.search_ui.revision = revision;
         if debounce {
             self.search_ui.hits.clear();
         }
@@ -157,20 +162,32 @@ impl ConduitApp {
                     .await;
             }
             // Snapshot after debounce so intermediate keystrokes don't clone the library.
-            let Ok(workspaces) = this.update(cx, |this, _| this.store.workspaces.clone()) else {
+            let Ok((workspaces, revision, cache)) = this.update(cx, |this, _| {
+                let revision = this.session_control.global_revision;
+                this.search_ui.revision = revision;
+                (
+                    this.store.workspaces.clone(),
+                    revision,
+                    std::mem::take(&mut this.search_ui.cache),
+                )
+            }) else {
                 return;
             };
             let result_query = query.clone();
-            let results = cx
+            let (mut results, cache) = cx
                 .background_executor()
                 .spawn(async move {
-                    super::search_worker::collect_cancellable(&workspaces, &query, &cancel)
+                    super::search_worker::collect_cached(&workspaces, &query, &cancel, cache)
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                if this.search_ui.generation == generation
-                    && this.session_control.global_revision == revision
-                {
+                if this.search_ui.generation == generation {
+                    this.search_ui.running = false;
+                    this.search_ui.cache = cache;
+                    this.search_ui.revision = revision;
+                    // Stable sessions are published even when another session streams.
+                    // Deleted/replaced bodies and stale snippets never escape this filter.
+                    results.retain_current(&this.store.workspaces);
                     if this.search_ui.result_query != result_query
                         || this.search_ui.matches != results.matches
                     {

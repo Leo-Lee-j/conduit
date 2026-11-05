@@ -296,7 +296,12 @@ fn notification_navigation_uses_bound_target_and_handles_deletion(cx: &mut TestA
                 cx,
             );
             assert_eq!(app.selected_session, Some(1));
+            app.open_settings(window, cx);
             app.open_notification(id, window, cx);
+            assert!(
+                !app.settings_ui.open,
+                "notification navigation leaves settings"
+            );
             assert_eq!(app.selected_session, Some(2));
             assert_eq!(app.selected_workspace, Some(1));
             assert_eq!(app.drafts.get(&1).map(String::as_str), Some("保留当前草稿"));
@@ -399,7 +404,7 @@ fn modal_notifications_preserve_dialog_and_late_toast_close_cannot_remove_replac
 ) {
     let (app, cx) = fixture(cx, false);
     cx.simulate_resize(size(px(1280.), px(900.)));
-    cx.update(|window, cx| app.update(cx, |app, cx| app.open_settings(window, cx)));
+    cx.update(|window, cx| app.update(cx, |app, cx| app.open_about_dialog(window, cx)));
     draw(cx);
     let id = cx.update(|window, cx| {
         app.update(cx, |app, cx| {

@@ -82,7 +82,7 @@ fn migration_backs_up_legacy_state_and_starts_with_summaries() {
         let bytes = serde_json::to_vec(&original).unwrap();
         fs::write(&fixture.state, &bytes).unwrap();
         let state = Store::load_migrating_from(&fixture.state).unwrap();
-        assert_eq!(state.version, 3);
+        assert_eq!(state.version, 4);
         assert_eq!(
             fs::read(fixture.state.with_extension("v2.json")).unwrap(),
             bytes
@@ -211,6 +211,7 @@ fn failed_manifest_write_keeps_previous_state_and_new_durable_body() {
     fs::create_dir(fixture.state.with_extension("json.tmp")).unwrap();
     assert!(state.save_to(&fixture.state).is_err());
     assert_eq!(fs::read(&fixture.state).unwrap(), old);
+    collect_unreferenced(&directory(&fixture.state));
     assert!(unload(&mut state.workspaces[0].sessions[0]));
     assert_eq!(
         read(&Store::load_from(&fixture.state).unwrap().workspaces[0].sessions[0]).unwrap()[1].text,
@@ -222,6 +223,109 @@ fn failed_manifest_write_keeps_previous_state_and_new_durable_body() {
         read(&Store::load_from(&fixture.state).unwrap().workspaces[0].sessions[0]).unwrap()[1].text,
         "new reply"
     );
+}
+
+#[test]
+fn streaming_large_message_writes_only_new_blocks_and_small_roots() {
+    let fixture = Fixture::new();
+    let mut state = fixture.store(1);
+    let body: String = (0..128)
+        .map(|index| format!("{index:08x}{}", "x".repeat(64 * 1024 - 8)))
+        .collect();
+    state.workspaces[0].sessions[0].messages[1].text = body.clone();
+    let directory = directory(&fixture.state);
+    let first = save(&state.workspaces[0].sessions[0], &directory)
+        .unwrap()
+        .unwrap();
+    let disk_bytes = || {
+        fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().metadata().unwrap().len())
+            .sum::<u64>()
+    };
+    let baseline = disk_bytes();
+    for _ in 0..12 {
+        state.workspaces[0].sessions[0].messages[1]
+            .text
+            .push_str(&"d".repeat(32));
+        save(&state.workspaces[0].sessions[0], &directory).unwrap();
+    }
+    let written = disk_bytes() - baseline;
+    eprintln!(
+        "incremental transcript: logical=384 bytes, written={written} bytes, baseline={baseline} bytes"
+    );
+    assert!(
+        written < 256 * 1024,
+        "wrote {written} bytes for 384 logical bytes"
+    );
+    assert!(unload(&mut state.workspaces[0].sessions[0]));
+    collect_unreferenced(&directory);
+    assert_eq!(
+        read(&state.workspaces[0].sessions[0]).unwrap()[1].text,
+        format!("{body}{}", "d".repeat(384))
+    );
+    let mut old = state.workspaces[0].sessions[0].clone();
+    old.transcript.reference = Some(first);
+    assert_eq!(read(&old).unwrap()[1].text, body);
+    let mut changed = load(state.workspaces[0].sessions[0].clone()).unwrap();
+    changed.messages[1].text.replace_range(100..103, "中");
+    changed.messages[1].text.truncate(70_000);
+    save(&changed, &directory).unwrap();
+    assert!(unload(&mut changed));
+    assert_eq!(read(&changed).unwrap()[1].text.len(), 70_000);
+    let chunk = fs::read_dir(&directory)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| {
+            p.extension().is_some_and(|e| e == "chunk")
+                && fs::read(p).unwrap().get(100..103) == Some("中".as_bytes())
+        })
+        .unwrap();
+    fs::write(chunk, b"broken").unwrap();
+    assert!(read(&changed).is_err());
+}
+
+#[test]
+fn pages_reuse_unchanged_messages_and_legacy_v3_roots_still_load() {
+    let fixture = Fixture::new();
+    let mut state = fixture.store(1);
+    let session = &mut state.workspaces[0].sessions[0];
+    session.messages = (0..200)
+        .map(|i| message(&format!("m-{i}"), &format!("body {i}"), i))
+        .collect();
+    let directory = directory(&fixture.state);
+    save(session, &directory).unwrap();
+    let before = session.transcript.receipt.lock().unwrap().clone().unwrap();
+    session.messages[199].text.push_str(" delta");
+    save(session, &directory).unwrap();
+    let after = session.transcript.receipt.lock().unwrap().clone().unwrap();
+    assert_eq!(&before.pages[..3], &after.pages[..3]);
+    assert_ne!(before.pages[3], after.pages[3]);
+    assert!(Arc::ptr_eq(&before.parts[0], &after.parts[0]));
+    assert!(!Arc::ptr_eq(&before.parts[199], &after.parts[199]));
+    let expected = serde_json::to_vec(&session.messages).unwrap();
+    assert!(unload(session));
+    assert_eq!(
+        serde_json::to_vec(&read(session).unwrap()).unwrap(),
+        expected
+    );
+    let mut shortened = load(session.clone()).unwrap();
+    shortened.messages.truncate(130);
+    save(&shortened, &directory).unwrap();
+    assert!(unload(&mut shortened));
+    assert_eq!(read(&shortened).unwrap().len(), 130);
+    // An existing v3 whole-body JSON remains a valid root.
+    let hash = format!("{:x}", Sha256::digest(&expected));
+    fs::write(directory.join(format!("{hash}.json")), &expected).unwrap();
+    let reference = session.transcript.reference.as_mut().unwrap();
+    reference.hash = hash;
+    reference.lease = Some(acquire(path(reference).unwrap()));
+    let mut loaded = load(session.clone()).unwrap();
+    assert_eq!(loaded.messages.len(), 200);
+    loaded.messages[0].text = "changed legacy".into();
+    save(&loaded, &directory).unwrap();
+    assert!(unload(&mut loaded));
+    assert_eq!(read(&loaded).unwrap()[0].text, "changed legacy");
 }
 
 #[test]

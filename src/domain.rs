@@ -154,6 +154,9 @@ pub struct SessionRecord {
     /// Hidden from the sidebar unless archived sessions are shown.
     #[serde(default)]
     pub archived: bool,
+    /// Shown before ordinary sessions without consuming the sidebar limit.
+    #[serde(default)]
+    pub pinned: bool,
     #[serde(default)]
     pub native_id: Option<String>,
     #[serde(default)]
@@ -437,6 +440,14 @@ impl Workspace {
 #[cfg(test)]
 mod snapshot_tests {
     use super::*;
+    #[test]
+    fn old_sessions_default_to_unpinned() {
+        let session: SessionRecord =
+            serde_json::from_str(r#"{"id":1,"provider":"Claude","created_at":0,"exit_code":null}"#)
+                .unwrap();
+        assert!(!session.pinned);
+    }
+
     #[test]
     fn message_snapshots_share_history_and_copy_only_an_edited_message() {
         let mut item: ChatItem =

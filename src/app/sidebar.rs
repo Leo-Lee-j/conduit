@@ -366,6 +366,7 @@ impl ConduitApp {
                         let running = self.session_control.runs.contains_key(&id);
                         let unread = self.session_control.unread_completed.contains(&id);
                         let archived = session.archived;
+                        let pinned = session.pinned;
                         let can_ai_rename = can_edit && session.has_user_messages();
 
                         h_flex()
@@ -400,6 +401,7 @@ impl ConduitApp {
                             .context_menu({
                                 let menu_app = app_entity.clone();
                                 move |menu, _, _| {
+                                    let pin_app = menu_app.clone();
                                     let rename_app = menu_app.clone();
                                     let ai_rename_app = menu_app.clone();
                                     let archive_app = menu_app.clone();
@@ -407,6 +409,23 @@ impl ConduitApp {
                                     let has_native_id = native_id.is_some();
                                     let copy_native_id = native_id.clone();
                                     menu.min_w(px(150.))
+                                        .item(
+                                            PopupMenuItem::new(if pinned {
+                                                "取消置顶"
+                                            } else {
+                                                "置顶会话"
+                                            })
+                                            .icon(if pinned {
+                                                FullIconName::PinOff
+                                            } else {
+                                                FullIconName::Pin
+                                            })
+                                            .disabled(!can_edit)
+                                            .on_click(move |_, _, cx| {
+                                                pin_app
+                                                    .update(cx, |this, cx| this.toggle_pin(id, cx));
+                                            }),
+                                        )
                                         .item(
                                             PopupMenuItem::new("重命名")
                                                 .icon(IconName::Replace)
@@ -479,6 +498,13 @@ impl ConduitApp {
                             )
                             .when(self.session_control.namings.contains_key(&id), |row| {
                                 row.child(Spinner::new().small().color(rgb(palette().muted).into()))
+                            })
+                            .when(pinned, |row| {
+                                row.child(
+                                    Icon::new(FullIconName::Pin)
+                                        .size(px(12.))
+                                        .text_color(rgb(palette().faint)),
+                                )
                             })
                             .when(archived, |row| {
                                 row.child(

@@ -1,15 +1,56 @@
-//! Settings dialogs, preferences, and CLI configuration.
+//! Settings workspace, preferences, and CLI configuration.
 
 use super::*;
 use gpui_kit::component::group_box::GroupBoxVariant;
-use gpui_kit::component::setting::{
-    SettingField, SettingGroup, SettingItem, SettingPage, Settings,
-};
+use gpui_kit::component::setting::{SettingField, SettingGroup, SettingItem, Settings};
+
+/// Keep groups available to the host so search can open a focused section
+/// without depending on the library's private scrolling state.
+pub(in crate::app) struct SettingPage {
+    page: gpui_kit::component::setting::SettingPage,
+    groups: Vec<SettingGroup>,
+}
+
+impl SettingPage {
+    fn group(mut self, group: SettingGroup) -> Self {
+        self.groups.push(group);
+        self
+    }
+
+    fn groups(mut self, groups: impl IntoIterator<Item = SettingGroup>) -> Self {
+        self.groups.extend(groups);
+        self
+    }
+
+    fn into_page(
+        self,
+        group: Option<usize>,
+        view: Entity<ConduitApp>,
+    ) -> gpui_kit::component::setting::SettingPage {
+        if let Some(group) = group.and_then(|index| self.groups.get(index)).cloned() {
+            self.page.group(group).title_suffix(move |_, _| {
+                let view = view.clone();
+                Button::new("settings-show-full-page")
+                    .debug_selector(|| "settings-show-full-page".into())
+                    .small()
+                    .ghost()
+                    .label("查看完整页面")
+                    .on_click(move |_, window, cx| {
+                        view.update(cx, |app, cx| {
+                            app.select_settings_page(app.settings_ui.page, window, cx);
+                        })
+                    })
+            })
+        } else {
+            self.page.groups(self.groups)
+        }
+    }
+}
 
 /// Each page keeps its title visible while the settings below it scroll.
 fn settings_page(title: &'static str, icon: FullIconName) -> SettingPage {
     let description = match title {
-        "通用" => "调整工作台布局。",
+        "通用" => "调整聊天布局、侧栏与标签页，让工作台适合你的使用习惯。",
         "外观" => "选择主题，调整聊天文字与代码的阅读体验。",
         "自动命名" => "设置会话标题的生成方式与使用的模型。",
         "Git 提交" => "自定义提交说明的生成模型与提示词。",
@@ -17,22 +58,27 @@ fn settings_page(title: &'static str, icon: FullIconName) -> SettingPage {
         "模型与服务" => "管理服务端点和模型目录；新会话默认值单独设置。",
         "新会话默认" => "按引擎设置新会话使用的服务和模型。现有会话保留自己的选择。",
         "数据与更新" => "管理本机数据、更新偏好与诊断。",
+        "快捷键" => "使用键盘在会话、文件和设置之间快速切换。",
         _ => "",
     };
-    SettingPage::new(title)
+    let page = gpui_kit::component::setting::SettingPage::new(title)
         .icon(icon)
         .resettable(false)
         .description(description)
-        .header_style(&page_header_style())
+        .header_style(&page_header_style());
+    SettingPage {
+        page,
+        groups: vec![],
+    }
 }
 
 fn page_header_style() -> StyleRefinement {
     StyleRefinement::default()
         .px(px(24.))
-        .py(px(10.))
-        .gap(px(6.))
+        .py(px(20.))
+        .gap(px(8.))
         .flex_shrink_0()
-        .text_size(px(18.))
+        .text_size(px(22.))
         .font_semibold()
         .text_color(rgb(palette().text))
         .bg(rgb(palette().surface))
@@ -44,24 +90,20 @@ fn page_header_style() -> StyleRefinement {
 fn settings_section(title: impl Into<SharedString>) -> SettingGroup {
     let title = title.into();
     let keywords = [title.clone()];
-    SettingGroup::new().py(px(12.)).gap(px(10.)).item(
+    SettingGroup::new().py(px(18.)).gap(px(20.)).item(
         SettingItem::render(move |_, _, _| {
             div()
                 .w_full()
                 .pb(px(12.))
                 .border_b_1()
                 .border_color(rgb(palette().border))
-                .text_size(px(13.))
+                .text_size(px(14.))
                 .font_semibold()
                 .text_color(rgb(palette().text))
                 .child(title.clone())
         })
         .keywords(keywords),
     )
-}
-
-fn settings_modal_height(window: &Window) -> f32 {
-    (f32::from(window.viewport_size().height) - 64.).clamp(0., 680.)
 }
 
 /// A read-only setting value, right-aligned in the row.
@@ -366,52 +408,46 @@ pub(super) use connections::ConnectionsUi;
 mod extensions_view;
 #[path = "settings/navigation.rs"]
 mod navigation;
+mod search;
+mod workspace;
+#[cfg(all(test, feature = "ui-tests"))]
+mod workspace_tests;
 pub(super) use extensions_view::ExtensionsUi;
 pub(super) use navigation::SettingsUi;
 
 impl ConduitApp {
     pub(super) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings_ui.open {
+            self.settings_ui
+                .search
+                .read(cx)
+                .focus_handle(cx)
+                .focus(window, cx);
+            return;
+        }
+        self.settings_ui.return_focus = window.focused(cx);
+        self.settings_ui.open = true;
+        self.double_shift.cancel();
+        self.settings_ui.focus.focus(window, cx);
         self.reload_all_models_async(false, window, cx);
-        let view = cx.entity();
         if matches!(self.settings_ui.page, 4 | 9) {
             self.ensure_extensions(window, cx, false);
         }
-        window.open_dialog(cx, move |dialog, window, _| {
-            let view = view.clone();
-            let close_view = view.clone();
-            let viewport_height = f32::from(window.viewport_size().height);
-            let modal_height = settings_modal_height(window);
-            let margin_top = ((viewport_height - modal_height) * 0.5).max(16.);
-            let modal_width = (f32::from(window.viewport_size().width) - 48.).clamp(0., 1080.);
-            dialog
-                // The library paints its scrim at full opacity on the first
-                // frame and fades only the surface, so an entrance animation
-                // reads as the panel rising out from behind the scrim.
-                .entrance(gpui_kit::component::dialog::DialogEntrance::None)
-                .overlay(true)
-                .overlay_closable(true)
-                .w(px(modal_width))
-                .margin_top(px(margin_top))
-                .p_0()
-                .gap(px(0.))
-                .rounded(px(16.))
-                .bg(rgb(palette().surface))
-                .border_color(rgb(palette().border))
-                .close_button(false)
-                .on_close(move |_, _, cx| {
-                    close_view.update(cx, |app, cx| {
-                        app.extensions_ui.probe = None;
-                        app.extensions_ui.connection_probe = None;
-                        cx.notify();
-                    });
-                })
-                .content(move |content, window, cx| {
-                    let body = view
-                        .read(cx)
-                        .settings_modal_content(window, view.clone(), cx);
-                    content.child(body)
-                })
-        });
+        cx.notify();
+    }
+
+    pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings_ui.open = false;
+        self.extensions_ui.probe = None;
+        self.extensions_ui.connection_probe = None;
+        self.settings_ui
+            .search
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        if let Some(focus) = self.settings_ui.return_focus.take() {
+            focus.focus(window, cx);
+        } else {
+            self.input.read(cx).focus_handle(cx).focus(window, cx);
+        }
         cx.notify();
     }
 
@@ -425,6 +461,7 @@ impl ConduitApp {
                 .w(px(width))
                 .centered()
                 .title("关于")
+                .entrance(gpui_kit::component::dialog::DialogEntrance::Fade)
                 .content(move |content, _, cx| {
                     content.child(
                         v_flex()
@@ -475,108 +512,13 @@ impl ConduitApp {
         cx.notify();
     }
 
-    pub(super) fn settings_modal_content(
-        &self,
-        window: &Window,
-        view: Entity<Self>,
-        cx: &App,
-    ) -> AnyElement {
-        let disabled = !self.writable || self.closing;
-        let settings = self.settings_body(window, view.clone(), cx);
-        let modal_height = settings_modal_height(window);
-        v_flex()
-            .id("settings-modal")
-            .debug_selector(|| "settings-modal".into())
-            .w_full()
-            .h(px(modal_height))
-            .overflow_hidden()
-            .rounded(px(16.))
-            .child(
-                h_flex()
-                    .id("settings-modal-header")
-                    .debug_selector(|| "settings-modal-header".into())
-                    .h(px(56.))
-                    .flex_shrink_0()
-                    .px(px(20.))
-                    .justify_between()
-                    .border_b_1()
-                    .border_color(rgb(palette().border))
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(
-                                Icon::new(FullIconName::Settings)
-                                    .small()
-                                    .text_color(rgb(palette().muted)),
-                            )
-                            .child(div().text_size(px(14.)).font_semibold().child("设置")),
-                    )
-                    .child(
-                        div()
-                            .id("settings-close-control")
-                            .debug_selector(|| "settings-close".into())
-                            .child(
-                                Button::new("settings-close")
-                                    .icon(FullIconName::X)
-                                    .ghost()
-                                    .small()
-                                    .accessibility_label("关闭设置")
-                                    .tooltip("关闭设置（Esc）")
-                                    .cursor_pointer()
-                                    .on_click(|_, window, cx| window.close_dialog(cx)),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .id("settings-modal-body")
-                    .debug_selector(|| "settings-modal-body".into())
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .child(settings),
-            )
-            .child(
-                h_flex()
-                    .id("settings-modal-footer")
-                    .debug_selector(|| "settings-modal-footer".into())
-                    .h(px(36.))
-                    .flex_shrink_0()
-                    .px(px(20.))
-                    .gap_2()
-                    .border_t_1()
-                    .border_color(rgb(palette().border))
-                    .bg(rgb(palette().surface_strong))
-                    .text_size(px(11.))
-                    .text_color(rgb(palette().muted))
-                    .child(
-                        Icon::new(if disabled {
-                            FullIconName::Lock
-                        } else {
-                            FullIconName::Check
-                        })
-                        .small(),
-                    )
-                    .child(if let Some(error) = &self.persistence.error {
-                        format!("保存失败：{error}")
-                    } else if disabled {
-                        "当前为只读模式".to_string()
-                    } else if self.persistence.busy() {
-                        "正在保存偏好设置…".to_string()
-                    } else if matches!(self.settings_ui.page, 4 | 9) {
-                        "原生配置通过编辑器保存 · 下次启动会话时加载".to_string()
-                    } else {
-                        "偏好设置已保存 · 编辑表单需点击保存".to_string()
-                    }),
-            )
-            .into_any_element()
-    }
-
     fn settings_shortcuts_page(&self) -> SettingPage {
         let rows = [
             ("最近会话", "ctrl-e"),
             ("搜索会话", "ctrl-p"),
-            ("打开设置", "ctrl-m"),
+            ("打开设置（也可使用 Ctrl+M）", "ctrl-,"),
+            ("在设置中搜索", "ctrl-f"),
+            ("清除搜索 / 返回工作台", "escape"),
             ("文件名搜索 Shift ×2", "shift"),
             ("切换 Git 侧栏", "ctrl-k"),
         ];

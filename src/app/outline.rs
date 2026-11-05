@@ -114,8 +114,12 @@ impl ConduitApp {
         }) else {
             return;
         };
+        self.sync_chat_rows();
+        let Some(row) = self.chat_rows.row(index) else {
+            return;
+        };
         self.scroll.scroll_to(ListOffset {
-            item_ix: index,
+            item_ix: row,
             offset_in_item: px(0.),
         });
         self.at_bottom = false;
@@ -127,7 +131,9 @@ impl ConduitApp {
     pub(super) fn message_outline(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let session_id = self.outline.session.unwrap_or_default();
         let entries = &self.outline.entries;
-        let top = self.scroll.logical_scroll_top().item_ix;
+        let top = self
+            .chat_rows
+            .message(self.scroll.logical_scroll_top().item_ix);
         let current = self.outline.active_for_item(top).unwrap_or(0);
         if self.outline.active != Some(current) {
             self.outline.active = Some(current);

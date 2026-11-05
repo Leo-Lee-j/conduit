@@ -58,6 +58,7 @@ struct Summary {
     provider: Provider,
     native_id: Option<String>,
     archived: bool,
+    pinned: bool,
     activity: u64,
     running: bool,
     has_user: bool,
@@ -69,13 +70,14 @@ impl Summary {
             provider: session.provider,
             native_id: session.native_id.clone(),
             archived: session.archived,
+            pinned: session.pinned,
             activity: session.last_activity_at(),
             running: control.runs.contains_key(&session.id),
             has_user: session.has_user_messages(),
         }
     }
-    fn sort_key(&self, id: u64) -> std::cmp::Reverse<(bool, u64, u64)> {
-        std::cmp::Reverse((self.running, self.activity, id))
+    fn sort_key(&self, id: u64) -> std::cmp::Reverse<(bool, bool, u64, u64)> {
+        std::cmp::Reverse((self.pinned, self.running, self.activity, id))
     }
 }
 #[derive(Default)]
@@ -327,19 +329,25 @@ impl SidebarState {
                     rows.push(Row::Loading(path.clone()));
                 }
                 let expanded = inputs.expanded.contains(&index);
-                for id in filtered
-                    .into_iter()
-                    .take(if expanded { total } else { inputs.limit })
-                {
+                let pinned = filtered
+                    .iter()
+                    .take_while(|id| group.summaries[id].pinned)
+                    .count();
+                let ordinary = total - pinned;
+                for id in filtered.into_iter().take(if expanded {
+                    total
+                } else {
+                    pinned + inputs.limit
+                }) {
                     rows.push(Row::Session {
                         path: path.clone(),
                         id,
                     });
                 }
-                if total > inputs.limit {
+                if ordinary > inputs.limit {
                     rows.push(Row::More {
                         path: path.clone(),
-                        total,
+                        total: ordinary,
                         expanded,
                     });
                 }

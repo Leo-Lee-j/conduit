@@ -128,6 +128,7 @@ pub(super) struct FileStat {
 
 /// Most recent plan emitted inside the latest user turn. Live Codex turns keep
 /// it in `ConduitApp::plans`; imported history falls back to the tool input.
+#[cfg(test)]
 pub(super) fn plan_from_messages(session: &SessionRecord) -> Vec<PlanStep> {
     let start = session
         .messages
@@ -143,11 +144,13 @@ pub(super) fn plan_from_messages(session: &SessionRecord) -> Vec<PlanStep> {
 }
 
 pub(super) fn plan_steps_from_input(input: &str) -> Option<Vec<PlanStep>> {
-    let value = serde_json::from_str::<serde_json::Value>(input).ok()?;
-    let entries = value
-        .get("plan")
-        .or_else(|| value.get("todos"))?
-        .as_array()?;
+    #[derive(serde::Deserialize)]
+    struct Input {
+        plan: Option<Vec<serde_json::Value>>,
+        todos: Option<Vec<serde_json::Value>>,
+    }
+    let value = serde_json::from_str::<Input>(input).ok()?;
+    let entries = value.plan.or(value.todos)?;
     let steps = entries
         .iter()
         .filter_map(|entry| {
@@ -204,6 +207,7 @@ pub(super) fn workspace_relative_path(path: &str, workspace: Option<&str>) -> St
     normalized
 }
 
+#[cfg(test)]
 pub(super) fn turn_file_stats(session: &SessionRecord) -> TurnFileStats {
     let start = session
         .messages

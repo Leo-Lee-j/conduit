@@ -41,6 +41,7 @@ mod tests {
                             created_at: 0,
                             exit_code: None,
                             archived: false,
+                            pinned: false,
                             model: None,
                             messages: vec![],
                             interrupted: false,

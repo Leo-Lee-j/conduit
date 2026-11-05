@@ -375,7 +375,7 @@ impl Store {
         }
         let mut state: Self = serde_json::from_slice(&fs::read(path)?)
             .with_context(|| format!("无法读取 {}；原文件不会被覆盖", path.display()))?;
-        if !matches!(state.version, 1..=3) {
+        if !matches!(state.version, 1..=4) {
             bail!("不支持的数据版本 {}", state.version);
         }
         let legacy = state.version == 1;
@@ -395,7 +395,7 @@ impl Store {
                 if session.id == 0 || session.id == u64::MAX || !sessions.insert(session.id) {
                     bail!("会话 ID 无效或重复，请修复 state.json");
                 }
-                if state.version == 3 {
+                if state.version >= 3 {
                     if !session.messages.is_empty() {
                         bail!("会话同时包含正文和引用，请修复 state.json");
                     }
@@ -430,8 +430,11 @@ impl Store {
     }
     pub(crate) fn save_to(&self, path: &Path) -> Result<()> {
         fs::create_dir_all(path.parent().unwrap())?;
+        crate::transcript::register_manifest(path);
         let mut manifest = self.clone();
-        manifest.version = 3;
+        // v4 roots may reference pages/chunks; older binaries must refuse them
+        // rather than run v3's single-blob garbage collector on their children.
+        manifest.version = 4;
         let directory = crate::transcript::directory(path);
         for workspace in &mut manifest.workspaces {
             for session in &mut workspace.sessions {
@@ -787,6 +790,7 @@ mod tests {
             exit_code: Some(7),
             title: "Test".into(),
             archived: false,
+            pinned: true,
             native_id: None,
             model: None,
             messages: vec![],
@@ -804,6 +808,7 @@ mod tests {
         let restored = Store::load_from(&path).unwrap();
         assert_eq!(restored.cli, store.cli);
         assert_eq!(restored.workspaces[0].sessions[0].exit_code, Some(7));
+        assert!(restored.workspaces[0].sessions[0].pinned);
         fs::write(&path, b"invalid json").unwrap();
         assert!(Store::load_from(&path).is_err());
         assert_eq!(fs::read(&path).unwrap(), b"invalid json");

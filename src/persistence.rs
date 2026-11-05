@@ -1,7 +1,7 @@
 //! One writer owns disk I/O. Ordinary saves coalesce around durable send barriers.
 use crate::store::Store;
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     path::PathBuf,
     sync::{Arc, Mutex, mpsc},
     thread,
@@ -30,6 +30,9 @@ pub(crate) struct Persistence {
     requested: u64,
     acknowledged: u64,
     pub(crate) error: Option<String>,
+    // Additional immutable message versions retained behind the largest snapshot.
+    // One large library is always saveable; slow writers cannot accumulate unlimited copies.
+    extra_bytes_budget: usize,
 }
 
 impl Persistence {
@@ -67,6 +70,7 @@ impl Persistence {
             requested: 0,
             acknowledged: 0,
             error: None,
+            extra_bytes_budget: 128 * 1024 * 1024,
         }
     }
     pub(crate) fn submit(&mut self, store: &Store) -> bool {
@@ -93,13 +97,29 @@ impl Persistence {
             self.error = Some("待保存消息过多，请等待磁盘写入完成。".into());
             return false;
         }
+        let replace = pending
+            .back()
+            .is_some_and(|snapshot| snapshot.receipt.is_none());
+        let keep = pending.len() - usize::from(replace);
+        let (retained, largest) = if keep == 0 {
+            (0, 0)
+        } else {
+            retained_bytes(
+                pending
+                    .iter()
+                    .take(keep)
+                    .map(|s| &s.store)
+                    .chain(std::iter::once(store)),
+            )
+        };
+        if retained.saturating_sub(largest) > self.extra_bytes_budget {
+            self.error = Some("待保存正文占用过多，请等待磁盘写入完成后重试。".into());
+            return false;
+        }
         self.requested += 1;
         // Ordinary saves can coalesce, but a send barrier must actually be
         // written even if a later snapshot cancels or edits that pending send.
-        if pending
-            .back()
-            .is_some_and(|snapshot| snapshot.receipt.is_none())
-        {
+        if replace {
             pending.pop_back();
         }
         pending.push_back(Snapshot {
@@ -145,9 +165,78 @@ impl Persistence {
     }
 }
 
+fn retained_bytes<'a>(stores: impl Iterator<Item = &'a Store>) -> (usize, usize) {
+    let mut identities = HashSet::new();
+    let mut total = 0;
+    let mut largest = 0;
+    for store in stores {
+        let mut size = 0;
+        for item in store
+            .workspaces
+            .iter()
+            .flat_map(|w| &w.sessions)
+            .flat_map(|s| &s.messages)
+        {
+            let bytes = crate::transcript::resident_bytes(std::slice::from_ref(item));
+            size += bytes;
+            if identities.insert(item.identity().as_ptr()) {
+                total += bytes;
+            }
+        }
+        largest = largest.max(size);
+    }
+    (total, largest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn slow_writer_bounds_retained_versions_without_losing_send_barriers() {
+        let (entered, started) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let mut writer = Persistence::with_writer(move |store| {
+            entered.send(store.version).unwrap();
+            wait.recv_timeout(std::time::Duration::from_secs(3))
+                .unwrap();
+            Ok(())
+        });
+        writer.extra_bytes_budget = 8 * 1024;
+        writer.submit(&Store::default());
+        started.recv().unwrap();
+        let fixture = crate::transcript::tests::Fixture::new();
+        let mut store = fixture.store(2);
+        store.workspaces[0].sessions[0].messages[1].text = "a".repeat(16 * 1024);
+        let before = std::time::Instant::now();
+        let receipt = writer.submit_confirmed(&store).unwrap();
+        // Sharing the same bodies adds no retention pressure.
+        let shared = writer.submit_confirmed(&store).unwrap();
+        store.workspaces[0].sessions[0].messages[1].text = "b".repeat(16 * 1024);
+        assert!(writer.submit_confirmed(&store).is_err());
+        let pending = writer.pending.lock().unwrap();
+        assert_eq!(pending.len(), 2);
+        let (bytes, largest) = retained_bytes(pending.iter().map(|s| &s.store));
+        assert_eq!(bytes, largest);
+        eprintln!(
+            "slow writer: queued message bytes={bytes}, additional versions={}",
+            bytes - largest
+        );
+        drop(pending);
+        assert!(receipt.poll().is_none());
+        release.send(()).unwrap();
+        started.recv().unwrap();
+        assert!(receipt.poll().is_none());
+        release.send(()).unwrap();
+        started.recv().unwrap();
+        release.send(()).unwrap();
+        writer.flush();
+        assert_eq!(receipt.poll(), Some(Ok(())));
+        assert_eq!(shared.poll(), Some(Ok(())));
+        eprintln!(
+            "controlled send confirmation latency: {:?}",
+            before.elapsed()
+        );
+    }
     #[test]
     fn send_receipts_survive_coalescing_and_keep_their_own_failure() {
         let (entered, started) = mpsc::channel();

@@ -143,7 +143,6 @@ impl ConduitApp {
             },
             FullIconName::SquareTerminal,
         )
-        .header_style(&page_header_style().py(px(12.)))
         .groups(groups)
     }
 }

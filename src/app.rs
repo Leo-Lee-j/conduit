@@ -101,6 +101,7 @@ mod sidebar;
 mod state;
 mod stream_events;
 mod theme;
+mod tool_analysis;
 mod tool_details;
 mod toolbar;
 mod tools;
@@ -242,6 +243,7 @@ pub struct ConduitApp {
     /// composer and Ctrl+C reaches the window root's copy handler.
     chat_focus: FocusHandle,
     timeline_session: Option<u64>,
+    chat_rows: chat::rows::Rows,
     outline: MessageOutlineCache,
     /// Whether the message list is scrolled to (or near) its end. Drives the
     /// floating "jump to latest" arrow so it only shows once the user scrolls up.
@@ -257,6 +259,7 @@ pub struct ConduitApp {
     tool_scrolls: HashMap<(u64, String), ScrollHandle>,
     /// Parsed diff viewers for expanded edit cards, keyed like `tool_scrolls`.
     tool_diffs: HashMap<(u64, String), CachedDiff>,
+    tool_analysis: tool_analysis::Cache,
     message_focus: Option<(u64, String, Instant)>,
     pending_message_jump: Option<usize>,
     performance: Entity<PerformanceMonitor>,
@@ -326,6 +329,7 @@ impl ConduitApp {
             KeyBinding::new("ctrl-e", RecentSessions, None),
             KeyBinding::new("ctrl-p", OpenSessionSearch, None),
             KeyBinding::new("ctrl-m", OpenSettingsShortcut, None),
+            KeyBinding::new("ctrl-,", OpenSettingsShortcut, None),
             KeyBinding::new("ctrl-k", ToggleGitNavigation, None),
         ]);
         let (mut store, message, writable) = match loaded {
@@ -626,7 +630,11 @@ impl ConduitApp {
             notifications: notifications::NotificationUi::new(writable, cx),
             connection_settings: settings::ConnectionsUi::new(new_session_provider),
             settings_ui: settings::SettingsUi {
+                open: false,
+                focus: cx.focus_handle(),
+                return_focus: None,
                 page: 0,
+                group: None,
                 search: settings_search,
                 naming_expanded: false,
                 git_expanded: false,
@@ -712,6 +720,7 @@ impl ConduitApp {
             file_view,
             chat_focus: cx.focus_handle(),
             timeline_session: None,
+            chat_rows: Default::default(),
             outline: MessageOutlineCache::default(),
             at_bottom: true,
             expanded_tools: HashSet::new(),
@@ -721,6 +730,7 @@ impl ConduitApp {
             last_live_tick: Instant::now(),
             tool_scrolls: HashMap::new(),
             tool_diffs: HashMap::new(),
+            tool_analysis: Default::default(),
             message_focus: None,
             pending_message_jump: None,
             performance: cx.new(|_| PerformanceMonitor::new()),

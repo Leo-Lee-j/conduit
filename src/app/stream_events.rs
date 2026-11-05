@@ -422,21 +422,6 @@ impl ConduitApp {
                     self.persist();
                 }
                 other => {
-                    // Starting a reply also collapses earlier tool rows. Their
-                    // cached heights must change before the turn finishes.
-                    if Some(id) == self.selected_session
-                        && matches!(&other, Event::Delta { text, .. } | Event::Text { text, .. }
-                            if !text.trim().is_empty())
-                        && self.session(id).is_some_and(|session| {
-                            session
-                                .messages
-                                .iter()
-                                .rposition(is_groupable_activity)
-                                .is_some_and(|index| !tool_group_has_reply(session, index + 1))
-                        })
-                    {
-                        structural_change = true;
-                    }
                     if let Some(run) = self.session_control.runs.get_mut(&id) {
                         let activity = match &other {
                             Event::Delta { .. } | Event::Text { .. } => "正在生成回复…".to_string(),
@@ -522,15 +507,14 @@ impl ConduitApp {
             }
         }
         if changed {
+            self.sync_chat_rows();
             if structural_change {
                 self.scroll.remeasure();
             } else {
                 dirty_messages.sort_unstable();
                 dirty_messages.dedup();
                 for index in dirty_messages {
-                    if index < self.scroll.item_count() {
-                        self.scroll.remeasure_items(index..index + 1);
-                    }
+                    self.remeasure_message(index);
                 }
             }
             self.dirty = true;

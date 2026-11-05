@@ -133,6 +133,18 @@ impl ConduitApp {
         self.open_tabs.retain(|tab| *tab != DocumentTab::Chat(id));
     }
 
+    pub(super) fn toggle_pin(&mut self, id: u64, cx: &mut Context<Self>) {
+        if !self.writable || self.closing {
+            return;
+        }
+        let Some(session) = self.session_mut(id) else {
+            return;
+        };
+        session.pinned = !session.pinned;
+        self.persist();
+        cx.notify();
+    }
+
     pub(super) fn toggle_archive(&mut self, id: u64, cx: &mut Context<Self>) {
         if let Some(session) = self.session_mut(id) {
             session.archived = !session.archived;
@@ -1278,6 +1290,7 @@ impl ConduitApp {
                 if record.id != existing.id {
                     continue;
                 }
+                record.pinned = existing.pinned;
                 *existing = record;
             } else if record.id == 0 {
                 record.id = self.next_id;
@@ -1379,6 +1392,7 @@ impl ConduitApp {
             exit_code: None,
             title: "新会话".into(),
             archived: false,
+            pinned: false,
             native_id: None,
             model,
             messages: vec![],

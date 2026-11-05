@@ -11,6 +11,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock, Weak},
 };
+mod chunks;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct Reference {
@@ -44,6 +45,58 @@ fn acquire(path: PathBuf) -> Arc<Lease> {
     lease
 }
 
+fn manifests() -> &'static Mutex<HashMap<PathBuf, PathBuf>> {
+    static PATHS: OnceLock<Mutex<HashMap<PathBuf, PathBuf>>> = OnceLock::new();
+    PATHS.get_or_init(Mutex::default)
+}
+
+pub(crate) fn register_manifest(path: &Path) {
+    manifests()
+        .lock()
+        .unwrap()
+        .insert(directory(path), path.to_owned());
+}
+
+fn committed_roots(directory: &Path) -> Result<Vec<PathBuf>> {
+    #[derive(Deserialize)]
+    struct Manifest {
+        workspaces: Vec<WorkspaceRoots>,
+    }
+    #[derive(Deserialize)]
+    struct WorkspaceRoots {
+        sessions: Vec<SessionRoot>,
+    }
+    #[derive(Deserialize)]
+    struct SessionRoot {
+        #[serde(default)]
+        transcript: Root,
+    }
+    #[derive(Default, Deserialize)]
+    struct Root {
+        reference: Option<Reference>,
+    }
+    let path = manifests().lock().unwrap().get(directory).cloned();
+    let Some(path) = path else {
+        return Ok(Vec::new());
+    };
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    let manifest: Manifest = serde_json::from_slice(&bytes)?;
+    manifest
+        .workspaces
+        .into_iter()
+        .flat_map(|w| w.sessions)
+        .filter_map(|s| s.transcript.reference)
+        .map(|r| {
+            validate_hash(&r.hash)?;
+            Ok(directory.join(format!("{}.json", r.hash)))
+        })
+        .collect()
+}
+
 pub(crate) fn collect_periodically(directory: &Path) {
     static LAST: OnceLock<Mutex<HashMap<PathBuf, std::time::Instant>>> = OnceLock::new();
     let now = std::time::Instant::now();
@@ -66,28 +119,37 @@ pub(crate) fn collect_unreferenced(directory: &Path) {
         return;
     };
     let mut leases = leases().lock().unwrap();
+    let Ok(committed) = committed_roots(directory) else {
+        return;
+    };
+    let roots = leases
+        .iter()
+        .filter(|(path, lease)| path.parent() == Some(directory) && lease.strong_count() > 0)
+        .map(|(path, _)| path.clone());
+    let Ok(reachable) = chunks::reachable(directory, roots.chain(committed)) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         let owned = path
             .extension()
-            .is_some_and(|extension| extension == "json")
+            .is_some_and(|extension| extension == "json" || extension == "chunk")
             && path
                 .file_stem()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| validate_hash(name).is_ok());
-        if owned
-            && leases.get(&path).and_then(Weak::upgrade).is_none()
-            && fs::remove_file(&path).is_ok()
-        {
+        if owned && !reachable.contains(&path) && fs::remove_file(&path).is_ok() {
             leases.remove(&path);
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Receipt {
     reference: Reference,
     messages: Vec<Weak<ChatItemData>>,
+    parts: Vec<Arc<chunks::Message>>,
+    pages: Vec<String>,
 }
 impl Receipt {
     fn matches(&self, messages: &[ChatItem]) -> bool {
@@ -149,10 +211,18 @@ impl Transcript {
             .map(|receipt| receipt.reference.clone())
     }
 
-    fn acknowledge(&self, reference: Reference, messages: &[ChatItem]) {
+    fn acknowledge(
+        &self,
+        reference: Reference,
+        messages: &[ChatItem],
+        parts: Vec<Arc<chunks::Message>>,
+        pages: Vec<String>,
+    ) {
         *self.receipt.lock().unwrap() = Some(Receipt {
             reference,
             messages: messages.iter().map(ChatItem::identity).collect(),
+            parts,
+            pages,
         });
     }
 }
@@ -228,54 +298,41 @@ pub(crate) fn save(session: &SessionRecord, directory: &Path) -> Result<Option<R
     if session.messages.is_empty() {
         return Ok(None);
     }
-    let bytes = serde_json::to_vec(&session.messages)?;
-    let hash = format!("{:x}", Sha256::digest(&bytes));
-    let mut reference = Reference {
-        hash,
-        message_count: session.messages.len(),
-        last_activity_at: session
-            .messages
-            .iter()
-            .rev()
-            .find(|message| message.created_at > 0)
-            .map_or(0, |message| message.created_at),
-        has_user: session
-            .messages
-            .iter()
-            .any(|message| message.kind == ItemKind::User),
-        bytes: resident_bytes(&session.messages),
-        attachments: attachment_paths(&session.messages),
-        directory: directory.to_owned(),
-        lease: None,
-    };
-    reference.lease = Some(acquire(path(&reference)?));
-    fs::create_dir_all(directory)?;
-    let destination = path(&reference)?;
+    let previous = session.transcript.receipt.lock().unwrap().clone();
+    let prepared = chunks::prepare(session, directory, previous.as_ref())?;
+    session.transcript.acknowledge(
+        prepared.reference.clone(),
+        &session.messages,
+        prepared.parts.clone(),
+        prepared.pages.clone(),
+    );
+    Ok(Some(prepared.reference.clone()))
+}
+
+/// Durable immutable publication shared by roots, pages, and raw text blocks.
+fn publish(bytes: &[u8], hash: &str, destination: &Path) -> Result<()> {
+    let directory = destination.parent().context("会话正文缺少存储目录")?;
     if destination.exists() {
         // An interrupted/externally damaged file is never mistaken for a durable receipt.
-        if fs::read(&destination)? != bytes {
+        if fs::read(destination)?.as_slice() != bytes {
             bail!("会话正文校验失败：{}", destination.display());
         }
     } else {
         // Import and persistence can save identical bodies concurrently. Each stages a unique file.
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let temporary = directory.join(format!(
-            "{}.{}.{sequence}.tmp",
-            reference.hash,
-            std::process::id()
-        ));
+        let temporary = directory.join(format!("{}.{}.{sequence}.tmp", hash, std::process::id()));
         let result = (|| -> Result<()> {
             let mut output = fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(&temporary)?;
-            output.write_all(&bytes)?;
+            output.write_all(bytes)?;
             output.sync_all()?;
             drop(output);
             // Concurrent writers publish the same hash/bytes. Atomic replacement
             // also works on filesystems without hard-link support.
-            crate::store::replace_file(&temporary, &destination)?;
+            crate::store::replace_file(&temporary, destination)?;
             Ok(())
         })();
         let _ = fs::remove_file(&temporary);
@@ -283,10 +340,7 @@ pub(crate) fn save(session: &SessionRecord, directory: &Path) -> Result<Option<R
         #[cfg(not(windows))]
         fs::File::open(directory)?.sync_all()?;
     }
-    session
-        .transcript
-        .acknowledge(reference.clone(), &session.messages);
-    Ok(Some(reference))
+    Ok(())
 }
 
 /// Returns one session's body without altering the UI's residency or error state.
@@ -299,27 +353,22 @@ pub(crate) fn read(session: &SessionRecord) -> Result<Vec<ChatItem>> {
         .reference
         .as_ref()
         .context("会话缺少正文引用")?;
-    let path = path(reference)?;
-    let bytes = fs::read(&path).with_context(|| format!("无法读取会话正文 {}", path.display()))?;
-    if format!("{:x}", Sha256::digest(&bytes)) != reference.hash {
-        bail!("会话正文校验失败：{}", path.display());
-    }
-    let messages: Vec<ChatItem> = serde_json::from_slice(&bytes)
-        .with_context(|| format!("会话正文损坏：{}", path.display()))?;
-    if messages.len() != reference.message_count {
-        bail!("会话正文与摘要不一致");
-    }
-    Ok(messages)
+    Ok(chunks::read(reference)?.messages)
 }
 
 /// Load and recover interrupted turns on a worker. The caller still checks identity before applying.
 pub(crate) fn load(mut session: SessionRecord) -> Result<SessionRecord> {
     if !session.transcript.loaded {
-        session.messages = read(&session)?;
-        session.transcript.acknowledge(
-            session.transcript.reference.clone().unwrap(),
-            &session.messages,
-        );
+        let reference = session
+            .transcript
+            .reference
+            .clone()
+            .context("会话缺少正文引用")?;
+        let loaded = chunks::read(&reference)?;
+        session.messages = loaded.messages;
+        session
+            .transcript
+            .acknowledge(reference, &session.messages, loaded.parts, loaded.pages);
         session.transcript.loaded = true;
         if session.interrupted {
             crate::store::restore_session(&mut session);

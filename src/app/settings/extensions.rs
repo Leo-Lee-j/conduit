@@ -291,10 +291,11 @@ impl ConduitApp {
 
     pub(super) fn extensions_content(
         &self,
-        _: &Window,
+        window: &Window,
         view: Entity<Self>,
         cx: &App,
     ) -> AnyElement {
+        let compact = f32::from(window.viewport_size().height) < 650.;
         let engine = self.extensions_ui.engine;
         let mut controls = h_flex().gap_2().flex_wrap();
         for (index, candidate) in Provider::ALL.into_iter().enumerate() {
@@ -445,15 +446,28 @@ impl ConduitApp {
             .child(
                 v_flex()
                     .flex_shrink_0()
-                    .p_3()
+                    .px_6()
+                    .py(px(if compact { 12. } else { 16. }))
                     .gap_2()
                     .border_b_1()
                     .border_color(rgb(palette().border))
-                    .child(div().text_size(px(18.)).font_semibold().child(if mcp {
+                    .child(div().text_size(px(22.)).font_semibold().child(if mcp {
                         "MCP 服务"
                     } else {
                         "Skills"
                     }))
+                    .when(!compact, |header| {
+                        header.child(
+                            div()
+                                .text_size(px(13.))
+                                .text_color(rgb(palette().muted))
+                                .child(if mcp {
+                                    "管理 AI 可连接的工具服务。先选择引擎与配置范围。"
+                                } else {
+                                    "浏览与管理本机技能。先选择引擎与配置范围。"
+                                }),
+                        )
+                    })
                     .child(controls)
                     .child(self.extension_actions(view.clone()))
                     .child(

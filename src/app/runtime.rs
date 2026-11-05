@@ -602,6 +602,7 @@ impl ConduitApp {
             cx.notify();
         }
         if !self.search_query.trim().is_empty()
+            && !self.search_ui.running
             && self.search_ui.revision != self.session_control.global_revision
             && self.search_ui.requested.elapsed() >= Duration::from_millis(500)
         {

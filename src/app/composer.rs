@@ -491,7 +491,7 @@ impl ConduitApp {
 
 impl ConduitApp {
     pub(super) fn render_composer(
-        &self,
+        &mut self,
         selected: Option<&SessionSummary>,
         window: &Window,
         cx: &mut Context<Self>,
@@ -640,6 +640,27 @@ impl ConduitApp {
                     .pt(px(3.))
                     .gap_2()
                     .items_center()
+                    .child(
+                        Button::new("chat-new-session")
+                            .ghost()
+                            .small()
+                            .compact()
+                            .h(px(22.))
+                            .icon(IconName::Plus)
+                            .tooltip(format!(
+                                "在当前工作区新建 {} 会话",
+                                self.new_session_provider.label()
+                            ))
+                            .accessibility_label("在当前工作区新建会话")
+                            .disabled(!composer_enabled)
+                            .when(composer_enabled, |button| button.cursor_pointer())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                cx.stop_propagation();
+                                if let Some(index) = this.selected_workspace {
+                                    this.new_session_here(index, window, cx);
+                                }
+                            })),
+                    )
                     .when(selected.is_some(), |row| {
                         row.child(self.permission_picker(app_entity.clone()))
                     })

@@ -3,6 +3,7 @@
 use super::*;
 use std::rc::Rc;
 
+pub(super) mod rows;
 mod turn_diff;
 
 /// Text segments separated by tools still belong to one user-facing reply.
@@ -190,10 +191,30 @@ impl ConduitApp {
     /// composer's top-right corner. Clicking them opens the per-step and
     /// per-file details above the tags; clicking outside closes the panel.
     pub(super) fn turn_stats_tags(
-        &self,
+        &mut self,
         session_id: u64,
-        cx: &Context<Self>,
+        cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        let session = self.session(session_id)?;
+        let start = session
+            .messages
+            .iter()
+            .rposition(|m| m.kind == ItemKind::User)
+            .unwrap_or(0);
+        let items: Vec<_> = session.messages[start..]
+            .iter()
+            .filter(|m| m.kind == ItemKind::Tool)
+            .cloned()
+            .collect();
+        let Some((stats, historical_plan)) = self.tool_analysis.turn(session_id, &items, cx) else {
+            return Some(
+                div()
+                    .text_size(px(11.))
+                    .text_color(rgb(palette().muted))
+                    .child("正在统计变更…")
+                    .into_any_element(),
+            );
+        };
         let session = self.session(session_id)?;
         let plan = self
             .session_control
@@ -201,8 +222,7 @@ impl ConduitApp {
             .get(&session_id)
             .cloned()
             .filter(|steps| !steps.is_empty())
-            .unwrap_or_else(|| plan_from_messages(session));
-        let stats = turn_file_stats(session);
+            .unwrap_or(historical_plan);
         if plan.is_empty() && stats.files.is_empty() {
             return None;
         }
@@ -499,27 +519,15 @@ impl ConduitApp {
         &self,
         session_id: u64,
         start: usize,
-        end: usize,
+        _end: usize,
         group_key: String,
         expanded: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let count = self.session(session_id).map_or(0, |session| {
-            session.messages[start..end]
-                .iter()
-                .filter(|item| is_groupable_activity(item))
-                .count()
-        });
-        let (failures, running) = self
-            .session(session_id)
-            .map(|session| {
-                let items = &session.messages[start..end.min(session.messages.len())];
-                (
-                    items.iter().filter(|item| tool_failed(item)).count(),
-                    items.iter().any(tool_running),
-                )
-            })
-            .unwrap_or((0, false));
+        let group = self.chat_rows.group(start).unwrap_or_default();
+        let count = group.count;
+        let failures = group.failures;
+        let running = group.running;
         let elapsed = self
             .session_control
             .runs
@@ -534,10 +542,7 @@ impl ConduitApp {
             format!("执行工具 {count} 次")
         };
         let toggle_key = group_key.clone();
-        let can_collapse = !running
-            && self
-                .session(session_id)
-                .is_some_and(|session| tool_group_has_reply(session, end));
+        let can_collapse = !running && group.replied;
         Button::new(SharedString::from(format!(
             "tool-group-{session_id}-{start}"
         )))
@@ -558,7 +563,8 @@ impl ConduitApp {
                 if !this.expanded_tool_groups.remove(&key) {
                     this.expanded_tool_groups.insert(key);
                 }
-                this.scroll.remeasure_items(start..end);
+                this.sync_chat_rows();
+                this.remeasure_message(start);
                 cx.notify();
             }))
         })
@@ -670,7 +676,7 @@ impl ConduitApp {
             category
         ))
         .on_click(cx.listener(move |this, _, _, cx| {
-            this.scroll.remeasure_items(index..index + 1);
+            this.remeasure_message(index);
             if reasoning {
                 if !this.expanded_reasoning.remove(&toggle_key) {
                     this.expanded_reasoning.insert(toggle_key.clone());
@@ -772,8 +778,19 @@ impl ConduitApp {
         .into_any_element()
     }
 
-    pub(super) fn render_message(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_message(&mut self, row: usize, cx: &mut Context<Self>) -> AnyElement {
         let started = Instant::now();
+        let index = self.chat_rows.message(row);
+        let element = self.render_message_content(index, cx);
+        if self.store.ui.performance_monitor {
+            self.performance.update(cx, |monitor, _| {
+                monitor.record_message_render(index, started.elapsed());
+            });
+        }
+        element
+    }
+
+    fn render_message_content(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(session) = self
             .store
             .workspaces
@@ -794,19 +811,11 @@ impl ConduitApp {
         }
         let session_id = session.id;
         let provider = session.provider;
-        let tool_group = contiguous_tool_group(session, index);
-        let tool_group_expanded = tool_group.is_some_and(|(start, _)| {
-            self.expanded_tool_groups
-                .contains(&(session_id, session.messages[start].key.clone()))
-        });
-        // Keep the tool group open through the whole tool phase. Collapse only
-        // after the assistant has started a visible reply, unless the user
-        // pinned the group open.
-        let tool_group_running = tool_group
-            .is_some_and(|(start, end)| session.messages[start..end].iter().any(tool_running));
-        let assistant_replied =
-            tool_group.is_some_and(|(_, end)| tool_group_has_reply(session, end));
-        let tool_group_expanded = tool_group_expanded || !assistant_replied;
+        let group = self.chat_rows.group(index);
+        let tool_group = group.map(|group| (group.start, group.end));
+        let tool_group_expanded = group.is_some_and(|group| group.expanded);
+        let tool_group_running = group.is_some_and(|group| group.running);
+        let assistant_replied = group.is_some_and(|group| group.replied);
         if let Some((start, end)) = tool_group
             && !tool_group_expanded
             && !tool_group_running
@@ -1206,7 +1215,6 @@ impl ConduitApp {
             ItemKind::Tool if is_compact_tool(item) => {
                 let detail_key = (session_id, item.key.clone());
                 let expanded = self.expanded_tools.contains(&detail_key);
-                let tool_id = format!("tool-{}-{}", session_id, item.key);
                 let mut content = v_flex()
                     .w_full()
                     .min_w_0()
@@ -1219,12 +1227,12 @@ impl ConduitApp {
                         .or_default()
                         .clone();
                     content = content.child(tool_detail_panel(
-                        &tool_id,
                         &detail_key,
                         item,
                         &tool_scroll,
                         &typography,
                         &mut self.tool_diffs,
+                        &mut self.tool_analysis,
                         cx,
                     ));
                 }
@@ -1236,11 +1244,17 @@ impl ConduitApp {
                 let tool_id = format!("tool-{}-{}", session_id, item.key);
                 let edit = is_tool_edit(item);
                 let edit_paths = if edit {
-                    edit_tool_diffs(item)
+                    self.tool_analysis
+                        .get(item, cx)
+                        .map(|value| {
+                            value
+                                .files
+                                .iter()
+                                .take(8)
+                                .map(|diff| diff.path.clone())
+                                .collect()
+                        })
                         .unwrap_or_default()
-                        .into_iter()
-                        .map(|diff| diff.path)
-                        .collect::<Vec<_>>()
                 } else {
                     Vec::new()
                 };
@@ -1343,7 +1357,7 @@ impl ConduitApp {
                     .on_click(cx.listener({
                         let detail_key = detail_key.clone();
                         move |this, _, _, cx| {
-                            this.scroll.remeasure_items(index..index + 1);
+                            this.remeasure_message(index);
                             if !this.expanded_tools.remove(&detail_key) {
                                 this.expanded_tools.insert(detail_key.clone());
                             }
@@ -1366,12 +1380,12 @@ impl ConduitApp {
                         .or_default()
                         .clone();
                     card = card.child(tool_detail_panel(
-                        &tool_id,
                         &detail_key,
                         item,
                         &tool_scroll,
                         &typography,
                         &mut self.tool_diffs,
+                        &mut self.tool_analysis,
                         cx,
                     ));
                 }
@@ -1626,11 +1640,6 @@ impl ConduitApp {
                     .when(highlighted, |row| row.bg(rgb(palette().surface_hover)))
                     .child(element),
             );
-        if self.store.ui.performance_monitor {
-            self.performance.update(cx, |monitor, _| {
-                monitor.record_message_render(index, started.elapsed());
-            });
-        }
         row.into_any_element()
     }
 }

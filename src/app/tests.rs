@@ -558,6 +558,7 @@ pub(crate) fn session() -> SessionRecord {
         exit_code: None,
         title: String::new(),
         archived: false,
+        pinned: false,
         native_id: None,
         model: None,
         messages: vec![],

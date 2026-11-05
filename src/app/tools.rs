@@ -4,6 +4,7 @@ use super::*;
 
 /// Tool activity collapses into one quiet "执行工具" group. File edits and
 /// unresolved or rejected approvals stay outside so their UI keeps its place.
+#[cfg(test)]
 pub(super) fn contiguous_tool_group(
     session: &SessionRecord,
     index: usize,
@@ -60,6 +61,7 @@ pub(super) fn is_compact_tool(item: &ChatItem) -> bool {
 }
 
 /// A later turn must not hide the tool history of a turn that never replied.
+#[cfg(test)]
 pub(super) fn tool_group_has_reply(session: &SessionRecord, end: usize) -> bool {
     session.messages[end..]
         .iter()
@@ -68,11 +70,16 @@ pub(super) fn tool_group_has_reply(session: &SessionRecord, end: usize) -> bool 
 }
 
 pub(super) fn is_tool_edit(item: &ChatItem) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Kind<'a> {
+        #[serde(rename = "acpKind", borrow)]
+        kind: Option<std::borrow::Cow<'a, str>>,
+    }
     matches!(
         item.text.trim(),
         "修改文件" | "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "apply_patch"
-    ) || serde_json::from_str::<serde_json::Value>(&item.detail)
-        .is_ok_and(|value| value["acpKind"] == "edit")
+    ) || serde_json::from_str::<Kind<'_>>(&item.detail)
+        .is_ok_and(|value| value.kind.as_deref() == Some("edit"))
 }
 
 pub(super) fn is_tool_command(item: &ChatItem) -> bool {
@@ -99,6 +106,12 @@ pub(super) fn tool_running(item: &ChatItem) -> bool {
 }
 
 pub(super) fn tool_failed(item: &ChatItem) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Exit {
+        #[serde(rename = "exitCode")]
+        code: Option<i64>,
+        exit_code: Option<i64>,
+    }
     if item
         .approval
         .as_ref()
@@ -113,14 +126,9 @@ pub(super) fn tool_failed(item: &ChatItem) -> bool {
         || status.eq_ignore_ascii_case("failed")
         || status.eq_ignore_ascii_case("error")
         || status.eq_ignore_ascii_case("aborted")
-        || serde_json::from_str::<serde_json::Value>(&item.detail)
+        || serde_json::from_str::<Exit>(&item.detail)
             .ok()
-            .and_then(|value| {
-                value
-                    .get("exitCode")
-                    .or_else(|| value.get("exit_code"))
-                    .and_then(serde_json::Value::as_i64)
-            })
+            .and_then(|value| value.code.or(value.exit_code))
             .is_some_and(|code| code != 0)
 }
 
@@ -295,6 +303,58 @@ pub(super) struct EditFileDiff {
 }
 
 pub(super) const MAX_EDIT_DIFF_LINES: usize = 400;
+const MAX_EDIT_DIFF_BYTES: usize = 64 * 1024;
+
+/// Count the whole change, but allocate only the displayed prefix.
+#[derive(Default)]
+pub(super) struct PreviewLines {
+    lines: Vec<EditLine>,
+    added: usize,
+    removed: usize,
+    seen: usize,
+    bytes: usize,
+    truncated: bool,
+}
+
+impl PreviewLines {
+    fn push(&mut self, kind: EditLineKind, text: &str) {
+        self.seen += 1;
+        self.added += usize::from(kind == EditLineKind::Add);
+        self.removed += usize::from(kind == EditLineKind::Remove);
+        if self.lines.len() == MAX_EDIT_DIFF_LINES || self.bytes == MAX_EDIT_DIFF_BYTES {
+            self.truncated = true;
+            return;
+        }
+        let mut end = text.len().min(MAX_EDIT_DIFF_BYTES - self.bytes);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.truncated |= end < text.len();
+        self.bytes += end;
+        self.lines.push(edit_line(kind, &text[..end]));
+        if end < text.len() {
+            self.bytes = MAX_EDIT_DIFF_BYTES;
+        }
+    }
+
+    fn text(&mut self, kind: EditLineKind, text: &str) {
+        for line in text.lines() {
+            self.push(kind, line);
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.seen == 0
+    }
+
+    fn finish(self, path: String, note: String, status: EditFileStatus) -> EditFileDiff {
+        let mut diff = EditFileDiff::new(path, note, status, self.lines);
+        diff.added = self.added;
+        diff.removed = self.removed;
+        diff.truncated |= self.truncated;
+        diff
+    }
+}
 
 impl EditFileDiff {
     pub(super) fn new(
@@ -313,7 +373,11 @@ impl EditFileDiff {
             .iter()
             .filter(|line| line.kind == EditLineKind::Remove)
             .count();
-        let patch = synthesize_patch(&path, status, &lines);
+        let patch = if lines.is_empty() {
+            String::new()
+        } else {
+            synthesize_patch(&path, status, &lines)
+        };
         Self {
             path,
             note,
@@ -428,8 +492,11 @@ pub(super) fn edit_line(kind: EditLineKind, text: &str) -> EditLine {
     }
 }
 
-pub(super) fn parse_unified_patch(patch: &str) -> Vec<EditLine> {
-    let mut lines = Vec::new();
+fn parse_unified_patch(patch: &str, preview: bool) -> PreviewLines {
+    let mut lines = PreviewLines::default();
+    if !preview {
+        lines.bytes = MAX_EDIT_DIFF_BYTES;
+    }
     for raw in patch.lines() {
         if raw.starts_with("diff --git")
             || raw.starts_with("index ")
@@ -442,21 +509,18 @@ pub(super) fn parse_unified_patch(patch: &str) -> Vec<EditLine> {
         {
             continue;
         }
-        let line = if raw.starts_with("@@") {
-            edit_line(EditLineKind::Hunk, raw)
+        let (kind, text) = if raw.starts_with("@@") {
+            (EditLineKind::Hunk, raw)
         } else if let Some(text) = raw.strip_prefix('+') {
-            edit_line(EditLineKind::Add, text)
+            (EditLineKind::Add, text)
         } else if let Some(text) = raw.strip_prefix('-') {
-            edit_line(EditLineKind::Remove, text)
+            (EditLineKind::Remove, text)
         } else if raw.starts_with('\\') {
             continue;
         } else {
-            edit_line(EditLineKind::Context, raw.strip_prefix(' ').unwrap_or(raw))
+            (EditLineKind::Context, raw.strip_prefix(' ').unwrap_or(raw))
         };
-        lines.push(line);
-        if lines.len() > MAX_EDIT_DIFF_LINES {
-            break;
-        }
+        lines.push(kind, text);
     }
     lines
 }
@@ -479,14 +543,13 @@ pub(super) fn codex_edit_diffs(input: &str, detail: &str) -> Option<Vec<EditFile
     // `item/started` can carry an empty changes array before the patch is
     // applied; prefer whichever payload actually has changes.
     let changes = |text: &str| {
-        serde_json::from_str::<serde_json::Value>(text)
+        serde_json::from_str::<Vec<serde_json::Value>>(text)
             .ok()
-            .and_then(|value| value.as_array().cloned())
             .filter(|changes| !changes.is_empty())
     };
     let changes = changes(input).or_else(|| changes(detail))?;
     let mut files = Vec::new();
-    for change in changes.iter().take(8) {
+    for (index, change) in changes.iter().enumerate() {
         let path = json_path(change).unwrap_or_else(|| "未知文件".into());
         let note = codex_change_note(&change["kind"]);
         let mut lines = parse_unified_patch(
@@ -494,15 +557,12 @@ pub(super) fn codex_edit_diffs(input: &str, detail: &str) -> Option<Vec<EditFile
                 .get("diff")
                 .and_then(|value| value.as_str())
                 .unwrap_or(""),
+            index < 8,
         );
         if lines.is_empty()
             && let Some(content) = change.get("content").and_then(|value| value.as_str())
         {
-            lines.extend(
-                content
-                    .lines()
-                    .map(|line| edit_line(EditLineKind::Add, line)),
-            );
+            lines.text(EditLineKind::Add, content);
         }
         if lines.is_empty() {
             continue;
@@ -512,7 +572,7 @@ pub(super) fn codex_edit_diffs(input: &str, detail: &str) -> Option<Vec<EditFile
             "删除" => EditFileStatus::Deleted,
             _ => EditFileStatus::Modified,
         };
-        files.push(EditFileDiff::new(path, note, status, lines));
+        files.push(lines.finish(path, note, status));
     }
     (!files.is_empty()).then_some(files)
 }
@@ -520,32 +580,25 @@ pub(super) fn codex_edit_diffs(input: &str, detail: &str) -> Option<Vec<EditFile
 pub(super) fn claude_edit_diffs(title: &str, input: &str) -> Option<Vec<EditFileDiff>> {
     let value: serde_json::Value = serde_json::from_str(input).ok()?;
     let path = json_path(&value).unwrap_or_else(|| "未知文件".into());
-    let mut lines = Vec::new();
+    let mut lines = PreviewLines::default();
     let mut note = String::new();
     match title {
         "Write" => {
             let content = value.get("content").and_then(|value| value.as_str())?;
-            lines.extend(
-                content
-                    .lines()
-                    .map(|line| edit_line(EditLineKind::Add, line)),
-            );
+            lines.text(EditLineKind::Add, content);
             note = "写入".into();
         }
         "MultiEdit" => {
             let edits = value.get("edits").and_then(|value| value.as_array())?;
-            for (index, edit) in edits.iter().enumerate().take(20) {
-                lines.push(edit_line(
-                    EditLineKind::Hunk,
-                    &format!("@@ 修改 {} @@", index + 1),
-                ));
+            for (index, edit) in edits.iter().enumerate() {
+                lines.push(EditLineKind::Hunk, &format!("@@ 修改 {} @@", index + 1));
                 for line in edit
                     .get("old_string")
                     .and_then(|value| value.as_str())
                     .unwrap_or("")
                     .lines()
                 {
-                    lines.push(edit_line(EditLineKind::Remove, line));
+                    lines.push(EditLineKind::Remove, line);
                 }
                 for line in edit
                     .get("new_string")
@@ -553,7 +606,7 @@ pub(super) fn claude_edit_diffs(title: &str, input: &str) -> Option<Vec<EditFile
                     .unwrap_or("")
                     .lines()
                 {
-                    lines.push(edit_line(EditLineKind::Add, line));
+                    lines.push(EditLineKind::Add, line);
                 }
             }
             note = format!("{} 处修改", edits.len());
@@ -571,12 +624,9 @@ pub(super) fn claude_edit_diffs(title: &str, input: &str) -> Option<Vec<EditFile
             {
                 note = "全部替换".into();
             }
-            lines.push(edit_line(EditLineKind::Hunk, "@@ 修改 @@"));
-            lines.extend(
-                old.lines()
-                    .map(|line| edit_line(EditLineKind::Remove, line)),
-            );
-            lines.extend(new.lines().map(|line| edit_line(EditLineKind::Add, line)));
+            lines.push(EditLineKind::Hunk, "@@ 修改 @@");
+            lines.text(EditLineKind::Remove, old);
+            lines.text(EditLineKind::Add, new);
         }
     }
     if lines.is_empty() {
@@ -587,7 +637,7 @@ pub(super) fn claude_edit_diffs(title: &str, input: &str) -> Option<Vec<EditFile
     } else {
         EditFileStatus::Modified
     };
-    Some(vec![EditFileDiff::new(path, note, status, lines)])
+    Some(vec![lines.finish(path, note, status)])
 }
 
 pub(super) fn edit_tool_diffs(item: &ChatItem) -> Option<Vec<EditFileDiff>> {
@@ -612,8 +662,8 @@ fn opencode_edit_diffs(detail: &str) -> Option<Vec<EditFileDiff>> {
         .as_array()?
         .iter()
         .filter(|part| part["type"] == "diff")
-        .take(8)
-        .filter_map(|part| {
+        .enumerate()
+        .filter_map(|(index, part)| {
             let old = part["oldText"].as_str()?;
             let new = part["newText"].as_str()?;
             let status = if old.is_empty() {
@@ -623,19 +673,17 @@ fn opencode_edit_diffs(detail: &str) -> Option<Vec<EditFileDiff>> {
             } else {
                 EditFileStatus::Modified
             };
-            let lines = std::iter::once(edit_line(EditLineKind::Hunk, "@@ OpenCode @@"))
-                .chain(
-                    old.lines()
-                        .map(|line| edit_line(EditLineKind::Remove, line)),
-                )
-                .chain(new.lines().map(|line| edit_line(EditLineKind::Add, line)))
-                .take(MAX_EDIT_DIFF_LINES + 1)
-                .collect();
-            Some(EditFileDiff::new(
+            let mut lines = PreviewLines::default();
+            if index >= 8 {
+                lines.bytes = MAX_EDIT_DIFF_BYTES;
+            }
+            lines.push(EditLineKind::Hunk, "@@ OpenCode @@");
+            lines.text(EditLineKind::Remove, old);
+            lines.text(EditLineKind::Add, new);
+            Some(lines.finish(
                 part["path"].as_str().unwrap_or("未知文件").into(),
                 "OpenCode".into(),
                 status,
-                lines,
             ))
         })
         .collect::<Vec<_>>();
@@ -654,23 +702,29 @@ pub(super) struct CachedDiff {
 }
 
 pub(super) fn edit_diff_content(
-    tool_id: &str,
     detail_key: &(u64, String),
     item: &ChatItem,
     scroll: &ScrollHandle,
     typography: &ChatTypography,
     diffs: &mut HashMap<(u64, String), CachedDiff>,
+    analysis: &mut tool_analysis::Cache,
     cx: &mut Context<ConduitApp>,
 ) -> (AnyElement, String) {
-    let input = format_tool_text(&item.input);
-    let output = format_tool_text(&item.detail);
-    let copy_text = format!("输入\n{input}\n\n输出 / 结果\n{output}");
-    let Some(files) = edit_tool_diffs(item) else {
-        return tool_content(tool_id, item, scroll, typography);
+    let tool_id = format!("tool-{}-{}", detail_key.0, detail_key.1);
+    let copy_text = String::new(); // Full input/output is formatted lazily by the copy action.
+    let Some(value) = analysis.get(item, cx) else {
+        return (
+            div().p_3().child("正在读取变更…").into_any_element(),
+            copy_text,
+        );
     };
+    let files = &value.files;
+    if files.is_empty() {
+        return tool_content(&tool_id, item, scroll, typography);
+    }
     let mut patch = String::new();
     let mut headers = HashMap::new();
-    for file in &files {
+    for file in files.iter().take(8) {
         patch.push_str(&file.patch);
         headers.insert(
             SharedString::from(file.path.clone()),
@@ -860,22 +914,24 @@ pub(super) fn tool_content(
 
 /// Shared expanded body for tool cards and compact activity rows.
 pub(super) fn tool_detail_panel(
-    tool_id: &str,
     detail_key: &(u64, String),
     item: &ChatItem,
     scroll: &ScrollHandle,
     typography: &ChatTypography,
     diffs: &mut HashMap<(u64, String), CachedDiff>,
+    analysis: &mut tool_analysis::Cache,
     cx: &mut Context<ConduitApp>,
 ) -> AnyElement {
+    let tool_id = format!("tool-{}-{}", detail_key.0, detail_key.1);
     let dock_key = item.key.clone();
     let dock_session = detail_key.0;
     let edit = is_tool_edit(item);
     let (content, copy_text) = if edit {
-        edit_diff_content(tool_id, detail_key, item, scroll, typography, diffs, cx)
+        edit_diff_content(detail_key, item, scroll, typography, diffs, analysis, cx)
     } else {
-        tool_content(tool_id, item, scroll, typography)
+        tool_content(&tool_id, item, scroll, typography)
     };
+    let copy_item = item.clone();
     v_flex()
         .w_full()
         .min_w_0()
@@ -921,7 +977,16 @@ pub(super) fn tool_detail_panel(
                         .tooltip("复制输入与输出")
                         .cursor_pointer()
                         .on_click(move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()))
+                            let text = if edit {
+                                format!(
+                                    "输入\n{}\n\n输出 / 结果\n{}",
+                                    format_tool_text(&copy_item.input),
+                                    format_tool_text(&copy_item.detail)
+                                )
+                            } else {
+                                copy_text.clone()
+                            };
+                            cx.write_to_clipboard(ClipboardItem::new_string(text))
                         }),
                 ),
         )

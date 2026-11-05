@@ -38,7 +38,9 @@ impl ChatTimeline {
             .unwrap_or(top.item_ix >= self.scroll.item_count());
         let _ = self.app.update(cx, |app, cx| {
             let navigating = app.pending_message_jump.take().is_some();
-            let outline = app.outline.active_for_item(top.item_ix);
+            let outline = app
+                .outline
+                .active_for_item(app.chat_rows.message(top.item_ix));
             // Let message_outline update its marker and scroll the rail when
             // the active section changes. Wheel packets within a section only
             // invalidate this timeline.
@@ -172,6 +174,9 @@ impl Render for ConduitApp {
         }
         self.sync_plugin_context();
         self.refresh_plugin_views(cx);
+        if self.settings_ui.open {
+            return self.render_settings_workspace(window, cx);
+        }
         self.ensure_selected_transcript(cx);
         let render_started = Instant::now();
         let app_entity = cx.entity();
@@ -188,20 +193,7 @@ impl Render for ConduitApp {
                 .find(|session| session.id == id)
         });
         self.outline.refresh(outline_session);
-        if self.timeline_session != self.selected_session {
-            self.scroll.reset(message_count);
-            self.timeline_session = self.selected_session;
-        } else {
-            let previous_count = self.scroll.item_count();
-            if message_count > previous_count {
-                self.scroll.splice(
-                    previous_count..previous_count,
-                    message_count - previous_count,
-                );
-            } else if message_count < previous_count {
-                self.scroll.splice(message_count..previous_count, 0);
-            }
-        }
+        self.sync_chat_rows();
         if self.at_bottom && self.pending_message_jump.is_none() {
             self.scroll.scroll_to_end();
         }
@@ -694,7 +686,7 @@ impl Render for ConduitApp {
                         .h(px(28.))
                         .flex_shrink_0()
                         .icon(IconName::Settings)
-                        .tooltip("设置")
+                        .tooltip("设置（Ctrl+,）")
                         .cursor_pointer()
                         .on_click(
                             cx.listener(|this, _, window, cx| this.open_settings(window, cx)),

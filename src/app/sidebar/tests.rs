@@ -1,6 +1,7 @@
 //! Real GPUI frames exercise the viewport, cache invalidation and scroll anchors.
 use super::cache;
 use crate::app::{ChatItem, ConduitApp, Event, Store, Workspace};
+use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, Entity, ScrollStrategy, TestAppContext, VisualTestContext};
 use std::rc::Rc;
 
@@ -61,6 +62,233 @@ fn draw(app: &Entity<ConduitApp>, cx: &mut VisualTestContext) {
     cx.update(|window, cx| {
         let _ = window.draw(cx);
     });
+}
+
+fn visible_sessions(app: &Entity<ConduitApp>, cx: &mut VisualTestContext) -> Vec<u64> {
+    cx.update(|_, cx| {
+        app.read(cx)
+            .sidebar
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                cache::Row::Session { id, .. } => Some(*id),
+                _ => None,
+            })
+            .collect()
+    })
+}
+
+#[gpui_kit::test]
+fn session_context_menu_pins_and_unpins_without_switching_the_conversation(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::{Modifiers, MouseButton};
+    let (app, cx) = fixture(cx, 3);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.writable = true;
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    draw(&app, cx);
+    for (label, pinned) in [("置顶会话", true), ("取消置顶", false)] {
+        let row = cx.debug_bounds("session-row-1").unwrap().center();
+        cx.simulate_mouse_down(row, MouseButton::Right, Modifiers::default());
+        cx.simulate_mouse_up(row, MouseButton::Right, Modifiers::default());
+        cx.run_until_parked();
+        draw(&app, cx);
+        cx.update(|window, cx| {
+            assert_eq!(
+                window.within("popup-menu").find(0usize).label(),
+                Some(label)
+            );
+            window.within("popup-menu").click(0usize, cx);
+        });
+        cx.run_until_parked();
+        draw(&app, cx);
+        cx.update(|_, cx| {
+            let app = app.read(cx);
+            assert_eq!(app.session(1).unwrap().pinned, pinned);
+            assert_eq!(app.selected_session, Some(3));
+        });
+        assert_eq!(
+            visible_sessions(&app, cx),
+            if pinned { vec![1, 3, 2] } else { vec![3, 2, 1] }
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn pinned_sessions_keep_the_ordinary_quota_and_follow_archive_and_search_filters(
+    cx: &mut TestAppContext,
+) {
+    let (app, cx) = fixture(cx, 8);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.writable = true;
+            app.expanded_workspaces.clear();
+            app.store.ui.sessions_per_workspace = 2;
+            app.toggle_pin(1, cx);
+            app.toggle_pin(2, cx);
+        })
+    });
+    cx.run_until_parked();
+    draw(&app, cx);
+    assert_eq!(visible_sessions(&app, cx), vec![2, 1, 8, 7]);
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert!(app.sidebar.rows.iter().any(|row| matches!(
+            row,
+            cache::Row::More {
+                total: 6,
+                expanded: false,
+                ..
+            }
+        )));
+        let restored: Store =
+            serde_json::from_slice(&serde_json::to_vec(&app.store).unwrap()).unwrap();
+        assert_eq!(
+            restored.workspaces[0]
+                .sessions
+                .iter()
+                .filter(|s| s.pinned)
+                .count(),
+            2
+        );
+    });
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.session_mut(8).unwrap().created_at = 1000;
+            app.toggle_archive(2, cx);
+        })
+    });
+    cx.run_until_parked();
+    draw(&app, cx);
+    assert_eq!(visible_sessions(&app, cx), vec![1, 8, 7]);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.show_archived = true;
+            app.toggle_pin(1, cx);
+        })
+    });
+    cx.run_until_parked();
+    draw(&app, cx);
+    assert_eq!(visible_sessions(&app, cx), vec![2, 8, 7]);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            for id in [1, 3, 4, 5, 6] {
+                app.toggle_pin(id, cx);
+            }
+        })
+    });
+    cx.run_until_parked();
+    draw(&app, cx);
+    assert_eq!(visible_sessions(&app, cx), vec![6, 5, 4, 3, 2, 1, 8, 7]);
+    assert!(cx.debug_bounds("workspace-more-0").is_none());
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.search_query = "needle session 1".into();
+            app.refresh_search(cx, false);
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    draw(&app, cx);
+    assert_eq!(visible_sessions(&app, cx), vec![1]);
+}
+
+#[gpui_kit::test]
+fn chat_new_session_uses_the_current_workspace_and_preserves_the_draft(cx: &mut TestAppContext) {
+    use gpui_kit::{Focusable as _, px, size};
+    let (app, cx) = fixture(cx, 2);
+    cx.simulate_resize(size(px(1200.), px(800.)));
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.writable = true;
+            app.store.workspaces.insert(
+                0,
+                Workspace {
+                    path: std::env::temp_dir().join("other-workspace"),
+                    sessions: vec![],
+                },
+            );
+            app.selected_workspace = Some(1);
+            app.new_session_provider = crate::domain::Provider::Codex;
+            app.input.update(cx, |input, cx| {
+                input.set_value("尚未发送的草稿", window, cx)
+            });
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    draw(&app, cx);
+    cx.update(|window, cx| {
+        let new = window.find("chat-new-session").bounds();
+        let permission = window.find("permission-picker-trigger").bounds();
+        assert!(new.right() <= permission.left());
+        window.click("chat-new-session", cx);
+    });
+    cx.run_until_parked();
+    draw(&app, cx);
+    cx.update(|window, cx| {
+        let app = app.read(cx);
+        let id = app.selected_session.unwrap();
+        assert_ne!(id, 2);
+        assert_eq!(app.selected_workspace, Some(1));
+        assert!(app.store.workspaces[0].sessions.is_empty());
+        assert_eq!(app.store.workspaces[1].sessions.len(), 3);
+        assert_eq!(
+            app.session(id).unwrap().provider,
+            crate::domain::Provider::Codex
+        );
+        assert_eq!(app.drafts.get(&2).unwrap(), "尚未发送的草稿");
+        assert!(app.input.read(cx).value().is_empty());
+        assert!(app.input.read(cx).focus_handle(cx).is_focused(window));
+    });
+    cx.update(|window, cx| app.update(cx, |app, cx| app.switch(1, Some(2), window, cx)));
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_, cx| app.read(cx).input.read(cx).value()),
+        "尚未发送的草稿"
+    );
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.writable = false;
+            cx.notify();
+        })
+    });
+    draw(&app, cx);
+    cx.update(|window, cx| window.click("chat-new-session", cx));
+    assert_eq!(
+        cx.update(|_, cx| app.read(cx).store.workspaces[1].sessions.len()),
+        3
+    );
+}
+
+#[gpui_kit::test]
+fn about_stays_centered_from_the_first_frame_and_after_resize(cx: &mut TestAppContext) {
+    use gpui_kit::{px, size};
+    let (app, cx) = fixture(cx, 1);
+    cx.update(|window, cx| {
+        cx.set_reduce_motion(false);
+        app.update(cx, |app, cx| app.open_about_dialog(window, cx));
+    });
+    for (width, height) in [(1200., 800.), (850., 500.)] {
+        cx.simulate_resize(size(px(width), px(height)));
+        cx.run_until_parked();
+        draw(&app, cx);
+        let bounds = cx.debug_bounds("dialog-0").unwrap();
+        assert!(
+            (f32::from(bounds.center().x) - width / 2.).abs() < 1.,
+            "{bounds:?}"
+        );
+        assert!(
+            (f32::from(bounds.center().y) - height / 2.).abs() < 1.,
+            "{bounds:?}"
+        );
+        assert!(bounds.top() >= px(0.) && bounds.bottom() <= px(height));
+    }
 }
 
 #[gpui_kit::test]

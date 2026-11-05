@@ -1,11 +1,11 @@
 //! Query work runs on snapshots. Rendering only reads completed results.
 use super::search::SearchHit;
-use crate::domain::{ItemKind, Workspace};
+use crate::domain::{ChatItemData, ItemKind, SessionRecord, Workspace};
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     ops::Range,
     sync::{
-        Arc,
+        Arc, Weak,
         atomic::{AtomicBool, Ordering},
     },
     time::Instant,
@@ -22,6 +22,9 @@ pub(super) struct SearchUi {
     pub revision: u64,
     pub requested: Instant,
     pub task: Option<gpui_kit::Task<()>>,
+    pub running: bool,
+    pub requested_query: String,
+    pub cache: Cache,
 }
 impl Default for SearchUi {
     fn default() -> Self {
@@ -36,6 +39,9 @@ impl Default for SearchUi {
             revision: 0,
             requested: Instant::now(),
             task: None,
+            running: false,
+            requested_query: String::new(),
+            cache: Cache::default(),
         }
     }
 }
@@ -134,6 +140,89 @@ pub(super) struct Results {
     pub hits: Vec<SearchHit>,
     pub errors: usize,
     pub matches: HashSet<u64>,
+    pub versions: HashMap<u64, Version>,
+}
+
+impl Results {
+    pub fn retain_current(&mut self, workspaces: &[Workspace]) {
+        let current: HashMap<_, _> = workspaces
+            .iter()
+            .flat_map(|w| w.sessions.iter().map(move |s| (s.id, (w, s))))
+            .collect();
+        self.matches.retain(|id| {
+            current.get(id).is_some_and(|(_, session)| {
+                self.versions
+                    .get(id)
+                    .is_some_and(|version| version.matches(session))
+            })
+        });
+        self.hits.retain(|hit| self.matches.contains(&hit.session));
+        for hit in &mut self.hits {
+            let (workspace, session) = current[&hit.session];
+            hit.archived = session.archived;
+            hit.provider = session.provider;
+            hit.workspace_name = workspace.name();
+        }
+    }
+}
+
+#[derive(Clone)]
+enum BodyVersion {
+    Memory(Vec<Weak<ChatItemData>>),
+    Disk(Option<crate::transcript::Reference>),
+}
+
+#[derive(Clone)]
+pub(super) struct Version {
+    title: String,
+    body: BodyVersion,
+}
+
+impl Version {
+    fn new(session: &SessionRecord) -> Self {
+        Self {
+            title: session.title.clone(),
+            body: if session.transcript.loaded {
+                BodyVersion::Memory(session.messages.iter().map(|m| m.identity()).collect())
+            } else {
+                BodyVersion::Disk(session.transcript.reference.clone())
+            },
+        }
+    }
+    pub fn matches(&self, session: &SessionRecord) -> bool {
+        if self.title != session.title {
+            return false;
+        }
+        match &self.body {
+            BodyVersion::Memory(items) => {
+                session.transcript.loaded
+                    && items.len() == session.messages.len()
+                    && items
+                        .iter()
+                        .zip(&session.messages)
+                        .all(|(a, b)| a.ptr_eq(&b.identity()))
+            }
+            BodyVersion::Disk(reference) => {
+                !session.transcript.loaded && *reference == session.transcript.reference
+            }
+        }
+    }
+}
+
+struct Cached {
+    version: Version,
+    matched: bool,
+    snippet: Option<String>,
+    failed: bool,
+}
+
+/// One query, one small result per session; never retains loaded transcript bodies.
+#[derive(Default)]
+pub(super) struct Cache {
+    query: String,
+    entries: HashMap<u64, Cached>,
+    #[cfg(test)]
+    pub scans: usize,
 }
 
 #[cfg(test)]
@@ -141,38 +230,98 @@ pub(super) fn collect(workspaces: &[Workspace], query: &str) -> Results {
     collect_cancellable(workspaces, query, &AtomicBool::new(false))
 }
 
+#[cfg(test)]
 pub(super) fn collect_cancellable(
     workspaces: &[Workspace],
     query: &str,
     cancel: &AtomicBool,
 ) -> Results {
+    collect_cached(workspaces, query, cancel, Cache::default()).0
+}
+
+pub(super) fn collect_cached(
+    workspaces: &[Workspace],
+    query: &str,
+    cancel: &AtomicBool,
+    mut cache: Cache,
+) -> (Results, Cache) {
+    if cache.query != query {
+        cache.entries.clear();
+        cache.query = query.to_owned();
+    }
+    let ids: HashSet<_> = workspaces
+        .iter()
+        .flat_map(|w| w.sessions.iter().map(|s| s.id))
+        .collect();
+    cache.entries.retain(|id, _| ids.contains(id));
     let matcher = Matcher::new(query);
     let mut hits = Vec::new();
     let mut matches = HashSet::new();
     let mut errors = 0;
+    let mut versions = HashMap::new();
     for workspace in workspaces {
         let name = workspace.name();
         for session in &workspace.sessions {
             if cancel.load(Ordering::Acquire) {
-                return Results {
-                    hits,
-                    matches,
-                    errors,
-                };
+                return (
+                    Results {
+                        hits,
+                        matches,
+                        errors,
+                        versions,
+                    },
+                    cache,
+                );
             }
+            let cached = cache.entries.get(&session.id).filter(|entry| {
+                entry.version.matches(session)
+                    && !entry.failed
+                    && (!entry.matched || entry.snippet.is_some() || hits.len() >= 40)
+            });
+            if let Some(entry) = cached {
+                versions.insert(session.id, entry.version.clone());
+                if entry.matched {
+                    matches.insert(session.id);
+                    if hits.len() < 40 {
+                        hits.push(hit(
+                            session,
+                            &name,
+                            entry.snippet.clone().unwrap_or_default(),
+                        ));
+                    }
+                }
+                continue;
+            }
+            #[cfg(test)]
+            {
+                cache.scans += 1;
+            }
+            let version = Version::new(session);
+            versions.insert(session.id, version.clone());
             let title_match = matcher.first(&session.title).is_some();
+            let mut failed = false;
             // No body I/O is needed for title-only matches past the snippet limit.
             let disk_messages;
             let messages = if session.transcript.loaded {
                 &session.messages
             } else if (title_match || query.is_empty()) && hits.len() >= 40 {
                 matches.insert(session.id);
+                cache.entries.insert(
+                    session.id,
+                    Cached {
+                        version,
+                        matched: true,
+                        snippet: None,
+                        failed: false,
+                    },
+                );
                 continue;
             } else {
                 disk_messages = match crate::transcript::read(session) {
                     Ok(messages) => messages,
                     Err(_) => {
                         errors += 1;
+                        failed = true;
                         Vec::new()
                     }
                 };
@@ -186,10 +335,28 @@ pub(super) fn collect_cancellable(
                 None
             };
             if !query.is_empty() && !title_match && message.is_none() {
+                cache.entries.insert(
+                    session.id,
+                    Cached {
+                        version,
+                        matched: false,
+                        snippet: None,
+                        failed,
+                    },
+                );
                 continue;
             }
             matches.insert(session.id);
             if hits.len() == 40 {
+                cache.entries.insert(
+                    session.id,
+                    Cached {
+                        version,
+                        matched: true,
+                        snippet: None,
+                        failed,
+                    },
+                );
                 continue;
             }
             let source = message.or_else(|| {
@@ -199,30 +366,89 @@ pub(super) fn collect_cancellable(
                     .or_else(|| messages.first())
                     .map(|m| (m, None))
             });
-            hits.push(SearchHit {
-                session: session.id,
-                provider: session.provider,
-                workspace_name: name.clone(),
-                title: if session.title.is_empty() {
-                    "新会话".into()
-                } else {
-                    session.title.clone()
+            let snippet = source.map_or_else(String::new, |(m, range)| snippet_at(&m.text, range));
+            hits.push(hit(session, &name, snippet.clone()));
+            cache.entries.insert(
+                session.id,
+                Cached {
+                    version,
+                    matched: true,
+                    snippet: Some(snippet),
+                    failed,
                 },
-                archived: session.archived,
-                snippet: source.map_or_else(String::new, |(m, range)| snippet_at(&m.text, range)),
-            });
+            );
         }
     }
-    Results {
-        hits,
-        matches,
-        errors,
+    (
+        Results {
+            hits,
+            matches,
+            errors,
+            versions,
+        },
+        cache,
+    )
+}
+
+fn hit(session: &SessionRecord, workspace_name: &str, snippet: String) -> SearchHit {
+    SearchHit {
+        session: session.id,
+        provider: session.provider,
+        workspace_name: workspace_name.to_owned(),
+        title: if session.title.is_empty() {
+            "新会话".into()
+        } else {
+            session.title.clone()
+        },
+        archived: session.archived,
+        snippet,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn streaming_rescans_only_changed_session_and_publishes_stable_cold_matches() {
+        let fixture = crate::transcript::tests::Fixture::new();
+        fixture.store(65).save_to(&fixture.state).unwrap();
+        let mut store = crate::store::Store::load_from(&fixture.state).unwrap();
+        store.workspaces[0].sessions[0] =
+            crate::transcript::load(store.workspaces[0].sessions[0].clone()).unwrap();
+        let cancel = AtomicBool::new(false);
+        let (_, mut cache) = collect_cached(
+            &store.workspaces,
+            "original reply",
+            &cancel,
+            Cache::default(),
+        );
+        assert_eq!(cache.scans, 65);
+        for _ in 0..12 {
+            store.workspaces[0].sessions[0].messages[0]
+                .text
+                .push_str(" delta");
+            let (mut results, next) =
+                collect_cached(&store.workspaces, "original reply", &cancel, cache);
+            cache = next;
+            // A live body changes while the snapshot is being searched.
+            store.workspaces[0].sessions[0].messages[0]
+                .text
+                .push_str(" later");
+            results.retain_current(&store.workspaces);
+            assert_eq!(results.matches.len(), 64);
+            assert!(
+                !results
+                    .matches
+                    .contains(&store.workspaces[0].sessions[0].id)
+            );
+            assert!(!results.hits.is_empty());
+        }
+        assert_eq!(cache.scans, 77);
+        let (mut results, _) = collect_cached(&store.workspaces, "original reply", &cancel, cache);
+        store.workspaces[0].sessions.remove(1);
+        results.retain_current(&store.workspaces);
+        assert_eq!(results.matches.len(), 64);
+    }
     #[test]
     fn matching_preserves_unicode_expansion_and_bounds_snippet_allocations() {
         assert_eq!(Matcher::new("i").first("İ"), Some(0..2));

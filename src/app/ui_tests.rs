@@ -181,8 +181,8 @@ fn error_retry_clears_cards_before_repeated_failures_and_preserves_output(cx: &m
 }
 
 #[gpui_kit::test]
-fn settings_dismisses_on_outside_click_and_keeps_inside_clicks(cx: &mut TestAppContext) {
-    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+fn settings_workspace_keeps_layout_and_returns_without_losing_context(cx: &mut TestAppContext) {
+    use gpui_kit::{AppContext as _, Focusable as _, Modifiers, MouseButton};
     cx.update(gpui_kit::init);
     let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
     let output = slot.clone();
@@ -200,49 +200,48 @@ fn settings_dismisses_on_outside_click_and_keeps_inside_clicks(cx: &mut TestAppC
         gpui_kit::component::Root::new(app, window, cx)
     });
     let app = slot.borrow().as_ref().unwrap().clone();
-    for (width, height, close_method) in [(850., 500., 0), (1280., 900., 1), (850., 500., 2)] {
+    for (width, height, light) in [(850., 500., true), (1280., 900., false)] {
         cx.simulate_resize(gpui_kit::size(px(width), px(height)));
         cx.update(|window, cx| {
-            app.update(cx, |app, _| app.startup = None);
+            app.update(cx, |app, cx| {
+                app.startup = None;
+                let mode = if light {
+                    gpui_kit::component::ThemeMode::Light
+                } else {
+                    gpui_kit::component::ThemeMode::Dark
+                };
+                super::set_palette(mode);
+                gpui_kit::component::Theme::change(mode, Some(window), cx);
+                app.input
+                    .update(cx, |input, cx| input.set_value("保留这份草稿", window, cx));
+                app.input.read(cx).focus_handle(cx).focus(window, cx);
+            });
             let _ = window.draw(cx);
         });
-        let settings = cx
-            .debug_bounds("title-settings")
-            .expect("title bar settings");
-        cx.simulate_mouse_down(settings.center(), MouseButton::Left, Modifiers::default());
-        cx.simulate_mouse_up(settings.center(), MouseButton::Left, Modifiers::default());
+        cx.simulate_keystrokes("ctrl-,");
         cx.run_until_parked();
         cx.update(|window, cx| {
             let _ = window.draw(cx);
-            assert!(window.has_active_dialog(cx));
+            assert!(app.read(cx).settings_ui.open);
+            assert!(
+                !window.has_active_dialog(cx),
+                "settings are a destination, not a dialog"
+            );
         });
-        let surface = cx.debug_bounds("dialog-0").unwrap();
-        let modal = cx.debug_bounds("settings-modal").expect("settings surface");
-        let header = cx
-            .debug_bounds("settings-modal-header")
-            .expect("fixed header");
-        let body = cx
-            .debug_bounds("settings-modal-body")
-            .expect("scrollable body");
-        let footer = cx
-            .debug_bounds("settings-modal-footer")
-            .expect("fixed footer");
-        let close = cx.debug_bounds("settings-close").expect("close button");
-        assert!(modal.left() >= px(16.) && modal.right() <= px(width - 16.));
-        assert!(modal.top() >= px(16.) && modal.bottom() <= px(height - 16.));
+        let surface = cx.debug_bounds("settings-workspace").unwrap();
+        let header = cx.debug_bounds("settings-workspace-header").unwrap();
+        let body = cx.debug_bounds("settings-workspace-body").unwrap();
+        let footer = cx.debug_bounds("settings-workspace-footer").unwrap();
+        let close = cx.debug_bounds("settings-close").unwrap();
+        assert!(surface.size.width >= px(width - 2.));
+        assert!(surface.bottom() <= px(height));
         assert!(body.top() >= header.bottom() && body.bottom() <= footer.top());
         assert!(
-            body.size.height >= px(300.),
-            "settings keep room for their content"
+            body.size.height >= px(350.),
+            "whole-window settings retain usable content height"
         );
         assert!(close.top() >= header.top() && close.bottom() <= header.bottom());
-        let inside = point(surface.left() + px(12.), surface.center().y);
-        cx.simulate_mouse_down(inside, MouseButton::Left, Modifiers::default());
-        cx.simulate_mouse_up(inside, MouseButton::Left, Modifiers::default());
-        cx.update(|window, cx| assert!(window.has_active_dialog(cx)));
-        let appearance = cx
-            .debug_bounds("settings-nav-1")
-            .expect("appearance navigation");
+        let appearance = cx.debug_bounds("settings-nav-1").unwrap();
         cx.simulate_mouse_down(appearance.center(), MouseButton::Left, Modifiers::default());
         cx.simulate_mouse_up(appearance.center(), MouseButton::Left, Modifiers::default());
         cx.run_until_parked();
@@ -255,28 +254,31 @@ fn settings_dismisses_on_outside_click_and_keeps_inside_clicks(cx: &mut TestAppC
             "appearance-theme-light",
             "appearance-theme-dark",
         ] {
-            let card = cx.debug_bounds(selector).expect("theme preview card");
+            let card = cx.debug_bounds(selector).unwrap();
             assert!(card.left() >= body.left() && card.right() <= body.right());
             assert!(card.top() >= body.top() && card.bottom() <= body.bottom());
             if let Some(last) = previous {
                 let last: gpui_kit::Bounds<gpui_kit::Pixels> = last;
-                assert!(card.left() > last.right(), "theme cards do not overlap");
+                assert!(card.left() > last.right());
                 assert_eq!(card.top(), last.top());
             }
             previous = Some(card);
         }
-        if close_method == 1 {
+        if light {
             cx.simulate_keystrokes("escape");
-        } else if close_method == 2 {
+        } else {
             cx.simulate_mouse_down(close.center(), MouseButton::Left, Modifiers::default());
             cx.simulate_mouse_up(close.center(), MouseButton::Left, Modifiers::default());
-        } else {
-            let outside = point(px(10.), px(100.));
-            cx.simulate_mouse_down(outside, MouseButton::Left, Modifiers::default());
-            cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::default());
         }
         cx.run_until_parked();
-        cx.update(|window, cx| assert!(!window.has_active_dialog(cx)));
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            let app = app.read(cx);
+            assert!(!app.settings_ui.open);
+            assert_eq!(app.settings_ui.page, 1, "remember last page");
+            assert_eq!(app.input.read(cx).value().as_str(), "保留这份草稿");
+            assert!(app.input.read(cx).focus_handle(cx).is_focused(window));
+        });
     }
 }
 
@@ -328,7 +330,7 @@ fn settings_connections_switch_engines_and_keep_read_only_actions_disabled(
         cx.update(|window, cx| {
             let _ = window.draw(cx);
         });
-        let body = cx.debug_bounds("settings-modal-body").unwrap();
+        let body = cx.debug_bounds("settings-workspace-body").unwrap();
         let mut last_right = body.left();
         for selector in [
             "settings-engine-0",
@@ -375,8 +377,8 @@ fn settings_connections_switch_engines_and_keep_read_only_actions_disabled(
                 app.read(cx).connection_settings.engine,
                 crate::domain::Provider::Claude
             );
-            assert!(window.has_active_dialog(cx));
-            window.close_dialog(cx);
+            assert!(app.read(cx).settings_ui.open);
+            app.update(cx, |app, cx| app.close_settings(window, cx));
         });
     }
 }
@@ -2296,6 +2298,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
         created_at: 0,
         exit_code: None,
         archived: false,
+        pinned: false,
         model: None,
         messages: vec![],
         interrupted: true,
@@ -2610,6 +2613,7 @@ fn long_chat_virtualizes_real_rows_and_keeps_history_jump_on_append(cx: &mut Tes
                         created_at: 0,
                         exit_code: None,
                         archived: false,
+                        pinned: false,
                         native_id: None,
                         model: None,
                         messages,
@@ -2993,6 +2997,7 @@ fn check_assistant_drag_selection(
                         created_at: 0,
                         exit_code: None,
                         archived: false,
+                        pinned: false,
                         native_id: None,
                         model: None,
                         messages: vec![
@@ -3465,6 +3470,7 @@ fn composer_files_paste_drafts_removal_and_failed_send(cx: &mut TestAppContext) 
         exit_code: None,
         title: format!("Chat {id}"),
         archived: false,
+        pinned: false,
         native_id: None,
         model: None,
         messages: vec![],
@@ -3833,6 +3839,7 @@ fn attachment_tags_size_to_names_and_stay_inside_the_user_bubble(cx: &mut TestAp
                         exit_code: None,
                         title: "Files".into(),
                         archived: false,
+                        pinned: false,
                         native_id: None,
                         model: None,
                         messages: vec![ChatItem::from(crate::domain::ChatItemData {
@@ -4037,6 +4044,7 @@ fn deleting_blank_session_skips_confirmation(cx: &mut TestAppContext) {
         exit_code: None,
         title: "新会话".into(),
         archived: false,
+        pinned: false,
         native_id: None,
         model: None,
         messages,
@@ -4578,6 +4586,7 @@ fn composer_recalls_sent_prompts_with_arrow_keys(cx: &mut TestAppContext) {
                         created_at: 0,
                         exit_code: None,
                         archived: false,
+                        pinned: false,
                         model: None,
                         messages: vec![
                             item("turn-0-user", "第一条"),
@@ -5396,7 +5405,7 @@ fn settings_extensions_lists_search_details_and_context_are_isolated(cx: &mut Te
         cx.update(|window, cx| {
             let _ = window.draw(cx);
         });
-        let body = cx.debug_bounds("settings-modal-body").unwrap();
+        let body = cx.debug_bounds("settings-workspace-body").unwrap();
         let list = cx.debug_bounds("extensions-list").unwrap();
         assert!(list.size.height >= px(120.));
         let first = cx.debug_bounds("extension-detail-0").unwrap();
@@ -5426,6 +5435,16 @@ fn settings_extensions_lists_search_details_and_context_are_isolated(cx: &mut Te
             let _ = window.draw(cx);
         });
         cx.update(|_, cx| assert_eq!(app.read(cx).extensions_ui.lists[0].item_count(), 1));
+        let nav = cx.debug_bounds("settings-navigation-scroll").unwrap();
+        cx.simulate_event(ScrollWheelEvent {
+            position: nav.center(),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-200.))),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
         let tab = cx.debug_bounds("settings-nav-9").unwrap();
         cx.simulate_mouse_down(tab.center(), MouseButton::Left, Modifiers::default());
         cx.simulate_mouse_up(tab.center(), MouseButton::Left, Modifiers::default());
@@ -5458,6 +5477,7 @@ fn settings_extensions_lists_search_details_and_context_are_isolated(cx: &mut Te
         cx.run_until_parked();
         cx.update(|window, cx| {
             assert!(!window.has_active_dialog(cx));
+            assert!(!app.read(cx).settings_ui.open);
             assert!(app.read(cx).extensions_ui.probe.is_none());
         });
     }

@@ -117,7 +117,7 @@ fn search_discards_results_after_transcript_changes(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
-            assert!(app.search_ui.hits.is_empty());
+            assert_eq!(app.search_ui.hits[0].snippet, "new prompt");
             app.refresh_search(cx, false);
         });
     });
@@ -125,6 +125,31 @@ fn search_discards_results_after_transcript_changes(cx: &mut TestAppContext) {
     cx.update(|_, cx| {
         let app = app.read(cx);
         assert_eq!(app.search_ui.hits.len(), 1);
+        assert_eq!(app.search_ui.hits[0].snippet, "new prompt");
+    });
+}
+
+#[gpui_kit::test]
+fn content_updates_do_not_cancel_an_active_search(cx: &mut TestAppContext) {
+    let (app, cx, _) = fixture(cx);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.search_query = "prompt".into();
+            app.refresh_search(cx, false);
+            let generation = app.search_ui.generation;
+            let cancel = app.search_ui.cancel.clone();
+            for _ in 0..20 {
+                app.session_mut(1).unwrap().messages = vec![item("user", "new prompt")];
+                app.refresh_search(cx, false);
+                assert_eq!(app.search_ui.generation, generation);
+                assert!(!cancel.load(std::sync::atomic::Ordering::Acquire));
+            }
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert!(!app.search_ui.running);
         assert_eq!(app.search_ui.hits[0].snippet, "new prompt");
     });
 }

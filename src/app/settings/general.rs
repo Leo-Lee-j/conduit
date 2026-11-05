@@ -41,7 +41,9 @@ impl ConduitApp {
                     .description("开启后聊天内容铺满可用区域，关闭时居中显示")
                     .disabled(disabled),
                 SettingItem::new("侧栏会话数量", sessions_limit)
-                    .description("每个工作区默认显示的会话数，更多会话可展开查看")
+                    .description(
+                        "每个工作区默认显示的普通会话数；置顶会话不计入，更多会话可展开查看",
+                    )
                     .disabled(disabled),
                 SettingItem::new("标签页上限", max_tabs_limit)
                     .description("超出上限时自动关闭最早打开的标签页")
