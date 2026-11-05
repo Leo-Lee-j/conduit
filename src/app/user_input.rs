@@ -285,7 +285,7 @@ impl ConduitApp {
                                 };
                                 if run.runtime.is_cancelled()
                                     || run.approvals.is_submitted(&request)
-                                    || !run.approvals.front().is_some_and(|a| a.id == request)
+                                    || run.approvals.front().is_none_or(|a| a.id != request)
                                 {
                                     return;
                                 }
@@ -351,7 +351,7 @@ impl ConduitApp {
                                 return;
                             };
                             if run.runtime.is_cancelled()
-                                || !run.approvals.front().is_some_and(|a| a.id == submit_id)
+                                || run.approvals.front().is_none_or(|a| a.id != submit_id)
                             {
                                 return;
                             }

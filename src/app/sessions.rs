@@ -1,6 +1,7 @@
 //! Workspace/session lifecycle, history import, and navigation.
 
 use super::*;
+use conduit::plugins::{builtins, ids::ViewId};
 
 pub(super) fn single_line_title(title: &str) -> String {
     title.replace(['\r', '\n'], " ")
@@ -370,7 +371,10 @@ impl ConduitApp {
     }
 
     pub(super) fn delete_session(&mut self, id: u64, cx: &mut Context<Self>) {
-        if self.session_control.runs.contains_key(&id) {
+        if self.session_control.runs.contains_key(&id)
+            || self.session_control.queue_saves.contains_key(&id)
+            || self.session_draft_save_pending(id)
+        {
             self.message = Some("该会话仍有任务运行，请先取消后再删除。".into());
             self.delete_target = None;
             cx.notify();
@@ -395,9 +399,8 @@ impl ConduitApp {
         self.expanded_reasoning
             .retain(|(session, _)| *session != id);
         self.tool_scrolls.retain(|(session, _), _| *session != id);
-        self.detail_scrolls.retain(|(session, _), _| *session != id);
+        self.tool_details.forget_session(id);
         self.remove_tab(id);
-        self.detail_text = None;
         self.select_fallback_session();
         self.delete_target = None;
         self.persist_and_cleanup_attachments();
@@ -715,7 +718,7 @@ impl ConduitApp {
             self.expanded_tools.retain(|(id, _)| *id != session.id);
             self.expanded_reasoning.retain(|(id, _)| *id != session.id);
             self.tool_scrolls.retain(|(id, _), _| *id != session.id);
-            self.detail_scrolls.retain(|(id, _), _| *id != session.id);
+            self.tool_details.forget_session(session.id);
         }
         let removed_ids: Vec<u64> = removed.sessions.iter().map(|session| session.id).collect();
         self.open_tabs
@@ -730,7 +733,6 @@ impl ConduitApp {
         {
             self.selected_workspace = Some(selected - 1);
         }
-        self.detail_text = None;
         self.persist_and_cleanup_attachments();
         self.sync_git_workspace(cx);
         cx.notify();
@@ -795,28 +797,40 @@ impl ConduitApp {
             .into_any_element()
     }
 
-    /// Whether the tool detail dock is currently visible.
-    pub(super) fn details_open(&self) -> bool {
-        self.details && self.detail_view == DetailView::Tool
-    }
-
-    /// Toggle button for the tool detail dock, pinned to the right of the tab bar.
+    /// Toggle the shared sidebar, retaining the last available tab.
     pub(super) fn detail_toggle(&self, cx: &mut Context<Self>) -> Button {
+        let open = self.plugins.right_visible(self.branch_navigation_open());
         Button::new("toggle-sidebar")
+            .debug_selector(|| "toggle-sidebar".into())
             .ghost()
             .small()
             .compact()
             .icon(gpui_kit::assets::IconName::PanelRight)
             .cursor_pointer()
-            .tooltip(if self.details_open() {
-                "隐藏工具详情"
+            .selected(open)
+            .tooltip(if open {
+                "隐藏侧边栏"
             } else {
-                "显示工具详情"
+                "显示侧边栏"
             })
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.details = !this.details_open();
-                this.detail_view = DetailView::Tool;
-                cx.notify();
+            .accessibility_label(if open {
+                "隐藏侧边栏"
+            } else {
+                "显示侧边栏"
+            })
+            .on_click(cx.listener(|this, _, window, cx| {
+                if this.plugins.right_visible(this.branch_navigation_open()) {
+                    this.close_right_view(window, cx);
+                } else {
+                    let selected = this.plugins.right().clone();
+                    if !this.open_right_view(&selected, window, cx) {
+                        this.open_right_view(
+                            &ViewId::new(builtins::NOTIFICATIONS).unwrap(),
+                            window,
+                            cx,
+                        );
+                    }
+                }
             }))
     }
 
@@ -836,7 +850,6 @@ impl ConduitApp {
         self.active_diff = None;
         self.selected_workspace = None;
         self.selected_session = None;
-        self.detail_text = None;
         self.message = None;
         self.message_focus = None;
         self.pending_message_jump = None;
@@ -870,6 +883,11 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if session.is_some_and(|id| self.pending_new_session(id)) {
+            self.message = Some("正在保存新会话，请稍候；草稿会保留到保存成功。".into());
+            cx.notify();
+            return;
+        }
         if let Some(id) = self.selected_session {
             self.drafts
                 .insert(id, self.input.read(cx).value().to_string());
@@ -896,7 +914,6 @@ impl ConduitApp {
         }
         self.message_focus = None;
         self.pending_message_jump = None;
-        self.detail_text = None;
         self.message = None;
         let draft = match session {
             Some(id) => self.drafts.get(&id),
@@ -1329,10 +1346,19 @@ impl ConduitApp {
         if !self.writable || self.closing || index >= self.store.workspaces.len() {
             return None;
         }
-        self.collapsed_workspaces
-            .remove(&self.store.workspaces[index].path);
+        let session = self.prepare_session(provider);
+        let id = session.id;
+        self.store.workspaces[index].sessions.insert(0, session);
+        self.select_created_session(index, id, provider);
+        self.persist();
+        cx.notify();
+        Some(id)
+    }
+
+    /// Build the exact selection for validation without creating an empty session
+    /// or consuming the composer's pending model selection.
+    pub(super) fn prepare_session(&mut self, provider: Provider) -> SessionRecord {
         let id = self.next_id;
-        self.next_id += 1;
         if provider != Provider::OpenCode {
             self.catalogs.insert(provider, models::load(provider));
         }
@@ -1342,54 +1368,60 @@ impl ConduitApp {
             .catalogs
             .get(&provider)
             .and_then(|catalog| catalog.current.clone());
-        self.store.workspaces[index].sessions.insert(
-            0,
-            SessionRecord {
-                transcript: Default::default(),
-                id,
-                provider,
-                created_at: SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                exit_code: None,
-                title: "新会话".into(),
-                archived: false,
-                native_id: None,
-                model,
-                messages: vec![],
-                interrupted: false,
-                channel: Default::default(),
-                reasoning_effort: ReasoningEffort::for_provider(provider),
-                opencode: Default::default(),
-                permission: self.pending_permission,
-                usage: Usage::default(),
-            },
-        );
+        let mut session = SessionRecord {
+            transcript: Default::default(),
+            id,
+            provider,
+            created_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            exit_code: None,
+            title: "新会话".into(),
+            archived: false,
+            native_id: None,
+            model,
+            messages: vec![],
+            interrupted: false,
+            channel: Default::default(),
+            reasoning_effort: ReasoningEffort::for_provider(provider),
+            opencode: Default::default(),
+            permission: self.pending_permission,
+            usage: Usage::default(),
+        };
+        if self.store.session_defaults.contains_key(&provider) {
+            self.default_selection(provider).apply(&mut session);
+        }
+        if let Some(selection) = self
+            .pending_model_selection
+            .as_ref()
+            .filter(|s| s.engine == provider)
+        {
+            selection.clone().apply(&mut session);
+        }
+        session
+    }
+
+    pub(super) fn select_created_session(&mut self, index: usize, id: u64, provider: Provider) {
+        self.next_id = self.next_id.max(id + 1);
+        self.collapsed_workspaces
+            .remove(&self.store.workspaces[index].path);
         self.selected_workspace = Some(index);
         self.active_file = None;
         self.active_diff = None;
         self.selected_session = Some(id);
-        if self.store.session_defaults.contains_key(&provider) {
-            self.default_selection(provider)
-                .apply(&mut self.store.workspaces[index].sessions[0]);
-        }
         if self
             .pending_model_selection
             .as_ref()
             .is_some_and(|s| s.engine == provider)
-            && let Some(selection) = self.pending_model_selection.take()
         {
-            selection.apply(&mut self.store.workspaces[index].sessions[0]);
+            self.pending_model_selection = None;
         }
         self.sidebar
             .invalidate_workspace(&self.store.workspaces[index].path);
         self.push_tab(id);
         self.new_session_provider = provider;
-        self.remember_provider(provider);
-        self.persist();
-        cx.notify();
-        Some(id)
+        self.store.ui.last_provider = Some(provider);
     }
 
     pub(super) fn remember_provider(&mut self, provider: Provider) {

@@ -1,4 +1,5 @@
 fn main() {
+    println!("cargo:rustc-check-cfg=cfg(conduit_shell_desktop)");
     println!("cargo:rerun-if-env-changed=CONDUIT_UPDATE_PUBLIC_KEY");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=assets/app-icons/icon.ico");

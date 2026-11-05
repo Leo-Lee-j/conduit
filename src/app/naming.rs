@@ -57,6 +57,7 @@ impl ConduitApp {
                 started: Instant::now(),
                 parts: vec![],
                 error: None,
+                cleanup_error: None,
             },
         );
         cx.notify();
@@ -122,6 +123,17 @@ impl ConduitApp {
                     }
                     Ok(Event::ErrorBanner(error)) => {
                         naming.error = Some(naming_failure_text(&error));
+                        cx.notify();
+                    }
+                    Ok(Event::CleanupBlocked(error)) => {
+                        naming.cleanup_error = Some(error.clone());
+                        naming.error = Some(error.clone());
+                        naming.runtime.cancel();
+                        self.session_control
+                            .naming_errors
+                            .insert(*id, error.clone());
+                        self.closing = false;
+                        self.message = Some(error);
                         cx.notify();
                     }
                     Ok(Event::Finished { error, cancelled }) => {

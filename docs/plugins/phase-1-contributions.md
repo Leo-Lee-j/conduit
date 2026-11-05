@@ -1,8 +1,8 @@
 # P1：界面贡献与内置适配
 
-设计版本：0.3；日期：2026-11-05；状态：P1-0 已记录原型结果，P1-1 数据注册层已实现，三处正式 UI 待迁移。前置阅读：[共同约定](README.md)与[Shell 复用评估](gpui-shell-reuse-assessment.md)；下一阶段优先验证 [P2-A Shell](phase-2-shell-runtime.md)，[P2-B 独立进程](phase-2-local-runtime.md)为备选。
+设计版本：0.7；日期：2026-11-05；状态：P1-0 已记录原型结果，P1-1 至 P1-5 原生贡献及生命周期已接入；Shell 生产准入与 P2 后端决策仍待完成。前置阅读：[共同约定](README.md)与[Shell 复用评估](gpui-shell-reuse-assessment.md)；下一阶段优先验证 [P2-A Shell](phase-2-shell-runtime.md)，[P2-B 独立进程](phase-2-local-runtime.md)为备选。
 
-当前代码与验证边界见 [P1-1 实现记录](p1-registry-validation.md)。本文仍描述完整 P1 目标；已实现的数据契约与后续 UI / 生命周期工作分别记录，不能将注册层测试等同于整个阶段验收。
+当前代码与验证边界见 [P1-1 实现记录](p1-registry-validation.md)、[P1-2 进度与验证](p1-2-progress-2026-11-05.md)、[P1-3 进度与验证](p1-3-progress-2026-11-05.md)、[P1-4 进度与验证](p1-4-progress-2026-11-05.md)及 [P1-5 生命周期与验收](p1-5-progress-2026-11-05.md)。本文描述完整 P1 目标；原生贡献自动化测试通过，Shell 准入、人工视觉验收与生产性能另行记录。
 
 ## 目标与交付边界
 
@@ -20,7 +20,7 @@ renderer key 应能由 app 层解析为内置视图，或未来所选后端的�
 
 ## 数据模型与依赖方向
 
-`src/plugins/` 中的类型只依赖普通 Rust 数据和序列化类型。建议新增 `ids.rs`、`contributions.rs`、`registry.rs`、`commands.rs`、`context.rs`；由 `src/plugins.rs` 声明模块，并已从现有 `src/lib.rs` 导出为 `conduit::plugins`，支持独立库级测试；ConduitApp 适配将在 P1-2 开始接入。
+`src/plugins/` 中的类型只依赖普通 Rust 数据和序列化类型。已新增 `ids.rs`、`contributions.rs`、`registry.rs`、`commands.rs`、`context.rs`；由 `src/plugins.rs` 声明模块，并从现有 `src/lib.rs` 导出为 `conduit::plugins`，支持独立库级测试。ConduitApp 已通过 `PluginUi` 接入左侧导航、右侧容器及底栏，原生命令执行前统一校验。
 
 | 类型 | 必要字段 | 约束 |
 | --- | --- | --- |
@@ -33,7 +33,7 @@ renderer key 应能由 app 层解析为内置视图，或未来所选后端的�
 | `ViewInstanceKey` | owner、view_id、scope_key | 区分不同工作区或会话的视图状态 |
 | `ScopeKey` | Global / Workspace / Session | Session 必须同时绑定工作区及会话身份 |
 
-以下为完整阶段的结构示意；当前纯数据版本见 `src/plugins/state.rs`，GUI 尺寸、拖动、工具内容与实例缓存仍由后续 app 适配补齐。
+以下为完整阶段的结构示意；当前选择状态见 `src/plugins/state.rs`，有界实例缓存与请求票据见 [instances.rs](../../src/plugins/instances.rs)，GUI 尺寸、拖动和工具内容由 app 适配。
 
 ```rust
 struct NavigationState {
@@ -81,7 +81,7 @@ struct ViewInstanceKey {
 | --- | --- | --- |
 | 左侧入口 | 顶部为核心导航与功能贡献，底部保留设置、关于和折叠；空间不足时将后序可见功能放入更多菜单，选中功能仍可在菜单中定位 | 图标栏折叠后仍可使用；工作区任务徽标及文件 / Git 刷新逻辑继续生效 |
 | 左侧页面 | 通过 ViewId 找 renderer；点击某页时展开侧栏；不因再次点击当前页而隐式重建其状态 | 共用默认宽度和拖动后宽度；键盘切换 Git 通过同一个导航动作 |
-| 右侧容器 | 标题区显示当前视图标题、视图切换菜单和关闭按钮；一次显示一个视图；宿主统一提供加载、空白及失败占位 | 窄屏浮层、宽屏限宽、拖动跟手、标题固定、内容独立滚动 |
+| 右侧容器 | 标题区使用与聊天标签栏对齐的图标页签，注册标题用于 tooltip / 可访问名称；固定关闭及视图操作；一次显示一个视图，统一加载 / 空白 / 失败占位 | 窄屏浮层、宽屏限宽、拖动跟手、标题固定、内容独立滚动 |
 | 工具详情 | 点击工具详情图标时显式激活核心工具视图并记录对应会话和消息；背景工具事件仅更新内容 | 工具输入 / 输出、复制、状态和滚动位置继续可用 |
 | 底部 | 左右贡献区域与核心状态分开；插件文本限制宽度，溢出项进入更多菜单；工具栏高度保持现有 34px | 工作区、分支、执行状态、推送与性能入口仍可操作；与侧栏底部对齐 |
 
@@ -115,11 +115,11 @@ struct ViewInstanceKey {
 | [files.rs](../../src/app/files.rs) | `Navigation` 分支迁为 ViewId 查询；`show_git_navigation` / `toggle_git_navigation` 调用统一导航动作；保留文件业务状态 |
 | [sidebar.rs](../../src/app/sidebar.rs) | 保留 `SidebarView` 缓存边界，接入注册表变更和必要上下文更新 |
 | [dock.rs](../../src/app/dock.rs) | 提取工具内容 renderer 和通用容器，不在容器中查找工具消息 |
-| [tools.rs](../../src/app/tools.rs)、[sessions.rs](../../src/app/sessions.rs) | 工具详情入口与标题栏切换按钮调用统一的 OpenView / CloseDock 动作 |
+| [tools.rs](../../src/app/tools.rs)、[sessions.rs](../../src/app/sessions.rs) | 工具详情入口显式激活工具视图，标题栏侧栏按钮恢复上次可用视图；统一 OpenView / CloseDock 动作 |
 | [toolbar.rs](../../src/app/toolbar.rs)、[shell.rs](../../src/app/shell.rs) | 插入贡献项、更多入口和容器；沿用宽度与浮层逻辑 |
-| [app.rs](../../src/app.rs)、[state.rs](../../src/app/state.rs) | 引入 PluginUi / DockState / ToolDetailState，移除被替代的导航字段 |
-| 拟新增 `src/app/plugin_ui.rs`、`plugin_views.rs` | 原生 renderer map、动作分发和示例视图 |
-| 拟新增 `src/plugins/` 基础模块 | 贡献声明、验证、注册 / 注销、上下文和命令数据 |
+| [app.rs](../../src/app.rs)、[state.rs](../../src/app/state.rs) | 引入 PluginUi / DockLayout / ToolDetailState，移除被替代的导航与右栏字段 |
+| [plugin_ui.rs](../../src/app/plugin_ui.rs)、[plugin_ui/right.rs](../../src/app/plugin_ui/right.rs) | 已接入原生 renderer map 与视图动作分发；[commands.rs](../../src/app/plugin_ui/commands.rs)、[status.rs](../../src/app/plugin_ui/status.rs)、[example.rs](../../src/app/plugin_ui/example.rs) 提供统一命令、底栏与示例 |
+| `src/plugins/` 基础模块 | 已实现贡献声明、验证、注册 / 注销、上下文和命令数据 |
 
 内置业务不必全部重写成插件：P1 至少将三个核心导航页、工具详情、一个简单状态项和示例接入注册路径。Git 分支选择器、复杂弹出控件仍可作为宿主保留内容，避免为复杂内置控件提前扩大外部 API。
 
@@ -131,10 +131,10 @@ struct ViewInstanceKey {
 | --- | --- | --- |
 | P1-0 Shell 复用验证 | G1–G6 结果、公开 API 路径及后端选择记录 | 多实例、按插件权限、主线程预算与 Root 兼容；不以 standalone 示例代替集成 |
 | P1-1 身份与注册 | 已实现数据模型、原子注册、注销、条件与路由校验；见[实现记录](p1-registry-validation.md) | 重复 ID、非法引用、未知条件、跨 owner / 代次、回退规则的单元测试 |
-| P1-2 左侧接入 | 核心导航适配、更多菜单、统一导航动作 | 文件 / Git 导航、工作区重排、折叠及宽度回归 |
-| P1-3 右侧接入 | 通用容器、工具详情适配、实例状态 | 宽 / 窄屏、独立滚动、显式打开、会话隔离 |
-| P1-4 底栏与示例 | 状态项布局、命令分发、完整示例 | 三处联动、窄窗口溢出、重复点击和只读行为 |
-| P1-5 进入 P2 的接口检查 | 宿主数据与 GPUI 对象边界、异步版本检查 | 示例注销后无残留，旧上下文结果不更新新视图 |
+| P1-2 左侧接入 | 已实现核心导航适配、滚动更多菜单、统一导航动作；见[进度记录](p1-2-progress-2026-11-05.md) | 文件 / Git 导航、工作区重排、折叠、宽度和菜单缩放回归 |
+| P1-3 右侧接入 | 已实现通用容器、工具 / 通知适配及工具状态缓存；见[进度记录](p1-3-progress-2026-11-05.md) | 宽 / 窄屏、独立滚动、显式打开、会话隔离、注销与删除回退 |
+| P1-4 底栏与示例 | 已接入状态项布局、统一原生命令与完整示例；见[进度记录](p1-4-progress-2026-11-05.md) | 三处联动、窄窗口溢出、重复点击、只读及注销行为 |
+| P1-5 进入 P2 的接口检查 | 已接入通用实例缓存、原生取消 / 清理与纯数据摘要；见[进度验收](p1-5-progress-2026-11-05.md) | 迟到结果、同名重注册、隐藏与淘汰、退出、摘要合并和聊天增量不重绘已覆盖；P2 后端决策仍独立 |
 
 需要保留的既有测试包括 [ui_tests.rs](../../src/app/ui_tests.rs) 中的 `tool_dock_keeps_header_visible_and_scrolls_independently_in_both_layouts`、`navigation_modes_share_default_and_retained_width_without_duplicate_git`、`sidebar_bottom_bar_matches_the_toolbar_and_opens_about`、`workspace_drag_reorders_and_preserves_navigation_identity`，以及 [files.rs](../../src/app/files.rs) 的文件与 Git 导航回归。
 

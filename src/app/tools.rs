@@ -869,6 +869,7 @@ pub(super) fn tool_detail_panel(
     cx: &mut Context<ConduitApp>,
 ) -> AnyElement {
     let dock_key = item.key.clone();
+    let dock_session = detail_key.0;
     let edit = is_tool_edit(item);
     let (content, copy_text) = if edit {
         edit_diff_content(tool_id, detail_key, item, scroll, typography, diffs, cx)
@@ -907,11 +908,8 @@ pub(super) fn tool_detail_panel(
                         .icon(gpui_kit::assets::IconName::PanelRight)
                         .tooltip("在右侧查看工具详情")
                         .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.details = true;
-                            this.detail_view = DetailView::Tool;
-                            this.detail_text = Some(dock_key.clone());
-                            cx.notify();
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.open_tool_details(dock_session, &dock_key, window, cx);
                         })),
                 )
                 .child(

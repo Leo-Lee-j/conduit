@@ -3,7 +3,7 @@ use crate::event_queue::Sender;
 use gpui_kit::{AppContext as _, Entity, Focusable as _, TestAppContext, VisualTestContext};
 use std::path::PathBuf;
 
-fn fixture<'a>(
+pub(in crate::app) fn fixture<'a>(
     cx: &'a mut TestAppContext,
     name: &str,
 ) -> (Entity<ConduitApp>, &'a mut VisualTestContext, PathBuf) {
@@ -59,7 +59,7 @@ fn fixture<'a>(
     (app, cx, root)
 }
 
-fn running(app: &mut ConduitApp, id: u64) -> Sender {
+pub(in crate::app) fn running(app: &mut ConduitApp, id: u64) -> Sender {
     let (runtime, sender) = ChatRuntime::test_channel();
     let path = app
         .store
@@ -91,6 +91,16 @@ fn draw(cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
+fn settle_saves(
+    app: &mut ConduitApp,
+    window: &mut gpui_kit::Window,
+    cx: &mut gpui_kit::Context<ConduitApp>,
+) {
+    app.persistence.flush();
+    app.poll_pending_sends(window, cx);
+    app.persistence.flush();
+}
+
 #[gpui_kit::test]
 fn queue_message_ui_capacity_and_takeback_preserve_drafts(cx: &mut TestAppContext) {
     let (app, cx, root) = fixture(cx, "capacity");
@@ -111,6 +121,7 @@ fn queue_message_ui_capacity_and_takeback_preserve_drafts(cx: &mut TestAppContex
     assert!(cx.debug_bounds("queue-message").is_none());
     assert!(cx.debug_bounds("stop").is_some());
     cx.simulate_keystrokes("enter");
+    cx.update(|window, cx| app.update(cx, |this, cx| settle_saves(this, window, cx)));
     draw(cx);
     let bubble = cx.debug_bounds("queued-message").unwrap();
     let composer = cx.debug_bounds("composer").unwrap();
@@ -157,6 +168,7 @@ fn queue_message_ui_capacity_and_takeback_preserve_drafts(cx: &mut TestAppContex
                 file.canonicalize().unwrap()
             );
             assert!(this.queued_messages.is_empty());
+            this.persistence.flush();
             assert!(Store::load().unwrap().queued_messages.is_empty());
         })
     });
@@ -174,6 +186,7 @@ fn queue_message_background_completion_uses_bound_session_and_keeps_focus(cx: &m
             this.input
                 .update(cx, |input, cx| input.set_value("follow-up", window, cx));
             this.send_prompt(window, cx);
+            settle_saves(this, window, cx);
             assert!(this.queued_messages.contains_key(&1));
             this.selected_workspace = Some(1);
             this.selected_session = Some(2);
@@ -217,6 +230,7 @@ fn queue_message_background_completion_uses_bound_session_and_keeps_focus(cx: &m
                 Some("latest-native-id")
             );
             assert!(this.queued_messages.is_empty());
+            this.persistence.flush();
             assert!(Store::load().unwrap().queued_messages.is_empty());
             assert!(this.session_control.runs.contains_key(&1));
             this.session_control.runs.remove(&1).unwrap().cancel();
@@ -234,6 +248,7 @@ fn queue_message_failure_cancel_and_manual_send(cx: &mut TestAppContext) {
                 this.input
                     .update(cx, |input, cx| input.set_value("retained", window, cx));
                 this.send_prompt(window, cx);
+                settle_saves(this, window, cx);
                 sender.send(Event::Finished { error, cancelled }).unwrap();
                 this.poll(window, cx);
                 assert_eq!(this.queued_messages[&1].text, "retained");
@@ -245,12 +260,15 @@ fn queue_message_failure_cancel_and_manual_send(cx: &mut TestAppContext) {
                     "paused queue cannot automatically resume"
                 );
                 this.queued_messages.remove(&1);
+                this.persist();
+                this.persistence.flush();
             }
             let sender = running(this, 1);
             this.input.update(cx, |input, cx| {
                 input.set_value("manual follow-up", window, cx)
             });
             this.send_prompt(window, cx);
+            settle_saves(this, window, cx);
             this.pause_queued_message(1, "stopped");
             sender
                 .send(Event::Finished {
@@ -266,6 +284,7 @@ fn queue_message_failure_cancel_and_manual_send(cx: &mut TestAppContext) {
             assert!(this.session_control.runs.contains_key(&1));
             assert_eq!(this.input.read(cx).value().as_ref(), "keep my draft");
             this.session_control.runs.remove(&1).unwrap().cancel();
+            this.persistence.flush();
         })
     });
 }
@@ -283,6 +302,7 @@ fn queue_message_invalid_attachment_launch_failure_and_close_keep_content(cx: &m
                 input.set_value("with attachment", window, cx)
             });
             this.send_prompt(window, cx);
+            settle_saves(this, window, cx);
             std::fs::remove_file(&file).unwrap();
             sender
                 .send(Event::Finished {
@@ -314,6 +334,7 @@ fn queue_message_invalid_attachment_launch_failure_and_close_keep_content(cx: &m
             this.closing = false;
             this.delete_session(1, cx);
             assert!(!this.queued_messages.contains_key(&1));
+            this.persistence.flush();
         })
     });
 }
@@ -328,6 +349,7 @@ fn queue_message_reopen_restores_paused_and_never_auto_sends(cx: &mut TestAppCon
                 input.set_value("survive restart", window, cx)
             });
             this.send_prompt(window, cx);
+            settle_saves(this, window, cx);
             let loaded = Store::load().unwrap();
             let restored =
                 cx.new(|cx| ConduitApp::with_store(window, cx, Ok(loaded), false, false));
@@ -338,6 +360,7 @@ fn queue_message_reopen_restores_paused_and_never_auto_sends(cx: &mut TestAppCon
                 assert!(restored.session_control.runs.is_empty());
                 restored.remove_workspace(0, cx);
                 assert!(restored.queued_messages.is_empty());
+                restored.persistence.flush();
             });
         })
     });

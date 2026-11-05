@@ -1,5 +1,6 @@
 //! Persistent branch navigation with independently loaded history and commit details.
 use super::*;
+use gpui_kit::component::skeleton::Skeleton;
 mod graph;
 mod tree;
 
@@ -46,11 +47,7 @@ impl GitLogView {
         let text = cx.new(|cx| InputState::new(window, cx).placeholder("提交信息或哈希"));
         let author = cx.new(|cx| InputState::new(window, cx).placeholder("作者"));
         let path = cx.new(|cx| InputState::new(window, cx).placeholder("文件或目录路径"));
-        let interaction = cx.new(|_| {
-            let mut state = git_branches::BranchMenuInteraction::default();
-            state.remote_expanded = true;
-            state
-        });
+        let interaction = cx.new(|_| git_branches::BranchMenuInteraction::default());
         let owner = cx.weak_entity();
         let tree = cx.new(|cx| tree::BranchTree::new(owner, cx));
         let mut subscriptions =
@@ -95,9 +92,9 @@ impl GitLogView {
                     this.details_loading = false;
                     this.details_error = None;
                     this.graph.clear();
+                    this.collapsed = HashSet::from(["git-tags-section".into()]);
                     this.interaction.update(cx, |state, cx| {
                         *state = Default::default();
-                        state.remote_expanded = true;
                         cx.notify();
                     });
                 }
@@ -146,7 +143,7 @@ impl GitLogView {
             log_cancel: Arc::new(AtomicBool::new(false)),
             detail_cancel: Arc::new(AtomicBool::new(false)),
             sequence: 0,
-            collapsed: HashSet::new(),
+            collapsed: HashSet::from(["git-tags-section".into()]),
             scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
             _subscriptions: subscriptions,
@@ -395,6 +392,7 @@ impl GitLogView {
             .debug_selector(move || format!("git-log-commit-{index}"))
             .w_full()
             .h(px(30.))
+            .flex_shrink_0()
             .items_center()
             .min_w_0()
             .pr_2()
@@ -463,10 +461,14 @@ impl GitLogView {
             .size_full()
             .min_w_0()
             .min_h_0()
+            .overflow_hidden()
             .bg(rgb(palette().sidebar_bg));
         if self.details_loading {
             return panel
-                .child(div().p_3().text_size(px(12.)).child("正在读取提交…"))
+                .child(Self::loading_placeholder(
+                    "git-log-details-loading",
+                    "正在读取提交…",
+                ))
                 .into_any_element();
         }
         if let Some(error) = &self.details_error {
@@ -515,7 +517,9 @@ impl GitLogView {
                                     .id(("git-log-file", index))
                                     .debug_selector(move || format!("git-log-file-{index}"))
                                     .w_full()
+                                    .min_w_0()
                                     .h(px(28.))
+                                    .flex_shrink_0()
                                     .items_center()
                                     .px_3()
                                     .gap_2()
@@ -527,6 +531,7 @@ impl GitLogView {
                                     .child(
                                         div()
                                             .w(px(12.))
+                                            .flex_shrink_0()
                                             .text_size(px(10.))
                                             .text_color(rgb(git_change_color(file.kind())))
                                             .child(file.index.to_string()),
@@ -544,15 +549,19 @@ impl GitLogView {
                             .collect::<Vec<_>>()
                     })
                 })
+                .debug_selector(|| "git-log-files".into())
                 .flex_1()
-                .min_h(px(50.)),
+                .w_full()
+                .min_h(px(28.)),
             )
             .child(
                 v_flex()
                     .id("git-log-message")
+                    .debug_selector(|| "git-log-message".into())
                     .max_h(relative(0.5))
+                    .min_h_0()
                     .overflow_y_scroll()
-                    .flex_shrink_0()
+                    .flex_shrink_1()
                     .p_3()
                     .gap_2()
                     .border_t_1()
@@ -562,6 +571,7 @@ impl GitLogView {
                         Button::new("git-log-copy-hash")
                             .ghost()
                             .small()
+                            .flex_shrink_0()
                             .label(details.oid[..12].to_string())
                             .icon(FullIconName::Copy)
                             .tooltip("复制完整提交哈希")
@@ -575,6 +585,7 @@ impl GitLogView {
                             .and_then(|h| h.commits.iter().find(|c| c.oid == details.oid))
                             .map(|commit| {
                                 div()
+                                    .flex_shrink_0()
                                     .text_size(px(11.))
                                     .text_color(rgb(palette().muted))
                                     .child(format!(
@@ -593,14 +604,57 @@ impl GitLogView {
                     .when(details.merge, |pane| {
                         pane.child(
                             div()
+                                .flex_shrink_0()
                                 .text_size(px(11.))
                                 .text_color(rgb(palette().faint))
                                 .child("合并提交 · 文件变化相对于第一个父提交"),
                         )
                     })
-                    .child(div().text_size(px(12.)).child(details.message.clone())),
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(12.))
+                            .child(details.message.clone()),
+                    ),
             );
         panel.into_any_element()
+    }
+
+    fn loading_placeholder(id: &'static str, label: &'static str) -> impl IntoElement {
+        v_flex()
+            .id(id)
+            .debug_selector(move || id.into())
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden()
+            .p_3()
+            .gap_3()
+            .child(
+                h_flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap_2()
+                    .text_size(px(12.))
+                    .text_color(rgb(palette().muted))
+                    .child(Spinner::new().small())
+                    .child(label),
+            )
+            .children((0..8).map(|index| {
+                h_flex()
+                    .id((id, index))
+                    .h(px(30.))
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap_3()
+                    .child(Skeleton::new().size(px(12.)).rounded_full().flex_shrink_0())
+                    .child(
+                        Skeleton::new()
+                            .h(px(10.))
+                            .w(relative([0.65, 0.45, 0.75, 0.55][index % 4]))
+                            .rounded(px(3.)),
+                    )
+            }))
     }
 }
 
@@ -634,7 +688,7 @@ impl Render for GitLogView {
                     .as_ref()
                     .is_some_and(|path| app.worktree_has_runs(path))
         });
-        let mut history = v_flex().flex_1().min_w_0().min_h_0();
+        let mut history = v_flex().flex_1().min_w_0().min_h_0().overflow_hidden();
         if let Some(error) = &self.error {
             history = history.child(
                 div()
@@ -645,6 +699,16 @@ impl Render for GitLogView {
             );
         } else if self.workspace.is_none() {
             history = history.child(div().p_3().child("请先选择工作区"));
+        } else if self.loading
+            && self
+                .history
+                .as_ref()
+                .is_none_or(|log| log.commits.is_empty())
+        {
+            history = history.child(Self::loading_placeholder(
+                "git-log-loading",
+                "正在加载 Git 日志…",
+            ));
         } else if let Some(log) = &self.history {
             let length = log.commits.len();
             if length == 0 {
@@ -665,6 +729,7 @@ impl Render for GitLogView {
                                 .collect::<Vec<_>>()
                         })
                     })
+                    .debug_selector(|| "git-log-commits".into())
                     .track_scroll(&self.scroll)
                     .flex_1()
                     .min_h_0()
@@ -676,6 +741,7 @@ impl Render for GitLogView {
                     Button::new("git-log-more")
                         .ghost()
                         .small()
+                        .flex_shrink_0()
                         .label("加载更多提交")
                         .disabled(self.loading)
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -686,6 +752,7 @@ impl Render for GitLogView {
             } else if log.has_more {
                 history = history.child(
                     div()
+                        .flex_shrink_0()
                         .p_2()
                         .text_size(px(11.))
                         .text_color(rgb(palette().faint))
@@ -709,6 +776,7 @@ impl Render for GitLogView {
             .size_full()
             .min_w_0()
             .min_h_0()
+            .overflow_hidden()
             .bg(rgb(palette().canvas))
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
@@ -738,15 +806,15 @@ impl Render for GitLogView {
                 }
             }))
             .child(
-                h_flex()
-                    .h(px(48.))
+                sidebar::navigation_header()
+                    .debug_selector(|| "git-log-header".into())
                     .px_3()
                     .gap_2()
                     .items_center()
                     .flex_shrink_0()
                     .border_b_1()
                     .border_color(rgb(palette().border))
-                    .child(div().text_size(px(13.)).font_semibold().child("Git 日志"))
+                    .child(div().text_size(px(12.)).font_semibold().child("Git 日志"))
                     .child(
                         div()
                             .flex_1()
@@ -885,7 +953,7 @@ impl Render for GitLogView {
                     .child(
                         div()
                             .h(relative(0.45))
-                            .min_h(px(120.))
+                            .min_h(px(132.))
                             .flex_shrink_0()
                             .border_t_1()
                             .border_color(rgb(palette().border))

@@ -15,6 +15,14 @@ fn fixture(
     } else {
         store
     };
+    fixture_with_store(cx, store, disk)
+}
+
+fn fixture_with_store(
+    cx: &mut TestAppContext,
+    store: Store,
+    disk: Fixture,
+) -> (Entity<ConduitApp>, &mut VisualTestContext, Fixture) {
     cx.update(gpui_kit::init);
     let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
     let output = slot.clone();
@@ -138,20 +146,24 @@ fn load_completion_preserves_metadata_and_never_resurrects_deleted_session(
 
 #[gpui_kit::test]
 fn missing_body_has_error_retry_and_blocks_send_without_looking_empty(cx: &mut TestAppContext) {
-    let (app, cx, disk) = fixture(cx, 2, true);
-    let body = cx.update(|_, cx| {
-        let app = app.read(cx);
-        let reference = app
-            .session(2)
-            .unwrap()
-            .transcript
-            .reference
-            .as_ref()
-            .unwrap();
-        reference.directory.join(format!("{}.json", reference.hash))
-    });
+    let disk = Fixture::new();
+    disk.store(2).save_to(&disk.state).unwrap();
+    let store = Store::load_from(&disk.state).unwrap();
+    let reference = store.workspaces[0]
+        .sessions
+        .iter()
+        .find(|session| session.id == 2)
+        .unwrap()
+        .transcript
+        .reference
+        .as_ref()
+        .unwrap();
+    let body = reference.directory.join(format!("{}.json", reference.hash));
     let bytes = std::fs::read(&body).unwrap();
+    // Remove the body before startup can schedule a read of the selected session.
     std::fs::remove_file(&body).unwrap();
+    let (app, cx, disk) = fixture_with_store(cx, store, disk);
+    cx.update(|window, cx| app.update(cx, |app, cx| app.switch(0, Some(2), window, cx)));
     cx.run_until_parked();
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {

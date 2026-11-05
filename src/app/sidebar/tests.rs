@@ -158,6 +158,84 @@ fn streaming_text_reuses_sidebar_and_order_but_title_and_archive_refresh(cx: &mu
 }
 
 #[gpui_kit::test]
+fn pending_push_changes_refresh_the_cached_branch_entry(cx: &mut TestAppContext) {
+    let (app, cx) = fixture(cx, 1);
+    cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            app.git.branch_probe = None;
+            app.git.repository = Some(crate::git::Repository {
+                current: "main".into(),
+                detached: false,
+                branches: vec![],
+                truncated: false,
+                upstream: None,
+                ahead: 0,
+                context: Default::default(),
+                branch_info: vec![],
+                integration: None,
+                conflicts: vec![],
+                remotes: vec![],
+            });
+        });
+    });
+    for (ahead, detached, upstream, label) in [
+        (
+            2,
+            false,
+            Some("origin/main"),
+            "Git 分支与日志 · 推送 2 个提交到 origin/main",
+        ),
+        (
+            120,
+            false,
+            Some("origin/main"),
+            "Git 分支与日志 · 推送 120 个提交到 origin/main",
+        ),
+        (
+            120,
+            false,
+            Some("origin/release"),
+            "Git 分支与日志 · 推送 120 个提交到 origin/release",
+        ),
+        (
+            120,
+            false,
+            None,
+            "Git 分支与日志 · 120 个本地未发布提交；尚未设置上游",
+        ),
+        (0, false, None, "Git 分支与日志"),
+        (2, true, Some("origin/main"), "Git 分支与日志"),
+    ] {
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                let repository = app.git.repository.as_mut().unwrap();
+                repository.ahead = ahead;
+                repository.detached = detached;
+                repository.upstream = upstream.map(str::to_owned);
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        // Draw without explicitly invalidating SidebarView: Git status alone
+        // must refresh the rail while workspace/session rows stay cached.
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            let branch =
+                gpui_kit::base::test_support::find(window, &[], &"nav-branches".into()).unwrap();
+            assert_eq!(branch.label(), Some(label));
+            assert!(
+                gpui_kit::base::test_support::find(window, &[], &"git-push-pending".into())
+                    .is_none()
+            );
+        });
+        assert_eq!(
+            cx.debug_bounds("nav-branches-badge").is_some(),
+            ahead > 0 && !detached
+        );
+    }
+}
+
+#[gpui_kit::test]
 fn reordering_activity_above_viewport_preserves_top_session_and_offset(cx: &mut TestAppContext) {
     let (app, cx) = fixture(cx, 100);
     cx.update(|_, cx| {

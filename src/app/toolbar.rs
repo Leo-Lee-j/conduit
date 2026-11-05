@@ -1,11 +1,10 @@
 //! Conversation status, workspace label, and panel controls.
 
 use super::*;
-use gpui_kit::component::status_bar::StatusBar;
 
 impl ConduitApp {
-    pub(super) fn render_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let app_entity = cx.entity();
+    pub(super) fn render_toolbar(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        self.sync_plugin_context();
         let active = self
             .selected_session
             .is_some_and(|id| self.session_control.runs.contains_key(&id));
@@ -22,19 +21,6 @@ impl ConduitApp {
         } else {
             None
         };
-        let workspace_label = self
-            .selected_session
-            .and_then(|id| {
-                self.store
-                    .workspaces
-                    .iter()
-                    .find(|workspace| workspace.sessions.iter().any(|session| session.id == id))
-            })
-            .or_else(|| {
-                self.selected_workspace
-                    .and_then(|index| self.store.workspaces.get(index))
-            })
-            .map(Workspace::name);
         let naming_status: Option<Result<(), String>> = self.selected_session.and_then(|id| {
             if let Some(error) = self.session_control.naming_errors.get(&id) {
                 Some(Err(error.clone()))
@@ -47,41 +33,14 @@ impl ConduitApp {
                 None
             }
         });
-        let toolbar = StatusBar::new()
-            .h(px(34.))
+        let has_hints = toolbar_hint.is_some() || naming_status.is_some();
+        let hints = h_flex()
+            .id("toolbar-hints")
+            .debug_selector(|| "toolbar-hints".into())
             .min_w_0()
-            .flex_shrink_0()
-            .py_0()
-            .px_2()
-            .gap_3()
+            .max_w(relative(0.35))
             .items_center()
-            .bg(rgb(palette().canvas))
-            .border_t_1()
-            .border_color(rgb(palette().border))
-            .when_some(workspace_label, |bar, label| {
-                bar.left(
-                    h_flex()
-                        .id("toolbar-workspace")
-                        .debug_selector(|| "toolbar-workspace".to_string())
-                        .min_w_0()
-                        .max_w(px(180.))
-                        .items_center()
-                        .gap_1()
-                        .child(
-                            Icon::new(IconName::Folder)
-                                .small()
-                                .text_color(rgb(palette().faint)),
-                        )
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(px(11.))
-                                .text_color(rgb(palette().muted))
-                                .child(label),
-                        ),
-                )
-            })
+            .gap_2()
             .when_some(toolbar_hint, |bar, hint| {
                 bar.child(
                     div()
@@ -99,7 +58,7 @@ impl ConduitApp {
                     Err(reason) => format!("自动重命名失败：{reason}"),
                 };
                 let tooltip = SharedString::from(text.clone());
-                bar.right(
+                bar.child(
                     h_flex()
                         .id("session-naming-status")
                         .min_w_0()
@@ -133,12 +92,15 @@ impl ConduitApp {
                             row.child(Spinner::new().small().color(rgb(palette().loading).into()))
                         }),
                 )
-            })
-            .when_some(self.push_button(app_entity.clone()), |bar, button| {
-                bar.right(button)
-            })
+            });
+        let controls = h_flex()
+            .id("toolbar-controls")
+            .debug_selector(|| "toolbar-controls".into())
+            .flex_shrink_0()
+            .items_center()
+            .gap_1()
             .when(self.store.ui.performance_monitor, |bar| {
-                bar.right({
+                bar.child({
                     let hover_monitor = self.performance.clone();
                     let pinned_monitor = self.performance.clone();
                     div()
@@ -168,7 +130,23 @@ impl ConduitApp {
                                 .content(move |_, _, _| pinned_monitor.clone()),
                         )
                 })
-            });
+            })
+            .child(self.notification_bell(cx));
+        let toolbar = h_flex()
+            .id("conversation-toolbar")
+            .debug_selector(|| "conversation-toolbar".into())
+            .h(px(34.))
+            .min_w_0()
+            .flex_shrink_0()
+            .px_2()
+            .gap_2()
+            .items_center()
+            .bg(rgb(palette().canvas))
+            .border_t_1()
+            .border_color(rgb(palette().border))
+            .child(self.render_status_contributions(cx))
+            .when(has_hints, |bar| bar.child(hints))
+            .child(controls);
         toolbar.into_any_element()
     }
 }

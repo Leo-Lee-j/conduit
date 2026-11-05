@@ -17,8 +17,8 @@ impl ConduitApp {
         let mut ids = self
             .session_control
             .runs
-            .keys()
-            .copied()
+            .iter()
+            .filter_map(|(&id, run)| run.pending_save.is_none().then_some(id))
             .collect::<Vec<_>>();
         ids.sort_unstable();
         if !ids.is_empty() {
@@ -137,32 +137,7 @@ impl ConduitApp {
                     if !accepted {
                         continue;
                     }
-                    if let Some(target) = self.session_notice_target(id) {
-                        let title = if approval.is_user_input() {
-                            "会话等待你的回答"
-                        } else {
-                            "会话等待审批"
-                        };
-                        self.notify_user(
-                            Notice::new(
-                                NoticeSource::Session,
-                                NoticeLevel::Warning,
-                                title,
-                                approval.title.clone(),
-                            )
-                            .target(target)
-                            .key(format!("approval/{id}/{prefix}/{}", approval.id), "waiting")
-                            .active()
-                            .presentation(
-                                if self.session_is_visible(id) {
-                                    NoticePresentation::History
-                                } else {
-                                    NoticePresentation::Toast
-                                },
-                            ),
-                            cx,
-                        );
-                    }
+                    let notification_approval = approval.clone();
                     let questions = approval.questions();
                     let drafts = questions
                         .iter()
@@ -199,9 +174,15 @@ impl ConduitApp {
                         run.status = run.waiting_status().into();
                         run.activity = run.status.clone();
                     }
+                    self.notify_approval(id, &prefix, &notification_approval, cx);
                 }
                 Event::ApprovalCancelled(request) => {
-                    self.resolve_notification(&format!("approval/{id}/{prefix}/{request}"), cx);
+                    self.finish_notification_approval(
+                        id,
+                        &request,
+                        crate::notifications::ApprovalOutcome::Cancelled,
+                        cx,
+                    );
                     let mut approval = None;
                     if let Some(run) = self.session_control.runs.get_mut(&id) {
                         run.expanded_approvals.remove(&request);
@@ -226,7 +207,16 @@ impl ConduitApp {
                     }
                 }
                 Event::ApprovalResolved { id: request, allow } => {
-                    self.resolve_notification(&format!("approval/{id}/{prefix}/{request}"), cx);
+                    self.finish_notification_approval(
+                        id,
+                        &request,
+                        if allow {
+                            crate::notifications::ApprovalOutcome::Allowed
+                        } else {
+                            crate::notifications::ApprovalOutcome::Denied
+                        },
+                        cx,
+                    );
                     let approval = self.session_control.runs.get_mut(&id).and_then(|run| {
                         run.expanded_approvals.remove(&request);
                         run.question_drafts.remove(&request);
@@ -263,6 +253,7 @@ impl ConduitApp {
                 }
                 Event::Finished { error, cancelled } => {
                     let finished_run = self.session_control.runs.remove(&id);
+                    self.refresh_notifications(cx);
                     self.notifications.center.resolve_session(id, unix_now());
                     if finished_run.is_some()
                         && !cancelled
@@ -393,6 +384,31 @@ impl ConduitApp {
                                 }));
                         }
                     }
+                }
+                Event::CleanupBlocked(error) => {
+                    if let Some(run) = self.session_control.runs.get_mut(&id) {
+                        run.cleanup_error = Some(error.clone());
+                        run.cancel();
+                    }
+                    self.pause_queued_message(id, "进程清理异常；待发送消息已暂停。");
+                    self.closing = false;
+                    self.message = Some(error.clone());
+                    if let Some(session) = self.session_mut(id) {
+                        crate::failure::record_failure(session, &prefix, &error, true);
+                    }
+                    if let Some(target) = self.session_notice_target(id) {
+                        self.notify_user(
+                            Notice::new(
+                                NoticeSource::Session,
+                                NoticeLevel::Error,
+                                "进程清理异常",
+                                error,
+                            )
+                            .target(target),
+                            cx,
+                        );
+                    }
+                    self.refresh_notifications(cx);
                 }
                 Event::NativeId(native_id) => {
                     if let Some(session) = self.session_mut(id) {

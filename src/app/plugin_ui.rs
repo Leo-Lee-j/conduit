@@ -10,6 +10,15 @@ use conduit::plugins::{
 };
 use std::collections::BTreeMap;
 
+mod commands;
+mod example;
+pub(super) mod right;
+#[cfg(conduit_shell_desktop)]
+#[path = "plugin_ui/plugin_shell.rs"]
+pub(super) mod shell;
+mod status;
+mod summary;
+
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests;
 
@@ -19,13 +28,23 @@ struct NavigationAdapter {
     activate: fn(&mut ConduitApp, &mut Context<ConduitApp>),
     element_id: &'static str,
     task_badge: bool,
+    refresh_on_notify: bool,
 }
 pub(super) struct PluginUi {
+    #[cfg(conduit_shell_desktop)]
+    shell: Option<shell::ShellPluginHost>,
     registry: Registry,
     context: ContextTracker,
     snapshot: PluginContext,
     state: WorkbenchState,
     renderers: BTreeMap<String, NavigationAdapter>,
+    right_renderers: BTreeMap<String, right::RightAdapter>,
+    renderer_registrations: BTreeMap<String, conduit::plugins::registry::Registration>,
+    commands: BTreeMap<conduit::plugins::ids::CommandId, commands::NativeCommand>,
+    status_providers: BTreeMap<conduit::plugins::ids::ItemId, status::StatusProvider>,
+    status_width: f32,
+    instances: conduit::plugins::instances::InstanceCache<example::OverviewInstance, Task<()>>,
+    pub(super) dock: right::DockLayout,
     reconciled_revision: Option<u64>,
 }
 /// Compared by SidebarView without walking chat bodies or rebuilding the navigation.
@@ -36,9 +55,13 @@ pub(super) struct NavigationRevision {
     selected: ViewId,
     collapsed: bool,
     running: bool,
+    appearance: (u32, u32, u32),
 }
 impl PluginUi {
     fn from_registry(registry: Registry) -> Self {
+        Self::from_registry_with_example(registry, true)
+    }
+    fn from_registry_with_example(registry: Registry, bind_example: bool) -> Self {
         let state = WorkbenchState::new(
             &registry,
             ViewId::new(builtins::WORKSPACES).unwrap(),
@@ -58,6 +81,7 @@ impl PluginUi {
                     activate: |_, _| {},
                     element_id: "nav-workspaces",
                     task_badge: true,
+                    refresh_on_notify: false,
                 },
             ),
             (
@@ -67,6 +91,7 @@ impl PluginUi {
                     activate: ConduitApp::activate_file_navigation,
                     element_id: "nav-files",
                     task_badge: false,
+                    refresh_on_notify: true,
                 },
             ),
             (
@@ -76,6 +101,7 @@ impl PluginUi {
                     activate: ConduitApp::refresh_git,
                     element_id: "nav-git",
                     task_badge: false,
+                    refresh_on_notify: true,
                 },
             ),
             (
@@ -85,24 +111,47 @@ impl PluginUi {
                     activate: |app, _| app.refresh_branches(),
                     element_id: "nav-branches",
                     task_badge: false,
+                    refresh_on_notify: true,
                 },
             ),
         ]
         .into_iter()
         .map(|(key, adapter)| (key.into(), adapter))
         .collect();
-        Self {
+        let renderer_registrations = registry
+            .views()
+            .filter_map(|view| {
+                let owner = registry.owner_for(view.id.as_str())?;
+                Some((view.renderer.clone(), registry.registration(owner)?.clone()))
+            })
+            .collect();
+        let mut ui = Self {
+            #[cfg(conduit_shell_desktop)]
+            shell: None,
             registry,
             context,
             snapshot,
             state,
             renderers,
+            right_renderers: right::core_renderers(),
+            renderer_registrations,
+            commands: BTreeMap::new(),
+            status_providers: BTreeMap::new(),
+            status_width: 0.,
+            instances: Default::default(),
+            dock: right::DockLayout::default(),
             reconciled_revision: None,
+        };
+        commands::bind_core(&mut ui);
+        status::bind_core(&mut ui);
+        if bind_example {
+            example::bind(&mut ui);
         }
+        ui
     }
     pub(super) fn new() -> Self {
         Self::from_registry(
-            builtins::register(false)
+            builtins::register(cfg!(feature = "plugin-example"))
                 .expect("valid core declarations")
                 .registry,
         )
@@ -118,9 +167,12 @@ impl PluginUi {
     }
     pub(super) fn set_collapsed(&mut self, collapsed: bool) {
         self.state.set_collapsed(collapsed);
+        self.reconcile_instance_visibility();
     }
     fn update_context(&mut self, input: ContextInput) {
-        if self.snapshot.input() == &input && self.reconciled_revision == Some(self.registry.revision()) {
+        if self.snapshot.input() == &input
+            && self.reconciled_revision == Some(self.registry.revision())
+        {
             return;
         }
         self.snapshot = self
@@ -128,9 +180,27 @@ impl PluginUi {
             .update(input)
             .expect("context version available")
             .clone();
+        #[cfg(conduit_shell_desktop)]
+        if let Some(shell) = &mut self.shell {
+            shell.reconcile_registrations(&self.registry);
+            shell.invalidate_context(self.snapshot.version());
+        }
         self.state
             .reconcile(&self.registry, &self.snapshot)
             .expect("core fallbacks remain registered");
+        self.commands
+            .retain(|_, binding| self.registry.is_registered(&binding.registration));
+        self.status_providers
+            .retain(|_, binding| self.registry.is_registered(&binding.registration));
+        self.renderer_registrations
+            .retain(|_, registration| self.registry.is_registered(registration));
+        self.renderers
+            .retain(|key, _| self.renderer_registrations.contains_key(key));
+        self.right_renderers
+            .retain(|key, _| self.renderer_registrations.contains_key(key));
+        if !self.state.right_open() {
+            self.dock.drag = None;
+        }
         self.reconciled_revision = Some(self.registry.revision());
     }
     pub(super) fn revision(&self) -> NavigationRevision {
@@ -140,11 +210,67 @@ impl PluginUi {
             selected: self.selected().clone(),
             collapsed: self.collapsed(),
             running: self.snapshot.input().session_running,
+            appearance: (palette().canvas, palette().sidebar_bg, palette().text),
         }
     }
     fn adapter(&self, view: &ViewId) -> Option<NavigationAdapter> {
         let descriptor = self.registry.view(view)?;
+        if !self.renderer_bound(&descriptor.renderer) {
+            return None;
+        }
         self.renderers.get(&descriptor.renderer).copied()
+    }
+    fn renderer_bound(&self, key: &str) -> bool {
+        self.renderer_registrations
+            .get(key)
+            .is_some_and(|registration| self.registry.is_registered(registration))
+    }
+    fn bind_renderer(&mut self, key: &str) {
+        let view = self
+            .registry
+            .views()
+            .find(|view| view.renderer == key)
+            .expect("declared native renderer");
+        let owner = self.registry.owner_for(view.id.as_str()).unwrap();
+        self.renderer_registrations.insert(
+            key.into(),
+            self.registry.registration(owner).unwrap().clone(),
+        );
+        self.instances.retain_registered(&self.registry);
+    }
+    pub(super) fn navigation_refresh_on_notify(&self) -> bool {
+        !self.collapsed()
+            && self
+                .adapter(self.selected())
+                .is_some_and(|adapter| adapter.refresh_on_notify)
+    }
+    fn visible_instance_keys(&self) -> Vec<conduit::plugins::state::ViewInstanceKey> {
+        [
+            (!self.collapsed())
+                .then(|| self.state.navigation_key())
+                .flatten(),
+            self.right_visible(self.is_selected(builtins::BRANCHES))
+                .then(|| self.right_key())
+                .flatten(),
+        ]
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect()
+    }
+    fn reconcile_instance_visibility(&mut self) {
+        let visible = self.visible_instance_keys();
+        #[cfg(conduit_shell_desktop)]
+        if let Some(shell) = &mut self.shell {
+            shell.host.set_visible(&visible);
+        }
+        self.instances
+            .reconcile(&self.registry, &self.snapshot, &visible, |_| true);
+    }
+    pub(super) fn stop_instances(&mut self) {
+        self.instances.clear();
+        #[cfg(conduit_shell_desktop)]
+        self.stop_shell();
     }
     fn request(&self, item: &ActivityItem) -> Option<ActionRequest> {
         let request = self
@@ -155,7 +281,9 @@ impl PluginUi {
             ActionRequest::OpenView(view) if self.adapter(&view.key().view).is_some() => {
                 Some(request)
             }
-            // Generic command handlers arrive with P1-4. Unbound actions are visibly disabled.
+            ActionRequest::Command(command) if self.command_bound(command.command()) => {
+                Some(request)
+            }
             _ => None,
         }
     }
@@ -169,14 +297,15 @@ impl PluginUi {
             .adapter(id)
             .ok_or_else(|| conduit::plugins::Error("navigation renderer unavailable".into()))?;
         self.state.open(&self.registry, &request, &self.snapshot)?;
+        self.reconcile_instance_visibility();
         Ok(adapter)
     }
 }
 
-// Rail rows are 36px + 4px gap. Reserve the four fixed bottom controls,
+// Rail rows are 36px + 4px gap. Reserve the two fixed bottom controls,
 // their gaps, the spacer gap and 4px top padding. An overflow button needs one slot.
 fn visible_activity_count(count: usize, height: f32) -> usize {
-    let slots = ((height - 154.).max(0.) / 40.).floor() as usize;
+    let slots = ((height - 78.).max(0.) / 40.).floor() as usize;
     if count <= slots {
         count
     } else {
@@ -194,6 +323,19 @@ fn activity_icon(name: &str) -> Option<FullIconName> {
 }
 impl ConduitApp {
     pub(super) fn sync_plugin_context(&mut self) {
+        use conduit::plugins::context::ScopeKey;
+        let removed =
+            self.plugins
+                .right_key()
+                .is_some_and(|key| match &key.scope {
+                    ScopeKey::Global => false,
+                    ScopeKey::Workspace(key) => {
+                        !self.store.workspaces.iter().any(|w| w.path == key.path())
+                    }
+                    ScopeKey::Session { workspace, id } => !self.store.workspaces.iter().any(|w| {
+                        w.path == workspace.path() && w.sessions.iter().any(|s| s.id == *id)
+                    }),
+                });
         let workspace = self
             .selected_workspace
             .and_then(|index| self.store.workspaces.get(index));
@@ -225,6 +367,38 @@ impl ConduitApp {
             writable: self.writable,
             closing: self.closing,
         });
+        if removed {
+            self.plugins
+                .state
+                .reset_right(&self.plugins.registry, &self.plugins.snapshot)
+                .expect("core fallback remains registered");
+            self.plugins.dock.drag = None;
+        }
+        let visible = if self.startup.is_some() {
+            vec![]
+        } else {
+            self.plugins.visible_instance_keys()
+        };
+        self.plugins.instances.reconcile(
+            &self.plugins.registry,
+            &self.plugins.snapshot,
+            &visible,
+            |key| match &key.scope {
+                ScopeKey::Global => true,
+                ScopeKey::Workspace(key) => {
+                    self.store.workspaces.iter().any(|w| w.path == key.path())
+                }
+                ScopeKey::Session { workspace, id } => {
+                    self.store.workspaces.iter().any(|w| {
+                        w.path == workspace.path() && w.sessions.iter().any(|s| s.id == *id)
+                    })
+                }
+            },
+        );
+        #[cfg(conduit_shell_desktop)]
+        if let Some(shell) = &mut self.plugins.shell {
+            shell.host.set_visible(&visible);
+        }
     }
     pub(super) fn select_navigation(&mut self, id: &ViewId) -> conduit::plugins::Result<()> {
         self.sync_plugin_context();
@@ -258,6 +432,7 @@ impl ConduitApp {
                 .open(&self.plugins.registry, view, &self.plugins.snapshot)
                 .is_ok()
         {
+            self.plugins.reconcile_instance_visibility();
             (adapter.activate)(self, cx);
             cx.notify();
         }
@@ -294,6 +469,10 @@ impl ConduitApp {
         let button = Button::new(SharedString::from(id.clone()))
             .debug_selector(move || id.clone())
             .ghost()
+            .focus_ring(!matches!(
+                &item.action,
+                ActivityAction::OpenView(id) if id.as_str() == builtins::WORKSPACES
+            ))
             .small()
             .compact()
             .w(px(36.))
@@ -305,9 +484,9 @@ impl ConduitApp {
             .accessibility_label(item.title.clone())
             .disabled(request.is_none())
             .cursor_pointer()
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .on_click(cx.listener(move |this, _, window, cx| {
                 if let Some(request) = &request {
-                    this.dispatch_navigation(request, cx);
+                    this.dispatch_activity(request, window, cx);
                 }
             }));
         div()
@@ -355,7 +534,8 @@ impl ConduitApp {
             .into_iter()
             .cloned()
             .collect();
-        let height = f32::from(window.viewport_size().height - gpui_kit::component::TITLE_BAR_HEIGHT);
+        let height =
+            f32::from(window.viewport_size().height - gpui_kit::component::TITLE_BAR_HEIGHT);
         let visible = visible_activity_count(items.len(), height);
         let mut rail = v_flex()
             .w(px(38.))
@@ -398,6 +578,10 @@ impl ConduitApp {
                     .tooltip("更多功能")
                     .accessibility_label("更多功能")
                     .dropdown_menu(move |mut menu, _, _| {
+                        // Keep every contribution reachable even when the menu has
+                        // more rows than the rail or the window can display. The
+                        // menu recomputes its default height limit on each resize.
+                        menu = menu.scrollable(true);
                         for (item, request, selected) in &hidden {
                             let app = app.clone();
                             let request = request.clone();
@@ -405,6 +589,9 @@ impl ConduitApp {
                             let debug = format!("nav-more-{}", item.id);
                             let entry = PopupMenuItem::element(move |_, _| {
                                 div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
                                     .debug_selector({
                                         let debug = debug.clone();
                                         move || debug.clone()
@@ -414,9 +601,11 @@ impl ConduitApp {
                             .checked(*selected)
                             .disabled(request.is_none())
                             .icon(activity_icon(&item.icon).unwrap_or(FullIconName::CirclePile))
-                            .on_click(move |_, _, cx| {
+                            .on_click(move |_, window, cx| {
                                 if let Some(request) = &request {
-                                    app.update(cx, |app, cx| app.dispatch_navigation(request, cx));
+                                    app.update(cx, |app, cx| {
+                                        app.dispatch_activity(request, window, cx)
+                                    });
                                 }
                             });
                             menu = menu.item(entry);
@@ -425,58 +614,60 @@ impl ConduitApp {
                     }),
             );
         }
-        let rail = rail
-            .child(div().flex_1())
-            .child(
-                Button::new("nav-branches")
-                    .debug_selector(|| "git-branch-trigger".into())
-                    .ghost()
-                    .small()
-                    .compact()
-                    .w(px(36.))
-                    .h(px(34.))
-                    .flex_shrink_0()
-                    .icon(FullIconName::GitBranch)
-                    .selected(self.plugins.is_selected(builtins::BRANCHES))
-                    .tooltip("Git 分支与日志")
-                    .accessibility_label("Git 分支与日志")
-                    .cursor_pointer()
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.show_branch_navigation(window, cx)),
-                    ),
-            )
-            .child(
-                Button::new("nav-settings")
-                    .debug_selector(|| "nav-settings".into())
-                    .accessibility_label("设置")
-                    .ghost()
-                    .small()
-                    .compact()
-                    .w(px(36.))
-                    .h(px(34.))
-                    .flex_shrink_0()
-                    .icon(IconName::Settings)
-                    .tooltip("设置")
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
-            )
-            .child(
-                Button::new("nav-about")
-                    .debug_selector(|| "nav-about".into())
-                    .ghost()
-                    .small()
-                    .compact()
-                    .w(px(36.))
-                    .h(px(34.))
-                    .flex_shrink_0()
-                    .icon(IconName::Info)
-                    .tooltip("关于 Conduit")
-                    .accessibility_label("关于")
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_about_dialog(window, cx);
-                    })),
-            );
+        let pending_push = self.pending_push_status();
+        let branch_tooltip = pending_push.as_ref().map_or_else(
+            || "Git 分支与日志".to_owned(),
+            |(_, tooltip)| format!("Git 分支与日志 · {tooltip}"),
+        );
+        let rail = rail.child(div().flex_1()).child(
+            div()
+                .relative()
+                .w(px(36.))
+                .h(px(34.))
+                .flex_shrink_0()
+                .child(
+                    Button::new("nav-branches")
+                        .debug_selector(|| "git-branch-trigger".into())
+                        .ghost()
+                        .small()
+                        .compact()
+                        .w(px(36.))
+                        .h(px(34.))
+                        .flex_shrink_0()
+                        .icon(FullIconName::GitBranch)
+                        .selected(self.plugins.is_selected(builtins::BRANCHES))
+                        .tooltip(branch_tooltip.clone())
+                        .accessibility_label(branch_tooltip)
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.show_branch_navigation(window, cx)
+                        })),
+                )
+                .when_some(pending_push, |row, (count, _)| {
+                    row.child(
+                        h_flex()
+                            .debug_selector(|| "nav-branches-badge".into())
+                            .absolute()
+                            .top_0()
+                            .right_0()
+                            .min_w(px(14.))
+                            .h(px(14.))
+                            .px(px(3.))
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .bg(rgb(palette().text))
+                            .text_color(rgb(palette().on_text))
+                            .text_size(px(10.))
+                            .line_height(relative(1.))
+                            .child(if count > 99 {
+                                "99+".to_owned()
+                            } else {
+                                count.to_string()
+                            }),
+                    )
+                }),
+        );
         let rail = rail.child(
             Button::new("nav-collapse")
                 .debug_selector(|| "nav-collapse".into())

@@ -24,6 +24,9 @@ impl ApprovalQueue {
     pub fn front(&self) -> Option<&Approval> {
         self.items.front()
     }
+    pub fn get(&self, id: &str) -> Option<&Approval> {
+        self.items.iter().find(|approval| approval.id == id)
+    }
     pub fn is_submitted(&self, id: &str) -> bool {
         self.submitted.contains(id)
     }

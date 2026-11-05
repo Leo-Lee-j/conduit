@@ -185,8 +185,9 @@ pub fn load_history(
         false,
     )?;
     let fields: Vec<_> = result.text.split_terminator('\0').collect();
+    let (rows, remainder) = fields.as_chunks::<7>();
     let mut commits = Vec::new();
-    for row in fields.chunks_exact(7) {
+    for row in rows {
         commits.push(LogCommit {
             oid: row[0].into(),
             parents: row[1].split_whitespace().map(str::to_string).collect(),
@@ -201,7 +202,7 @@ pub fn load_history(
                 .collect(),
         });
     }
-    if !result.truncated && fields.len() % 7 != 0 {
+    if !result.truncated && !remainder.is_empty() {
         bail!("Git 日志输出不完整，请刷新后重试");
     }
     let has_more = commits.len() > query.limit || result.truncated;

@@ -18,6 +18,8 @@ Keep transcript bodies out of startup/sidebar state, load a body in the backgrou
 
 ## Verification So Far
 
+Integration follow-up (2026-11-05): all 5 transcript UI tests now pass within the full 165-test `app::` regression. The missing-body fixture removes the body before creating the app, then explicitly selects session 2, so an asynchronous startup read cannot finish before deletion. The failure/retry assertions remain intact. Final all-target Clippy with `ui-tests` and formatting checks pass. This resolves the test blocker below; the wider phase-2 review and documentation items remain separate work.
+
 - `cargo fmt --all` ran and the subsequent format check passed.
 - `cargo check --locked --bin conduit` and a tests/ui-tests check passed before the latest parallel workspace changes.
 - A focused run executed 32 tests: 31 passed. The sole failure was `missing_body_has_error_retry_and_blocks_send_without_looking_empty`: its fixture selected session 1, while the test removed session 2's body and never selected session 2. Explicitly switch to session 2 and await its load before asserting the failure UI.
@@ -27,7 +29,7 @@ Keep transcript bodies out of startup/sidebar state, load a body in the backgrou
 ## Next Session
 
 1. Inspect `git status --short` and the newly added plugin/file-preview files. Preserve concurrent work and confirm those modules are complete.
-2. Fix the cold-load failure UI test by explicitly selecting session 2, awaiting failure, and checking the error, send guard, delete confirmation, and retry.
+2. Completed in the integration follow-up: make missing-body setup precede startup reads, select session 2 explicitly, and verify error, send guard, delete confirmation, and retry.
 3. Run `cargo fmt --all --check`, `cargo check --locked --bin conduit`, focused store/history tests, and `cargo clippy --locked --all-targets --features ui-tests -- -D warnings`.
 4. Review startup selection and async completion, rapid switch/delete/import, import merge, running-session pinning, persistence acknowledgements, cleanup, search completeness, and attachment reachability; then run the relevant UI regressions.
 5. Update `docs/technical-design.md` with v3 layout, migration backup, memory limits, and recovery behavior. Review the final diff and verification. No commit has been made.

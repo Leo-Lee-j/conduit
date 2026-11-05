@@ -55,6 +55,7 @@ pub(crate) fn event_bytes(event: &Event) -> usize {
         Event::NativeId(s)
         | Event::ApprovalCancelled(s)
         | Event::Notice(s)
+        | Event::CleanupBlocked(s)
         | Event::ErrorBanner(s) => s.len(),
         Event::ApprovalResolved { id, .. } => id.len(),
         Event::Finished { error, .. } => error.as_ref().map_or(0, String::len),
@@ -96,17 +97,24 @@ impl Sender {
             return Ok(());
         }
         let finished = matches!(event, Event::Finished { .. });
+        let cleanup = matches!(event, Event::CleanupBlocked(_));
         let control = matches!(
             event,
             Event::Finished { .. }
                 | Event::ErrorBanner(_)
+                | Event::CleanupBlocked(_)
                 | Event::ApprovalResolved { .. }
                 | Event::ApprovalCancelled(_)
                 | Event::Notice(_)
         );
-        let limit = MAX_EVENTS + if control { CONTROL_RESERVE } else { 0 } + usize::from(finished);
-        let bytes =
-            MAX_BYTES + if control { 512 * 1024 } else { 0 } + if finished { MAX_BYTES } else { 0 };
+        let limit = MAX_EVENTS
+            + if control { CONTROL_RESERVE } else { 0 }
+            + usize::from(cleanup || finished)
+            + usize::from(finished);
+        let bytes = MAX_BYTES
+            + if control { 512 * 1024 } else { 0 }
+            + if cleanup || finished { MAX_BYTES } else { 0 }
+            + if finished { MAX_BYTES } else { 0 };
         if queue.events.len() >= limit || queue.bytes + cost > bytes {
             return Err(Box::new(mpsc::SendError(event)));
         }
@@ -222,6 +230,9 @@ mod tests {
         }
         assert!(sender.send(Event::Notice("overflow".into())).is_err());
         sender
+            .send(Event::CleanupBlocked("cleanup timed out".into()))
+            .unwrap();
+        sender
             .send(Event::Finished {
                 error: Some("queue full".into()),
                 cancelled: false,
@@ -230,6 +241,7 @@ mod tests {
         for _ in 0..MAX_EVENTS + CONTROL_RESERVE {
             assert!(matches!(receiver.try_recv(), Ok(Event::Notice(_))));
         }
+        assert!(matches!(receiver.try_recv(), Ok(Event::CleanupBlocked(_))));
         assert!(matches!(receiver.try_recv(), Ok(Event::Finished { .. })));
     }
 }

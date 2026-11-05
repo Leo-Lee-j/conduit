@@ -2,6 +2,9 @@
 
 use super::*;
 
+#[cfg(all(test, feature = "ui-tests"))]
+mod tests;
+
 // All navigation modes share one range and one retained resize state.
 pub(super) const NAVIGATION_MIN_WIDTH: f32 = 200.;
 pub(super) const NAVIGATION_MAX_WIDTH: f32 = 420.;
@@ -17,6 +20,34 @@ pub(super) struct ChatTimeline {
 impl ChatTimeline {
     pub(super) fn new(app: WeakEntity<ConduitApp>, scroll: ListState) -> Self {
         Self { app, scroll }
+    }
+
+    fn handle_scroll(
+        &mut self,
+        event: &ScrollWheelEvent,
+        origin: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let delta = event.delta.pixel_delta(px(20.)).y;
+        self.scroll
+            .set_offset_from_scrollbar(point(px(0.), origin.y + delta));
+        let top = self.scroll.logical_scroll_top();
+        let at_bottom = self
+            .scroll
+            .is_scrolled_to_end()
+            .unwrap_or(top.item_ix >= self.scroll.item_count());
+        let _ = self.app.update(cx, |app, cx| {
+            let navigating = app.pending_message_jump.take().is_some();
+            let outline = app.outline.active_for_item(top.item_ix);
+            // Let message_outline update its marker and scroll the rail when
+            // the active section changes. Wheel packets within a section only
+            // invalidate this timeline.
+            if navigating || app.at_bottom != at_bottom || app.outline.active != outline {
+                app.at_bottom = at_bottom;
+                cx.notify();
+            }
+        });
+        cx.notify();
     }
 }
 
@@ -34,12 +65,48 @@ impl Render for ChatTimeline {
             }
         }
         let app = self.app.clone();
-        gpui_kit::list(self.scroll.clone(), move |index, _, cx| {
+        let list = gpui_kit::list(self.scroll.clone(), move |index, _, cx| {
             app.update(cx, |app, cx| app.render_message(index, cx))
                 .unwrap_or_else(|_| div().into_any_element())
         })
-        .size_full()
-        .pt(px(5.))
+        .size_full();
+        let origin = std::rc::Rc::new(std::cell::Cell::new(Point::<Pixels>::default()));
+        let capture_origin = origin.clone();
+        let scroll = self.scroll.clone();
+        div()
+            .relative()
+            .size_full()
+            .pt(px(5.))
+            .on_scroll_wheel(cx.listener(move |this, event, _, cx| {
+                this.handle_scroll(event, origin.get(), cx);
+                cx.stop_propagation();
+            }))
+            .child(
+                canvas(
+                    |_, _, _| (),
+                    move |bounds, _, window, _| {
+                        // gpui-pre 0.3.9 coalesces wheel packets against the
+                        // last painted anchor, losing movement on reversals.
+                        // Capture the live offset before its listener, then
+                        // replace that result in our bubble handler. Nested
+                        // scrollers get first refusal and can stop bubbling.
+                        window.on_mouse_event(move |event: &ScrollWheelEvent, phase, _, _| {
+                            if phase == DispatchPhase::Capture && bounds.contains(&event.position) {
+                                let offset = scroll.scroll_px_offset_for_scrollbar();
+                                // scroll_to_end can temporarily use an item-count
+                                // sentinel; normalize it to the viewport's top.
+                                capture_origin.set(point(
+                                    px(0.),
+                                    offset.y.max(-scroll.max_offset_for_scrollbar().y),
+                                ));
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .inset_0(),
+            )
+            .child(list)
     }
 }
 
@@ -104,6 +171,7 @@ impl Render for ConduitApp {
             return self.startup_page();
         }
         self.sync_plugin_context();
+        self.refresh_plugin_views(cx);
         self.ensure_selected_transcript(cx);
         let render_started = Instant::now();
         let app_entity = cx.entity();
@@ -137,21 +205,6 @@ impl Render for ConduitApp {
         if self.at_bottom && self.pending_message_jump.is_none() {
             self.scroll.scroll_to_end();
         }
-        self.scroll
-            .set_scroll_handler(cx.listener(|this, event: &ListScrollEvent, _, cx| {
-                // The jump is a one-time anchor. Once the user wheels the
-                // transcript, let their list position become authoritative.
-                let navigating = this.pending_message_jump.take().is_some();
-                let at_bottom = !navigating && !event.is_scrolled;
-                let outline = this.outline.active_for_item(event.visible_range.start);
-                // The list redraws itself. Rebuild the surrounding UI only when
-                // the jump-to-latest control or active outline marker changes.
-                let changed = this.at_bottom != at_bottom || this.outline.active != outline;
-                this.at_bottom = at_bottom;
-                if changed {
-                    cx.notify();
-                }
-            }));
         // Parent changes include streaming content, settings and row expansion.
         self.timeline.update(cx, |_, cx| cx.notify());
         if self.store.ui.performance_monitor {
@@ -621,16 +674,51 @@ impl Render for ConduitApp {
                             .child("Chat M0 · Preview"),
                     ),
             );
-        let title_bar = title_bar
-            .child(div().flex_1())
-            .child(self.notification_bell(cx));
+        let title_bar = title_bar.child(div().flex_1()).child(
+            h_flex()
+                .id("title-bar-actions")
+                .debug_selector(|| "title-bar-actions".into())
+                .items_center()
+                .gap_1()
+                .mr_1()
+                .flex_shrink_0()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    Button::new("title-settings")
+                        .debug_selector(|| "title-settings".into())
+                        .accessibility_label("设置")
+                        .ghost()
+                        .small()
+                        .compact()
+                        .w(px(36.))
+                        .h(px(28.))
+                        .flex_shrink_0()
+                        .icon(IconName::Settings)
+                        .tooltip("设置")
+                        .cursor_pointer()
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.open_settings(window, cx)),
+                        ),
+                )
+                .child(
+                    Button::new("title-about")
+                        .debug_selector(|| "title-about".into())
+                        .accessibility_label("关于")
+                        .ghost()
+                        .small()
+                        .compact()
+                        .w(px(36.))
+                        .h(px(28.))
+                        .flex_shrink_0()
+                        .icon(IconName::Info)
+                        .tooltip("关于 Conduit")
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_about_dialog(window, cx);
+                        })),
+                ),
+        );
         conversation = conversation.child(toolbar);
-        let (detail_panel, overlay) =
-            if self.branch_navigation_open() && self.detail_view != DetailView::Notifications {
-                (None, None)
-            } else {
-                self.render_detail_dock(selected.as_ref(), window, cx)
-            };
         // The left workspace rail stays a resizable group. The right sidebar is
         // laid out by hand so dragging its edge follows the pointer 1:1 and its
         // width can be capped at half of the remaining content area.
@@ -652,8 +740,9 @@ impl Render for ConduitApp {
         self.sidebar_width = measured_sidebar;
         let content_width = (viewport_width - measured_sidebar - 6.).max(320.);
         let max_detail_width = (content_width * 0.5).max(260.);
-        self.detail_width = self.detail_width.clamp(260., max_detail_width);
-        let detail_width = self.detail_width;
+        self.plugins.dock.width = self.plugins.dock.width.clamp(260., max_detail_width);
+        let detail_width = self.plugins.dock.width;
+        let (detail_panel, overlay) = self.render_detail_dock(window, cx);
 
         let body = h_resizable("body").with_state(&sidebar_state).child(
             resizable_panel()
@@ -667,6 +756,7 @@ impl Render for ConduitApp {
                 let drag_app = app_entity.clone();
                 let band = div()
                     .id("detail-resize")
+                    .debug_selector(|| "detail-resize".into())
                     .relative()
                     .w(px(6.))
                     .h_full()
@@ -680,8 +770,8 @@ impl Render for ConduitApp {
                         let viewport = f32::from(window.viewport_size().width);
                         let local = f32::from(position.x);
                         drag_app.update(cx, |this, cx| {
-                            let start_x = viewport - this.detail_width - 6. + local;
-                            this.detail_drag = Some((start_x, this.detail_width));
+                            let start_x = viewport - this.plugins.dock.width - 6. + local;
+                            this.plugins.dock.drag = Some((start_x, this.plugins.dock.width));
                             cx.notify();
                         });
                         cx.new(|_| DetailResize)
@@ -728,14 +818,14 @@ impl Render for ConduitApp {
                 let x = f32::from(event.event.position.x);
                 let viewport = f32::from(window.viewport_size().width);
                 drag_app.update(cx, |this, cx| {
-                    let Some((start_x, start_width)) = this.detail_drag else {
+                    let Some((start_x, start_width)) = this.plugins.dock.drag else {
                         return;
                     };
                     let content = (viewport - this.sidebar_width - 6.).max(320.);
                     let max = (content * 0.5).max(260.);
                     let width = (start_width + (start_x - x)).clamp(260., max);
-                    if (width - this.detail_width).abs() > 0.5 {
-                        this.detail_width = width;
+                    if (width - this.plugins.dock.width).abs() > 0.5 {
+                        this.plugins.dock.width = width;
                         cx.notify();
                     }
                 });

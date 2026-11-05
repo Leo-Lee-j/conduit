@@ -40,6 +40,15 @@ impl ConduitApp {
     /// workspaces. Rebuild reachability only when attachments are discarded.
     pub(super) fn cleanup_attachments(&mut self) {
         if !self.writable
+            || self.persistence.busy()
+            || self.persistence.error.is_some()
+            || self.dirty
+            || self
+                .session_control
+                .runs
+                .values()
+                .any(|run| run.pending_save.is_some())
+            || !self.session_control.queue_saves.is_empty()
             || Store::path()
                 .with_file_name("update-recovery.json")
                 .exists()
@@ -87,14 +96,16 @@ impl ConduitApp {
 
     /// Never delete files while the saved transcript still contains old refs.
     pub(super) fn persist_and_cleanup_attachments(&mut self) {
-        if self.persist() {
-            self.cleanup_attachments();
-        }
+        self.attachments_cleanup_pending = true;
+        self.persist();
     }
 
     pub(super) fn discard_composer_attachments(&mut self) {
         self.composer_files.clear();
-        self.persist_and_cleanup_attachments();
+        // Draft attachments are in memory only. The close path has already
+        // waited for every transcript/queue save; do not enqueue another save
+        // immediately before exiting.
+        self.cleanup_attachments();
     }
 
     /// Let the input perform its normal text paste unless files or pixels exist.
@@ -713,15 +724,15 @@ impl ConduitApp {
             composer = composer.max_w(px(840.)).mx_auto();
         }
         let composer: AnyElement = composer.into_any_element();
-        // Live engine activity stays on the left; the step and file-churn tags
-        // dock to the right edge, just above the composer's top-right corner.
+        // Live engine activity stays on the left; the step/file tags and the
+        // latest-message button share a row above the composer on the right.
         let turn_activity = self
             .selected_session
             .and_then(|id| self.turn_activity_strip(id));
         let turn_stats = self
             .selected_session
-            .and_then(|id| self.turn_stats_tags(id));
-        let has_status_row = turn_activity.is_some() || turn_stats.is_some();
+            .and_then(|id| self.turn_stats_tags(id, cx));
+        let has_status_row = turn_activity.is_some() || turn_stats.is_some() || show_latest_button;
         // Live engine activity and the step/file tags share the transcription's
         // content width: the same 24px gutter message rows add inside the 8px
         // list padding, so the hint never looks wider than the chat content.
@@ -736,16 +747,42 @@ impl ConduitApp {
                 })
                 .items_center()
                 .justify_end()
-                .gap_2()
+                .gap(px(6.))
                 .pb(px(8.))
                 .when_some(turn_activity, |row, activity| row.child(activity))
-                .when_some(turn_stats, |row, tags| row.child(tags)),
+                .when_some(turn_stats, |row, tags| row.child(tags))
+                .when(show_latest_button, |row| {
+                    row.child(
+                        Button::new("scroll-to-latest")
+                            .debug_selector(|| "scroll-to-latest".into())
+                            .ghost()
+                            .tooltip("转到最新消息")
+                            .accessibility_label("转到最新消息")
+                            .size(px(24.))
+                            .p_0()
+                            .flex_shrink_0()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(6.))
+                            .border_1()
+                            .border_color(rgb(palette().border))
+                            .bg(rgb(palette().surface_strong))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.scroll_to_end();
+                                this.at_bottom = true;
+                                this.message_focus = None;
+                                this.pending_message_jump = None;
+                                cx.notify();
+                            }))
+                            .child(
+                                Icon::new(gpui_kit::assets::IconName::ArrowDown)
+                                    .size(px(12.))
+                                    .text_color(rgb(palette().muted)),
+                            ),
+                    )
+                }),
         );
-        // The "jump to latest" arrow floats at the lower-right of the message
-        // area, just above the composer's top-right corner, and only exists
-        // while the list is scrolled away from its end. It clears the status
-        // row when that row is present.
-        let latest_top = px(if has_status_row { -72. } else { -40. });
         let area = div().px_2().pt(px(12.)).pb_4().child(
             v_flex()
                 .w_full()
@@ -777,38 +814,6 @@ impl ConduitApp {
                         .child(composer)
                         .when(mentions_open, |area| {
                             area.child(self.render_file_mentions(window, cx))
-                        })
-                        .when(show_latest_button, |area| {
-                            area.child(
-                                Button::new("scroll-to-latest")
-                                    .ghost()
-                                    .tooltip("转到最新消息")
-                                    .accessibility_label("转到最新消息")
-                                    .absolute()
-                                    .top(latest_top)
-                                    .right(px(14.))
-                                    .w(px(30.))
-                                    .h(px(30.))
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded_full()
-                                    .border_1()
-                                    .border_color(rgb(palette().border))
-                                    .bg(rgb(palette().surface_strong))
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.scroll_to_end();
-                                        this.at_bottom = true;
-                                        this.message_focus = None;
-                                        this.pending_message_jump = None;
-                                        cx.notify();
-                                    }))
-                                    .child(
-                                        Icon::new(gpui_kit::assets::IconName::ArrowDown)
-                                            .small()
-                                            .text_color(rgb(palette().muted)),
-                                    ),
-                            )
                         }),
                 ),
         );

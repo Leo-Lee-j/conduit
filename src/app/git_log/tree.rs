@@ -68,6 +68,7 @@ impl GitLogView {
             .debug_selector(move || id.clone())
             .w_full()
             .h(px(28.))
+            .flex_shrink_0()
             .items_center()
             .gap_1()
             .px_2()
@@ -122,6 +123,7 @@ impl GitLogView {
             == Some(&branch.full_ref);
         let selected = self.query.reference.as_ref() == Some(&branch.full_ref);
         let favorite = favorites.contains(&branch.full_ref);
+        let group: SharedString = format!("git-branch-row-{index}").into();
         let reference = branch.full_ref.clone();
         let star_ref = reference.clone();
         let host = self.host();
@@ -163,7 +165,9 @@ impl GitLogView {
         h_flex()
             .id(("git-branch-row", index))
             .debug_selector(move || format!("git-branch-row-{index}"))
+            .group(group.clone())
             .h(px(30.))
+            .flex_shrink_0()
             .w_full()
             .min_w_0()
             .pl(px(if branch.remote { 28. } else { 16. }))
@@ -223,6 +227,9 @@ impl GitLogView {
                     .compact()
                     .icon(FullIconName::Star)
                     .selected(favorite)
+                    .opacity(0.)
+                    .group_hover(group.clone(), |style| style.opacity(1.))
+                    .focus(|style| style.opacity(1.))
                     .tooltip(if favorite {
                         "取消收藏"
                     } else {
@@ -245,6 +252,9 @@ impl GitLogView {
                     .small()
                     .compact()
                     .icon(FullIconName::Ellipsis)
+                    .opacity(0.)
+                    .group_hover(group, |style| style.opacity(1.))
+                    .focus(|style| style.opacity(1.))
                     .tooltip(format!("{name} 的分支操作"))
                     .accessibility_label(format!("{name} 的分支操作"))
                     .dropdown_menu(move |menu, window, cx| {
@@ -292,6 +302,7 @@ impl GitLogView {
                 .id("git-log-all-branches")
                 .debug_selector(|| "git-log-all-branches".into())
                 .h(px(30.))
+                .flex_shrink_0()
                 .px_3()
                 .items_center()
                 .gap_2()
@@ -311,6 +322,7 @@ impl GitLogView {
                     .id("git-log-head")
                     .debug_selector(|| "git-log-head".into())
                     .h(px(30.))
+                    .flex_shrink_0()
                     .px_3()
                     .gap_2()
                     .items_center()
@@ -437,7 +449,11 @@ impl GitLogView {
                 list = list.child(
                     h_flex()
                         .id(("git-log-tag", index))
+                        .debug_selector(move || format!("git-log-tag-{index}"))
                         .h(px(28.))
+                        .flex_shrink_0()
+                        .w_full()
+                        .min_w_0()
                         .pl_5()
                         .pr_2()
                         .gap_2()
@@ -459,7 +475,13 @@ impl GitLogView {
                 );
             }
             if history.tags_truncated {
-                list = list.child(div().p_2().text_size(px(11.)).child("仅显示前 1000 个标签"));
+                list = list.child(
+                    div()
+                        .flex_shrink_0()
+                        .p_2()
+                        .text_size(px(11.))
+                        .child("仅显示前 1000 个标签"),
+                );
             }
         }
         let mut feedback_panel = v_flex()
@@ -502,6 +524,7 @@ impl GitLogView {
             .upgrade()
             .and_then(|app| app.read(cx).git_integration_banner(app.clone()));
         sidebar::navigation_pane()
+            .min_h_0()
             .id("git-branch-navigation")
             .debug_selector(|| "git-branch-navigation".into())
             .on_mouse_down_out(move |event, window, cx| {
@@ -509,6 +532,7 @@ impl GitLogView {
             })
             .child(
                 sidebar::navigation_header()
+                    .debug_selector(|| "git-branch-header".into())
                     .px_2()
                     .items_center()
                     .gap_2()
@@ -521,6 +545,9 @@ impl GitLogView {
             .child(
                 div()
                     .p_2()
+                    .flex_shrink_0()
+                    .border_b_1()
+                    .border_color(rgb(palette().border))
                     .debug_selector(|| "git-branch-search".into())
                     .child(
                         Input::new(&self.branch_search)

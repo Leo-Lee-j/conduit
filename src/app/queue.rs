@@ -7,6 +7,9 @@ pub(super) use crate::store::QueuedMessage;
 impl ConduitApp {
     /// Keyboard and mouse share the same capacity and concurrency rules.
     pub(super) fn composer_send_blocked(&self) -> Option<&'static str> {
+        if self.composer_save_pending() {
+            return Some("正在保存消息，请稍候；草稿会保留到保存成功。");
+        }
         if let Some(id) = self.send_target(true) {
             if self.queued_messages.contains_key(&id) {
                 return Some("已有 1 条待发送消息，请先发送或撤回；当前草稿会保留。");
@@ -35,7 +38,7 @@ impl ConduitApp {
                 .session_control
                 .runs
                 .get(&id)
-                .is_none_or(|run| run.runtime.is_cancelled())
+                .is_none_or(|run| run.runtime.is_cancelled() || run.pending_save.is_some())
         {
             return false;
         }
@@ -53,11 +56,23 @@ impl ConduitApp {
                 paused: None,
             },
         );
-        if !self.persist() {
-            self.queued_messages.remove(&id);
-            cx.notify();
-            return false;
-        }
+        let receipt = match self.persist_confirmed() {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                self.queued_messages.remove(&id);
+                self.dirty = true;
+                self.message = Some(error);
+                cx.notify();
+                return false;
+            }
+        };
+        self.session_control.queue_saves.insert(
+            id,
+            runtime::PendingQueueSave {
+                receipt,
+                composer: self.sent_composer(cx),
+            },
+        );
         self.message = None;
         cx.notify();
         true
@@ -71,7 +86,11 @@ impl ConduitApp {
 
     /// Called only after the previous turn's final events have been merged.
     pub(super) fn dispatch_queued_message(&mut self, id: u64, cx: &mut Context<Self>) {
-        if self.closing || !self.writable {
+        if self.closing
+            || !self.writable
+            || self.session_control.queue_saves.contains_key(&id)
+            || self.session_busy(id)
+        {
             return;
         }
         let Some(message) = self
@@ -115,6 +134,14 @@ impl ConduitApp {
         let message = self.queued_messages.remove(&id).unwrap();
         match self.start_turn(index, Some(id), provider, prompt, true, cx) {
             Ok(_) => {
+                if let Some(pending) = self
+                    .session_control
+                    .runs
+                    .get_mut(&id)
+                    .and_then(|run| run.pending_save.as_mut())
+                {
+                    pending.queued = Some(message);
+                }
                 if self.selected_session == Some(id) {
                     self.scroll.remeasure();
                 }
@@ -167,7 +194,11 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.closing || !self.writable || self.selected_session != Some(id) {
+        if self.closing
+            || !self.writable
+            || self.selected_session != Some(id)
+            || self.session_control.queue_saves.contains_key(&id)
+        {
             return;
         }
         // Never overwrite typed text or attachments, including a pending engine switch.
@@ -224,12 +255,14 @@ impl ConduitApp {
                 .take(180)
                 .collect::<String>()
         };
+        let saving = self.session_control.queue_saves.contains_key(&id);
         let can_take_back = enabled
+            && !saving
             && self.input.read(cx).value().is_empty()
             && self
                 .current_files()
                 .is_none_or(|files| files.references.is_empty());
-        let can_send = enabled && !self.session_busy(id);
+        let can_send = enabled && !saving && !self.session_busy(id);
         Some(
             v_flex()
                 .id("queued-message")
@@ -249,7 +282,9 @@ impl ConduitApp {
                             div()
                                 .text_size(px(12.))
                                 .text_color(rgb(palette().text))
-                                .child(if paused {
+                                .child(if saving {
+                                    "正在保存…"
+                                } else if paused {
                                     "待发送 · 已暂停"
                                 } else {
                                     "排队中"
@@ -316,7 +351,7 @@ impl ConduitApp {
                                 .icon(FullIconName::X)
                                 .tooltip("移除待发送消息")
                                 .accessibility_label("移除待发送消息")
-                                .disabled(!enabled)
+                                .disabled(!enabled || saving)
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     cx.stop_propagation();
                                     this.queued_messages.remove(&id);
@@ -340,4 +375,4 @@ impl ConduitApp {
 
 #[cfg(all(test, feature = "ui-tests"))]
 #[path = "queue_tests.rs"]
-mod tests;
+pub(in crate::app) mod tests;

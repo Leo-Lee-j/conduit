@@ -2,6 +2,9 @@
 
 use super::*;
 
+mod saves;
+pub(super) use saves::{PendingQueueSave, PendingTurn};
+
 /// Only the latest failed exchange can reuse its original prompt.
 pub(super) fn error_retry_prompt(session: &SessionRecord, index: usize) -> Option<&str> {
     if session.messages.get(index)?.kind != ItemKind::Error
@@ -60,10 +63,10 @@ impl ConduitApp {
         self.git.operation.as_ref().is_some_and(|operation| {
             git::repository_scope(&operation.worktree)
                 == git::repository_scope(&self.store.workspaces[index].path)
-        }) || self.store.workspaces[index]
-            .sessions
-            .iter()
-            .any(|s| self.session_control.runs.contains_key(&s.id))
+        }) || self.store.workspaces[index].sessions.iter().any(|s| {
+            self.session_control.runs.contains_key(&s.id)
+                || self.session_control.queue_saves.contains_key(&s.id)
+        })
     }
 
     /// One turn per conversation, including aliases of the same native context.
@@ -107,6 +110,9 @@ impl ConduitApp {
 
     /// Shared by keyboard sends and the composer button.
     pub(super) fn send_blocked(&self, append_user: bool) -> Option<&'static str> {
+        if self.composer_save_pending() {
+            return Some("正在保存消息，请稍候；草稿会保留到保存成功。");
+        }
         if self
             .send_target(append_user)
             .and_then(|id| self.session(id))
@@ -180,21 +186,7 @@ impl ConduitApp {
         } else {
             self.send_text(prompt, true, window, cx)
         };
-        if accepted {
-            self.input
-                .update(cx, |input, cx| input.set_value("", window, cx));
-            // The sent prompt is now the newest history entry; stop any
-            // browsing so the next Up recalls it from the top.
-            self.prompt_history = None;
-            if let Some(target) = target {
-                self.composer_files.remove(&target);
-                if let Some(id) = target.session {
-                    self.drafts.remove(&id);
-                } else {
-                    self.workspace_drafts.remove(&target.workspace);
-                }
-            }
-        } else if let Some(target) = target {
+        if !accepted && let Some(target) = target {
             // A failed send may have attempted to create or retarget a session.
             // Keep the draft and its files visible in their original conversation.
             self.selected_session = target.session;
@@ -236,20 +228,11 @@ impl ConduitApp {
         // A pending engine switch (composer engine differs from the selected
         // session's) retargets the message to a fresh session instead of
         // jumping to history. Regeneration always stays on its own session.
-        if append_user {
-            let retarget = self.selected_session.is_some_and(|id| {
-                self.session(id)
-                    .is_some_and(|session| session.provider != self.new_session_provider)
-            });
-            if retarget && let Some(id) = self.selected_session {
-                self.drafts
-                    .insert(id, self.input.read(cx).value().to_string());
-                self.selected_session = None;
-            }
-        } else if self.selected_session.is_none() {
+        if !append_user && self.selected_session.is_none() {
             return false;
         }
-        let target = self.selected_session;
+        let target = self.send_target(append_user);
+        let composer = append_user.then(|| self.sent_composer(cx)).flatten();
         match self.start_turn(
             index,
             target,
@@ -259,13 +242,16 @@ impl ConduitApp {
             cx,
         ) {
             Ok(id) => {
-                if append_user {
-                    self.input
-                        .update(cx, |input, cx| input.set_value("", window, cx));
-                    self.drafts.remove(&id);
+                if let Some(pending) = self
+                    .session_control
+                    .runs
+                    .get_mut(&id)
+                    .and_then(|run| run.pending_save.as_mut())
+                {
+                    pending.composer = composer;
                 }
                 self.input.read(cx).focus_handle(cx).focus(window, cx);
-                self.message = None;
+                self.message = Some("正在保存消息…".into());
                 self.scroll_to_end();
                 cx.notify();
                 true
@@ -317,7 +303,13 @@ impl ConduitApp {
             }
             return Err("会话正文尚未加载，请等待加载完成或重试。".into());
         }
-        let cwd = self.store.workspaces[index].path.clone();
+        let cwd = self
+            .store
+            .workspaces
+            .get(index)
+            .ok_or("工作区已不存在。")?
+            .path
+            .clone();
         if self.git.operation.as_ref().is_some_and(|operation| {
             git::repository_scope(&operation.worktree) == git::repository_scope(&cwd)
         }) {
@@ -352,11 +344,28 @@ impl ConduitApp {
             return Err("工作区目录已移动或不可访问。".into());
         }
         let worktree = git::worktree_root(&cwd);
-        let id = match target {
-            Some(id) => id,
-            None => self
-                .create_session(index, provider, cx)
-                .ok_or("无法创建会话。")?,
+        let prepared = target.is_none().then(|| self.prepare_session(provider));
+        let selection = prepared.as_ref().map(ComposerSelection::from_session);
+        let mut route = if let Some(session) = &prepared {
+            let mut route = self
+                .channel_route(provider, &session.channel)
+                .map_err(|error| format!("无法使用所选 Provider：{error:#}"))?;
+            if session.channel == ModelChannel::Cli {
+                route.opencode_variant = session.opencode.variant.clone();
+            }
+            route
+        } else {
+            self.session_route(target.unwrap())
+                .map_err(|error| format!("无法使用所选 Provider：{error:#}"))?
+        };
+        let before = target.and_then(|id| self.session(id).cloned());
+        let id = if let Some(session) = prepared {
+            let id = session.id;
+            self.next_id += 1;
+            self.store.workspaces[index].sessions.insert(0, session);
+            id
+        } else {
+            target.unwrap()
         };
         let native_id = self
             .session(id)
@@ -370,9 +379,6 @@ impl ConduitApp {
             .session(id)
             .map(|s| s.reasoning_effort)
             .unwrap_or_default();
-        let route = self
-            .session_route(id)
-            .map_err(|error| format!("无法使用所选 Provider：{error:#}"))?;
         let model = model.or_else(|| route.default_model.clone());
         let session = self.session_mut(id).unwrap();
         let prefix = next_turn_prefix(session);
@@ -403,17 +409,13 @@ impl ConduitApp {
                 }));
         }
         session.interrupted = true;
-        if !self.persist() {
-            let session = self.session_mut(id).unwrap();
-            if append_user {
-                session.messages.pop();
+        let receipt = match self.persist_confirmed() {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                self.restore_unsent_turn(id, before);
+                return Err(error);
             }
-            session.interrupted = false;
-            return Err(self
-                .message
-                .clone()
-                .unwrap_or_else(|| "保存会话失败，消息未发送。".into()));
-        }
+        };
         let first_turn = append_user
             && !self.session(id).is_some_and(|session| {
                 session
@@ -433,7 +435,7 @@ impl ConduitApp {
                 self.usage_context_window_fallback(provider, &session.channel, model.as_deref())
             })
             .unwrap_or(0);
-        let runtime = ChatRuntime::start_request(crate::chat_runtime::StartRequest {
+        let (runtime, release) = ChatRuntime::start_after_save(crate::chat_runtime::StartRequest {
             provider,
             executable,
             cwd,
@@ -442,27 +444,33 @@ impl ConduitApp {
             model: model.clone(),
             permission,
             effort,
-            route,
+            route: std::mem::take(&mut route),
         });
         let usage = self
             .session(id)
             .map(|session| session.usage)
             .unwrap_or_default();
-        self.session_control.plans.remove(&id);
-        self.session_control.unread_completed.remove(&id);
         self.session_control.runs.insert(
             id,
             ActiveRun::new(runtime, worktree, prefix, usage, model, effort),
         );
         if let Some(run) = self.session_control.runs.get_mut(&id) {
+            run.status = "正在保存消息…".into();
+            run.activity = run.status.clone();
+            run.pending_save = Some(PendingTurn {
+                receipt,
+                release,
+                before,
+                composer: None,
+                queued: None,
+                naming_snippet,
+                selection,
+            });
             run.opencode_variant = opencode_variant;
             run.context_window_fallback = context_window_fallback;
             if fresh_session && provider == Provider::Codex {
                 run.output_tokens_at_start = Some(0);
             }
-        }
-        if let Some(snippet) = naming_snippet {
-            self.start_session_naming(id, &snippet, cx);
         }
         Ok(id)
     }
@@ -489,8 +497,17 @@ impl ConduitApp {
         let Some(prompt) = error_retry_prompt(session, index).map(str::to_owned) else {
             return;
         };
+        let before = session.clone();
         let removed = clear_retry_errors(self.session_mut(id).unwrap());
         if self.send_text(prompt, false, window, cx) {
+            if let Some(pending) = self
+                .session_control
+                .runs
+                .get_mut(&id)
+                .and_then(|run| run.pending_save.as_mut())
+            {
+                pending.before = Some(before);
+            }
             for (_, item) in removed {
                 self.expanded_errors.remove(&(id, item.key.clone()));
             }
@@ -514,7 +531,7 @@ impl ConduitApp {
         let Some(session) = self.session(id) else {
             return;
         };
-        if self.session_control.runs.contains_key(&id)
+        if self.session_busy(id)
             || session
                 .messages
                 .get(index)
@@ -538,13 +555,21 @@ impl ConduitApp {
             return;
         }
         let prompt = session.messages[user_index].text.clone();
+        let before = session.clone();
         let removed = self
             .session_mut(id)
             .map(|session| session.messages.split_off(user_index + 1))
             .unwrap_or_default();
-        if !self.send_text(prompt, false, window, cx)
-            && let Some(session) = self.session_mut(id)
-        {
+        if self.send_text(prompt, false, window, cx) {
+            if let Some(pending) = self
+                .session_control
+                .runs
+                .get_mut(&id)
+                .and_then(|run| run.pending_save.as_mut())
+            {
+                pending.before = Some(before);
+            }
+        } else if let Some(session) = self.session_mut(id) {
             session.messages.extend(removed);
             cx.notify();
         }
@@ -552,6 +577,30 @@ impl ConduitApp {
 
     pub(super) fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.poll_persistence(cx);
+        self.poll_pending_sends(window, cx);
+        if self.closing
+            && let Some(error) = self
+                .session_control
+                .runs
+                .values()
+                .find_map(|run| run.cleanup_error.clone())
+                .or_else(|| {
+                    self.session_control
+                        .namings
+                        .values()
+                        .find_map(|naming| naming.cleanup_error.clone())
+                })
+                .or_else(|| {
+                    self.git
+                        .generation
+                        .as_ref()
+                        .and_then(|generation| generation.cleanup_error.clone())
+                })
+        {
+            self.closing = false;
+            self.message = Some(error);
+            cx.notify();
+        }
         if !self.search_query.trim().is_empty()
             && self.search_ui.revision != self.session_control.global_revision
             && self.search_ui.requested.elapsed() >= Duration::from_millis(500)
@@ -561,6 +610,9 @@ impl ConduitApp {
         self.poll_updates(window, cx);
         self.publish_update_notification(cx);
         self.poll_notifications(window, cx);
+        self.sync_plugin_context();
+        #[cfg(conduit_shell_desktop)]
+        self.refresh_shell_context(cx);
         if self.updater.exiting || self.updater.preparing() {
             return;
         }
@@ -684,6 +736,7 @@ impl ConduitApp {
         if self.closing
             && !self.updater.preparing()
             && self.session_control.runs.is_empty()
+            && self.session_control.queue_saves.is_empty()
             && self.probes.is_empty()
             && self.opencode_model_probes.is_empty()
             && self.git.operation.is_none()
@@ -722,19 +775,54 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.closing
-            && let Some(run) = self.session_control.runs.get_mut(&session)
-            && !run.runtime.is_cancelled()
-            && run
-                .approvals
-                .front()
-                .is_some_and(|a| a.id == request && (!allow || a.allow_once))
-            && run.approvals.begin(&request)
+        if self
+            .session_control
+            .runs
+            .get(&session)
+            .and_then(|run| run.approvals.front())
+            .is_some_and(|approval| approval.id == request)
+            && self.submit_approval(session, &request, allow, cx)
         {
-            run.runtime.decide(request, allow);
-            run.status = "正在提交审批…".into();
             self.input.read(cx).focus_handle(cx).focus(window, cx);
-            cx.notify();
         }
+    }
+
+    /// Exact-ticket submission shared by chat and notifications, without navigation or focus changes.
+    pub(super) fn submit_approval(
+        &mut self,
+        session: u64,
+        request: &str,
+        allow: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.closing {
+            return false;
+        }
+        let Some(run) = self.session_control.runs.get_mut(&session) else {
+            return false;
+        };
+        if run.runtime.is_cancelled()
+            || !run.approvals.get(request).is_some_and(|approval| {
+                !allow || (approval.allow_once && !approval.is_user_input())
+            })
+            || !run.approvals.begin(request)
+        {
+            return false;
+        }
+        let sent = run.runtime.try_decide(request.to_owned(), allow);
+        if sent {
+            run.status = "正在提交审批…".into();
+        } else {
+            run.approvals.remove(request);
+            run.status = "审批提交失败，运行连接已关闭；请查看会话。".into();
+            self.finish_notification_approval(
+                session,
+                request,
+                crate::notifications::ApprovalOutcome::Expired,
+                cx,
+            );
+        }
+        self.refresh_notifications(cx);
+        sent
     }
 }

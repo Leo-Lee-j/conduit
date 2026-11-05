@@ -2,7 +2,7 @@
 
 日期：2026-11-05；范围：[P1 设计](phase-1-contributions.md)的 P1-1，以及供下一步 UI 适配使用的选择状态模型。P1-0 的 Shell 结论仍见[原型验证记录](shell-prototype-validation.md)。
 
-**纯数据注册层已实现并导出到 `conduit::plugins`。** 本轮完成原子注册、身份与引用校验、条件求值、命令分发前检查、稳定作用域、注销句柄与选择回退。正式 ConduitApp 还没有调用这个注册表，界面仍沿用现有实现；不能把本轮测试当作 P1-2～P1-4 的三处 UI 回归通过。
+**纯数据注册层已实现并导出到 `conduit::plugins`。** 本轮完成原子注册、身份与引用校验、条件求值、命令分发前检查、稳定作用域、注销句柄与选择回退。本记录对应 P1-1 完成时的状态；此后正式 ConduitApp 已接入两侧，见 [P1-2 左侧导航](p1-2-progress-2026-11-05.md)及 [P1-3 右侧容器](p1-3-progress-2026-11-05.md)。不能把本记录中的注册层测试当作三处 UI 回归通过。
 
 ## 实现与边界
 
@@ -18,7 +18,7 @@
 | [builtins.rs](../../src/plugins/builtins.rs) | 核心工作区 / 文件 / Git / 工具详情及简单状态项声明；显式 opt-in 的工作区概览三处声明 |
 | [tests.rs](../../src/plugins/tests.rs) | 注册失败回滚、两个 owner、撤销与重注册、过期请求、作用域切换、回退及参数边界 |
 
-库入口只导出数据层，没有为正式应用增加 feature、运行时依赖或启动时加载行为。`builtins::register(false)` 只注册核心声明；`true` 额外登记示例。P1-4 接入时须从开发 / 测试开关决定是否传 `true`，默认发布界面不能因此出现示例按钮。renderer key 是宿主映射表的键，注册不会执行 renderer 或业务处理器。
+P1-1 的库入口只导出数据层，没有为正式应用增加 feature、运行时依赖或启动时加载行为。`builtins::register(false)` 只注册核心声明；`true` 额外登记示例。后续 [P1-4](p1-4-progress-2026-11-05.md) 已接入显式 `plugin-example` 开关，默认发布界面不出现示例按钮。renderer key 是宿主映射表的键，注册不会执行 renderer 或业务处理器。
 
 ### 注册协议
 
@@ -79,6 +79,6 @@ rustfmt --edition 2024 --check --config skip_children=true src/lib.rs
 
 测试不会读写真实工作区或实例化 GUI；使用宿主路径身份的合成输入验证模型。库级测试还覆盖原有更新协议，未改动其实现。
 
-## 下一步：P1-2 左侧适配
+## 后续进展
 
-把 Registry 与 ContextTracker 放入 ConduitApp 的 PluginUi，先让工作区 / 文件 / Git 的活动入口从注册表产生，并统一导航动作。保留现有 SidebarView 缓存、文件 / Git 刷新副作用、任务徽标与拖动宽度；随后补更多菜单和真实工作区重排测试。P1-3 再迁移通用右栏与工具详情，P1-4 接入底栏及内置示例，最后执行 P1-5 实例缓存与清理验收。
+P1-2 已把 Registry 与 ContextTracker 放入 ConduitApp 的 PluginUi，让工作区 / 文件 / Git 的活动入口从注册表产生，并统一导航动作。左侧接入、更多菜单和相关测试见[进度记录](p1-2-progress-2026-11-05.md)。P1-3 已迁移通用右栏、工具详情和通知，见[进度记录](p1-3-progress-2026-11-05.md)。P1-4 已接入底栏、统一命令及完整示例，见[进度记录](p1-4-progress-2026-11-05.md)。P1-5 已接入通用缓存、异步结果屏障与原生清理，见[验收记录](p1-5-progress-2026-11-05.md)。下一步为 P2 后端决策。

@@ -1289,7 +1289,7 @@ impl ConduitApp {
             .max_width(px(240.))
             .track_scroll(&self.files.tab_scroll)
             .with_size(Size::Medium)
-            .h(px(36.))
+            .h(px(TAB_BAR_HEIGHT))
             .when_some(selected, |bar, i| bar.selected_index(i));
         for tab in self.open_tabs.iter().copied() {
             let (title, tooltip, icon, running, unread, selector) = match tab {
@@ -1452,7 +1452,7 @@ impl ConduitApp {
         div()
             .debug_selector(|| "document-tab-strip".into())
             .relative()
-            .h(px(36.))
+            .h(px(TAB_BAR_HEIGHT))
             .min_w_0()
             .flex_shrink_0()
             .on_prepaint(move |bounds, window, cx| {
@@ -2075,7 +2075,6 @@ mod tests {
                 let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
                 app.writable = false;
                 app.startup = None;
-                app.details = false;
                 app.selected_workspace = Some(0);
                 app.selected_session = Some(1);
                 app.open_tabs = (1..=12).map(DocumentTab::Chat).collect();
@@ -2460,7 +2459,6 @@ mod tests {
                 let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
                 app.writable = false;
                 app.startup = None;
-                app.details = false;
                 app.selected_workspace = Some(0);
                 app.selected_session = Some(1);
                 app.open_tabs = vec![DocumentTab::Chat(1)];
@@ -2649,7 +2647,6 @@ mod tests {
                 let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
                 app.writable = false;
                 app.startup = None;
-                app.details = false;
                 app.selected_workspace = Some(0);
                 app.selected_session = Some(1);
                 app.open_tabs = vec![DocumentTab::Chat(1)];
@@ -3228,7 +3225,7 @@ mod git_navigation_tests {
         });
         let app = slot.borrow().as_ref().unwrap().clone();
         draw(cx);
-        assert!(cx.debug_bounds("nav-settings").is_some());
+        assert!(cx.debug_bounds("title-settings").is_some());
         assert_eq!(
             cx.update(|window, _| window.find_all_by_label("设置").len()),
             1
@@ -3258,7 +3255,7 @@ mod git_navigation_tests {
         cx.update(|window, cx| {
             app.update(cx, |a, cx| {
                 a.ensure_commit_draft(window, cx);
-                assert!(!a.details);
+                assert!(!a.plugins.right_open());
                 assert_eq!(a.selected_session, Some(1));
                 assert_eq!(a.input.read(cx).value(), "keep this draft");
             })
@@ -3640,7 +3637,7 @@ mod git_navigation_tests {
             })
         });
         draw(cx);
-        click(cx, "nav-settings");
+        click(cx, "title-settings");
         assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
         cx.update(|window, cx| window.close_dialog(cx));
         app.update(cx, |a, _| a.writable = false);
@@ -3666,14 +3663,14 @@ mod git_navigation_tests {
                     true,
                 );
                 assert!(app.git_navigation_open());
-                assert!(!app.details);
+                assert!(!app.plugins.right_open());
                 app
             });
             gpui_kit::component::Root::new(app, window, cx)
         });
         draw(cx);
         assert!(cx.debug_bounds("git-navigation").is_some());
-        assert!(cx.debug_bounds("nav-settings").is_some());
+        assert!(cx.debug_bounds("title-settings").is_some());
         cx.update(|window, _| window.remove_window());
         cx.run_until_parked();
     }

@@ -260,10 +260,6 @@ pub enum Operation {
         push: bool,
         tag: Option<String>,
     },
-    Push {
-        branch: String,
-        upstream: String,
-    },
     RetryTag(TagRetry),
 }
 
@@ -1175,6 +1171,12 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                     "提交已成功，推送失败"
                 };
                 if push {
+                    let destination = resolve_push_destination(
+                        &git,
+                        workspace,
+                        target.branch.as_deref().unwrap(),
+                        cancel,
+                    );
                     if let Some(tag) = tag.as_deref() {
                         let mut pending = TagRetry {
                             branch: target.branch.clone().unwrap(),
@@ -1184,21 +1186,21 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                             tag: tag.into(),
                             oid: oid.trim().into(),
                         };
-                        if let Ok((remote, merge)) =
-                            resolve_upstream(&git, workspace, &pending.branch, None, cancel)
-                            && let Ok(url) = single_push_url(&git, workspace, &remote, cancel)
+                        if let Ok(destination) = &destination
+                            && let Ok(url) =
+                                single_push_url(&git, workspace, &destination.remote, cancel)
                         {
-                            pending.remote = remote;
+                            pending.remote = destination.remote.clone();
                             pending.remote_url = url;
-                            pending.merge = merge;
+                            pending.merge = destination.merge.clone();
                         }
                         retry_tag = Some(pending);
                     }
-                    push_upstream(
+                    push_branch(
                         &git,
                         workspace,
                         target.branch.as_deref().unwrap(),
-                        None,
+                        &destination?,
                         tag.as_deref().map(|tag| (tag, oid.trim())),
                         cancel,
                     )?;
@@ -1217,10 +1219,6 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                     }
                     .into())
                 }
-            }
-            Operation::Push { branch, upstream } => {
-                push_upstream(&git, workspace, &branch, Some(&upstream), None, cancel)?;
-                Ok("推送成功".into())
             }
             Operation::RetryTag(retry) => {
                 retry_tag = Some(retry.clone());
@@ -1262,6 +1260,84 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
     }
 }
 
+struct PushDestination {
+    remote: String,
+    merge: String,
+    set_upstream: bool,
+}
+
+fn resolve_push_destination(
+    git: &Path,
+    workspace: &Path,
+    branch: &str,
+    cancel: &AtomicBool,
+) -> Result<PushDestination> {
+    let current = run_git(
+        git,
+        workspace,
+        &["symbolic-ref", "--quiet", "--short", "HEAD"],
+        cancel,
+    )?;
+    if current.trim() != branch {
+        bail!("当前分支已变化，请刷新后重试推送");
+    }
+    // A missing key has an empty default; command failures must still propagate.
+    let config = |key: &str| -> Result<String> {
+        run_git(
+            git,
+            workspace,
+            &["config", "--default", "", "--get", key],
+            cancel,
+        )
+        .map(|value| value.trim().to_owned())
+    };
+    let configured_remote = config(&format!("branch.{branch}.remote"))?;
+    let merge = config(&format!("branch.{branch}.merge"))?;
+    if !merge.is_empty() {
+        if configured_remote.is_empty() || !merge.starts_with("refs/heads/") {
+            bail!("上游配置不完整，请在分支菜单中选择 Push 并设置上游");
+        }
+        // The tracking ref may be missing locally; keep the configured destination.
+        return Ok(PushDestination {
+            remote: configured_remote,
+            merge,
+            set_upstream: false,
+        });
+    }
+    let remotes = run_git(git, workspace, &["remote"], cancel)?;
+    let remotes: Vec<_> = remotes
+        .lines()
+        .filter(|remote| !remote.is_empty())
+        .collect();
+    let mut remote = config(&format!("branch.{branch}.pushRemote"))?;
+    if remote.is_empty() {
+        remote = config("remote.pushDefault")?;
+    }
+    if remote.is_empty() {
+        remote = configured_remote;
+    }
+    if remote.is_empty() {
+        remote = if remotes.contains(&"origin") {
+            "origin"
+        } else if remotes.len() == 1 {
+            remotes[0]
+        } else if remotes.is_empty() {
+            bail!("尚未配置远程仓库，无法推送新分支");
+        } else {
+            bail!("存在多个远程仓库且未指定默认推送目标，请在分支菜单中选择 Push 和目标远程");
+        }
+        .to_owned();
+    }
+    if remote != "." && !remotes.contains(&remote.as_str()) {
+        bail!("推送远程 {remote} 不存在，请在分支菜单中选择 Push 和目标远程");
+    }
+    Ok(PushDestination {
+        remote,
+        merge: format!("refs/heads/{branch}"),
+        set_upstream: true,
+    })
+}
+
 fn resolve_upstream(
     git: &Path,
     workspace: &Path,
@@ -1289,7 +1365,7 @@ fn resolve_upstream(
         ],
         cancel,
     )
-    .map_err(|_| anyhow!("当前分支未设置有效上游，请先在终端配置上游后重试推送"))?;
+    .map_err(|_| anyhow!("当前分支未设置有效上游，请先在分支菜单中选择 Push 并设置上游"))?;
     if expected.is_some_and(|expected| expected != upstream.trim()) {
         bail!("上游分支已变化，请刷新后重试推送");
     }
@@ -1496,23 +1572,28 @@ fn retry_tag_push(
     Ok(())
 }
 
-fn push_upstream(
+fn push_branch(
     git: &Path,
     workspace: &Path,
     branch: &str,
-    expected: Option<&str>,
+    destination: &PushDestination,
     tag: Option<(&str, &str)>,
     cancel: &AtomicBool,
 ) -> Result<()> {
-    let (remote, merge) = resolve_upstream(git, workspace, branch, expected, cancel)?;
+    let PushDestination {
+        remote,
+        merge,
+        set_upstream,
+    } = destination;
     if let Some((_, oid)) = tag {
-        single_push_url(git, workspace, &remote, cancel)?;
+        single_push_url(git, workspace, remote, cancel)?;
         let head = run_git(git, workspace, &["rev-parse", "--verify", "HEAD"], cancel)?;
         if head.trim() != oid {
             bail!("提交后 HEAD 已变化，请检查分支和标签再推送");
         }
     }
-    let branch_ref = format!("{}:{merge}", tag.map_or("HEAD", |(_, oid)| oid));
+    let local_ref = format!("refs/heads/{branch}");
+    let branch_ref = format!("{}:{merge}", tag.map_or(local_ref.as_str(), |(_, oid)| oid));
     let tag_ref = tag.map(|(name, oid)| format!("{oid}:refs/tags/{name}"));
     let mut args = vec![
         "-c",
@@ -1523,12 +1604,32 @@ fn push_upstream(
     ];
     if tag_ref.is_some() {
         args.push("--atomic");
+    } else if *set_upstream {
+        args.push("--set-upstream");
     }
     args.extend(["--", remote.as_str(), branch_ref.as_str()]);
     if let Some(ref tag_ref) = tag_ref {
         args.push(tag_ref);
     }
     run_git_with_timeout(git, workspace, &args, cancel, Duration::from_secs(120))?;
+    if *set_upstream && tag.is_some() {
+        // Tagged pushes pin both refs to the commit OID. Git cannot infer a local
+        // branch from that source, so record tracking only after atomic success.
+        for (key, value) in [("remote", remote), ("merge", merge)] {
+            run_git(
+                git,
+                workspace,
+                &[
+                    "config",
+                    "--local",
+                    &format!("branch.{branch}.{key}"),
+                    value,
+                ],
+                cancel,
+            )
+            .context("分支和标签已推送，但保存上游配置失败")?;
+        }
+    }
     Ok(())
 }
 
@@ -1758,6 +1859,7 @@ fn run_git_with_environment(
 #[cfg(test)]
 mod tests {
     include!("git/branch_tests.rs");
+    include!("git/push_tests.rs");
     use super::*;
 
     #[test]
@@ -2854,12 +2956,23 @@ mod tests {
         repo.stage("third\n");
         assert!(repo.commit("third", false).committed);
         assert_eq!(repo.metadata().ahead, 2);
+        let repository = repo.metadata();
+        let selected = repository
+            .branch_info
+            .into_iter()
+            .find(|branch| branch.full_ref == "refs/heads/main")
+            .unwrap();
         let pushed = operate(
             &repo.path,
-            Operation::Push {
-                branch: "main".into(),
-                upstream: "origin/main".into(),
-            },
+            Operation::Branch(Box::new(BranchRequest {
+                expected: repository.context,
+                selected: Some(selected),
+                action: BranchAction::Push {
+                    remote: "origin".into(),
+                    destination: "main".into(),
+                    set_upstream: false,
+                },
+            })),
             &AtomicBool::new(false),
         );
         assert!(pushed.error.is_none(), "{pushed:?}");
@@ -2885,8 +2998,8 @@ mod tests {
             return;
         };
         repo.stage("initial\n");
-        let no_upstream = repo.commit("first", true);
-        assert!(no_upstream.committed && no_upstream.error.unwrap().contains("上游"));
+        let no_remote = repo.commit("first", true);
+        assert!(no_remote.committed && no_remote.error.unwrap().contains("远程仓库"));
         assert_eq!(repo.metadata().ahead, 1);
         repo.seed_remote();
         // Keep the tracking ref but point the remote at a missing local directory.

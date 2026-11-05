@@ -962,17 +962,10 @@ impl BranchForm {
             action,
             ..self.request.clone()
         };
-        let inline = self.popup_host.is_some();
         let started = self
             .app
             .update(cx, |this, cx| {
-                let details = (this.details, this.detail_view);
-                let started = this.start_branch_operation(self.workspace.clone(), request, cx);
-                if inline {
-                    this.details = details.0;
-                    this.detail_view = details.1;
-                }
-                started
+                this.start_branch_operation(self.workspace.clone(), request, cx)
             })
             .unwrap_or(false);
         if !started {

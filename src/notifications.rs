@@ -119,6 +119,24 @@ impl Notice {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum ApprovalOutcome {
+    Allowed,
+    Denied,
+    Cancelled,
+    Expired,
+}
+impl ApprovalOutcome {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Allowed => "已允许",
+            Self::Denied => "已拒绝",
+            Self::Cancelled => "已取消",
+            Self::Expired => "已失效",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Record {
     pub id: u64,
@@ -131,6 +149,8 @@ pub(crate) struct Record {
     pub updated_at: u64,
     pub read_at: Option<u64>,
     pub lifecycle: Lifecycle,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_outcome: Option<ApprovalOutcome>,
     pub occurrences: u32,
     pub key: Option<String>,
     pub seen_events: Vec<String>,
@@ -312,6 +332,7 @@ impl Center {
             self.snapshot.next_id += 1;
             Record {
                 id,
+                approval_outcome: None,
                 source: request.source,
                 level: request.level,
                 title: String::new(),
@@ -408,6 +429,24 @@ impl Center {
         }).filter_map(|record| record.key.clone()).collect();
         for key in keys {
             self.resolve(&key, now);
+        }
+    }
+    /// Updates the original record only after a live approval ends; never republishes it.
+    pub(crate) fn resolve_approval(&mut self, id: u64, outcome: ApprovalOutcome, now: u64) {
+        if let Some(record) = self
+            .snapshot
+            .records
+            .iter_mut()
+            .find(|record| record.id == id && record.lifecycle == Lifecycle::Active)
+        {
+            record.lifecycle = Lifecycle::Resolved;
+            record.approval_outcome = Some(outcome);
+            record.updated_at = now;
+            if matches!(outcome, ApprovalOutcome::Allowed | ApprovalOutcome::Denied) {
+                record.read_at.get_or_insert(now);
+            }
+            self.revision += 1;
+            record.revision = self.revision;
         }
     }
     pub(crate) fn prune(&mut self, now: u64) {
@@ -518,5 +557,44 @@ mod tests {
         let record = &center.records()[0];
         assert!(record.title.len() + record.message.len() <= MAX_TEXT_BYTES);
         assert_eq!(record.target, request.target);
+    }
+
+    #[test]
+    fn confirmed_approval_outcome_is_read_terminal_and_persisted() {
+        let mut center = Center::default();
+        let id = center.publish(notice("waiting").active(), 100).id;
+        center.resolve_approval(id, ApprovalOutcome::Denied, 101);
+        let revision = center.revision();
+        center.resolve_approval(id, ApprovalOutcome::Allowed, 102);
+        assert_eq!(center.revision(), revision);
+        let record = center.get(id).unwrap();
+        assert_eq!(record.approval_outcome, Some(ApprovalOutcome::Denied));
+        assert_eq!(record.read_at, Some(101));
+        assert_eq!(record.occurrences, 1);
+        assert!(!center.publish(notice("waiting").active(), 103).changed);
+        let snapshot =
+            serde_json::from_slice(&serde_json::to_vec(&center.snapshot()).unwrap()).unwrap();
+        let restored = Center::restore(snapshot, 104).unwrap();
+        assert_eq!(
+            restored.get(id).unwrap().approval_outcome,
+            Some(ApprovalOutcome::Denied)
+        );
+        assert_eq!(restored.unread(), 0);
+    }
+
+    #[test]
+    fn expired_approvals_remain_unread_and_old_history_needs_no_outcome_field() {
+        let mut center = Center::default();
+        let id = center.publish(notice("waiting").active(), 100).id;
+        let legacy = serde_json::to_value(center.snapshot()).unwrap();
+        assert!(legacy["records"][0].get("approval_outcome").is_none());
+        let restored = Center::restore(serde_json::from_value(legacy).unwrap(), 101).unwrap();
+        assert_eq!(restored.get(id).unwrap().lifecycle, Lifecycle::Resolved);
+        center.resolve_approval(id, ApprovalOutcome::Expired, 101);
+        assert_eq!(center.unread(), 1);
+        assert_eq!(
+            center.get(id).unwrap().approval_outcome,
+            Some(ApprovalOutcome::Expired)
+        );
     }
 }

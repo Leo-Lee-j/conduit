@@ -124,6 +124,7 @@ fn error_retry_clears_cards_before_repeated_failures_and_preserves_output(cx: &m
                     serde_json::to_value(&kept).unwrap(),
                     "retry must clear old errors before any new output arrives"
                 );
+                app.persistence.flush();
                 let saved = Store::load().unwrap();
                 let saved_messages = crate::transcript::read(&saved.workspaces[0].sessions[0]).unwrap();
                 // Loading a running turn also appends an interruption notice.
@@ -201,7 +202,15 @@ fn settings_dismisses_on_outside_click_and_keeps_inside_clicks(cx: &mut TestAppC
     let app = slot.borrow().as_ref().unwrap().clone();
     for (width, height, close_method) in [(850., 500., 0), (1280., 900., 1), (850., 500., 2)] {
         cx.simulate_resize(gpui_kit::size(px(width), px(height)));
-        cx.update(|window, cx| app.update(cx, |app, cx| app.open_settings(window, cx)));
+        cx.update(|window, cx| {
+            app.update(cx, |app, _| app.startup = None);
+            let _ = window.draw(cx);
+        });
+        let settings = cx
+            .debug_bounds("title-settings")
+            .expect("title bar settings");
+        cx.simulate_mouse_down(settings.center(), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(settings.center(), MouseButton::Left, Modifiers::default());
         cx.run_until_parked();
         cx.update(|window, cx| {
             let _ = window.draw(cx);
@@ -2237,6 +2246,7 @@ fn session_naming_applies_success_and_reports_failure_without_starting_cli(
                         started: std::time::Instant::now(),
                         parts: vec![],
                         error: None,
+                        cleanup_error: None,
                     },
                 );
                 this.poll_session_namings(cx);
@@ -2732,8 +2742,7 @@ fn tool_dock_keeps_header_visible_and_scrolls_independently_in_both_layouts(
             app.selected_workspace = Some(0);
             app.selected_session = Some(1);
             app.open_tabs = vec![super::DocumentTab::Chat(1)];
-            app.details = true;
-            app.detail_text = Some("dock-tool".into());
+            app.open_tool_details(1, "dock-tool", window, cx);
             app
         });
         *output.borrow_mut() = Some(app.clone());
@@ -2762,11 +2771,19 @@ fn tool_dock_keeps_header_visible_and_scrolls_independently_in_both_layouts(
             .debug_bounds("detail-content")
             .expect("scrollable detail body");
         assert!(panel.right() <= px(width) && panel.left() >= px(0.));
-        assert_eq!(header.size.height, px(48.));
+        let tabs = cx
+            .debug_bounds("document-tab-strip")
+            .expect("conversation tabs");
+        assert_eq!(header.size.height, tabs.size.height);
+        assert_eq!(header.top(), tabs.top());
         assert!(viewport.top() >= header.bottom());
         assert!(viewport.bottom() <= panel.bottom());
-        let scroll =
-            cx.update(|_, cx| app.read(cx).detail_scrolls[&(1, "dock-tool".into())].clone());
+        let scroll = cx.update(|_, cx| {
+            app.update(cx, |app, _| {
+                let session = app.plugins.session_key().unwrap();
+                app.tool_details.scroll(&session, "dock-tool")
+            })
+        });
         assert!(scroll.max_offset().y > px(1000.));
         let chat_before = cx.update(|_, cx| app.read(cx).scroll.logical_scroll_top());
         cx.simulate_event(ScrollWheelEvent {
@@ -2796,11 +2813,20 @@ fn tool_dock_keeps_header_visible_and_scrolls_independently_in_both_layouts(
         cx.simulate_mouse_down(close.center(), MouseButton::Left, Modifiers::default());
         cx.simulate_mouse_up(close.center(), MouseButton::Left, Modifiers::default());
         cx.run_until_parked();
-        cx.update(|_, cx| assert!(!app.read(cx).details, "close details at {width}"));
         cx.update(|_, cx| {
+            assert!(
+                !app.read(cx).plugins.right_open(),
+                "close details at {width}"
+            )
+        });
+        cx.update(|window, cx| {
             app.update(cx, |app, cx| {
-                app.details = true;
-                cx.notify();
+                app.open_right_view(
+                    &conduit::plugins::ids::ViewId::new(conduit::plugins::builtins::TOOL_DETAILS)
+                        .unwrap(),
+                    window,
+                    cx,
+                );
             })
         });
     }
@@ -3221,8 +3247,8 @@ fn sidebar_bottom_bar_matches_the_toolbar_and_opens_about(cx: &mut TestAppContex
         );
     });
     let about = cx
-        .debug_bounds("nav-about")
-        .expect("the navigation rail has an About button");
+        .debug_bounds("title-about")
+        .expect("the title bar has an About button");
     cx.simulate_mouse_down(
         about.center(),
         gpui_kit::MouseButton::Left,
@@ -3592,6 +3618,8 @@ fn composer_files_paste_drafts_removal_and_failed_send(cx: &mut TestAppContext) 
             assert_eq!(this.current_files().unwrap().references.len(), 3);
             // A clipboard containing both paths and a thumbnail adds only paths.
             this.remove_file(&pasted, window, cx);
+            this.persistence.flush();
+            this.poll_persistence(cx);
             assert!(this.paste_attachments(
                 &ClipboardItem {
                     entries: vec![
@@ -3706,18 +3734,22 @@ fn clipboard_images_are_collected_after_the_last_draft_or_history_reference(
                 "sending transfers ownership from the draft to history"
             );
             assert!(this.persist());
+            this.persistence.flush();
             let locked = std::fs::OpenOptions::new()
                 .read(true)
                 .share_mode(0)
                 .open(Store::path())
                 .unwrap();
             this.delete_session(2, cx);
+            this.persistence.flush();
             assert!(
                 pasted.exists(),
                 "failed state writes must not delete an image referenced on disk"
             );
             drop(locked);
             this.persist_and_cleanup_attachments();
+            this.persistence.flush();
+            this.poll_persistence(cx);
             assert!(
                 !pasted.exists(),
                 "deleting the last saved reference must collect the image"
@@ -3735,6 +3767,8 @@ fn clipboard_images_are_collected_after_the_last_draft_or_history_reference(
             this.paste_attachments(&ClipboardItem::new_image(&image), window, cx);
             this.attach_paths(std::slice::from_ref(&original), window, cx);
             this.remove_workspace(0, cx);
+            this.persistence.flush();
+            this.poll_persistence(cx);
             assert!(
                 !pasted.exists(),
                 "removing a workspace must collect its last draft image"
@@ -4995,6 +5029,7 @@ fn workspace_drag_reorders_and_preserves_navigation_identity(cx: &mut TestAppCon
             assert_eq!(this.open_tabs, vec![super::DocumentTab::Chat(2)]);
             assert_eq!(this.remove_workspace_target, Some(2));
             assert!(this.expanded_workspaces.contains(&0) && this.expanded_workspaces.contains(&2));
+            this.persistence.flush();
             let saved = crate::store::Store::load().unwrap();
             assert_eq!(saved.workspaces[2].sessions[0].id, 1);
             let source = this.store.workspaces[1].path.clone();
@@ -5002,6 +5037,7 @@ fn workspace_drag_reorders_and_preserves_navigation_identity(cx: &mut TestAppCon
             this.reorder_workspace(&source, &target, cx);
             assert_eq!(this.selected_workspace, Some(1));
             assert_eq!(this.selected_session, Some(2));
+            this.persistence.flush();
             this.writable = false;
         })
     });
@@ -5057,6 +5093,7 @@ fn commit_generation_recovers_from_transient_errors_and_preserves_edited_drafts(
                     parts: vec![],
                     error: None,
                     last_diagnostic: None,
+                    cleanup_error: None,
                 });
                 if edited {
                     this.git.drafts[&path].input.update(cx, |input, cx| {

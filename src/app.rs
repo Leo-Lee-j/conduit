@@ -101,6 +101,7 @@ mod sidebar;
 mod state;
 mod stream_events;
 mod theme;
+mod tool_details;
 mod toolbar;
 mod tools;
 mod transcripts;
@@ -123,6 +124,9 @@ use theme::*;
 pub(crate) use theme::{install_theme_packs, set_palette};
 use tools::*;
 use typography::*;
+
+/// Keep document and right-sidebar tab strips aligned in both layouts.
+const TAB_BAR_HEIGHT: f32 = 36.;
 
 actions!(
     conduit,
@@ -152,6 +156,7 @@ pub struct ConduitApp {
     git: git_ui::GitUi,
     branch_manager: Option<Entity<git_log::GitLogView>>,
     persistence: crate::persistence::Persistence,
+    attachments_cleanup_pending: bool,
     session_control: session_controller::SessionController,
     transcripts: transcripts::TranscriptUi,
     updater: update::UpdateUi,
@@ -198,14 +203,7 @@ pub struct ConduitApp {
     default_mono_font: SharedString,
     next_id: u64,
     closing: bool,
-    details: bool,
-    detail_view: DetailView,
-    detail_text: Option<String>,
-    detail_scrolls: HashMap<(u64, String), ScrollHandle>,
-    /// Width of the right sidebar.
-    detail_width: f32,
-    /// Drag origin `(pointer x, width at drag start)` for the right sidebar edge.
-    detail_drag: Option<(f32, f32)>,
+    tool_details: tool_details::ToolDetailState,
     /// Measured width of the left workspace sidebar, used to cap the right one at
     /// half of the remaining content area.
     sidebar_width: f32,
@@ -533,9 +531,14 @@ impl ConduitApp {
             });
         }
         let weak = cx.weak_entity();
-        window.on_window_should_close(cx, move |_, cx| {
+        window.on_window_should_close(cx, move |_window, cx| {
             weak.update(cx, |this, cx| {
                 this.extensions_ui.probe = None;
+                this.plugins.stop_instances();
+                #[cfg(conduit_shell_desktop)]
+                gpui_shell::ShellRoot::update(_window, cx, |root, window, cx| {
+                    root.clear_stopped_overlays(window, cx);
+                });
                 if this.updater.exiting {
                     return true;
                 }
@@ -613,6 +616,7 @@ impl ConduitApp {
         let file_view = cx.new(|cx| files::FileDocumentView::new(app, cx));
         let mut app = Self {
             persistence: crate::persistence::Persistence::new(Store::path()),
+            attachments_cleanup_pending: false,
             session_control: session_controller::SessionController::default(),
             transcripts: Default::default(),
             store,
@@ -668,12 +672,7 @@ impl ConduitApp {
             default_mono_font,
             next_id,
             closing: false,
-            details: false,
-            detail_view: DetailView::Tool,
-            detail_text: None,
-            detail_scrolls: HashMap::new(),
-            detail_width: 340.,
-            detail_drag: None,
+            tool_details: tool_details::ToolDetailState::default(),
             sidebar_width: shell::NAVIGATION_DEFAULT_WIDTH,
             expanded_workspaces: HashSet::new(),
             collapsed_workspaces: HashSet::new(),
@@ -782,28 +781,52 @@ impl ConduitApp {
             return false;
         }
         self.dirty = false;
-        // Existing UI fixtures assert disk state immediately. The writer itself
-        // is tested separately with blocked I/O and coalesced revisions.
-        #[cfg(test)]
-        {
-            self.persistence.flush();
-            self.trim_transcripts();
-            if let Some(error) = &self.persistence.error {
-                self.dirty = true;
-                self.message = Some(format!("保存失败：{error}"));
-                return false;
-            }
-        }
         true
+    }
+    fn persist_confirmed(&mut self) -> Result<crate::persistence::SaveReceipt, String> {
+        if !self.writable {
+            return Err("当前无法保存消息。".into());
+        }
+        self.last_save = Instant::now();
+        self.session_control.global_revision = self.session_control.global_revision.wrapping_add(1);
+        self.store.queued_messages = self.queued_messages.clone();
+        let receipt = self.persistence.submit_confirmed(&self.store)?;
+        self.dirty = false;
+        Ok(receipt)
     }
     fn poll_persistence(&mut self, cx: &mut Context<Self>) {
         if self.persistence.poll() {
             self.trim_transcripts();
             if let Some(error) = &self.persistence.error {
                 self.dirty = true;
-                self.message = Some(format!("保存失败：{error}"));
+                self.closing = false;
+                // Pending sends report their own failure against the originating
+                // conversation, preserving another conversation's banner.
+                if self
+                    .session_control
+                    .runs
+                    .values()
+                    .all(|run| run.pending_save.is_none())
+                    && self.session_control.queue_saves.is_empty()
+                {
+                    self.message = Some(format!("保存失败：{error}"));
+                }
             }
             cx.notify();
+        }
+        if self.attachments_cleanup_pending
+            && !self.persistence.busy()
+            && self.persistence.error.is_none()
+            && !self.dirty
+            && self
+                .session_control
+                .runs
+                .values()
+                .all(|run| run.pending_save.is_none())
+            && self.session_control.queue_saves.is_empty()
+        {
+            self.attachments_cleanup_pending = false;
+            self.cleanup_attachments();
         }
     }
 }

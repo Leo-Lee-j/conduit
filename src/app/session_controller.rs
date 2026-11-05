@@ -7,6 +7,7 @@ use std::{cell::RefCell, collections::HashMap, path::PathBuf};
 #[derive(Default)]
 pub(super) struct SessionController {
     pub(super) runs: HashMap<u64, ActiveRun>,
+    pub(super) queue_saves: HashMap<u64, super::runtime::PendingQueueSave>,
     pub(super) plans: HashMap<u64, Vec<PlanStep>>,
     pub(super) namings: HashMap<u64, SessionNaming>,
     pub(super) naming_errors: HashMap<u64, String>,

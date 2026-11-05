@@ -500,95 +500,17 @@ impl ConduitApp {
         self.git_feedback(path, "正在重试推送标签…", false, cx);
     }
 
-    pub(super) fn start_push(&mut self, cx: &mut Context<Self>) {
-        let Some(path) = self.selected_workspace_path() else {
-            return;
-        };
-        if self.closing
-            || !self.writable
-            || self.git.operation.is_some()
-            || self.git.generation.is_some()
-        {
-            return;
-        }
-        if self.worktree_has_runs(&path) {
-            self.git_feedback(path, "请等待 CLI 任务结束后推送。", true, cx);
-            return;
-        }
-        let Some(repository) = &self.git.repository else {
-            return;
-        };
-        let Some(upstream) = repository.upstream.clone() else {
-            self.show_git_navigation(cx);
-            self.git_feedback(
-                path,
-                "当前分支没有有效上游。请打开分支菜单，选择 Push 设置远程目标，或在 Tracked Branch 中选择上游。",
-                true,
-                cx,
-            );
-            return;
-        };
-        let operation = git::Operation::Push {
-            branch: repository.current.clone(),
-            upstream,
-        };
-        self.git.operation = Some(GitOperation {
-            worktree: git::worktree_root(&path),
-            probe: git::OperationProbe::start(path.clone(), operation),
-            draft: String::new(),
-        });
-        self.git_feedback(path, "正在推送…", false, cx);
-    }
-
-    pub(super) fn push_button(&self, view: Entity<Self>) -> Option<AnyElement> {
+    pub(super) fn pending_push_status(&self) -> Option<(usize, String)> {
         let repository = self
             .git
             .repository
             .as_ref()
             .filter(|repository| !repository.detached && repository.ahead > 0)?;
-        let busy = self.git.operation.is_some();
-        let disabled = self.closing
-            || !self.writable
-            || busy
-            || repository.integration.is_some()
-            || self.git.generation.is_some()
-            || self
-                .selected_workspace_path()
-                .is_some_and(|path| self.worktree_has_runs(&path));
         let tooltip = match &repository.upstream {
             Some(upstream) => format!("推送 {} 个提交到 {}", repository.ahead, upstream),
             None => format!("{} 个本地未发布提交；尚未设置上游", repository.ahead),
         };
-        Some(
-            Button::new("git-push-pending")
-                .ghost()
-                .small()
-                .h(px(26.))
-                .px_2()
-                .tooltip(tooltip)
-                .disabled(disabled)
-                .loading(busy)
-                .when(!disabled, |button| button.cursor_pointer())
-                .child(
-                    h_flex()
-                        .gap_1()
-                        .items_center()
-                        .child(Icon::new(gpui_kit::assets::IconName::ArrowUpFromLine).small())
-                        .child(
-                            div()
-                                .min_w(px(16.))
-                                .h(px(16.))
-                                .px_1()
-                                .rounded_full()
-                                .bg(rgb(palette().surface_hover))
-                                .text_size(px(10.))
-                                .text_color(rgb(palette().text))
-                                .child(repository.ahead.to_string()),
-                        ),
-                )
-                .on_click(move |_, _, cx| view.update(cx, |this, cx| this.start_push(cx)))
-                .into_any_element(),
-        )
+        Some((repository.ahead, tooltip))
     }
 
     pub(super) fn generate_commit_message(&mut self, cx: &mut Context<Self>) {
@@ -668,6 +590,7 @@ impl ConduitApp {
             last_diagnostic: None,
             parts: vec![],
             error: None,
+            cleanup_error: None,
         });
         self.git_feedback(
             path,
@@ -837,6 +760,21 @@ impl ConduitApp {
                     Event::ErrorBanner(error) => {
                         // A later successful reply may recover from this diagnostic.
                         generation.last_diagnostic = Some(error);
+                    }
+                    Event::CleanupBlocked(error) => {
+                        generation.cleanup_error = Some(error.clone());
+                        generation.error = Some(error.clone());
+                        generation.runtime.cancel();
+                        self.git.feedback.insert(
+                            generation.path.clone(),
+                            GitFeedback {
+                                text: error.clone(),
+                                error: true,
+                            },
+                        );
+                        self.closing = false;
+                        self.message = Some(error);
+                        cx.notify();
                     }
                     Event::Approval(approval) => {
                         generation.runtime.decide(approval.id, false);
@@ -1514,6 +1452,7 @@ impl ConduitApp {
         };
         let mut body = sidebar::navigation_content()
             .id("git-panel-body")
+            .debug_selector(|| "git-panel-body".into())
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -1607,7 +1546,7 @@ impl ConduitApp {
                     ),
             );
         } else {
-            let mut groups = v_flex().w_full().gap(px(2.));
+            let mut groups = v_flex().w_full().flex_shrink_0().gap(px(2.));
             for kind in if self.git.group_by_status {
                 GitChangeGroup::STATUS.to_vec()
             } else {
@@ -1638,11 +1577,12 @@ impl ConduitApp {
                 let select_group_app = view.clone();
                 let group_checked = selected_count == files.len();
                 let label_app = view.clone();
-                let mut group = v_flex().w_full().child(
+                let mut group = v_flex().w_full().flex_shrink_0().child(
                     h_flex()
                         .w_full()
                         .min_w_0()
                         .h(px(24.))
+                        .flex_shrink_0()
                         .items_center()
                         .bg(rgb(palette().surface_strong))
                         .rounded(px(3.))
@@ -1766,7 +1706,7 @@ impl ConduitApp {
                         ),
                 );
                 if !collapsed {
-                    let mut rows = v_flex().w_full().pl(px(16.));
+                    let mut rows = v_flex().w_full().flex_shrink_0().pl(px(16.));
                     for file in files {
                         let app = view.clone();
                         let target = file.clone();
@@ -1809,6 +1749,7 @@ impl ConduitApp {
                                 .gap(px(6.))
                                 .items_center()
                                 .h(px(22.))
+                                .flex_shrink_0()
                                 .px_2()
                                 .rounded(px(3.))
                                 .cursor_pointer()
@@ -1875,12 +1816,12 @@ impl ConduitApp {
                                     let discard_file = menu_file.clone();
                                     let discard_workspace = menu_workspace.clone();
                                     let can_discard = menu_app.read(cx).can_stage_files()
-                                        && !menu_app
+                                        && menu_app
                                             .read(cx)
                                             .git
                                             .repository
                                             .as_ref()
-                                            .is_some_and(|repo| repo.integration.is_some());
+                                            .is_none_or(|repo| repo.integration.is_none());
                                     let disabled = !can_stage;
                                     menu.item(
                                         PopupMenuItem::new("加入暂存区")
@@ -2075,7 +2016,7 @@ impl ConduitApp {
             }
             body = body.child(groups);
             if !snapshot.notes.is_empty() {
-                body = body.child(v_flex().w_full().gap_1().pt_1().children(
+                body = body.child(v_flex().w_full().flex_shrink_0().gap_1().pt_1().children(
                     snapshot.notes.iter().map(|note| {
                         div()
                             .text_size(px(10.))

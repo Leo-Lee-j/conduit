@@ -3,9 +3,11 @@ use crate::app::{ActiveRun, ChatRuntime, ConduitApp, Event, Store, Workspace, un
 use gpui_kit::component::{Root, WindowExt as _};
 use gpui_kit::{
     AppContext as _, Entity, Focusable as _, Modifiers, MouseButton, TestAppContext,
-    VisualTestContext, px, size,
+    VisualTestContext, base::test_support, point, px, size,
 };
 use std::time::Duration;
+
+mod approvals;
 
 fn fixture(
     cx: &mut TestAppContext,
@@ -49,15 +51,145 @@ fn draw(cx: &mut VisualTestContext) {
     });
     cx.run_until_parked();
 }
-fn click(cx: &mut VisualTestContext, selector: &'static str) {
+fn click(cx: &mut VisualTestContext, selector: &str) {
     draw(cx);
     let at = cx
-        .debug_bounds(selector)
+        .debug_bounds(selector.to_owned().leak())
         .unwrap_or_else(|| panic!("missing {selector}"))
         .center();
     cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::default());
     cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::default());
     draw(cx);
+}
+
+#[gpui_kit::test]
+fn notification_card_keeps_actions_at_corners_and_reveals_hover_controls(cx: &mut TestAppContext) {
+    let (app, cx) = fixture(cx, true);
+    let id = cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let id = app.notify_user(
+                Notice::new(
+                    Source::Session,
+                    Level::Success,
+                    "检查已经完成，包含较长标题时仍与状态图标垂直居中",
+                    "可以返回会话查看结果。",
+                )
+                .target(app.session_notice_target(1).unwrap())
+                .presentation(super::Presentation::History),
+                cx,
+            );
+            app.read_notification(id, window, cx);
+            app.toggle_notifications(window, cx);
+            id
+        })
+    });
+    for width in [1280., 850.] {
+        cx.simulate_resize(size(px(width), px(800.)));
+        cx.simulate_mouse_move(point(px(20.), px(20.)), None, Modifiers::default());
+        draw(cx);
+        let card = cx
+            .debug_bounds(format!("notification-record-{id}").leak())
+            .unwrap();
+        let icon = cx
+            .debug_bounds(format!("notification-icon-{id}").leak())
+            .unwrap();
+        let title = cx
+            .debug_bounds(format!("notification-title-{id}").leak())
+            .unwrap();
+        let footer = cx
+            .debug_bounds(format!("notification-footer-{id}").leak())
+            .unwrap();
+        let time = cx
+            .debug_bounds(format!("notification-time-{id}").leak())
+            .unwrap();
+        let open = cx
+            .debug_bounds(format!("notification-open-{id}").leak())
+            .unwrap();
+        let close = cx
+            .debug_bounds(format!("notification-remove-{id}").leak())
+            .unwrap();
+        assert!((icon.center().y - title.center().y).abs() <= px(0.5));
+        assert_eq!(time.left(), footer.left());
+        assert_eq!(open.right(), footer.right());
+        assert!(close.top() < footer.top() && close.right() == footer.right());
+        assert!(footer.bottom() < card.bottom());
+        let tabs = cx.debug_bounds("document-tab-strip").unwrap();
+        let header = cx.debug_bounds("detail-header").unwrap();
+        assert_eq!(header.top(), tabs.top());
+        assert_eq!(header.size.height, tabs.size.height);
+        cx.update(|window, _| {
+            for kind in ["notification-time", "notification-remove"] {
+                assert!(
+                    !test_support::find(window, &[], &(kind, id).into())
+                        .unwrap()
+                        .visible()
+                );
+            }
+        });
+        cx.simulate_mouse_move(card.center(), None, Modifiers::default());
+        draw(cx);
+        cx.update(|window, _| {
+            for kind in ["notification-time", "notification-remove"] {
+                assert!(
+                    test_support::find(window, &[], &(kind, id).into())
+                        .unwrap()
+                        .visible()
+                );
+            }
+        });
+        assert_eq!(
+            cx.debug_bounds(format!("notification-record-{id}").leak()),
+            Some(card)
+        );
+        assert_eq!(
+            cx.debug_bounds(format!("notification-footer-{id}").leak()),
+            Some(footer)
+        );
+    }
+    click(cx, &format!("notification-remove-{id}"));
+    cx.update(|_, cx| assert!(app.read(cx).notifications.center.get(id).is_none()));
+}
+
+#[gpui_kit::test]
+fn notification_close_control_preserves_unread_and_active_records(cx: &mut TestAppContext) {
+    let (app, cx) = fixture(cx, false);
+    let (unread, active) = cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let unread = app.notify_user(
+                Notice::new(Source::App, Level::Info, "未读通知", "先标为已读再移除")
+                    .presentation(super::Presentation::History),
+                cx,
+            );
+            let active = app.notify_user(
+                Notice::new(Source::App, Level::Warning, "待处理", "仍需处理")
+                    .key("hover-active", "first")
+                    .active()
+                    .presentation(super::Presentation::History),
+                cx,
+            );
+            app.read_notification(active, window, cx);
+            (unread, active)
+        })
+    });
+    click(cx, "toggle-sidebar");
+    assert!(cx.debug_bounds("notification-panel").is_some());
+    assert!(
+        cx.debug_bounds(format!("notification-remove-{unread}").leak())
+            .is_none()
+    );
+    assert!(
+        cx.debug_bounds(format!("notification-remove-{active}").leak())
+            .is_none()
+    );
+    click(cx, &format!("notification-read-{unread}"));
+    assert!(
+        cx.debug_bounds(format!("notification-remove-{unread}").leak())
+            .is_some()
+    );
+    assert!(
+        cx.debug_bounds(format!("notification-remove-{active}").leak())
+            .is_none()
+    );
 }
 
 #[gpui_kit::test]
@@ -72,7 +204,6 @@ fn notification_bell_and_panel_work_without_a_session_in_both_layouts(cx: &mut T
                 } else {
                     app.leave_branch_navigation();
                 }
-                app.detail_text = Some("retained-tool".into());
                 cx.notify();
             })
         });
@@ -83,12 +214,22 @@ fn notification_bell_and_panel_work_without_a_session_in_both_layouts(cx: &mut T
         assert!(bounds.size.width >= px(250.) && bounds.right() <= px(width));
         assert!(cx.debug_bounds("notification-list").is_some());
         cx.update(|_, cx| {
-            assert!(app.read(cx).details);
-            assert_eq!(app.read(cx).detail_text.as_deref(), Some("retained-tool"));
+            assert!(
+                app.read(cx)
+                    .plugins
+                    .right_is(conduit::plugins::builtins::NOTIFICATIONS)
+            );
         });
         cx.simulate_keystrokes("escape");
         draw(cx);
         assert!(cx.debug_bounds("notification-panel").is_none());
+        cx.update(|_, cx| {
+            assert!(!app.read(cx).plugins.right_open());
+            assert_eq!(
+                app.read(cx).plugins.right().as_str(),
+                conduit::plugins::builtins::NOTIFICATIONS
+            );
+        });
         assert!(cx.debug_bounds("notification-bell").is_some());
     }
 }

@@ -12,12 +12,14 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender, SyncSender},
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+const PROCESS_CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 mod opencode_questions;
 #[cfg(test)]
@@ -78,11 +80,30 @@ pub struct StartRequest {
 }
 
 pub struct ChatRuntime {
+    identity: String,
     pub events: crate::event_queue::Receiver,
     controls: Sender<Control>,
     cancelled: Arc<AtomicBool>,
 }
 impl ChatRuntime {
+    fn next_identity() -> String {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        // Include the process/time so restored history cannot suppress a new
+        // request when regeneration reuses a transcript prefix after restart.
+        format!(
+            "{}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        )
+    }
+    /// Unique to this runtime, including when a later turn reuses local tickets.
+    pub(crate) fn identity(&self) -> &str {
+        &self.identity
+    }
     /// Controllable event source for UI concurrency regressions; starts no CLI.
     #[cfg(all(test, feature = "ui-tests"))]
     pub(crate) fn test_channel() -> (Self, crate::event_queue::Sender) {
@@ -90,12 +111,28 @@ impl ChatRuntime {
         let (controls, _) = mpsc::channel();
         (
             Self {
+                identity: Self::next_identity(),
                 events,
                 controls,
                 cancelled: Arc::new(AtomicBool::new(false)),
             },
             sender,
         )
+    }
+    #[cfg(all(test, feature = "ui-tests"))]
+    pub(crate) fn test_approval_channel() -> (
+        Self,
+        crate::event_queue::Sender,
+        impl Fn() -> Option<(String, bool)>,
+    ) {
+        let (mut runtime, events) = Self::test_channel();
+        let (controls, receiver) = mpsc::channel();
+        runtime.controls = controls;
+        (runtime, events, move || match receiver.try_recv() {
+            Ok(Control::Decision { id, allow }) => Some((id, allow)),
+            Ok(_) => panic!("expected an approval decision"),
+            Err(_) => None,
+        })
     }
     /// Isolated helper turn; never resumes or mutates the chat conversation.
     #[cfg(test)]
@@ -164,7 +201,15 @@ impl ChatRuntime {
             route: Default::default(),
         })
     }
+    #[cfg(test)]
     pub fn start_request(request: StartRequest) -> Self {
+        Self::start_request_gated(request, None)
+    }
+    pub(crate) fn start_after_save(request: StartRequest) -> (Self, Sender<()>) {
+        let (release, wait) = mpsc::channel();
+        (Self::start_request_gated(request, Some(wait)), release)
+    }
+    fn start_request_gated(request: StartRequest, gate: Option<Receiver<()>>) -> Self {
         let StartRequest {
             provider,
             executable,
@@ -186,7 +231,7 @@ impl ChatRuntime {
         .with_permission(permission)
         .with_options(effort, route);
         let args = protocol.args();
-        Self::start_command(protocol, executable, args, cwd)
+        Self::start_command_gated(protocol, executable, args, cwd, gate)
     }
 
     #[cfg(test)]
@@ -212,29 +257,79 @@ impl ChatRuntime {
         args: Vec<String>,
         cwd: PathBuf,
     ) -> Self {
+        Self::start_command_gated(protocol, executable, args, cwd, None)
+    }
+    fn start_command_gated(
+        protocol: Protocol,
+        executable: PathBuf,
+        args: Vec<String>,
+        cwd: PathBuf,
+        gate: Option<Receiver<()>>,
+    ) -> Self {
+        Self::start_worker(move |stop, rx, tx, child| {
+            if let Some(gate) = gate {
+                loop {
+                    if stop.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    match gate.recv_timeout(Duration::from_millis(20)) {
+                        Ok(()) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                        Err(_) => bail!("保存未确认，消息未发送。"),
+                    }
+                }
+            }
+            if stop.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            execute(
+                protocol,
+                LaunchCommand {
+                    executable,
+                    args,
+                    cwd,
+                },
+                stop,
+                rx,
+                tx,
+                child,
+            )
+        })
+    }
+
+    fn start_worker(
+        work: impl FnOnce(
+            Arc<AtomicBool>,
+            Receiver<Control>,
+            &crate::event_queue::Sender,
+            &mut Option<Child>,
+        ) -> Result<()>
+        + Send
+        + 'static,
+    ) -> Self {
         let (tx, events) = crate::event_queue::channel();
         let (controls, rx) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let stop = cancelled.clone();
         thread::spawn(move || {
             let sender = tx.clone();
+            // Keep ownership outside the unwind boundary, including startup and
+            // writer setup, so a panic cannot lose the process verification handle.
+            let mut child = None;
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                execute(protocol, executable, args, cwd, stop.clone(), rx, &tx)
+                work(stop.clone(), rx, &tx, &mut child)
             }));
-            let error = match outcome {
-                Ok(Ok(())) => None,
-                Ok(Err(error)) => Some(format!("{error:#}")),
-                Err(_) => {
-                    let _ = sender.send(Event::Notice("CLI 工作线程异常，进程身份无法继续核实；该会话保持占用，请重启应用后检查。".into()));
-                    return;
-                }
-            };
-            let _ = sender.send(Event::Finished {
-                error,
-                cancelled: stop.load(Ordering::Acquire),
-            });
+            let mut finished = finished_event(outcome, stop.load(Ordering::Acquire));
+            if let Some(child) = child {
+                cleanup_process(&child, &sender, &mut finished, PROCESS_CLEANUP_TIMEOUT);
+            }
+            if let Event::Finished { cancelled, .. } = &mut finished {
+                *cancelled = stop.load(Ordering::Acquire);
+            }
+            let _ = sender.send(finished);
         });
         Self {
+            identity: Self::next_identity(),
             events,
             controls,
             cancelled,
@@ -247,7 +342,10 @@ impl ChatRuntime {
         self.cancelled.load(Ordering::Acquire)
     }
     pub fn decide(&self, id: String, allow: bool) {
-        let _ = self.controls.send(Control::Decision { id, allow });
+        self.try_decide(id, allow);
+    }
+    pub(crate) fn try_decide(&self, id: String, allow: bool) -> bool {
+        self.controls.send(Control::Decision { id, allow }).is_ok()
     }
     pub fn answer(&self, id: String, answers: std::collections::BTreeMap<String, Vec<String>>) {
         let _ = self.controls.send(Control::Answer { id, answers });
@@ -257,6 +355,18 @@ impl ChatRuntime {
             let _ = self.controls.send(Control::EnableFullAccess);
         }
     }
+}
+
+fn finished_event(
+    outcome: std::result::Result<Result<()>, Box<dyn std::any::Any + Send + 'static>>,
+    cancelled: bool,
+) -> Event {
+    let error = match outcome {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => Some(format!("{error:#}")),
+        Err(_) => Some("CLI 工作线程异常；已进入进程清理流程，请检查结果后重试".into()),
+    };
+    Event::Finished { error, cancelled }
 }
 impl Drop for ChatRuntime {
     fn drop(&mut self) {
@@ -329,15 +439,25 @@ fn send(writer: &SyncSender<Vec<u8>>, value: Value) -> Result<()> {
         .map_err(|_| anyhow::anyhow!("CLI 输入队列不可用，任务未继续"))
 }
 
+struct LaunchCommand {
+    executable: PathBuf,
+    args: Vec<String>,
+    cwd: PathBuf,
+}
+
 fn execute(
     mut protocol: Protocol,
-    executable: PathBuf,
-    mut args: Vec<String>,
-    cwd: PathBuf,
+    command: LaunchCommand,
     cancel: Arc<AtomicBool>,
     controls: Receiver<Control>,
     events: &crate::event_queue::Sender,
+    owned_child: &mut Option<Child>,
 ) -> Result<()> {
+    let LaunchCommand {
+        executable,
+        mut args,
+        cwd,
+    } = command;
     protocol.prepare()?;
     let mut question_bridge = protocol
         .opencode_question_connection()
@@ -352,6 +472,8 @@ fn execute(
     let (program, full_args) = crate::cli::command_for(&executable, &args);
     let (child, mut pipes) =
         Child::spawn_with_env(&program, &full_args, &cwd, protocol.environment())?;
+    *owned_child = Some(child);
+    let child = owned_child.as_ref().unwrap();
     let (writer, input) = mpsc::sync_channel::<Vec<u8>>(128);
     let done = Arc::new(AtomicBool::new(false));
     let writer_done = done.clone();
@@ -595,11 +717,41 @@ fn execute(
         }
         thread::sleep(Duration::from_millis(10));
     }
+    result
+}
+
+trait ProcessTree {
+    fn terminate(&self) -> Result<()>;
+    fn active_processes(&self) -> Result<u32>;
+    fn exit_code(&self) -> Result<Option<u32>>;
+}
+impl ProcessTree for Child {
+    fn terminate(&self) -> Result<()> {
+        Child::terminate(self)
+    }
+    fn active_processes(&self) -> Result<u32> {
+        Child::active_processes(self)
+    }
+    fn exit_code(&self) -> Result<Option<u32>> {
+        Child::exit_code(self)
+    }
+}
+
+fn cleanup_process(
+    child: &impl ProcessTree,
+    events: &crate::event_queue::Sender,
+    finished: &mut Event,
+    timeout: Duration,
+) {
+    let termination_deadline = Instant::now() + timeout;
     let mut termination_error_reported = false;
+    let mut termination_error = None;
+    let mut quarantined = false;
     loop {
         if let Err(error) = child.terminate()
             && !termination_error_reported
         {
+            termination_error = Some(error.to_string());
             let _ = events.send(Event::Notice(format!(
                 "进程树停止失败，该会话保持占用：{error}"
             )));
@@ -608,10 +760,36 @@ fn execute(
         if matches!(child.active_processes(), Ok(0)) && matches!(child.exit_code(), Ok(Some(_))) {
             break;
         }
-        thread::sleep(Duration::from_millis(20));
+        if !quarantined && Instant::now() >= termination_deadline {
+            let active = child
+                .active_processes()
+                .map(|count| count.to_string())
+                .unwrap_or_else(|error| format!("查询失败：{error}"));
+            let exit = child
+                .exit_code()
+                .map(|code| format!("{code:?}"))
+                .unwrap_or_else(|error| format!("查询失败：{error}"));
+            let detail = termination_error
+                .as_ref()
+                .map(|error| format!("最近一次终止错误：{error}；"))
+                .unwrap_or_default();
+            let cleanup_error =
+                anyhow::anyhow!("进程树清理超时；{detail}仍有 {active} 个活动进程，退出码：{exit}");
+            if let Event::Finished { error, .. } = finished {
+                *error = Some(match error.take() {
+                    None => cleanup_error.to_string(),
+                    Some(error) => format!("{error}；{cleanup_error:#}"),
+                });
+            }
+            // A timeout is a visible fault, not proof that the Job is empty.
+            // Retain its handles and exclusion while the worker observes cleanup.
+            let _ = events.send(Event::CleanupBlocked(format!(
+                "{cleanup_error:#}。已停止接收任务，正在后台重试清理；此会话暂不可重启。"
+            )));
+            quarantined = true;
+        }
+        thread::sleep(Duration::from_millis(if quarantined { 500 } else { 20 }));
     }
-    drop(child);
-    result
 }
 
 #[cfg(test)]
@@ -728,6 +906,104 @@ mod tests {
                 .into(),
             cwd,
         )
+    }
+    #[test]
+    fn worker_panic_becomes_terminal_finished_event() {
+        let runtime = ChatRuntime::start_worker(|_, _, _, _| panic!("fixture panic"));
+        match runtime.events.recv_timeout(Duration::from_secs(3)).unwrap() {
+            Event::Finished { error, cancelled } => {
+                assert!(!cancelled);
+                assert!(error.is_some());
+            }
+            _ => unreachable!("worker failures must always become terminal events"),
+        }
+        assert!(matches!(
+            runtime.events.recv_timeout(Duration::from_secs(3)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn worker_setup_panic_keeps_child_owned_until_verified_exit() {
+        let (tx, rx) = mpsc::channel();
+        let runtime = ChatRuntime::start_worker(move |_, _, _, owned| {
+            let program = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+                .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+            let (child, _pipes) = Child::spawn(
+                &program,
+                &[
+                    "-NoProfile".into(),
+                    "-NonInteractive".into(),
+                    "-Command".into(),
+                    "Start-Sleep -Seconds 60".into(),
+                ],
+                &std::env::temp_dir(),
+            )?;
+            *owned = Some(child);
+            tx.send(()).unwrap();
+            panic!("panic during writer setup");
+        });
+        rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert!(matches!(
+            runtime
+                .events
+                .recv_timeout(Duration::from_secs(15))
+                .unwrap(),
+            Event::Finished {
+                error: Some(_),
+                cancelled: false
+            }
+        ));
+        assert!(matches!(
+            runtime.events.recv_timeout(Duration::from_secs(3)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn cleanup_timeout_reports_fault_and_waits_for_verified_recovery() {
+        struct StalledTree(Arc<AtomicBool>);
+        impl ProcessTree for StalledTree {
+            fn terminate(&self) -> Result<()> {
+                bail!("injected termination failure")
+            }
+            fn active_processes(&self) -> Result<u32> {
+                Ok(u32::from(!self.0.load(Ordering::Acquire)))
+            }
+            fn exit_code(&self) -> Result<Option<u32>> {
+                Ok(self.0.load(Ordering::Acquire).then_some(1))
+            }
+        }
+        let exited = Arc::new(AtomicBool::new(false));
+        let tree = StalledTree(exited.clone());
+        let (sender, events) = crate::event_queue::channel();
+        let worker = thread::spawn(move || {
+            let mut finished = Event::Finished {
+                error: None,
+                cancelled: false,
+            };
+            cleanup_process(&tree, &sender, &mut finished, Duration::ZERO);
+            sender.send(finished).unwrap();
+        });
+        assert!(matches!(
+            events.recv_timeout(Duration::from_secs(3)).unwrap(),
+            Event::Notice(_)
+        ));
+        assert!(matches!(
+            events.recv_timeout(Duration::from_secs(3)).unwrap(),
+            Event::CleanupBlocked(_)
+        ));
+        assert!(matches!(
+            events.recv_timeout(Duration::from_millis(80)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        exited.store(true, Ordering::Release);
+        let Event::Finished { error, .. } = events.recv_timeout(Duration::from_secs(3)).unwrap()
+        else {
+            panic!("missing recovery completion")
+        };
+        assert!(error.unwrap().contains("injected termination failure"));
+        worker.join().unwrap();
     }
     #[test]
     fn runtime_cancellation_finishes_after_descendant_exits() {

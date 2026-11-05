@@ -73,6 +73,8 @@ pub enum Event {
     /// A transient or fatal error from the CLI stream. Rendered as a banner
     /// instead of an inline notice so it does not pollute the transcript.
     ErrorBanner(String),
+    /// Cleanup has timed out; the process tree is still owned and monitored.
+    CleanupBlocked(String),
     Finished {
         error: Option<String>,
         cancelled: bool,

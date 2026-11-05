@@ -73,31 +73,46 @@ pub(super) struct SidebarView {
     _bounds_subscription: Subscription,
     was_workspace_navigation: bool,
     navigation_revision: Option<super::plugin_ui::NavigationRevision>,
+    pending_push: Option<(usize, String)>,
+    pending_tasks: usize,
     #[cfg(test)]
     pub(super) render_count: usize,
 }
 
 impl SidebarView {
-    pub(super) fn new(app: WeakEntity<ConduitApp>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(super) fn new(
+        app: WeakEntity<ConduitApp>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let subscription = cx.observe(&app.upgrade().expect("app is alive"), |view, app, cx| {
-            let (workspaces, changed, revision) = app.update(cx, |app, _| {
-                app.sync_plugin_context();
-                let workspaces = app.workspace_navigation_active();
-                (
-                    workspaces,
-                    workspaces && app.refresh_sidebar(),
-                    app.plugins.revision(),
-                )
-            });
-            if !workspaces
-                || !view.was_workspace_navigation
+            let (workspaces, changed, revision, pending_push, pending_tasks, refresh) =
+                app.update(cx, |app, cx| {
+                    app.sync_plugin_context();
+                    app.refresh_plugin_views(cx);
+                    let workspaces = app.workspace_navigation_active();
+                    (
+                        workspaces,
+                        workspaces && app.refresh_sidebar(),
+                        app.plugins.revision(),
+                        app.pending_push_status(),
+                        app.session_control.runs.len() + app.session_control.unread_completed.len(),
+                        app.plugins.navigation_refresh_on_notify(),
+                    )
+                });
+            if refresh
+                || workspaces != view.was_workspace_navigation
                 || changed
                 || view.navigation_revision.as_ref() != Some(&revision)
+                || view.pending_push != pending_push
+                || view.pending_tasks != pending_tasks
             {
                 cx.notify();
             }
             view.was_workspace_navigation = workspaces;
             view.navigation_revision = Some(revision);
+            view.pending_push = pending_push;
+            view.pending_tasks = pending_tasks;
         });
         Self {
             app,
@@ -105,6 +120,8 @@ impl SidebarView {
             _bounds_subscription: cx.observe_window_bounds(window, |_, _, cx| cx.notify()),
             was_workspace_navigation: false,
             navigation_revision: None,
+            pending_push: None,
+            pending_tasks: 0,
             #[cfg(test)]
             render_count: 0,
         }
@@ -124,7 +141,11 @@ impl Render for SidebarView {
             .app
             .update(cx, |app, cx| app.render_navigation(window, cx));
         if let Some(app) = self.app.upgrade() {
-            self.navigation_revision = Some(app.read(cx).plugins.revision());
+            let app = app.read(cx);
+            self.navigation_revision = Some(app.plugins.revision());
+            self.pending_push = app.pending_push_status();
+            self.pending_tasks =
+                app.session_control.runs.len() + app.session_control.unread_completed.len();
         }
         rendered.unwrap_or_else(|_| div().into_any_element())
     }

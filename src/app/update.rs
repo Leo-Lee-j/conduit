@@ -90,6 +90,7 @@ impl ConduitApp {
 
     fn update_idle(&self) -> bool {
         self.session_control.runs.is_empty()
+            && self.session_control.queue_saves.is_empty()
             && self.probes.is_empty()
             && self.opencode_model_probes.is_empty()
             && self.git.operation.is_none()
@@ -282,7 +283,7 @@ impl ConduitApp {
         }
     }
 
-    fn begin_update_install(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+    fn begin_update_install(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.writable {
             self.updater.fail("当前数据不可写，不能安全重启".into());
             cx.notify();
@@ -299,6 +300,11 @@ impl ConduitApp {
             return;
         }
         self.closing = true;
+        self.plugins.stop_instances();
+        #[cfg(conduit_shell_desktop)]
+        gpui_shell::ShellRoot::update(_window, cx, |root, window, cx| {
+            root.clear_stopped_overlays(window, cx);
+        });
         self.updater.phase = Phase::Preparing;
         self.updater.status = "正在准备安装并重启…".into();
         let data = Store::path().parent().unwrap().to_path_buf();
@@ -321,8 +327,6 @@ impl ConduitApp {
             self.workspace_drafts
                 .insert(target.workspace, self.input.read(cx).value().to_string());
         }
-        #[cfg(test)]
-        anyhow::ensure!(self.persist(), "无法保存应用数据");
         anyhow::ensure!(
             !self.dirty && !self.persistence.busy() && self.persistence.error.is_none(),
             "等待应用数据保存完成"
@@ -612,10 +616,10 @@ impl ConduitApp {
     }
 
     pub(super) fn update_notice(&self, cx: &mut Context<Self>) -> AnyElement {
-        if !matches!(
+        if !(matches!(
             self.updater.phase,
             Phase::Available | Phase::Downloading | Phase::Ready | Phase::Preparing
-        ) && !(self.updater.phase == Phase::Failed && self.updater.release.is_some())
+        ) || self.updater.phase == Phase::Failed && self.updater.release.is_some())
         {
             return div().into_any_element();
         }
@@ -687,6 +691,8 @@ mod tests {
                 app.git.drafts[&workspace]
                     .input
                     .update(cx, |input, cx| input.set_value("待提交说明", window, cx));
+                assert!(app.persist());
+                app.persistence.flush();
                 app.save_update_drafts(cx).unwrap();
             });
             let restored = cx.new(|cx| ConduitApp::with_store(window, cx, Ok(copy), false, false));
@@ -710,6 +716,58 @@ mod tests {
             gpui_kit::component::Root::new(restored, window, cx)
         });
         std::fs::remove_file(attachment).unwrap();
+    }
+
+    #[cfg(conduit_shell_desktop)]
+    #[gpui_kit::test]
+    fn shell_update_preparation_stops_pending_commands_before_installer_work(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::app::plugin_ui::shell::tests::{assert_no_overlays, command, fixture, runtime};
+        let (app, cx) = fixture(cx);
+        command(&app, "example.workspace-overview.overlays", cx);
+        command(&app, "example.workspace-overview.read-delayed", cx);
+        let weak = runtime(&app, cx);
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let saved = app
+                    .plugins
+                    .host_command("example.workspace-overview.increment")
+                    .unwrap();
+                // A missing package fails preparation without ever launching an installer.
+                app.updater.package =
+                    Some(Store::path().with_file_name("nonexistent-shell-test.exe"));
+                app.updater.release = Some(Release {
+                    manifest: Manifest {
+                        schema: 1,
+                        version: "0.2.0".into(),
+                        target: "x86_64-pc-windows-msvc".into(),
+                        filename: "nonexistent-shell-test.exe".into(),
+                        url: String::new(),
+                        size: 1,
+                        sha256: "0".repeat(64),
+                        published_at: "2026-11-05".into(),
+                        notes: String::new(),
+                        min_updater_version: 1,
+                    },
+                    raw: Vec::new(),
+                    signature: String::new(),
+                });
+                app.begin_update_install(window, cx);
+                gpui_shell::ShellRoot::update(window, cx, |root, _, _| {
+                    assert_eq!(root.dialog_count(), 0);
+                    assert!(root.sheet().is_none());
+                    assert_eq!(root.toast_count(), 0);
+                })
+                .unwrap();
+                assert!(app.closing && app.updater.preparing());
+                assert!(!app.dispatch_plugin_command(&saved, window, cx));
+            })
+        });
+        assert_no_overlays(cx);
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(weak.upgrade().is_none());
     }
 
     #[gpui_kit::test]

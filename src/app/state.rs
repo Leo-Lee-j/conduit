@@ -74,7 +74,6 @@ impl ComposerSelection {
 pub(super) struct SessionSummary {
     pub(super) id: u64,
     pub(super) provider: Provider,
-    pub(super) native_id: Option<String>,
     pub(super) message_count: usize,
 }
 
@@ -83,7 +82,6 @@ impl From<&SessionRecord> for SessionSummary {
         Self {
             id: session.id,
             provider: session.provider,
-            native_id: session.native_id.clone(),
             message_count: session.messages.len(),
         }
     }
@@ -233,6 +231,8 @@ pub(super) fn turn_file_stats(session: &SessionRecord) -> TurnFileStats {
 
 pub(super) struct ActiveRun {
     pub(super) runtime: ChatRuntime,
+    pub(super) pending_save: Option<super::runtime::PendingTurn>,
+    pub(super) cleanup_error: Option<String>,
     /// Git worktree shared by this turn's files and index.
     pub(super) worktree: PathBuf,
     pub(super) approvals: ApprovalQueue,
@@ -285,6 +285,8 @@ impl ActiveRun {
         usage.turn_elapsed_ms = None;
         Self {
             runtime,
+            pending_save: None,
+            cleanup_error: None,
             worktree,
             approvals: ApprovalQueue::default(),
             expanded_approvals: HashSet::new(),
@@ -309,8 +311,13 @@ impl ActiveRun {
         self.approvals.clear();
         self.expanded_approvals.clear();
         self.question_drafts.clear();
-        self.status = "正在停止…".into();
-        self.activity = "正在停止…".into();
+        self.status = if self.cleanup_error.is_some() {
+            "进程清理异常，正在后台重试…"
+        } else {
+            "正在停止…"
+        }
+        .into();
+        self.activity = self.status.clone();
     }
 }
 
@@ -350,6 +357,7 @@ pub(super) struct CommitGeneration {
     pub(super) last_diagnostic: Option<String>,
     pub(super) parts: Vec<(String, String)>,
     pub(super) error: Option<String>,
+    pub(super) cleanup_error: Option<String>,
 }
 
 pub(super) struct GitOperation {
@@ -365,6 +373,7 @@ pub(super) struct SessionNaming {
     pub(super) started: Instant,
     pub(super) parts: Vec<(String, String)>,
     pub(super) error: Option<String>,
+    pub(super) cleanup_error: Option<String>,
 }
 
 pub(super) struct GitFeedback {
@@ -390,13 +399,6 @@ pub(super) fn update_commit_text(
     } else {
         parts[index].1.push_str(&text);
     }
-}
-
-/// Independent tool windows sharing the application's right-hand dock.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum DetailView {
-    Tool,
-    Notifications,
 }
 
 /// Drag payload (and invisible drag preview) for the right-sidebar edge.

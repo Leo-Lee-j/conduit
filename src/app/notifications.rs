@@ -1,10 +1,16 @@
 //! Notification presentation and navigation. Business workflows publish through `notify_user`.
+use super::plugin_ui::right::{RightBody, RightView};
 use super::*;
 use crate::notifications::{
     Center, Level, Lifecycle, Notice, Presentation, Record, Source, Target, history::History,
 };
+use conduit::plugins::{builtins, ids::ViewId, state::ViewInstanceKey};
+
+mod approvals;
+use approvals::ApprovalBinding;
 use gpui_kit::component::{
     alert::Alert,
+    badge::Badge,
     notification::{Notification, NotificationDelivery},
 };
 
@@ -31,6 +37,8 @@ pub(super) struct NotificationUi {
     persistence_error: Option<String>,
     load_failed: bool,
     target_error: Option<(u64, String)>,
+    // Capabilities for live requests only. Never written to notification history.
+    approvals: HashMap<u64, ApprovalBinding>,
 }
 
 impl NotificationUi {
@@ -66,6 +74,7 @@ impl NotificationUi {
             persistence_error: None,
             load_failed: !writable,
             target_error: None,
+            approvals: HashMap::new(),
         }
     }
     pub(super) fn finish(&mut self) -> bool {
@@ -141,6 +150,7 @@ impl ConduitApp {
         published.id
     }
     pub(super) fn refresh_notifications(&mut self, cx: &mut Context<Self>) {
+        self.expire_notification_approvals();
         self.notifications.rendered_revision = self.notifications.center.revision();
         if let Some(view) = &self.notifications.view {
             view.update(cx, |_, cx| cx.notify());
@@ -202,49 +212,51 @@ impl ConduitApp {
         }
     }
     pub(super) fn toggle_notifications(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.details && self.detail_view == DetailView::Notifications {
-            self.close_notification_panel(window, cx);
+        if self.plugins.right_is(builtins::NOTIFICATIONS) {
+            self.close_right_view(window, cx);
         } else {
-            self.notifications.return_focus = window.focused(cx);
-            self.details = true;
-            self.detail_view = DetailView::Notifications;
-            self.notifications.focus.focus(window, cx);
-            self.refresh_notifications(cx);
+            self.open_right_view(&ViewId::new(builtins::NOTIFICATIONS).unwrap(), window, cx);
         }
     }
-    fn close_notification_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.details = false;
+    pub(super) fn activate_notifications(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.notifications.return_focus = window.focused(cx);
+        self.notifications.focus.focus(window, cx);
+        self.refresh_notifications(cx);
+    }
+    pub(super) fn deactivate_notifications(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(focus) = self.notifications.return_focus.take() {
             focus.focus(window, cx);
         }
-        cx.notify();
     }
     pub(super) fn notification_bell(&self, cx: &mut Context<Self>) -> AnyElement {
         let unread = self.notifications.center.unread();
-        Button::new("notification-bell")
-            .debug_selector(|| "notification-bell".into())
-            .ghost()
-            .small()
-            .compact()
-            .icon(FullIconName::Bell)
-            .selected(self.details && self.detail_view == DetailView::Notifications)
-            .when(unread > 0, |button| {
-                button.label(if unread > 99 {
-                    "99+".into()
-                } else {
-                    unread.to_string()
-                })
-            })
-            .tooltip(format!("通知 · {unread} 条未读"))
-            .accessibility_label(format!("通知，{unread} 条未读"))
-            .on_click(cx.listener(|app, _, window, cx| app.toggle_notifications(window, cx)))
+        div()
+            .flex_shrink_0()
+            .pr_1()
+            .child(
+                Badge::new().count(unread).max(99).child(
+                    Button::new("notification-bell")
+                        .debug_selector(|| "notification-bell".into())
+                        .ghost()
+                        .small()
+                        .compact()
+                        .icon(FullIconName::Bell)
+                        .selected(self.plugins.right_is(builtins::NOTIFICATIONS))
+                        .tooltip(format!("通知 · {unread} 条未读"))
+                        .accessibility_label(format!("通知，{unread} 条未读"))
+                        .on_click(
+                            cx.listener(|app, _, window, cx| app.toggle_notifications(window, cx)),
+                        ),
+                ),
+            )
             .into_any_element()
     }
-    pub(super) fn notification_dock(
+    pub(super) fn render_notification_view(
         &mut self,
+        _: &ViewInstanceKey,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> (Option<AnyElement>, Option<AnyElement>) {
+    ) -> RightView {
         let app = cx.weak_entity();
         let view = self
             .notifications
@@ -256,35 +268,6 @@ impl ConduitApp {
                 })
             })
             .clone();
-        let header = h_flex()
-            .h(px(48.))
-            .px_3()
-            .gap_2()
-            .items_center()
-            .flex_shrink_0()
-            .border_b_1()
-            .border_color(rgb(palette().border))
-            .child(Icon::new(FullIconName::Bell).small())
-            .child(
-                div()
-                    .flex_1()
-                    .text_size(px(13.))
-                    .font_semibold()
-                    .child("通知"),
-            )
-            .child(
-                Button::new("close-notifications")
-                    .debug_selector(|| "close-notifications".into())
-                    .ghost()
-                    .small()
-                    .compact()
-                    .icon(FullIconName::X)
-                    .tooltip("关闭通知")
-                    .accessibility_label("关闭通知")
-                    .on_click(
-                        cx.listener(|app, _, window, cx| app.close_notification_panel(window, cx)),
-                    ),
-            );
         // gpui-pre 0.3.9 replays cached drawing and input handlers, but not the
         // accessibility subtree. Rebuild it while assistive technology is active
         // so history rows and their actions remain available on every frame.
@@ -306,13 +289,12 @@ impl ConduitApp {
             .track_focus(&self.notifications.focus)
             .on_key_down(cx.listener(|app, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" {
-                    app.close_notification_panel(window, cx);
+                    app.close_right_view(window, cx);
                     cx.stop_propagation();
                 }
             }))
-            .child(header)
             .child(body);
-        self.wrap_detail_panel(div().into_any_element(), content.into_any_element(), window)
+        RightBody::Content(content.into_any_element()).into()
     }
     fn notification_list(&self, cx: &mut Context<Self>) -> AnyElement {
         let unread_only = self.notifications.unread_only;
@@ -439,8 +421,11 @@ impl ConduitApp {
             .into_any_element()
     }
     fn notification_row(&self, record: &Record, cx: &mut Context<Self>) -> AnyElement {
+        use gpui_kit::base::TestSupportExt as _;
         let id = record.id;
         let unread = record.read_at.is_none();
+        let approval = self.notification_approval_state(id);
+        let group = SharedString::from(format!("notification-card-{id}"));
         let time = DateTime::from_timestamp(record.updated_at as i64, 0)
             .map(|time| time.with_timezone(&Local).format("%m-%d %H:%M").to_string())
             .unwrap_or_default();
@@ -457,10 +442,15 @@ impl ConduitApp {
             }
             _ => String::new(),
         };
-        let lifecycle = match record.lifecycle {
-            Lifecycle::Active => " · 待处理",
-            Lifecycle::Resolved => " · 已结束",
-            Lifecycle::Recorded => "",
+        let lifecycle = if let Some(outcome) = record.approval_outcome {
+            format!(" · {}", outcome.label())
+        } else {
+            match record.lifecycle {
+                Lifecycle::Active => " · 待处理",
+                Lifecycle::Resolved => " · 已结束",
+                Lifecycle::Recorded => "",
+            }
+            .into()
         };
         let count = if record.occurrences > 1 {
             format!(" · {} 次", record.occurrences)
@@ -469,6 +459,7 @@ impl ConduitApp {
         };
         v_flex()
             .id(("notification-record", id))
+            .group(group.clone())
             .role(Role::ListItem)
             .aria_label(format!(
                 "{} · {}",
@@ -488,14 +479,23 @@ impl ConduitApp {
             .child(
                 h_flex()
                     .gap_2()
-                    .items_start()
+                    .items_center()
                     .child(
-                        Icon::new(level_icon(record.level))
-                            .small()
-                            .text_color(rgb(level_color(record.level))),
+                        h_flex()
+                            .debug_selector(move || format!("notification-icon-{id}"))
+                            .size(px(16.))
+                            .flex_shrink_0()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                Icon::new(level_icon(record.level))
+                                    .small()
+                                    .text_color(rgb(level_color(record.level))),
+                            ),
                     )
                     .child(
                         div()
+                            .debug_selector(move || format!("notification-title-{id}"))
                             .min_w_0()
                             .flex_1()
                             .text_sm()
@@ -505,9 +505,31 @@ impl ConduitApp {
                     .when(unread, |row| {
                         row.child(
                             div()
+                                .flex_shrink_0()
                                 .text_size(px(11.))
                                 .text_color(rgb(palette().text))
                                 .child("未读"),
+                        )
+                    })
+                    .when(!unread && record.lifecycle != Lifecycle::Active, |row| {
+                        row.child(
+                            Button::new(("notification-remove", id))
+                                .debug_selector(move || format!("notification-remove-{id}"))
+                                .self_start()
+                                .small()
+                                .compact()
+                                .ghost()
+                                .icon(FullIconName::X)
+                                .opacity(0.)
+                                .group_hover(group.clone(), |style| style.opacity(1.))
+                                .focus_visible(|style| style.opacity(1.))
+                                .tooltip("移除通知")
+                                .accessibility_label("移除通知")
+                                .on_click(cx.listener(move |app, _, window, cx| {
+                                    app.notifications.center.remove_read(id);
+                                    app.dismiss_read_toasts(window, cx);
+                                    app.refresh_notifications(cx);
+                                })),
                         )
                     }),
             )
@@ -516,6 +538,8 @@ impl ConduitApp {
                     .id(("notification-message", id))
                     .role(Role::Label)
                     .aria_value(record.message.clone())
+                    .min_w_0()
+                    .overflow_x_hidden()
                     .text_size(px(12.))
                     .text_color(rgb(palette().text))
                     .child(record.message.clone()),
@@ -535,57 +559,6 @@ impl ConduitApp {
                         record.source.label()
                     )),
             )
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .flex_wrap()
-                    .child(
-                        Button::new(("notification-time", id))
-                            .small()
-                            .ghost()
-                            .label(time)
-                            .accessibility_label(full_time.clone())
-                            .tooltip(full_time)
-                            .tab_stop(false),
-                    )
-                    .when(unread, |row| {
-                        row.child(
-                            Button::new(("notification-read", id))
-                                .small()
-                                .ghost()
-                                .label("标为已读")
-                                .on_click(cx.listener(move |app, _, window, cx| {
-                                    app.read_notification(id, window, cx)
-                                })),
-                        )
-                    })
-                    .when(record.target.is_some(), |row| {
-                        row.child(
-                            Button::new(("notification-open", id))
-                                .debug_selector(move || format!("notification-open-{id}"))
-                                .small()
-                                .ghost()
-                                .label("查看")
-                                .on_click(cx.listener(move |app, _, window, cx| {
-                                    app.open_notification(id, window, cx)
-                                })),
-                        )
-                    })
-                    .when(!unread && record.lifecycle != Lifecycle::Active, |row| {
-                        row.child(
-                            Button::new(("notification-remove", id))
-                                .small()
-                                .ghost()
-                                .label("删除")
-                                .on_click(cx.listener(move |app, _, window, cx| {
-                                    app.notifications.center.remove_read(id);
-                                    app.dismiss_read_toasts(window, cx);
-                                    app.refresh_notifications(cx);
-                                })),
-                        )
-                    }),
-            )
             .when(
                 self.notifications
                     .target_error
@@ -602,6 +575,104 @@ impl ConduitApp {
                             .child(self.notifications.target_error.as_ref().unwrap().1.clone()),
                     )
                 },
+            )
+            .child(
+                h_flex()
+                    .debug_selector(move || format!("notification-footer-{id}"))
+                    .w_full()
+                    .min_w_0()
+                    .h(px(24.))
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .id(("notification-time", id))
+                            .test_support()
+                            .debug_selector(move || format!("notification-time-{id}"))
+                            .role(Role::Label)
+                            .aria_value(full_time.clone())
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(10.))
+                            .text_color(rgb(palette().muted))
+                            .opacity(0.)
+                            .group_hover(group, |style| style.opacity(1.))
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(full_time.clone())
+                                    .build(window, cx)
+                            })
+                            .child(time),
+                    )
+                    .child(
+                        h_flex()
+                            .flex_shrink_0()
+                            .items_center()
+                            .gap_1()
+                            .when_some(approval, |row, (allow_once, submitted)| {
+                                row.child(
+                                    Button::new(("notification-allow", id))
+                                        .debug_selector(move || format!("notification-allow-{id}"))
+                                        .small()
+                                        .ghost()
+                                        .label(if submitted {
+                                            "提交中…"
+                                        } else {
+                                            "允许本次"
+                                        })
+                                        .accessibility_label(if submitted {
+                                            "审批提交中"
+                                        } else {
+                                            "允许本次审批"
+                                        })
+                                        .tooltip(if allow_once {
+                                            "仅允许本次请求"
+                                        } else {
+                                            "此请求不支持仅允许本次，请查看会话"
+                                        })
+                                        .disabled(submitted || !allow_once)
+                                        .on_click(cx.listener(move |app, _, window, cx| {
+                                            app.decide_notification(id, true, window, cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new(("notification-deny", id))
+                                        .debug_selector(move || format!("notification-deny-{id}"))
+                                        .small()
+                                        .ghost()
+                                        .label("拒绝")
+                                        .accessibility_label("拒绝本次审批")
+                                        .disabled(submitted)
+                                        .on_click(cx.listener(move |app, _, window, cx| {
+                                            app.decide_notification(id, false, window, cx);
+                                        })),
+                                )
+                            })
+                            .when(unread && approval.is_none(), |row| {
+                                row.child(
+                                    Button::new(("notification-read", id))
+                                        .debug_selector(move || format!("notification-read-{id}"))
+                                        .small()
+                                        .ghost()
+                                        .label("标为已读")
+                                        .on_click(cx.listener(move |app, _, window, cx| {
+                                            app.read_notification(id, window, cx)
+                                        })),
+                                )
+                            })
+                            .when(record.target.is_some(), |row| {
+                                row.child(
+                                    Button::new(("notification-open", id))
+                                        .debug_selector(move || format!("notification-open-{id}"))
+                                        .small()
+                                        .ghost()
+                                        .label("查看")
+                                        .on_click(cx.listener(move |app, _, window, cx| {
+                                            app.open_notification(id, window, cx)
+                                        })),
+                                )
+                            }),
+                    ),
             )
             .into_any_element()
     }
@@ -661,8 +732,7 @@ impl ConduitApp {
         };
         if !valid {
             self.notifications.target_error = Some((id, "目标已不存在".into()));
-            self.details = true;
-            self.detail_view = DetailView::Notifications;
+            self.open_right_view(&ViewId::new(builtins::NOTIFICATIONS).unwrap(), window, cx);
         }
         self.refresh_notifications(cx);
     }
@@ -714,6 +784,7 @@ impl ConduitApp {
         rows.into_any_element()
     }
     pub(super) fn poll_notifications(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.expire_notification_approvals();
         let persistence_error = if self.notifications.load_failed {
             Some("应用数据无法加载，原文件已保留；当前为只读模式。".to_string())
         } else {
@@ -865,7 +936,7 @@ impl ConduitApp {
                     .delivery(NotificationDelivery::InApp)
                     .on_click(move |_, window, cx| {
                         let _ = view.update(cx, |app, cx| {
-                            if !(app.details && app.detail_view == DetailView::Notifications) {
+                            if !(app.plugins.right_is(builtins::NOTIFICATIONS)) {
                                 app.toggle_notifications(window, cx);
                             }
                         });
