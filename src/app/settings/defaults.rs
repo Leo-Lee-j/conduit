@@ -212,6 +212,9 @@ mod tests {
                     Some("explicit-model")
                 );
                 assert!(app.pending_model_selection.is_none());
+                // Session creation queues an asynchronous save; wait for its disk receipt.
+                app.persistence.flush();
+                assert_eq!(app.persistence.error, None);
                 let loaded: Store =
                     serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
                 assert_eq!(
