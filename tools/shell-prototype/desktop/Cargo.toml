@@ -2,7 +2,7 @@
 # Keep dependencies in sync with the root manifest; verify-desktop.py checks this.
 [package]
 name = "conduit-shell-desktop"
-version = "0.1.9"
+version = "0.2.0"
 edition = "2024"
 publish = false
 
