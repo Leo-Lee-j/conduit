@@ -11,7 +11,7 @@ pub(super) struct ApprovalBinding {
 
 /// Prefer the command or affected paths to protocol IDs. Keep history bounded
 /// and leave the complete request in the conversation's approval details.
-fn approval_message(approval: &Approval) -> String {
+pub(in crate::app) fn approval_message(approval: &Approval) -> String {
     let details: serde_json::Value = serde_json::from_str(&approval.detail).unwrap_or_default();
     let values = [&approval.input, &details];
     let command = values.iter().find_map(|value| {

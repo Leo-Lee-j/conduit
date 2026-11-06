@@ -318,7 +318,7 @@ impl Render for ConduitApp {
                                             .text_size(px(12.))
                                             .text_color(rgb(palette().faint))
                                             .child(format!(
-                                                "{} · 已就绪",
+                                                "{} · 可以开始输入",
                                                 session.provider.label()
                                             )),
                                     ),
@@ -334,7 +334,10 @@ impl Render for ConduitApp {
                                 div()
                                     .text_size(px(14.))
                                     .text_color(rgb(palette().muted))
-                                    .child(format!("在 {} 中开始你的任务", directory)),
+                                    .child(format!(
+                                        "在 {} 中开始你的任务；CLI 登录与模型权限将在执行时确认。",
+                                        directory
+                                    )),
                             ),
                     );
                 }
@@ -401,7 +404,7 @@ impl Render for ConduitApp {
                     ),
             );
             } else {
-                messages = messages.child(self.session_heatmap(13));
+                messages = messages.child(self.session_heatmap(13, cx));
             }
 
             let mut conversation = v_flex().flex_1().min_w_0().h_full();
@@ -450,6 +453,12 @@ impl Render for ConduitApp {
                     .and_then(|id| self.session_control.runs.get(&id))
                     .is_some_and(|r| r.approvals.is_submitted(&approval.id));
                 let id = self.selected_session.unwrap();
+                let summary = notifications::approval_message(&approval);
+                let detail_copy = approval.detail.clone();
+                let origin = self
+                    .selected_workspace_path()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_default();
                 let allow_id = approval.id.clone();
                 let deny_id = approval.id;
                 let toggle_id = deny_id.clone();
@@ -552,6 +561,21 @@ impl Render for ConduitApp {
                                             })),
                                     ),
                             )
+                            .child(
+                                div()
+                                    .id(("approval-summary", index))
+                                    .max_h(px(120.))
+                                    .overflow_y_scroll()
+                                    .text_sm()
+                                    .text_color(rgb(palette().warning_text))
+                                    .child(summary),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(palette().warning_muted))
+                                    .child(format!("工作区：{origin}")),
+                            )
                             .when(expanded, |column| {
                                 column.child(
                                     div()
@@ -574,6 +598,17 @@ impl Render for ConduitApp {
                                 h_flex()
                                     .items_center()
                                     .gap_2()
+                                    .child(
+                                        Button::new(("approval-copy", index))
+                                            .label("复制完整请求")
+                                            .small()
+                                            .ghost()
+                                            .on_click(move |_, _, cx| {
+                                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                                    detail_copy.clone(),
+                                                ))
+                                            }),
+                                    )
                                     .when(!approval.allow_once, |row| {
                                         row.child(
                                             div()
@@ -624,17 +659,31 @@ impl Render for ConduitApp {
                 && self.persistence.error.is_none()
             {
                 conversation = conversation.child(
-                    div().mx_6().mb_3().child(
-                        gpui_kit::component::alert::Alert::error(
-                            "application-message",
-                            message.clone(),
+                    div()
+                        .mx_6()
+                        .mb_3()
+                        .child(
+                            gpui_kit::component::alert::Alert::error(
+                                "application-message",
+                                message.clone(),
+                            )
+                            .small()
+                            .on_close(cx.listener(|app, _, _, cx| {
+                                app.message = None;
+                                cx.notify();
+                            })),
                         )
-                        .small()
-                        .on_close(cx.listener(|app, _, _, cx| {
-                            app.message = None;
-                            cx.notify();
-                        })),
-                    ),
+                        .when(message.contains("AI 引擎"), |body| {
+                            body.child(
+                                Button::new("message-engine-settings")
+                                    .label("打开 AI 引擎设置")
+                                    .small()
+                                    .ghost()
+                                    .on_click(cx.listener(|app, _, window, cx| {
+                                        app.open_engine_settings(window, cx)
+                                    })),
+                            )
+                        }),
                 );
             }
             conversation = conversation.child(self.render_composer(selected.as_ref(), window, cx));
@@ -710,7 +759,13 @@ impl Render for ConduitApp {
                         })),
                 ),
         );
-        conversation = conversation.child(toolbar);
+        let conversation = self.with_terminal_panel(conversation.into_any_element(), window, cx);
+        let conversation = v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .child(div().flex_1().min_h_0().child(conversation))
+            .child(toolbar);
         // The left workspace rail stays a resizable group. The right sidebar is
         // laid out by hand so dragging its edge follows the pointer 1:1 and its
         // width can be capped at half of the remaining content area.
@@ -748,6 +803,7 @@ impl Render for ConduitApp {
                 let drag_app = app_entity.clone();
                 let band = div()
                     .id("detail-resize")
+                    .test_support()
                     .debug_selector(|| "detail-resize".into())
                     .relative()
                     .w(px(6.))
@@ -848,11 +904,32 @@ impl Render for ConduitApp {
         }))
         .on_modifiers_changed(
             cx.listener(|this, event: &ModifiersChangedEvent, window, cx| {
-                if this.double_shift.update(event.modifiers, Instant::now()) {
+                if !this.terminal_focused(window, cx)
+                    && this.double_shift.update(event.modifiers, Instant::now())
+                {
                     this.open_file_search(window, cx);
                 }
             }),
         )
+        .on_action(cx.listener(|this, _: &ToggleTerminal, window, cx| {
+            this.terminal_command(false, window, cx)
+        }))
+        .on_action(
+            cx.listener(|this, _: &NewTerminal, window, cx| {
+                this.terminal_command(true, window, cx)
+            }),
+        )
+        .on_action(
+            cx.listener(|this, _: &LeaveTerminal, window, cx| this.leave_terminal(window, cx)),
+        )
+        .on_action(
+            cx.listener(|this, _: &NextTerminal, window, cx| {
+                this.cycle_terminal(false, window, cx)
+            }),
+        )
+        .on_action(cx.listener(|this, _: &PreviousTerminal, window, cx| {
+            this.cycle_terminal(true, window, cx)
+        }))
         .on_action(cx.listener(|this, _: &RecentSessions, window, cx| {
             this.open_recent_sessions(window, cx);
         }))

@@ -36,6 +36,7 @@ impl ConduitApp {
         let has_hints = toolbar_hint.is_some() || naming_status.is_some();
         let hints = h_flex()
             .id("toolbar-hints")
+            .test_support()
             .debug_selector(|| "toolbar-hints".into())
             .min_w_0()
             .max_w(relative(0.35))
@@ -46,7 +47,7 @@ impl ConduitApp {
                     div()
                         .min_w_0()
                         .truncate()
-                        .text_size(px(11.))
+                        .text_size(px(12.))
                         .text_color(rgb(palette().faint))
                         .child(hint),
                 )
@@ -80,7 +81,7 @@ impl ConduitApp {
                             div()
                                 .min_w_0()
                                 .truncate()
-                                .text_size(px(11.))
+                                .text_size(px(12.))
                                 .text_color(rgb(if failed {
                                     palette().danger_text
                                 } else {
@@ -95,6 +96,7 @@ impl ConduitApp {
             });
         let controls = h_flex()
             .id("toolbar-controls")
+            .test_support()
             .debug_selector(|| "toolbar-controls".into())
             .flex_shrink_0()
             .items_center()
@@ -131,9 +133,11 @@ impl ConduitApp {
                         )
                 })
             })
+            .child(self.terminal_button(cx))
             .child(self.notification_bell(cx));
         let toolbar = h_flex()
             .id("conversation-toolbar")
+            .test_support()
             .debug_selector(|| "conversation-toolbar".into())
             .h(px(34.))
             .min_w_0()

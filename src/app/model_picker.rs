@@ -80,7 +80,8 @@ impl Render for SessionModelPicker {
             if !catalog_models.is_empty() {
                 catalog_models
             } else {
-                selection.opencode.models()
+                app.native_model_preferences(engine)
+                    .merge(&selection.opencode.models(), false)
             }
         } else {
             vec![]
@@ -154,7 +155,6 @@ impl Render for SessionModelPicker {
             );
         }
         if let Some(id) = &selected
-            && engine != Provider::OpenCode
             && !models.iter().any(|m| m.id == *id)
         {
             models::push_model(&mut models, id, id, "当前会话模型");
@@ -190,7 +190,7 @@ impl Render for SessionModelPicker {
                             .items_center()
                             .child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(px(12.))
                                     .text_color(rgb(palette().faint))
                                     .child("Provider"),
                             )
@@ -348,9 +348,10 @@ impl Render for SessionModelPicker {
                     })),
             );
         }
-        v_flex()
-            .debug_selector(|| "session-model-panel".into())
-            .w(px(340.))
+        let body = v_flex()
+            .id("session-model-body")
+            .min_h_0()
+            .overflow_y_scroll()
             .gap_2()
             .child(
                 h_flex()
@@ -367,7 +368,7 @@ impl Render for SessionModelPicker {
                     )
                     .child(
                         div()
-                            .text_size(px(10.))
+                            .text_size(px(12.))
                             .text_color(rgb(palette().faint))
                             .child(if pending { "新会话" } else { "当前会话" }),
                     ),
@@ -377,7 +378,7 @@ impl Render for SessionModelPicker {
             .child(
                 div()
                     .px_2()
-                    .text_size(px(11.))
+                    .text_size(px(12.))
                     .text_color(rgb(palette().faint))
                     .child("模型"),
             )
@@ -392,7 +393,7 @@ impl Render for SessionModelPicker {
                     div()
                         .px_2()
                         .py_2()
-                        .text_size(px(11.))
+                        .text_size(px(12.))
                         .text_color(rgb(palette().faint))
                         .child("没有匹配的模型"),
                 )
@@ -410,7 +411,7 @@ impl Render for SessionModelPicker {
                             }
                         })
                         .px_2()
-                        .text_size(px(10.))
+                        .text_size(px(12.))
                         .text_color(rgb(palette().faint))
                         .child(note),
                 )
@@ -421,7 +422,7 @@ impl Render for SessionModelPicker {
                     v_flex()
                         .px_2()
                         .gap_2()
-                        .child(div().text_size(px(11.)).child("思考强度"))
+                        .child(div().text_size(px(12.)).child("思考强度"))
                         .child(
                             h_flex()
                                 .id("opencode-effort-options")
@@ -476,7 +477,7 @@ impl Render for SessionModelPicker {
                         )
                         .child(
                             div()
-                                .text_size(px(10.))
+                                .text_size(px(12.))
                                 .text_color(rgb(palette().faint))
                                 .child("可用档位在连接模型后更新"),
                         ),
@@ -497,13 +498,13 @@ impl Render for SessionModelPicker {
                                 .child(
                                     div()
                                         .flex_1()
-                                        .text_size(px(11.))
+                                        .text_size(px(12.))
                                         .text_color(rgb(palette().muted))
                                         .child("思考强度"),
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(11.))
+                                        .text_size(px(12.))
                                         .font_semibold()
                                         .text_color(rgb(palette().text))
                                         .child(effort.label()),
@@ -523,23 +524,30 @@ impl Render for SessionModelPicker {
                         .child(h_flex().w_full().justify_between().children(
                             ReasoningEffort::ALL.map(|level| {
                                 div()
-                                    .text_size(px(10.))
+                                    .text_size(px(12.))
                                     .text_color(rgb(palette().faint))
                                     .child(level.label())
                             }),
                         ))
                         .child(
                             div()
-                                .text_size(px(10.))
+                                .text_size(px(12.))
                                 .line_height(relative(1.4))
                                 .text_color(rgb(palette().faint))
                                 .child("更高强度可能增加耗时；支持的档位由模型决定"),
                         ),
                 )
-            })
+            });
+        v_flex()
+            .debug_selector(|| "session-model-panel".into())
+            .w(px(340.))
+            .max_h((window.viewport_size().height - px(200.)).max(px(180.)))
+            .gap_2()
+            .child(body)
             .child(
                 h_flex()
                     .debug_selector(|| "session-model-footer".into())
+                    .flex_shrink_0()
                     .px_2()
                     .pt_2()
                     .border_t_1()
@@ -548,7 +556,7 @@ impl Render for SessionModelPicker {
                     .child(
                         div()
                             .flex_1()
-                            .text_size(px(10.))
+                            .text_size(px(12.))
                             .text_color(rgb(palette().faint))
                             .child(if pending {
                                 "首次发送时使用以上配置新建会话"
@@ -596,7 +604,7 @@ impl SessionModelPicker {
                     .items_center()
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(px(12.))
                             .text_color(rgb(palette().faint))
                             .child("引擎"),
                     )
@@ -621,6 +629,7 @@ impl SessionModelPicker {
                 let popover = cx.entity().downgrade();
                 let mut list = v_flex().w(px(300.)).gap_1();
                 for (index, option) in Provider::ALL.into_iter().enumerate() {
+                    let enabled = view.read(cx).app.read(cx).store.cli.enabled(option);
                     let picker = view.clone();
                     let popover = popover.clone();
                     let active = option == provider;
@@ -636,6 +645,7 @@ impl SessionModelPicker {
                         .px_2()
                         .cursor_pointer()
                         .accessibility_label(option.label())
+                        .disabled(!enabled)
                         .child(
                             h_flex()
                                 .debug_selector(move || format!("session-engine-option-{index}"))
@@ -648,7 +658,11 @@ impl SessionModelPicker {
                                         .flex_1()
                                         .text_size(px(12.))
                                         .text_color(rgb(palette().muted))
-                                        .child(option.label()),
+                                        .child(if enabled {
+                                            option.label().to_owned()
+                                        } else {
+                                            format!("{} · 已停用", option.label())
+                                        }),
                                 )
                                 .when(active, |row| row.child(Icon::new(IconName::Check).small())),
                         )
@@ -738,7 +752,7 @@ impl ConduitApp {
         let trigger = Button::new("permission-picker-trigger")
             .ghost()
             .small()
-            .h(px(22.))
+            .h(px(28.))
             .px_1()
             .cursor_pointer()
             .tooltip(match permission {
@@ -765,7 +779,7 @@ impl ConduitApp {
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(px(12.))
                             .text_color(rgb(if warning {
                                 palette().warning_text
                             } else {
@@ -848,7 +862,7 @@ impl ConduitApp {
                                 .child(
                                     div()
                                         .pl_6()
-                                        .text_size(px(10.))
+                                        .text_size(px(12.))
                                         .text_color(rgb(palette().faint))
                                         .child(match (opencode, option) {
                                             (true, PermissionLevel::ReadOnly) => {
@@ -886,7 +900,7 @@ impl ConduitApp {
                         .pt_2()
                         .border_t_1()
                         .border_color(rgb(palette().border))
-                        .text_size(px(10.))
+                        .text_size(px(12.))
                         .text_color(rgb(palette().faint))
                         .child(
                             "完全权限会立即自动处理当前审批；沙箱及其他权限改动从下一条消息生效",
@@ -942,7 +956,9 @@ impl ConduitApp {
         let selected_model = selection.model;
         let (_, mut models) = self.channel_models(provider, &selection.channel);
         if provider == Provider::OpenCode && models.is_empty() {
-            models = selection.opencode.models();
+            models = self
+                .native_model_preferences(provider)
+                .merge(&selection.opencode.models(), false);
         }
         let label = selected_model
             .as_ref()
@@ -975,6 +991,8 @@ impl ConduitApp {
         let trigger = Button::new("composer-model-trigger")
             .ghost()
             .small()
+            .min_w_0()
+            .max_w_full()
             .h(px(26.))
             .px_2()
             .rounded(px(7.))
@@ -989,17 +1007,20 @@ impl ConduitApp {
             .child(
                 h_flex()
                     .debug_selector(|| "composer-model-control".into())
+                    .min_w_0()
                     .gap_2()
                     .items_center()
                     .child(model_mark(provider, selected_model.as_deref()))
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(px(12.))
                             .text_color(rgb(palette().faint))
                             .child(provider.label()),
                     )
                     .child(
                         div()
+                            .min_w_0()
+                            .flex_shrink_1()
                             .max_w(px(170.))
                             .truncate()
                             .text_size(px(12.))
@@ -1009,7 +1030,7 @@ impl ConduitApp {
                     .when(effort != "默认", |row| {
                         row.child(
                             div()
-                                .text_size(px(10.))
+                                .text_size(px(12.))
                                 .text_color(rgb(palette().faint))
                                 .child(effort.clone()),
                         )
@@ -1021,6 +1042,7 @@ impl ConduitApp {
                     ),
             );
         Popover::new("composer-model-popover")
+            .trigger_style(StyleRefinement::default().min_w_0().max_w_full())
             .anchor(Anchor::BottomRight)
             .offset(px(8.))
             .trigger(trigger)
@@ -1073,17 +1095,27 @@ impl ConduitApp {
                 .map(|catalog| {
                     (
                         catalog.error.clone().or_else(|| catalog.note.clone()),
-                        catalog.models.clone(),
+                        self.managed_native_models(engine, false),
                     )
                 })
-                .unwrap_or_else(|| (Some("正在从 OpenCode CLI 读取原生模型目录…".into()), vec![]));
+                .unwrap_or_else(|| {
+                    (
+                        Some("正在从 OpenCode CLI 读取原生模型目录…".into()),
+                        self.managed_native_models(engine, false),
+                    )
+                });
         }
         match channel {
             ModelChannel::Cli => self
                 .catalogs
                 .get(&engine)
-                .map(|c| (c.error.clone().or_else(|| c.note.clone()), c.models.clone()))
-                .unwrap_or_default(),
+                .map(|c| {
+                    (
+                        c.error.clone().or_else(|| c.note.clone()),
+                        self.managed_native_models(engine, false),
+                    )
+                })
+                .unwrap_or_else(|| (None, self.managed_native_models(engine, false))),
             ModelChannel::Ccs(id) => self.channel_models(
                 engine,
                 &ModelChannel::Provider(ModelProvider::ccs_id(engine, id)),
@@ -1180,7 +1212,7 @@ impl ConduitApp {
                     .when_some(current, |row, provider| row.child(provider_icon(provider)))
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(px(12.))
                             .text_color(rgb(if disabled {
                                 palette().faint
                             } else {
@@ -1288,7 +1320,7 @@ impl ConduitApp {
                     .items_center()
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(px(12.))
                             .text_color(rgb(if disabled {
                                 palette().faint
                             } else {
@@ -1370,7 +1402,7 @@ impl ConduitApp {
                                             )
                                             .child(
                                                 div()
-                                                    .text_size(px(10.))
+                                                    .text_size(px(12.))
                                                     .text_color(rgb(palette().faint))
                                                     .child(detail),
                                             ),
@@ -1429,7 +1461,7 @@ impl ConduitApp {
                         div()
                             .max_w(px(180.))
                             .truncate()
-                            .text_size(px(11.))
+                            .text_size(px(12.))
                             .text_color(rgb(if disabled {
                                 palette().faint
                             } else {
@@ -1521,7 +1553,7 @@ impl ConduitApp {
                                                 column.child(
                                                     div()
                                                         .truncate()
-                                                        .text_size(px(10.))
+                                                        .text_size(px(12.))
                                                         .text_color(rgb(palette().faint))
                                                         .child(note),
                                                 )
@@ -1541,7 +1573,7 @@ impl ConduitApp {
                     div()
                         .px_2()
                         .pt_1()
-                        .text_size(px(10.))
+                        .text_size(px(12.))
                         .text_color(rgb(palette().faint))
                         .child(format!("{provider_label} · {} 个模型", models.len())),
                 );
@@ -1572,7 +1604,7 @@ impl ConduitApp {
                     .when_some(current, |row, provider| row.child(provider_icon(provider)))
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(px(12.))
                             .text_color(rgb(if disabled {
                                 palette().faint
                             } else {
@@ -1700,7 +1732,7 @@ impl ConduitApp {
                         div()
                             .max_w(px(180.))
                             .truncate()
-                            .text_size(px(11.))
+                            .text_size(px(12.))
                             .text_color(rgb(if disabled {
                                 palette().faint
                             } else {
@@ -1792,7 +1824,7 @@ impl ConduitApp {
                                                 column.child(
                                                     div()
                                                         .truncate()
-                                                        .text_size(px(10.))
+                                                        .text_size(px(12.))
                                                         .text_color(rgb(palette().faint))
                                                         .child(note),
                                                 )
@@ -1812,7 +1844,7 @@ impl ConduitApp {
                     div()
                         .px_2()
                         .pt_1()
-                        .text_size(px(10.))
+                        .text_size(px(12.))
                         .text_color(rgb(palette().faint))
                         .child(format!("{provider_label} · {} 个模型", models.len())),
                 );

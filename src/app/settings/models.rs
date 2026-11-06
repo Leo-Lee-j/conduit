@@ -14,6 +14,8 @@ struct ProviderEditor {
     probing: bool,
     feedback: Option<String>,
     subscriptions: Vec<Subscription>,
+    initial: ([String; 4], Provider, bool, Option<String>),
+    confirm_discard: bool,
 }
 
 impl ProviderEditor {
@@ -74,6 +76,13 @@ impl ProviderEditor {
             })
             .collect();
         Self {
+            initial: (
+                values,
+                engine,
+                provider.as_ref().is_some_and(|p| !p.api_key_env.is_empty()),
+                provider.as_ref().and_then(|p| p.protected_api_key.clone()),
+            ),
+            confirm_discard: false,
             key,
             protected_key: provider.as_ref().and_then(|p| p.protected_api_key.clone()),
             env_auth: provider.as_ref().is_some_and(|p| !p.api_key_env.is_empty()),
@@ -86,6 +95,26 @@ impl ProviderEditor {
             fields,
             error: None,
         }
+    }
+
+    fn can_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.probing {
+            return false;
+        }
+        let dirty = self
+            .fields
+            .iter()
+            .zip(&self.initial.0)
+            .any(|(field, value)| field.read(cx).value().as_str() != value)
+            || self.engine != self.initial.1
+            || self.env_auth != self.initial.2
+            || self.protected_key != self.initial.3
+            || !self.key.read(cx).value().is_empty();
+        if dirty {
+            self.confirm_discard = true;
+            cx.notify();
+        }
+        !dirty
     }
 
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -424,9 +453,31 @@ impl Render for ProviderEditor {
                     Button::new("custom-provider-cancel")
                         .ghost()
                         .small()
-                        .label("取消")
-                        .on_click(|_, w, cx| w.close_dialog(cx)),
+                        .label(if self.confirm_discard {
+                            "继续编辑"
+                        } else {
+                            "取消"
+                        })
+                        .disabled(self.probing)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if this.confirm_discard {
+                                this.confirm_discard = false;
+                                this.fields[0].read(cx).focus_handle(cx).focus(window, cx);
+                                cx.notify();
+                            } else if this.can_close(cx) {
+                                window.close_dialog(cx);
+                            }
+                        })),
                 )
+                .when(self.confirm_discard, |row| {
+                    row.child(
+                        Button::new("custom-provider-discard")
+                            .label("放弃未保存修改")
+                            .small()
+                            .ghost()
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                })
                 .child(
                     Button::new("custom-provider-save")
                         .primary()
@@ -437,82 +488,6 @@ impl Render for ProviderEditor {
                 ),
         )
     }
-}
-
-#[derive(Clone)]
-struct ModelRow {
-    label: String,
-    id: String,
-    note: String,
-    current: bool,
-}
-
-fn model_list_field(provider: Provider, rows: Vec<ModelRow>) -> SettingField<SharedString> {
-    let empty = rows.is_empty();
-    SettingField::render(move |_, _, _| {
-        let mut list = v_flex().w_full().gap_2();
-        for row in &rows {
-            let show_id = row.label != row.id;
-            list = list.child(
-                h_flex()
-                    .w_full()
-                    .gap_2()
-                    .items_center()
-                    .child(model_mark(provider, Some(&row.id)))
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_size(px(12.))
-                                    .text_color(rgb(palette().text))
-                                    .child(row.label.clone()),
-                            )
-                            .when(show_id, |this| {
-                                this.child(
-                                    div()
-                                        .truncate()
-                                        .text_size(px(10.))
-                                        .text_color(rgb(palette().faint))
-                                        .child(row.id.clone()),
-                                )
-                            }),
-                    )
-                    .when(!row.note.is_empty(), |this| {
-                        this.child(
-                            div()
-                                .flex_shrink_0()
-                                .text_size(px(10.))
-                                .text_color(rgb(palette().faint))
-                                .child(row.note.clone()),
-                        )
-                    })
-                    .when(row.current, |this| {
-                        this.child(
-                            div()
-                                .px_2()
-                                .py(px(2.))
-                                .rounded(px(4.))
-                                .bg(rgb(palette().surface_hover))
-                                .text_size(px(9.))
-                                .text_color(rgb(palette().muted))
-                                .child("CLI 当前"),
-                        )
-                    }),
-            );
-        }
-        if empty {
-            list = list.child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(rgb(palette().faint))
-                    .child("未发现模型定义，可在 CLI 中配置后重新读取。"),
-            );
-        }
-        list
-    })
 }
 
 impl ConduitApp {
@@ -532,14 +507,19 @@ impl ConduitApp {
         };
         let app = cx.entity();
         let editor = cx.new(|cx| ProviderEditor::new(app, provider, window, cx));
-        window.open_dialog(cx, move |dialog, window, _| {
+        window.open_dialog(cx, move |dialog, window, cx| {
             let editor = editor.clone();
+            let dismiss = editor.clone();
+            let probing = editor.read(cx).probing;
             dialog
                 .w(px(
                     (f32::from(window.viewport_size().width) - 60.).clamp(0., 620.)
                 ))
                 .margin_top(px(32.))
                 .overlay_closable(false)
+                .keyboard(!probing)
+                .close_button(!probing)
+                .on_cancel(move |_, _, cx| dismiss.update(cx, |editor, cx| editor.can_close(cx)))
                 .title(title)
                 .content(move |content, _, _| content.child(editor.clone()))
         });
@@ -898,29 +878,15 @@ impl ConduitApp {
         let config_path = catalog
             .map(|catalog| display_path(&catalog.config_path))
             .unwrap_or_else(|| "—".into());
-        let model_count = catalog.map(|catalog| catalog.models.len()).unwrap_or(0);
-        let rows: Vec<_> = catalog
-            .map(|catalog| {
-                let current = catalog.current.as_deref();
-                catalog
-                    .models
-                    .iter()
-                    .map(|model| ModelRow {
-                        label: model.label.clone(),
-                        id: model.id.clone(),
-                        note: model.note.clone(),
-                        current: current == Some(model.id.as_str()),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let model_count = self.managed_native_models(provider, true).len();
         let error = catalog.and_then(|catalog| catalog.error.clone());
         let note = catalog.and_then(|catalog| catalog.note.clone());
         let expanded = self.connection_settings.models_expanded;
         let closing = self.closing;
+        let summary_view = view.clone();
         let summary = SettingItem::render(move |_, _, _| {
-            let toggle_view = view.clone();
-            let refresh_view = view.clone();
+            let toggle_view = summary_view.clone();
+            let refresh_view = summary_view.clone();
             h_flex()
                 .w_full()
                 .justify_between()
@@ -957,7 +923,7 @@ impl ConduitApp {
                                 .label(if expanded {
                                     "收起模型目录"
                                 } else {
-                                    "查看模型目录"
+                                    "管理模型目录"
                                 })
                                 .cursor_pointer()
                                 .on_click(move |_, _, cx| {
@@ -983,8 +949,11 @@ impl ConduitApp {
                 items.push(value_item("附加配置", detail));
             }
             items.extend(vec![
-                SettingItem::new("模型列表", model_list_field(provider, rows))
-                    .layout(Axis::Vertical),
+                SettingItem::new(
+                    "模型列表",
+                    self.managed_models_field(provider, view.clone()),
+                )
+                .layout(Axis::Vertical),
             ]);
         }
         if let Some(error) = error {
@@ -1011,6 +980,38 @@ impl ConduitApp {
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests {
     use super::{ConduitApp, ProviderEditor, Store};
+
+    #[gpui_kit::test]
+    fn provider_editor_tracks_fields_and_credentials_without_persisting_drafts(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        cx.add_window_view(|window, cx| {
+            let app =
+                cx.new(|cx| ConduitApp::with_store(window, cx, Ok(Store::default()), false, false));
+            let editor = cx.new(|cx| ProviderEditor::new(app.clone(), None, window, cx));
+            let provider_count = app.read(cx).store.providers.len();
+            editor.update(cx, |editor, cx| {
+                assert!(editor.can_close(cx));
+                editor.key.update(cx, |input, cx| {
+                    input.set_value("synthetic-unsaved-key", window, cx)
+                });
+                assert!(!editor.can_close(cx));
+                assert!(editor.confirm_discard);
+                assert_eq!(app.read(cx).store.providers.len(), provider_count);
+                editor
+                    .key
+                    .update(cx, |input, cx| input.set_value("", window, cx));
+                assert!(editor.can_close(cx));
+                editor.fields[3].update(cx, |input, cx| input.set_value("model-id", window, cx));
+                assert!(!editor.can_close(cx));
+                editor.fields[3].update(cx, |input, cx| input.set_value("", window, cx));
+                editor.env_auth = !editor.initial.2;
+                assert!(!editor.can_close(cx));
+            });
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+    }
     use gpui_kit::{AppContext as _, TestAppContext};
 
     #[gpui_kit::test]

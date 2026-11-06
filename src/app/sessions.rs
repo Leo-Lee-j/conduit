@@ -436,7 +436,7 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.writable || self.closing {
+        if !self.writable || self.closing || !self.store.cli.enabled(provider) {
             return;
         }
         if self.new_session_provider != provider {
@@ -462,7 +462,11 @@ impl ConduitApp {
         channel: &ModelChannel,
         model: Option<&str>,
     ) -> u64 {
-        let (_, models) = self.channel_models(provider, channel);
+        let models = if *channel == ModelChannel::Cli {
+            self.managed_native_models(provider, true)
+        } else {
+            self.channel_models(provider, channel).1
+        };
         let default_model = match channel {
             ModelChannel::Cli => self
                 .engine_catalog(provider)
@@ -710,11 +714,12 @@ impl ConduitApp {
             return;
         }
         if self.workspace_busy(index) {
-            self.message = Some("该工作区仍有任务运行，请先取消后再移除。".into());
+            self.message = Some("该工作区仍有任务或终端运行，请先停止后再移除。".into());
             cx.notify();
             return;
         }
         let removed = self.store.workspaces.remove(index);
+        self.terminals.forget_workspace(&removed.path);
         self.history_loading.remove(&removed.path);
         self.collapsed_workspaces.remove(&removed.path);
         self.workspace_drafts.remove(&removed.path);
@@ -900,6 +905,18 @@ impl ConduitApp {
             cx.notify();
             return;
         }
+        if let Some(id) = self.selected_session
+            && self.timeline_session == Some(id)
+        {
+            let top = self.scroll.logical_scroll_top();
+            if let Some(row) = self.chat_rows.rows.get(top.item_ix) {
+                self.reading_positions
+                    .insert(id, (row.key.clone(), top.offset_in_item, self.at_bottom));
+            } else if self.at_bottom {
+                self.reading_positions
+                    .insert(id, (String::new(), px(0.), true));
+            }
+        }
         if let Some(id) = self.selected_session {
             self.drafts
                 .insert(id, self.input.read(cx).value().to_string());
@@ -943,8 +960,10 @@ impl ConduitApp {
             self.input.read(cx).focus_handle(cx).focus(window, cx);
         }
         self.timeline_session = None;
-        // A newly selected conversation opens at its latest message.
-        self.at_bottom = true;
+        self.at_bottom = session
+            .and_then(|id| self.reading_positions.get(&id))
+            .is_none_or(|position| position.2);
+        self.restore_reading_position = !self.at_bottom;
         if activate_chat
             && let Some(provider) = session
                 .and_then(|id| self.session(id))
@@ -1487,7 +1506,7 @@ impl ConduitApp {
 
     /// Activity heatmap shown in place of the chat while no workspace is
     /// selected: 7 rows (weekdays) by trailing weeks, newest column last.
-    pub(super) fn session_heatmap(&self, weeks: usize) -> AnyElement {
+    pub(super) fn session_heatmap(&self, weeks: usize, cx: &mut Context<Self>) -> AnyElement {
         const WEEKDAYS: [&str; 7] = ["一", "二", "三", "四", "五", "六", "日"];
         let (today, counts) = self.session_activity(weeks);
         let start_day = today - chrono::Duration::days((weeks * 7 - 1) as i64);
@@ -1547,6 +1566,26 @@ impl ConduitApp {
                     .child("连接一个本地工作区"),
             )
             .child(
+                h_flex()
+                    .gap_2()
+                    .flex_wrap()
+                    .child(
+                        Button::new("welcome-add-workspace")
+                            .label("添加工作区")
+                            .primary()
+                            .disabled(!self.writable || self.closing)
+                            .on_click(cx.listener(Self::add_workspace)),
+                    )
+                    .child(
+                        Button::new("welcome-engine-settings")
+                            .label("检查 AI 引擎")
+                            .secondary()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_engine_settings(window, cx)
+                            })),
+                    ),
+            )
+            .child(
                 v_flex()
                     .gap_2()
                     .items_center()
@@ -1562,7 +1601,7 @@ impl ConduitApp {
                 div()
                     .text_size(px(11.))
                     .text_color(rgb(palette().faint))
-                    .child("CLI 只会在所选目录内执行任务"),
+                    .child("所选目录作为任务的工作目录；文件访问范围取决于权限设置。"),
             )
             .into_any_element()
     }

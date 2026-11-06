@@ -3,6 +3,23 @@
 use super::*;
 
 impl ConduitApp {
+    pub(in crate::app) fn set_engine_enabled(
+        &mut self,
+        provider: Provider,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.writable || self.closing {
+            return;
+        }
+        let previous = self.store.cli.clone();
+        self.store.cli.set_enabled(provider, enabled);
+        if !self.persist() {
+            self.store.cli = previous;
+        }
+        cx.emit(crate::providers::ProviderCatalogChanged);
+        cx.notify();
+    }
     pub(in crate::app) fn choose_cli(
         &mut self,
         provider: Provider,
@@ -226,15 +243,48 @@ impl ConduitApp {
                 .small()
                 .outline()
                 .label("安装与登录说明")
+                .on_click(move |_, _, cx| cx.open_url(provider.descriptor().guide))
+        });
+        let enabled = self.store.cli.enabled(provider);
+        let toggle_view = view.clone();
+        let toggle = SettingField::render(move |_, _, _| {
+            let view = toggle_view.clone();
+            Button::new(("engine-enabled", index))
+                .debug_selector(move || format!("engine-enabled-{index}"))
+                .small()
+                .outline()
+                .label(if enabled {
+                    "停用引擎"
+                } else {
+                    "启用引擎"
+                })
+                .disabled(disabled)
                 .on_click(move |_, _, cx| {
-                    cx.open_url(match provider {
-                        Provider::Claude => "https://code.claude.com/docs/en/setup",
-                        Provider::Codex => "https://developers.openai.com/codex/cli",
-                        Provider::OpenCode => "https://opencode.ai/docs/",
-                    })
+                    view.update(cx, |app, cx| app.set_engine_enabled(provider, !enabled, cx));
                 })
         });
+        let descriptor = provider.descriptor();
         let capabilities = vec![
+            SettingItem::new(if enabled { "已启用" } else { "已停用" }, toggle).description(
+                "停用阻止后续聊天、排队任务、自动命名和提交说明生成；在途任务继续运行。",
+            ),
+            value_item(
+                "接入能力",
+                format!(
+                    "{} · {} · {}",
+                    descriptor.capabilities.protocol,
+                    if descriptor.capabilities.model_services {
+                        "原生与自定义模型服务"
+                    } else {
+                        "原生模型服务"
+                    },
+                    if descriptor.capabilities.mcp_toggle {
+                        "MCP 原生启停"
+                    } else {
+                        "MCP 来源编辑"
+                    }
+                ),
+            ),
             SettingItem::new(
                 if available {
                     "已找到启动文件"

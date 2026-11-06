@@ -1,6 +1,7 @@
 //! Lightweight navigation metadata; transcripts stay in the store.
 use super::*;
 use gpui_kit::component::VirtualListScrollHandle;
+use gpui_kit::component::menu::PopupMenu;
 use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,13 +36,13 @@ impl Row {
     }
     pub(super) fn height(&self) -> f32 {
         match self {
-            Self::Controls => 26.,
-            Self::More { .. } => 24.,
+            Self::Controls => 30.,
+            Self::More { .. } => 28.,
             Self::Empty => 76.,
             _ => 30.,
         }
     }
-    fn same_identity(&self, other: &Self) -> bool {
+    pub(super) fn same_identity(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Session { id: a, .. }, Self::Session { id: b, .. }) => a == b,
             _ => {
@@ -118,6 +119,7 @@ pub(super) struct Inputs {
     selected_workspace: Option<usize>,
     selected_session: Option<u64>,
     delete_target: Option<u64>,
+    keyboard_row: Option<Row>,
     remove_target: Option<usize>,
     editable: bool,
     sidebar_collapsed: bool,
@@ -128,6 +130,7 @@ pub(super) struct Inputs {
 impl Inputs {
     pub(super) fn new(app: &ConduitApp) -> Self {
         Self {
+            keyboard_row: app.sidebar.keyboard_row.clone(),
             workspaces: app
                 .store
                 .workspaces
@@ -169,6 +172,10 @@ impl Inputs {
 }
 
 pub(in crate::app) struct SidebarState {
+    pub(super) focus: Option<FocusHandle>,
+    pub(super) keyboard_row: Option<Row>,
+    pub(super) menu: Option<Entity<PopupMenu>>,
+    pub(super) menu_subscription: Option<Subscription>,
     pub(super) rows: Rc<Vec<Row>>,
     pub(super) sizes: Rc<Vec<gpui_kit::Size<Pixels>>>,
     pub(in crate::app) scroll: VirtualListScrollHandle,
@@ -189,6 +196,10 @@ pub(in crate::app) struct SidebarState {
 impl Default for SidebarState {
     fn default() -> Self {
         Self {
+            focus: None,
+            keyboard_row: None,
+            menu: None,
+            menu_subscription: None,
             rows: Rc::default(),
             sizes: Rc::default(),
             scroll: VirtualListScrollHandle::new(),

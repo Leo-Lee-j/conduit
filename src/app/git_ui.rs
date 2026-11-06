@@ -5,6 +5,25 @@ use super::*;
 pub(super) use super::git_state::{GitChangeGroup, GitUi};
 use gpui_kit::component::checkbox::Checkbox;
 
+#[derive(Clone, Copy)]
+enum CommitRecovery {
+    Session(usize, u64),
+    Branches,
+    Stage,
+    Refresh,
+}
+
+impl CommitRecovery {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Session(..) => "查看运行会话",
+            Self::Branches => "打开分支视图",
+            Self::Stage => "暂存勾选文件",
+            Self::Refresh => "刷新状态",
+        }
+    }
+}
+
 impl ConduitApp {
     pub(super) fn selected_workspace_path(&self) -> Option<PathBuf> {
         self.selected_workspace
@@ -554,7 +573,7 @@ impl ConduitApp {
                 return;
             }
         };
-        let executable = match cli::resolve(provider, &self.store.cli) {
+        let executable = match cli::resolve_for_launch(provider, &self.store.cli) {
             Ok(cli) => cli.path,
             Err(error) => {
                 self.git_feedback(
@@ -886,41 +905,117 @@ impl ConduitApp {
         let checked_count = self.git.snapshot.as_ref().map_or(0, |snapshot| {
             self.checked_staged_files(&path, snapshot).len()
         });
-        let staged = checked_count > 0
-            && self
-                .git
-                .snapshot
-                .as_ref()
-                .is_some_and(|snapshot| snapshot.target.branch.is_some());
         let staged_count = self
             .git
             .snapshot
             .as_ref()
             .map_or(0, |snapshot| snapshot.staged_count());
-        let disabled = self.closing
-            || !self.writable
-            || busy
-            || self.worktree_has_runs(&path)
-            || self.git.probe.is_some()
-            || self
-                .git
-                .repository
-                .as_ref()
-                .is_some_and(|repository| repository.integration.is_some())
-            || !staged;
-        let can_commit = !disabled && !draft.input.read(cx).value().trim().is_empty();
-        let can_generate = !disabled;
-        let generate_tip = if !staged {
-            "请勾选需要提交的已暂存文件"
-        } else if self.worktree_has_runs(&path) {
-            "请等待此工作区的 CLI 任务结束"
+        let blocked = if self.closing {
+            Some("正在关闭应用")
+        } else if !self.writable {
+            Some("应用数据只读；请先处理数据加载错误")
         } else if busy {
-            "Git 操作或 AI 生成正在进行"
+            Some("Git 操作或 AI 生成正在进行，请等待完成")
+        } else if self.worktree_has_runs(&path) {
+            Some("该仓库有会话任务运行；请在会话中停止或等待完成")
+        } else if self.git.probe.is_some() {
+            Some("正在刷新 Git 状态，请稍候")
+        } else if self
+            .git
+            .repository
+            .as_ref()
+            .is_some_and(|repository| repository.integration.is_some())
+        {
+            Some("合并或变基尚未结束；请先在分支视图处理冲突并完成或中止操作")
+        } else if self.git.snapshot.is_none() {
+            Some("Git 状态尚未加载，请刷新")
+        } else if self
+            .git
+            .snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.target.branch.is_none())
+        {
+            Some("当前为分离 HEAD；请先在分支视图切换或创建分支")
+        } else if checked_count == 0 {
+            Some(if staged_count == 0 {
+                "请勾选文件并暂存修改，再填写提交说明"
+            } else {
+                "请勾选需要提交的已暂存文件"
+            })
         } else {
-            "使用设置中的引擎、Provider 和模型生成 Commit Message"
+            None
         };
+        let disabled = blocked.is_some();
+        let commit_blocked = blocked.or_else(|| {
+            draft
+                .input
+                .read(cx)
+                .value()
+                .trim()
+                .is_empty()
+                .then_some("请填写提交说明，或使用 AI 生成")
+        });
+        let can_commit = commit_blocked.is_none();
+        let can_generate = !disabled;
+        let generate_tip = blocked.unwrap_or("使用设置中的引擎、Provider 和模型生成提交说明");
         let generate_app = view.clone();
         let commit_app = view.clone();
+        let review_app = view.clone();
+        let review_files: Vec<_> = self
+            .git
+            .snapshot
+            .as_ref()
+            .map(|snapshot| {
+                snapshot
+                    .files
+                    .iter()
+                    .filter(|file| {
+                        file.staged()
+                            && self
+                                .git
+                                .selected_files
+                                .get(&path)
+                                .is_some_and(|selected| selected.contains(&file.path))
+                    })
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        let recovery_app = view.clone();
+        let running_session =
+            self.store
+                .workspaces
+                .iter()
+                .enumerate()
+                .find_map(|(index, workspace)| {
+                    workspace
+                        .sessions
+                        .iter()
+                        .find(|session| {
+                            self.session_control
+                                .runs
+                                .get(&session.id)
+                                .is_some_and(|run| {
+                                    git::repository_scope(&run.worktree)
+                                        == git::repository_scope(&path)
+                                })
+                        })
+                        .map(|session| (index, session.id))
+                });
+        let recovery_action = if let Some((workspace, session)) = running_session {
+            CommitRecovery::Session(workspace, session)
+        } else if self
+            .git
+            .repository
+            .as_ref()
+            .is_some_and(|repo| repo.integration.is_some() || repo.detached)
+        {
+            CommitRecovery::Branches
+        } else if staged_count == 0 {
+            CommitRecovery::Stage
+        } else {
+            CommitRecovery::Refresh
+        };
         let alternate_commit_app = view.clone();
         let cancel_app = view.clone();
         let tag_input = draft.tag.clone();
@@ -1090,7 +1185,7 @@ impl ConduitApp {
                             .flex_1()
                             .text_size(px(12.))
                             .font_semibold()
-                            .child("Commit Message"),
+                            .child("提交说明"),
                     )
                     .when(staged_count > 0, |row| {
                         row.child(
@@ -1158,7 +1253,7 @@ impl ConduitApp {
                                 .bordered(false)
                                 .h(relative(1.))
                                 .text_size(px(13.))
-                                .aria_label("Git Commit Message")
+                                .aria_label("Git 提交说明")
                                 .disabled(
                                     self.closing
                                         || !self.writable
@@ -1231,6 +1326,35 @@ impl ConduitApp {
             editor = editor.child(row);
         }
         editor
+            .when_some(commit_blocked, |editor, reason| editor.child(
+                h_flex().h(px(36.)).flex_shrink_0().gap_1().items_center()
+                    .child(div().id("git-commit-blocked").debug_selector(|| "git-commit-blocked".into()).flex_1().min_w_0().h_full().overflow_y_scroll().text_xs()
+                        .text_color(rgb(palette().muted)).child(reason))
+                    .when(blocked.is_some() && !busy && !self.closing && self.writable && self.git.probe.is_none(), |column| column.child(
+                        Button::new("git-commit-recover").label(recovery_action.label()).small().ghost().h(px(24.)).flex_shrink_0()
+                            .on_click(move |_, window, cx| recovery_app.update(cx, |app, cx| {
+                                match recovery_action {
+                                    CommitRecovery::Session(workspace, session) => app.switch(workspace, Some(session), window, cx),
+                                    CommitRecovery::Branches => app.show_branch_navigation(window, cx),
+                                    CommitRecovery::Stage => if let Some(path) = app.selected_workspace_path() {
+                                        let selected = app.git.selected_files.get(&path).map(|set| set.iter().cloned().collect()).unwrap_or_default();
+                                        app.stage_git_files(selected, cx);
+                                    },
+                                    CommitRecovery::Refresh => app.refresh_git(cx),
+                                }
+                            }))))))
+            .child(Button::new("git-review-staged").label(format!("核对待提交文件（{checked_count}）")).small().ghost().h(px(28.)).flex_shrink_0()
+                .disabled(review_files.is_empty()).dropdown_menu(move |mut menu, _, _| {
+                    menu = menu.scrollable(true);
+                    for file in &review_files {
+                        let app = review_app.clone();
+                        let file = file.clone();
+                        menu = menu.item(PopupMenuItem::new(file.path.clone()).on_click(move |_, window, cx| {
+                            app.update(cx, |app, cx| app.open_staged_diff_document(file.clone(), window, cx));
+                        }));
+                    }
+                    menu
+                }))
             .child(
                 h_flex()
                     .debug_selector(|| "git-commit-actions".into())
@@ -1242,8 +1366,8 @@ impl ConduitApp {
                     .child(
                         Button::new("git-commit")
                             .debug_selector(|| "git-commit".into())
-                            .label("Commit")
-                            .tooltip(format!("仅提交勾选的 {checked_count} 个已暂存文件"))
+                            .label("提交")
+                            .tooltip(commit_blocked.map(str::to_owned).unwrap_or_else(|| format!("仅提交勾选的 {checked_count} 个已暂存文件；可在 Diff 的「已暂存」页核对")))
                             .primary()
                             .small()
                             .h(px(30.))
@@ -1262,7 +1386,7 @@ impl ConduitApp {
                     .child(
                         Button::new("git-commit-alternate")
                             .debug_selector(|| "git-commit-alternate".into())
-                            .label("Commit & Push")
+                            .label("提交并推送")
                             .small()
                             .h(px(30.))
                             .disabled(!can_commit)

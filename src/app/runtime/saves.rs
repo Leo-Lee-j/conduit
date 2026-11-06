@@ -202,9 +202,6 @@ impl ConduitApp {
                         run.status = "正在连接 CLI…".into();
                         run.activity = "正在启动 CLI…".into();
                     }
-                    if self.message.as_deref() == Some("正在保存消息…") {
-                        self.message = None;
-                    }
                     if let Some(snippet) = pending.naming_snippet {
                         self.start_session_naming(id, &snippet, cx);
                     }
@@ -221,10 +218,6 @@ impl ConduitApp {
                             .and_then(|sent| sent.target.session)
                             .and_then(|source| self.session_notice_target(source))
                     };
-                    let visible = self.selected_session == Some(id)
-                        || pending.composer.as_ref().is_some_and(|sent| {
-                            self.composer_target().as_ref() == Some(&sent.target)
-                        });
                     self.session_control.runs.remove(&id);
                     self.restore_unsent_turn(id, pending.before);
                     if let Some(mut queued) = pending.queued {
@@ -236,14 +229,11 @@ impl ConduitApp {
                         // Stay open so the original unsent composer can be recovered.
                         self.closing = false;
                     }
-                    if visible {
-                        self.message = Some(format!("消息未发送：{error} 草稿已保留。"));
-                    }
                     let mut notice = Notice::new(
                         NoticeSource::Session,
                         NoticeLevel::Error,
                         "消息未发送",
-                        error,
+                        format!("{error} 草稿已保留。"),
                     );
                     if let Some(target) = target {
                         notice = notice.target(target);
@@ -276,26 +266,16 @@ impl ConduitApp {
                     self.dirty = true;
                     self.persist();
                     self.closing = false;
-                    if pending
-                        .composer
-                        .as_ref()
-                        .is_some_and(|sent| self.composer_target().as_ref() == Some(&sent.target))
-                    {
-                        self.message =
-                            Some(format!("保存失败，消息未加入队列：{error}。草稿已保留。"));
-                    }
+                    let mut notice = Notice::new(
+                        NoticeSource::Session,
+                        NoticeLevel::Error,
+                        "消息未加入队列",
+                        format!("保存失败：{error}。草稿已保留。"),
+                    );
                     if let Some(target) = self.session_notice_target(id) {
-                        self.notify_user(
-                            Notice::new(
-                                NoticeSource::Session,
-                                NoticeLevel::Error,
-                                "消息未加入队列",
-                                error,
-                            )
-                            .target(target),
-                            cx,
-                        );
+                        notice = notice.target(target);
                     }
+                    self.notify_user(notice, cx);
                 }
             }
             cx.notify();

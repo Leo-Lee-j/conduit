@@ -201,7 +201,25 @@ fn quote_diff_path(path: &str, quote_unicode: bool) -> String {
     out
 }
 
-/// Patch for one file, compared against HEAD in the diff window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FileDiffScope {
+    Staged,
+    Unstaged,
+    #[default]
+    All,
+}
+
+impl FileDiffScope {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Staged => "已暂存（待提交）",
+            Self::Unstaged => "未暂存",
+            Self::All => "全部修改",
+        }
+    }
+}
+
+/// Patch for one file in the selected comparison scope.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileDiff {
     pub patch: String,
@@ -804,6 +822,15 @@ pub fn load_file_diff(
     file: &ChangedFile,
     cancel: &AtomicBool,
 ) -> Result<FileDiff> {
+    load_file_diff_scoped(workspace, file, FileDiffScope::All, cancel)
+}
+
+pub fn load_file_diff_scoped(
+    workspace: &Path,
+    file: &ChangedFile,
+    scope: FileDiffScope,
+    cancel: &AtomicBool,
+) -> Result<FileDiff> {
     if !workspace.is_dir() {
         bail!("工作目录不存在：{}", workspace.display());
     }
@@ -813,7 +840,9 @@ pub fn load_file_diff(
         .context("该工作区不是 Git 仓库")?;
     let root = PathBuf::from(root.trim());
     let mut notes = vec![];
-    let patch = if file.untracked() {
+    let patch = if file.untracked() && scope == FileDiffScope::Staged {
+        String::new()
+    } else if file.untracked() {
         let content = read_file_content(&root, &file.path)?;
         if content.truncated {
             notes.push(format!(
@@ -822,7 +851,9 @@ pub fn load_file_diff(
             ));
         }
         added_file_patch(&file.path, content.text.as_deref())
-    } else if run_git(&git, &root, &["rev-parse", "--verify", "HEAD"], cancel).is_err() {
+    } else if scope == FileDiffScope::All
+        && run_git(&git, &root, &["rev-parse", "--verify", "HEAD"], cancel).is_err()
+    {
         if file.kind() != ChangeKind::Added {
             bail!("仓库尚无提交，无法对比该文件");
         }
@@ -837,23 +868,31 @@ pub fn load_file_diff(
         added_file_patch(&file.path, content.text.as_deref())
     } else {
         let context = format!("--unified={FULL_FILE_CONTEXT_LINES}");
+        let mut args = vec![
+            "--no-optional-locks",
+            "--no-pager",
+            "--literal-pathspecs",
+            "-c",
+            "core.quotepath=false",
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            &context,
+        ];
+        match scope {
+            FileDiffScope::Staged => args.push("--cached"),
+            FileDiffScope::Unstaged => {}
+            FileDiffScope::All => args.push("HEAD"),
+        }
+        args.extend(["--", &file.path]);
+        if let Some(original) = &file.original {
+            args.push(original);
+        }
         let output = run_git_bounded(
             &git,
             &root,
-            &[
-                "--no-optional-locks",
-                "--no-pager",
-                "-c",
-                "core.quotepath=false",
-                "diff",
-                "HEAD",
-                "--no-color",
-                "--no-ext-diff",
-                "--no-textconv",
-                &context,
-                "--",
-                &file.path,
-            ],
+            &args,
             cancel,
             MAX_FILE_DIFF_BYTES,
             COMMAND_TIMEOUT,
@@ -3277,6 +3316,80 @@ mod tests {
         assert_eq!(files[0].path().as_str(), "tracked.txt");
         assert_eq!(files[0].additions(), 1);
         assert_eq!(files[0].deletions(), 1);
+    }
+
+    #[test]
+    fn file_diff_scopes_keep_index_separate_from_worktree_and_other_files() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        repo.run(&["config", "core.autocrlf", "false"]);
+        repo.stage("base\n");
+        assert!(repo.commit("seed", false).committed);
+        repo.stage("staged A\n");
+        fs::write(repo.path.join("tracked.txt"), "unstaged B\n").unwrap();
+        fs::write(repo.path.join("unchecked.txt"), "unchecked C\n").unwrap();
+        repo.run(&["add", "--", "unchecked.txt"]);
+        let file = changed_file("tracked.txt", 'M', 'M');
+        let cancel = AtomicBool::new(false);
+        let staged =
+            load_file_diff_scoped(&repo.path, &file, FileDiffScope::Staged, &cancel).unwrap();
+        let unstaged =
+            load_file_diff_scoped(&repo.path, &file, FileDiffScope::Unstaged, &cancel).unwrap();
+        let all = load_file_diff_scoped(&repo.path, &file, FileDiffScope::All, &cancel).unwrap();
+        assert!(staged.patch.contains("-base\n") && staged.patch.contains("+staged A\n"));
+        assert!(!staged.patch.contains("unstaged B"));
+        assert!(unstaged.patch.contains("-staged A\n") && unstaged.patch.contains("+unstaged B\n"));
+        assert!(all.patch.contains("-base\n") && all.patch.contains("+unstaged B\n"));
+        for diff in [&staged, &unstaged, &all] {
+            assert!(!diff.patch.contains("unchecked C"));
+        }
+        assert_eq!(repo.run(&["show", ":tracked.txt"]), "staged A\n");
+        assert_eq!(repo.run(&["show", ":unchecked.txt"]), "unchecked C\n");
+    }
+
+    #[test]
+    fn file_diff_scopes_handle_unborn_index_deleted_and_untracked_files() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        repo.run(&["config", "core.autocrlf", "false"]);
+        repo.stage("first index\n");
+        fs::write(repo.path.join("tracked.txt"), "first working\n").unwrap();
+        let file = changed_file("tracked.txt", 'A', 'M');
+        let cancel = AtomicBool::new(false);
+        let staged =
+            load_file_diff_scoped(&repo.path, &file, FileDiffScope::Staged, &cancel).unwrap();
+        assert!(staged.patch.contains("+first index") && !staged.patch.contains("first working"));
+        let unstaged =
+            load_file_diff_scoped(&repo.path, &file, FileDiffScope::Unstaged, &cancel).unwrap();
+        assert!(
+            unstaged.patch.contains("-first index") && unstaged.patch.contains("+first working")
+        );
+        assert!(repo.commit("seed", false).committed);
+        repo.run(&["rm", "-f", "--", "tracked.txt"]);
+        let deleted = load_file_diff_scoped(
+            &repo.path,
+            &changed_file("tracked.txt", 'D', ' '),
+            FileDiffScope::Staged,
+            &cancel,
+        )
+        .unwrap();
+        assert!(deleted.patch.contains("-first index"));
+        fs::write(repo.path.join("new.txt"), "untracked\n").unwrap();
+        let new = changed_file("new.txt", '?', '?');
+        assert!(
+            load_file_diff_scoped(&repo.path, &new, FileDiffScope::Staged, &cancel)
+                .unwrap()
+                .patch
+                .is_empty()
+        );
+        assert!(
+            load_file_diff_scoped(&repo.path, &new, FileDiffScope::Unstaged, &cancel)
+                .unwrap()
+                .patch
+                .contains("+untracked")
+        );
     }
 
     #[test]

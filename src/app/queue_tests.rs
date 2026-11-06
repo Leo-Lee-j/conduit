@@ -91,14 +91,155 @@ fn draw(cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
+#[gpui_kit::test]
+fn stop_shortcut_only_cancels_selected_run_and_retains_queue(cx: &mut TestAppContext) {
+    let (app, cx, _) = fixture(cx, "stop-shortcut");
+    let mut senders = Vec::new();
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            senders.push(running(this, 1));
+            senders.push(running(this, 2));
+            this.queued_messages.insert(
+                1,
+                crate::store::QueuedMessage {
+                    text: "later".into(),
+                    references: vec![],
+                    paused: None,
+                },
+            );
+            this.input.read(cx).focus_handle(cx).focus(window, cx);
+            cx.notify();
+        })
+    });
+    draw(cx);
+    cx.simulate_keystrokes("ctrl-shift-x");
+    draw(cx);
+    cx.update(|_, cx| {
+        let this = app.read(cx);
+        assert!(this.session_control.runs[&1].runtime.is_cancelled());
+        assert!(!this.session_control.runs[&2].runtime.is_cancelled());
+        assert_eq!(this.queued_messages[&1].text, "later");
+        assert!(this.queued_messages[&1].paused.is_some());
+    });
+    assert!(cx.debug_bounds("stop").is_some());
+    assert!(cx.debug_bounds("send").is_none());
+}
+
+#[gpui_kit::test]
+fn composer_actions_remain_inside_short_and_narrow_viewports(cx: &mut TestAppContext) {
+    let (app, cx, _) = fixture(cx, "composer-layout");
+    let mut sender = None;
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.session_mut(1).unwrap().model =
+                Some("a-very-long-model-name-for-layout-validation".into());
+            app.input
+                .update(cx, |input, cx| input.set_value("下一条消息", window, cx));
+            cx.notify();
+        })
+    });
+    for (width, height) in [(850., 500.), (1100., 700.), (1200., 800.), (1600., 1000.)] {
+        cx.simulate_resize(gpui_kit::size(gpui_kit::px(width), gpui_kit::px(height)));
+        let mut action_bounds = None;
+        for (active, stopping) in [(false, false), (true, false), (true, true)] {
+            cx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    if !active {
+                        app.session_control.runs.remove(&1);
+                    } else if stopping {
+                        app.session_control.runs.get_mut(&1).unwrap().cancel();
+                    } else {
+                        sender = Some(running(app, 1));
+                    }
+                    cx.notify();
+                })
+            });
+            draw(cx);
+            let composer = cx.debug_bounds("composer").unwrap();
+            let controls = cx.debug_bounds("composer-actions").unwrap();
+            let (id, hidden) = if active {
+                ("stop", "send")
+            } else {
+                ("send", "stop")
+            };
+            assert!(cx.debug_bounds(hidden).is_none());
+            let action = cx.debug_bounds(id).unwrap();
+            assert!(
+                action.left() >= composer.left() && action.right() <= composer.right(),
+                "{id}: {action:?} vs {composer:?}"
+            );
+            assert!(
+                action.top() >= controls.top()
+                    && action.bottom() <= controls.bottom()
+                    && action.bottom() <= gpui_kit::px(height),
+                "{id}: {action:?}"
+            );
+            assert_eq!(action.size.width, gpui_kit::px(30.));
+            assert_eq!(action.size.height, gpui_kit::px(30.));
+            if let Some(previous) = action_bounds {
+                assert_eq!(
+                    action, previous,
+                    "send and stop share a stable toolbar slot"
+                );
+            }
+            action_bounds = Some(action);
+        }
+    }
+}
+
 fn settle_saves(
     app: &mut ConduitApp,
     window: &mut gpui_kit::Window,
     cx: &mut gpui_kit::Context<ConduitApp>,
 ) {
     app.persistence.flush();
+    assert!(
+        app.persistence.error.is_none(),
+        "queue save failed: {:?}",
+        app.persistence.error
+    );
     app.poll_pending_sends(window, cx);
     app.persistence.flush();
+}
+
+#[cfg(windows)]
+#[gpui_kit::test]
+fn queue_message_save_isolated_from_another_test_writer(cx: &mut TestAppContext) {
+    // A previous test's detached writer can outlive its test thread, even when
+    // the harness uses --test-threads=1. Keep its temporary file open throughout
+    // this send so a shared data directory fails deterministically on Windows.
+    let _other_writer = std::thread::spawn(|| {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let path = Store::path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .share_mode(0)
+            .open(path.with_extension("json.tmp"))
+            .unwrap()
+    })
+    .join()
+    .unwrap();
+    let (app, cx, _) = fixture(cx, "isolated-save");
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            let _sender = running(this, 1);
+            this.input.update(cx, |input, cx| {
+                input.set_value("isolated follow-up", window, cx)
+            });
+            this.send_prompt(window, cx);
+            settle_saves(this, window, cx);
+            assert_eq!(this.queued_messages[&1].text, "isolated follow-up");
+            assert_eq!(
+                Store::load().unwrap().queued_messages[&1].text,
+                "isolated follow-up"
+            );
+            assert!(this.input.read(cx).value().is_empty());
+        })
+    });
 }
 
 #[gpui_kit::test]

@@ -1,0 +1,12 @@
+flowchart TD
+    A["活动工作区 WorkspaceKey"] --> B["底栏入口与宿主命令"]
+    B --> C["TerminalManager 会话与生命周期"]
+    C --> D["TerminalPanel 标签与纵向分隔"]
+    D --> E["TerminalView 输入与可见行绘制"]
+    E -->|输入与最新尺寸| F["TerminalRuntime 有界队列"]
+    C -->|启动与停止| F
+    F --> G["ConPTY 与 Job 进程树"]
+    G -->|输出字节| H["VTE 解析与 Term 网格"]
+    H -->|合并唤醒与短锁快照| E
+    G -->|清理回执| C
+    I["窗口关闭与应用更新"] -->|等待清理屏障| C

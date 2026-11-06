@@ -35,6 +35,115 @@ fn draw(cx: &mut VisualTestContext) {
 }
 
 #[gpui_kit::test]
+fn settings_engine_management_is_readonly_and_disabled_launches_preserve_history(
+    cx: &mut TestAppContext,
+) {
+    use crate::domain::Provider;
+    let (app, cx) = fixture(cx);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.connection_settings.engine = Provider::Codex;
+            app.select_settings_page(3, window, cx);
+            app.set_engine_enabled(Provider::Codex, false, cx);
+            assert!(
+                app.store.cli.enabled(Provider::Codex),
+                "read-only mutation must be rejected"
+            );
+        })
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("engine-enabled-1").is_some());
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.writable = true;
+            app.store.cli.set_enabled(Provider::Codex, false);
+            app.new_session_provider = Provider::Claude;
+            app.select_engine(Provider::Codex, window, cx);
+            assert_eq!(app.new_session_provider, Provider::Claude);
+            app.store.workspaces.push(crate::domain::Workspace {
+                path: std::env::temp_dir(),
+                sessions: vec![],
+            });
+            let before = serde_json::to_value(&app.store.workspaces).unwrap();
+            let error = app
+                .start_turn(0, None, Provider::Codex, "offline prompt".into(), true, cx)
+                .unwrap_err();
+            assert!(error.contains("已停用"));
+            assert_eq!(serde_json::to_value(&app.store.workspaces).unwrap(), before);
+            assert!(app.session_control.runs.is_empty());
+            app.writable = false;
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn settings_extension_filters_keep_the_list_visible_at_small_and_large_sizes(
+    cx: &mut TestAppContext,
+) {
+    use crate::{
+        domain::Provider,
+        extensions::{Catalog, Context, Entry, Kind, management::Filter},
+    };
+    let (app, cx) = fixture(cx);
+    for (width, height) in [(850., 500.), (1280., 900.)] {
+        cx.simulate_resize(size(px(width), px(height)));
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.settings_ui.page = 4;
+                app.extensions_ui.initialized = true;
+                app.extensions_ui.probe = None;
+                let context = Context {
+                    engine: Provider::Codex,
+                    workspace: None,
+                    cli_path: None,
+                };
+                app.extensions_ui.context = Some(context.clone());
+                app.extensions_ui.catalogs.insert(
+                    context,
+                    Catalog {
+                        entries: vec![Entry {
+                            name: "sample".into(),
+                            description: "Skill description".into(),
+                            path: "C:/test/SKILL.md".into(),
+                            scope: "全局".into(),
+                            kind: Kind::Skill,
+                            disabled: true,
+                            transport: String::new(),
+                            target: String::new(),
+                        }],
+                        ..Default::default()
+                    },
+                );
+                app.extensions_ui.filters[0] = Filter::All;
+                app.extensions_ui.lists[0].reset(0);
+                cx.notify();
+            })
+        });
+        draw(cx);
+        let list = cx.debug_bounds("extensions-list").unwrap();
+        assert!(
+            list.size.height > px(50.),
+            "filters must leave room for the list"
+        );
+        let filter = cx.debug_bounds("extensions-filter-trigger").unwrap();
+        cx.simulate_mouse_down(filter.center(), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(filter.center(), MouseButton::Left, Modifiers::default());
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.extensions_ui.filters[0] = Filter::Disabled;
+                app.extensions_ui.lists[0].reset(0);
+                cx.notify();
+            })
+        });
+        cx.simulate_keystrokes("escape");
+        draw(cx);
+        assert!(app.read_with(cx, |app, _| app.extensions_ui.filters[0]
+            == Filter::Disabled));
+        assert!(cx.debug_bounds("extension-detail-0").is_some());
+    }
+}
+
+#[gpui_kit::test]
 fn settings_keyboard_search_reveals_deep_section_and_escape_clears_before_leaving(
     cx: &mut TestAppContext,
 ) {

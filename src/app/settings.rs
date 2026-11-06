@@ -54,8 +54,8 @@ fn settings_page(title: &'static str, icon: FullIconName) -> SettingPage {
         "外观" => "选择主题，调整聊天文字与代码的阅读体验。",
         "自动命名" => "设置会话标题的生成方式与使用的模型。",
         "Git 提交" => "自定义提交说明的生成模型与提示词。",
-        "AI 引擎" => "选择引擎，检查本机 CLI 的启动路径与版本。",
-        "模型与服务" => "管理服务端点和模型目录；新会话默认值单独设置。",
+        "AI 引擎" => "管理引擎启用状态，检查接入能力、启动路径与版本。",
+        "模型与服务" => "管理服务端点与模型目录，设置新会话默认模型。",
         "新会话默认" => "按引擎设置新会话使用的服务和模型。现有会话保留自己的选择。",
         "数据与更新" => "管理本机数据、更新偏好与诊断。",
         "快捷键" => "使用键盘在会话、文件和设置之间快速切换。",
@@ -400,7 +400,9 @@ mod config_editor;
 #[path = "settings/connections.rs"]
 mod connections;
 mod defaults;
+mod extension_management;
 mod general;
+mod model_management;
 #[path = "settings/models.rs"]
 mod model_sync;
 pub(super) use connections::ConnectionsUi;
@@ -416,6 +418,15 @@ pub(super) use extensions_view::ExtensionsUi;
 pub(super) use navigation::SettingsUi;
 
 impl ConduitApp {
+    pub(super) fn open_engine_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings_ui.page = 3;
+        self.settings_ui.group = None;
+        self.settings_ui
+            .search
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.open_settings(window, cx);
+    }
+
     pub(super) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings_ui.open {
             self.settings_ui
@@ -521,6 +532,12 @@ impl ConduitApp {
             ("清除搜索 / 返回工作台", "escape"),
             ("文件名搜索 Shift ×2", "shift"),
             ("切换 Git 侧栏", "ctrl-k"),
+            ("输入区：发送；运行中自动排队", "enter"),
+            ("输入区：换行（也可使用 Ctrl+Enter）", "shift-enter"),
+            ("输入区：停止当前会话回复", "ctrl-shift-x"),
+            ("文件内查找", "ctrl-f"),
+            ("Diff：下一处修改", "f7"),
+            ("Diff：上一处修改", "shift-f7"),
         ];
         let items: Vec<_> = rows
             .into_iter()
@@ -535,6 +552,6 @@ impl ConduitApp {
             })
             .collect();
         settings_page("快捷键", FullIconName::Keyboard)
-            .group(settings_section("全局快捷键").items(items))
+            .group(settings_section("全局与当前区域快捷键").items(items))
     }
 }

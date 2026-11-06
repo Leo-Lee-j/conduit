@@ -1,6 +1,6 @@
 use super::super::{
     PluginUi,
-    tests::{click, draw, fixture as navigation_fixture, store},
+    tests::{ElementBounds as _, click, click_labeled, draw, fixture as navigation_fixture, store},
 };
 use super::{RightAdapter, RightBody};
 use crate::{
@@ -17,8 +17,8 @@ use conduit::plugins::{
 };
 use gpui_kit::{
     Entity, Focusable as _, InteractiveElement, IntoElement, Modifiers, MouseButton, ParentElement,
-    ScrollDelta, ScrollWheelEvent, TestAppContext, VisualTestContext, assets::IconName, div, point,
-    px, size,
+    Role, ScrollDelta, ScrollWheelEvent, SharedString, TestAppContext, TestSupportExt,
+    VisualTestContext, assets::IconName, div, point, px, size,
 };
 
 fn tool_store() -> Store {
@@ -88,7 +88,7 @@ fn tool_entry_tabs_copy_close_and_notification_focus(cx: &mut TestAppContext) {
     });
     draw(cx);
     click(cx, "tool-1-shared-dock");
-    assert!(cx.debug_bounds("detail-content").is_some());
+    assert!(cx.labeled_bounds(Role::Group, "工具调用详情").is_some());
     assert!(copied(cx).contains("session 1 output"));
     let scroll = cx.update(|_, cx| {
         app.update(cx, |app, _| {
@@ -96,7 +96,7 @@ fn tool_entry_tabs_copy_close_and_notification_focus(cx: &mut TestAppContext) {
             app.tool_details.scroll(&session, "shared")
         })
     });
-    let body = cx.debug_bounds("detail-content").unwrap();
+    let body = cx.labeled_bounds(Role::Group, "工具调用详情").unwrap();
     cx.simulate_event(ScrollWheelEvent {
         position: body.center(),
         delta: ScrollDelta::Pixels(point(px(0.), px(-200.))),
@@ -106,12 +106,12 @@ fn tool_entry_tabs_copy_close_and_notification_focus(cx: &mut TestAppContext) {
     let offset = scroll.offset();
     assert!(offset.y < px(0.));
     click(cx, "close-details");
-    assert!(cx.debug_bounds("detail-panel").is_none());
+    assert!(cx.element_bounds("detail-panel").is_none());
     click(cx, "toggle-sidebar");
     assert_eq!(scroll.offset(), offset);
-    click(cx, "right-choice-conduit.core.notifications");
-    assert!(cx.debug_bounds("notification-panel").is_some());
-    assert!(cx.debug_bounds("detail-content").is_none());
+    click_labeled(cx, Role::Tab, "通知");
+    assert!(cx.element_bounds("notification-panel").is_some());
+    assert!(cx.labeled_bounds(Role::Group, "工具调用详情").is_none());
     cx.update(|window, cx| {
         let app = app.read(cx);
         assert!(window.focused(cx).is_some());
@@ -122,7 +122,7 @@ fn tool_entry_tabs_copy_close_and_notification_focus(cx: &mut TestAppContext) {
     });
     cx.simulate_keystrokes("escape");
     draw(cx);
-    assert!(cx.debug_bounds("detail-panel").is_none());
+    assert!(cx.element_bounds("detail-panel").is_none());
     cx.update(|window, cx| {
         let app = app.read(cx);
         assert_eq!(
@@ -132,8 +132,8 @@ fn tool_entry_tabs_copy_close_and_notification_focus(cx: &mut TestAppContext) {
         assert_eq!(app.plugins.right().as_str(), builtins::NOTIFICATIONS);
     });
     click(cx, "toggle-sidebar");
-    assert!(cx.debug_bounds("notification-panel").is_some());
-    click(cx, "right-choice-conduit.core.tool-details");
+    assert!(cx.element_bounds("notification-panel").is_some());
+    click_labeled(cx, Role::Tab, "工具详情");
     assert_eq!(scroll.offset(), offset);
     assert!(copied(cx).contains("session 1 output"));
 }
@@ -157,10 +157,10 @@ fn tool_state_isolated_across_sessions_workspaces_and_stale_clicks(cx: &mut Test
             })
         });
         draw(cx);
-        assert!(cx.debug_bounds("detail-empty").is_some());
+        assert!(cx.element_bounds("detail-empty").is_some());
         // A click queued from the old chat cannot select the new session's same message key.
         choose_tool(&app, cx, 1);
-        assert!(cx.debug_bounds("detail-empty").is_some());
+        assert!(cx.element_bounds("detail-empty").is_some());
         choose_tool(&app, cx, session);
         assert!(copied(cx).contains(&format!("session {session} output")));
         cx.update(|_, cx| {
@@ -241,6 +241,8 @@ fn plugins() -> PluginUi {
                     let selector = format!("rendered-{}-{id}", key.view);
                     RightBody::Content(
                         div()
+                            .id(SharedString::from(selector.clone()))
+                            .test_support()
                             .debug_selector(move || selector.clone())
                             .child(key.view.to_string())
                             .into_any_element(),
@@ -262,12 +264,12 @@ fn plugins() -> PluginUi {
 fn generic_tabs_route_two_owners_and_reject_unbound_stale_revoked_views(cx: &mut TestAppContext) {
     let (app, cx) = fixture(cx, tool_store(), plugins());
     open(&app, cx, builtins::TOOL_DETAILS);
-    click(cx, "right-choice-test.missing.view");
+    click_labeled(cx, Role::Tab, "View missing");
     cx.update(|_, cx| assert!(app.read(cx).plugins.right_is(builtins::TOOL_DETAILS)));
-    click(cx, "right-choice-test.alpha.view");
-    assert!(cx.debug_bounds("rendered-test.alpha.view-1").is_some());
-    click(cx, "right-choice-test.beta.view");
-    assert!(cx.debug_bounds("rendered-test.beta.view-1").is_some());
+    click_labeled(cx, Role::Tab, "View alpha");
+    assert!(cx.element_bounds("rendered-test.alpha.view-1").is_some());
+    click_labeled(cx, Role::Tab, "View beta");
+    assert!(cx.element_bounds("rendered-test.beta.view-1").is_some());
     let request = cx.update(|_, cx| {
         let app = app.read(cx);
         app.plugins
@@ -280,7 +282,7 @@ fn generic_tabs_route_two_owners_and_reject_unbound_stale_revoked_views(cx: &mut
     });
     cx.update(|window, cx| app.update(cx, |app, cx| app.switch(1, Some(2), window, cx)));
     draw(cx);
-    assert!(cx.debug_bounds("rendered-test.beta.view-2").is_some());
+    assert!(cx.element_bounds("rendered-test.beta.view-2").is_some());
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
             assert!(!app.dispatch_right_view(&request, window, cx));
@@ -304,7 +306,7 @@ fn generic_tabs_route_two_owners_and_reject_unbound_stale_revoked_views(cx: &mut
         })
     });
     draw(cx);
-    assert!(cx.debug_bounds("detail-panel").is_none());
+    assert!(cx.element_bounds("detail-panel").is_none());
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
             assert!(!app.dispatch_right_view(&revoked, window, cx));
@@ -313,7 +315,7 @@ fn generic_tabs_route_two_owners_and_reject_unbound_stale_revoked_views(cx: &mut
         })
     });
     open(&app, cx, "test.alpha.view");
-    assert!(cx.debug_bounds("rendered-test.alpha.view-2").is_some());
+    assert!(cx.element_bounds("rendered-test.alpha.view-2").is_some());
     click(cx, "close-test-view");
     cx.update(|_, cx| assert_eq!(app.read(cx).plugins.right().as_str(), "test.alpha.view"));
 }
@@ -325,7 +327,7 @@ fn scope_removal_closes_dock_even_when_host_selects_another_session(cx: &mut Tes
     let session = cx.update(|_, cx| app.read(cx).plugins.session_key().unwrap());
     cx.update(|_, cx| app.update(cx, |app, cx| app.delete_session(1, cx)));
     draw(cx);
-    assert!(cx.debug_bounds("detail-panel").is_none());
+    assert!(cx.element_bounds("detail-panel").is_none());
     cx.update(|_, cx| {
         assert!(app.read(cx).tool_details.selected(&session).is_none());
         assert_eq!(app.read(cx).selected_session, Some(3));
@@ -333,7 +335,7 @@ fn scope_removal_closes_dock_even_when_host_selects_another_session(cx: &mut Tes
     open(&app, cx, "test.alpha.view");
     cx.update(|window, cx| app.update(cx, |app, cx| app.clear_workspace_selection(window, cx)));
     draw(cx);
-    assert!(cx.debug_bounds("detail-panel").is_none());
+    assert!(cx.element_bounds("detail-panel").is_none());
     cx.update(|_, cx| {
         assert_eq!(
             app.read(cx).plugins.right().as_str(),
@@ -341,18 +343,12 @@ fn scope_removal_closes_dock_even_when_host_selects_another_session(cx: &mut Tes
         )
     });
     click(cx, "notification-bell");
-    assert!(
-        cx.debug_bounds("right-choice-conduit.core.tool-details")
-            .is_none()
-    );
-    assert!(cx.debug_bounds("right-choice-test.alpha.view").is_none());
-    assert!(
-        cx.debug_bounds("right-choice-conduit.core.notifications")
-            .is_some()
-    );
+    assert!(cx.labeled_bounds(Role::Tab, "工具详情").is_none());
+    assert!(cx.labeled_bounds(Role::Tab, "View alpha").is_none());
+    assert!(cx.labeled_bounds(Role::Tab, "通知").is_some());
     cx.simulate_keystrokes("escape");
     draw(cx);
-    assert!(cx.debug_bounds("detail-panel").is_none());
+    assert!(cx.element_bounds("detail-panel").is_none());
     click(cx, "toggle-sidebar");
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
@@ -361,14 +357,14 @@ fn scope_removal_closes_dock_even_when_host_selects_another_session(cx: &mut Tes
         })
     });
     draw(cx);
-    assert!(cx.debug_bounds("notification-panel").is_some());
+    assert!(cx.element_bounds("notification-panel").is_some());
 }
 
 #[gpui_kit::test]
 fn host_placeholders_cover_empty_loading_failure_and_missing_adapter(cx: &mut TestAppContext) {
     let (app, cx) = fixture(cx, tool_store(), PluginUi::new());
     open(&app, cx, builtins::TOOL_DETAILS);
-    assert!(cx.debug_bounds("detail-empty").is_some());
+    assert!(cx.element_bounds("detail-empty").is_some());
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
             app.session_mut(1).unwrap().transcript.loaded = false;
@@ -389,7 +385,7 @@ fn host_placeholders_cover_empty_loading_failure_and_missing_adapter(cx: &mut Te
         })
     });
     draw(cx);
-    assert!(cx.debug_bounds("right-view-error").is_some());
+    assert!(cx.element_bounds("right-view-error").is_some());
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
             app.session_mut(1).unwrap().transcript.loaded = true;
@@ -398,7 +394,7 @@ fn host_placeholders_cover_empty_loading_failure_and_missing_adapter(cx: &mut Te
         })
     });
     choose_tool(&app, cx, 1);
-    assert!(cx.debug_bounds("detail-content").is_some());
+    assert!(cx.labeled_bounds(Role::Group, "工具调用详情").is_some());
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
             app.plugins.right_renderers.remove(builtins::TOOL_DETAILS);
@@ -406,9 +402,9 @@ fn host_placeholders_cover_empty_loading_failure_and_missing_adapter(cx: &mut Te
         })
     });
     draw(cx);
-    assert!(cx.debug_bounds("right-view-error").is_some());
+    assert!(cx.element_bounds("right-view-error").is_some());
     click(cx, "close-right-view");
-    assert!(cx.debug_bounds("detail-panel").is_none());
+    assert!(cx.element_bounds("detail-panel").is_none());
 }
 
 #[gpui_kit::test]
@@ -473,8 +469,8 @@ fn background_tool_and_notification_events_preserve_active_view_and_focus(cx: &m
         })
     });
     draw(cx);
-    assert!(cx.debug_bounds("notification-panel").is_some());
-    click(cx, "right-choice-conduit.core.tool-details");
+    assert!(cx.element_bounds("notification-panel").is_some());
+    click_labeled(cx, Role::Tab, "工具详情");
     assert!(copied(cx).contains("session 1 output"));
 }
 
@@ -483,9 +479,9 @@ fn right_width_drag_and_view_switch_preserve_layout(cx: &mut TestAppContext) {
     let (app, cx) = fixture(cx, tool_store(), PluginUi::new());
     cx.simulate_resize(size(px(1600.), px(900.)));
     choose_tool(&app, cx, 1);
-    let width = cx.debug_bounds("detail-panel").unwrap().size.width;
+    let width = cx.element_bounds("detail-panel").unwrap().size.width;
     let band = cx
-        .debug_bounds("detail-resize")
+        .element_bounds("detail-resize")
         .expect("right resize handle");
     let start = band.center();
     cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
@@ -507,20 +503,26 @@ fn right_width_drag_and_view_switch_preserve_layout(cx: &mut TestAppContext) {
         Modifiers::default(),
     );
     draw(cx);
-    let resized = cx.debug_bounds("detail-panel").unwrap().size.width;
+    let resized = cx.element_bounds("detail-panel").unwrap().size.width;
     assert!(resized > width + px(50.));
     open(&app, cx, builtins::NOTIFICATIONS);
-    assert_eq!(cx.debug_bounds("detail-panel").unwrap().size.width, resized);
+    assert_eq!(
+        cx.element_bounds("detail-panel").unwrap().size.width,
+        resized
+    );
     click(cx, "close-notifications");
     open(&app, cx, builtins::TOOL_DETAILS);
-    assert_eq!(cx.debug_bounds("detail-panel").unwrap().size.width, resized);
+    assert_eq!(
+        cx.element_bounds("detail-panel").unwrap().size.width,
+        resized
+    );
     cx.simulate_resize(size(px(850.), px(500.)));
     draw(cx);
-    let panel = cx.debug_bounds("detail-panel").unwrap();
+    let panel = cx.element_bounds("detail-panel").unwrap();
     assert!(panel.right() <= px(850.) && panel.left() >= px(38.));
     assert_eq!(
-        cx.debug_bounds("detail-header").unwrap().size.height,
-        cx.debug_bounds("document-tab-strip").unwrap().size.height
+        cx.element_bounds("detail-header").unwrap().size.height,
+        cx.element_bounds("document-tab-strip").unwrap().size.height
     );
 }
 
@@ -547,13 +549,10 @@ fn branch_navigation_only_offers_visible_views_and_rejects_hidden_requests(
         })
     });
     draw(cx);
-    assert!(cx.debug_bounds("detail-panel").is_none());
+    assert!(cx.element_bounds("detail-panel").is_none());
     click(cx, "notification-bell");
-    assert!(cx.debug_bounds("notification-panel").is_some());
-    assert!(
-        cx.debug_bounds("right-choice-conduit.core.tool-details")
-            .is_none()
-    );
+    assert!(cx.element_bounds("notification-panel").is_some());
+    assert!(cx.labeled_bounds(Role::Tab, "工具详情").is_none());
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
             app.leave_branch_navigation();
@@ -561,6 +560,6 @@ fn branch_navigation_only_offers_visible_views_and_rejects_hidden_requests(
         })
     });
     draw(cx);
-    click(cx, "right-choice-conduit.core.tool-details");
+    click_labeled(cx, Role::Tab, "工具详情");
     assert!(copied(cx).contains("session 1 output"));
 }

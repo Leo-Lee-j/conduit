@@ -8,16 +8,20 @@ pub(in crate::app) struct ConnectionsUi {
     pub sources_expanded: bool,
     pub path_help: bool,
     pub syncing: bool,
+    pub model_search: Entity<InputState>,
+    pub model_limit: usize,
 }
 
 impl ConnectionsUi {
-    pub(in crate::app) fn new(engine: Provider) -> Self {
+    pub(in crate::app) fn new(engine: Provider, model_search: Entity<InputState>) -> Self {
         Self {
             engine,
             models_expanded: false,
             sources_expanded: false,
             path_help: false,
             syncing: false,
+            model_search,
+            model_limit: 50,
         }
     }
 }
@@ -50,11 +54,15 @@ impl ConduitApp {
                                 .text_color(rgb(palette().activity_running))
                         })
                         .cursor_pointer()
-                        .on_click(move |_, _, cx| {
+                        .on_click(move |_, window, cx| {
                             select_view.update(cx, |app, cx| {
                                 app.connection_settings.engine = candidate;
                                 app.connection_settings.models_expanded = false;
                                 app.connection_settings.sources_expanded = false;
+                                app.connection_settings.model_limit = 50;
+                                app.connection_settings
+                                    .model_search
+                                    .update(cx, |input, cx| input.set_value("", window, cx));
                                 cx.notify();
                             });
                         }),
@@ -71,11 +79,11 @@ impl ConduitApp {
                 .item(selector),
         ];
         if services {
-            if engine != Provider::OpenCode {
+            if engine.descriptor().capabilities.model_services {
                 groups.push(self.providers_group(engine, disabled, view.clone()));
             }
             groups.push(self.models_provider_group(engine, view.clone()));
-            if engine != Provider::OpenCode {
+            if engine.descriptor().capabilities.model_services {
                 groups.push(self.models_source_group(engine, view));
             }
         } else {
@@ -85,16 +93,34 @@ impl ConduitApp {
                 SettingGroup::new().variant(GroupBoxVariant::Normal).item(
                     SettingItem::render(move |_, _, _| {
                         let view = extensions_view.clone();
-                        Button::new("settings-view-extensions")
-                            .small()
-                            .ghost()
-                            .label("管理 Skills")
-                            .on_click(move |_, window, cx| {
-                                view.update(cx, |app, cx| {
-                                    app.extensions_ui.engine = engine;
-                                    app.select_settings_page(4, window, cx);
-                                });
-                            })
+                        let mcp_view = extensions_view.clone();
+                        h_flex()
+                            .gap_2()
+                            .flex_wrap()
+                            .child(
+                                Button::new("settings-view-extensions")
+                                    .small()
+                                    .ghost()
+                                    .label("管理 Skills")
+                                    .on_click(move |_, window, cx| {
+                                        view.update(cx, |app, cx| {
+                                            app.extensions_ui.engine = engine;
+                                            app.select_settings_page(4, window, cx);
+                                        });
+                                    }),
+                            )
+                            .child(
+                                Button::new("settings-view-mcp")
+                                    .small()
+                                    .ghost()
+                                    .label("管理 MCP")
+                                    .on_click(move |_, window, cx| {
+                                        mcp_view.update(cx, |app, cx| {
+                                            app.extensions_ui.engine = engine;
+                                            app.select_settings_page(9, window, cx);
+                                        })
+                                    }),
+                            )
                     })
                     .keywords(["Skills", "MCP", "扩展"]),
                 ),

@@ -6,6 +6,8 @@ struct ConfigEditor {
     app: Entity<ConduitApp>,
     path: PathBuf,
     original: Option<String>,
+    initial_text: String,
+    confirm_discard: bool,
     text: Entity<TextareaState>,
     name: Option<Entity<InputState>>,
     error: Option<String>,
@@ -17,6 +19,48 @@ mod tests {
     use super::{ConduitApp, InputState, McpForm, Provider, Store, TextareaState, show_editor};
     use gpui_kit::component::WindowExt;
     use gpui_kit::{AppContext as _, ParentElement as _, TestAppContext, px};
+
+    #[gpui_kit::test]
+    fn config_editor_requires_explicit_discard_after_edits_and_keeps_failures(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        cx.add_window_view(|window, cx| {
+            let app =
+                cx.new(|cx| ConduitApp::with_store(window, cx, Ok(Store::default()), false, false));
+            let editor = cx.new(|cx| super::ConfigEditor {
+                app: app.clone(),
+                path: Store::path().with_file_name("hfe-config.json"),
+                original: None,
+                initial_text: "{}".into(),
+                confirm_discard: false,
+                text: cx.new(|cx| TextareaState::new(window, cx).default_value("{}")),
+                name: None,
+                error: None,
+                saving: false,
+            });
+            editor.update(cx, |editor, cx| {
+                assert!(editor.can_close(cx));
+                editor
+                    .text
+                    .update(cx, |text, cx| text.set_value("{ invalid", window, cx));
+                assert!(!editor.can_close(cx));
+                assert!(editor.confirm_discard);
+                editor.confirm_discard = false;
+                editor.save(window, cx);
+                assert!(editor.error.is_some());
+                assert_eq!(editor.text.read(cx).value().as_str(), "{ invalid");
+                assert!(!editor.can_close(cx));
+                editor
+                    .text
+                    .update(cx, |text, cx| text.set_value("{}", window, cx));
+                assert!(editor.can_close(cx));
+                editor.saving = true;
+                assert!(!editor.can_close(cx));
+            });
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+    }
 
     #[gpui_kit::test]
     fn config_and_mcp_forms_keep_actions_visible_on_short_windows(cx: &mut TestAppContext) {
@@ -165,7 +209,7 @@ impl Render for McpForm {
     }
 }
 
-fn show_editor(
+pub(super) fn show_editor(
     app: Entity<ConduitApp>,
     path: PathBuf,
     original: Option<String>,
@@ -178,6 +222,8 @@ fn show_editor(
         app,
         path,
         original,
+        initial_text: text.clone(),
+        confirm_discard: false,
         text: cx.new(|cx| {
             TextareaState::new(window, cx)
                 .default_value(text)
@@ -189,6 +235,7 @@ fn show_editor(
     });
     window.open_dialog(cx, move |dialog, window, cx| {
         let editor = editor.clone();
+        let dismiss = editor.clone();
         let saving = editor.read(cx).saving;
         dialog
             .margin_top(px(32.))
@@ -203,11 +250,28 @@ fn show_editor(
             .overlay_closable(false)
             .keyboard(!saving)
             .close_button(!saving)
+            .on_cancel(move |_, _, cx| dismiss.update(cx, |editor, cx| editor.can_close(cx)))
             .content(move |body, _, _| body.child(editor.clone()))
     });
 }
 
 impl ConfigEditor {
+    fn can_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.saving {
+            return false;
+        }
+        let dirty = self.text.read(cx).value().as_str() != self.initial_text
+            || self
+                .name
+                .as_ref()
+                .is_some_and(|name| name.read(cx).value().as_str() != "my-skill");
+        if dirty {
+            self.confirm_discard = true;
+            cx.notify();
+        }
+        !dirty
+    }
+
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.saving || !self.app.read(cx).writable || self.app.read(cx).closing {
             return;
@@ -321,11 +385,31 @@ impl Render for ConfigEditor {
                 .justify_end()
                 .child(
                     Button::new("native-config-cancel")
-                        .label("取消")
+                        .label(if self.confirm_discard {
+                            "继续编辑"
+                        } else {
+                            "取消"
+                        })
                         .ghost()
                         .disabled(self.saving)
-                        .on_click(|_, window, cx| window.close_dialog(cx)),
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if this.confirm_discard {
+                                this.confirm_discard = false;
+                                this.text.read(cx).focus_handle(cx).focus(window, cx);
+                                cx.notify();
+                            } else if this.can_close(cx) {
+                                window.close_dialog(cx);
+                            }
+                        })),
                 )
+                .when(self.confirm_discard, |row| {
+                    row.child(
+                        Button::new("native-config-discard")
+                            .label("放弃未保存修改")
+                            .ghost()
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                })
                 .child(
                     Button::new("native-config-save")
                         .debug_selector(|| "native-config-save".into())

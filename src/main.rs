@@ -6,6 +6,7 @@ mod chat_runtime;
 mod child;
 mod cli;
 mod domain;
+mod engines;
 mod event_queue;
 mod extensions;
 mod failure;
@@ -21,6 +22,7 @@ mod persistence;
 mod protocol;
 mod providers;
 mod store;
+mod terminal;
 mod transcript;
 mod workspace_files;
 

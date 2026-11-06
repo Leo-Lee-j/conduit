@@ -469,10 +469,7 @@ impl ConduitApp {
         let button = Button::new(SharedString::from(id.clone()))
             .debug_selector(move || id.clone())
             .ghost()
-            .focus_ring(!matches!(
-                &item.action,
-                ActivityAction::OpenView(id) if id.as_str() == builtins::WORKSPACES
-            ))
+            .focus_ring(true)
             .small()
             .compact()
             .w(px(36.))
@@ -589,6 +586,8 @@ impl ConduitApp {
                             let debug = format!("nav-more-{}", item.id);
                             let entry = PopupMenuItem::element(move |_, _| {
                                 div()
+                                    .id(SharedString::from(debug.clone()))
+                                    .test_support()
                                     .flex_1()
                                     .min_w_0()
                                     .truncate()
@@ -646,6 +645,8 @@ impl ConduitApp {
                 .when_some(pending_push, |row, (count, _)| {
                     row.child(
                         h_flex()
+                            .id("nav-branches-badge")
+                            .test_support()
                             .debug_selector(|| "nav-branches-badge".into())
                             .absolute()
                             .top_0()
@@ -702,6 +703,7 @@ impl ConduitApp {
             .unwrap_or_else(|| div().p_3().child("导航视图不可用").into_any_element());
         h_flex()
             .id("navigation-panel")
+            .test_support()
             .debug_selector(|| "navigation-panel".into())
             .size_full()
             .child(rail)

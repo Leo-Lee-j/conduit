@@ -20,6 +20,7 @@ pub(super) struct GitDiffDialog {
     pub(super) commit: Option<git::CommitDiffRequest>,
     pub(super) workspace: PathBuf,
     pub(super) file: git::ChangedFile,
+    pub(super) scope: git::FileDiffScope,
     pub(super) state: Entity<DiffState>,
     pub(super) loading: bool,
     pub(super) error: Option<String>,
@@ -93,6 +94,11 @@ impl GitDiffDialog {
             comparison,
             commit,
             workspace,
+            scope: if file.staged() {
+                git::FileDiffScope::Staged
+            } else {
+                git::FileDiffScope::Unstaged
+            },
             file,
             state,
             loading: true,
@@ -122,6 +128,7 @@ impl GitDiffDialog {
         cx.notify();
         let workspace = self.workspace.clone();
         let file = self.file.clone();
+        let scope = self.scope;
         let comparison = self.comparison.clone();
         let commit = self.commit.clone();
         let ticket = cancelled.clone();
@@ -133,8 +140,10 @@ impl GitDiffDialog {
                         git::load_commit_diff(&workspace, &commit, &file, &cancelled)
                     } else if let Some(comparison) = comparison {
                         git::load_comparison_diff(&workspace, &comparison, &file, &cancelled)
-                    } else {
+                    } else if scope == git::FileDiffScope::All {
                         git::load_file_diff(&workspace, &file, &cancelled)
+                    } else {
+                        git::load_file_diff_scoped(&workspace, &file, scope, &cancelled)
                     }
                 })
                 .await;
@@ -266,10 +275,15 @@ impl GitDiffDialog {
             };
             return (before, after);
         }
-        match self.file.kind() {
-            git::ChangeKind::Added => ("空（新增前）".into(), "工作区".into()),
-            git::ChangeKind::Modified => ("HEAD".into(), "工作区（含暂存）".into()),
-            git::ChangeKind::Deleted => ("HEAD".into(), "已删除".into()),
+        match self.scope {
+            git::FileDiffScope::Staged => (
+                "HEAD（无提交时为空树）".into(),
+                "暂存区 · 待提交内容".into(),
+            ),
+            git::FileDiffScope::Unstaged => ("暂存区".into(), "工作区 · 未暂存修改".into()),
+            git::FileDiffScope::All => {
+                ("HEAD（无提交时为空树）".into(), "工作区 · 全部修改".into())
+            }
         }
     }
 
@@ -421,6 +435,39 @@ impl GitDiffDialog {
                                 .on_click(|_, window, cx| window.close_dialog(cx)),
                         )
                     }),
+            )
+            .when(
+                self.comparison.is_none() && self.commit.is_none(),
+                |column| {
+                    column.child(
+                        h_flex().gap_1().flex_wrap().children(
+                            [
+                                git::FileDiffScope::Staged,
+                                git::FileDiffScope::Unstaged,
+                                git::FileDiffScope::All,
+                            ]
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, scope)| {
+                                Button::new(("git-diff-scope", index))
+                                    .label(scope.label())
+                                    .small()
+                                    .ghost()
+                                    .selected(self.scope == scope)
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        if this.scope != scope {
+                                            this.scope = scope;
+                                            this.last_patch = None;
+                                            this.state.update(cx, |state, cx| {
+                                                state.set_files(Vec::new(), cx)
+                                            });
+                                            this.reload(window, cx);
+                                        }
+                                    }))
+                            }),
+                        ),
+                    )
+                },
             )
             .into_any_element()
     }

@@ -16,6 +16,14 @@ pub(super) struct NativeCommand {
 }
 
 pub(super) fn bind_core(ui: &mut PluginUi) {
+    ui.bind_command(builtins::TOGGLE_TERMINAL, |app, _, window, cx| {
+        app.toggle_terminal(window, cx);
+        true
+    });
+    ui.bind_command(builtins::NEW_TERMINAL, |app, _, window, cx| {
+        app.new_terminal(app.store.ui.terminal_profile, window, cx);
+        true
+    });
     ui.bind_command(builtins::SHOW_TOOL_DETAILS, |app, _, window, cx| {
         app.open_right_view(&ViewId::new(builtins::TOOL_DETAILS).unwrap(), window, cx)
     });

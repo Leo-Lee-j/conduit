@@ -60,13 +60,16 @@ pub(super) fn next_turn_prefix(session: &SessionRecord) -> String {
 
 impl ConduitApp {
     pub(super) fn workspace_busy(&self, index: usize) -> bool {
-        self.git.operation.as_ref().is_some_and(|operation| {
-            git::repository_scope(&operation.worktree)
-                == git::repository_scope(&self.store.workspaces[index].path)
-        }) || self.store.workspaces[index].sessions.iter().any(|s| {
-            self.session_control.runs.contains_key(&s.id)
-                || self.session_control.queue_saves.contains_key(&s.id)
-        })
+        self.terminals
+            .workspace_busy(&self.store.workspaces[index].path)
+            || self.git.operation.as_ref().is_some_and(|operation| {
+                git::repository_scope(&operation.worktree)
+                    == git::repository_scope(&self.store.workspaces[index].path)
+            })
+            || self.store.workspaces[index].sessions.iter().any(|s| {
+                self.session_control.runs.contains_key(&s.id)
+                    || self.session_control.queue_saves.contains_key(&s.id)
+            })
     }
 
     /// One turn per conversation, including aliases of the same native context.
@@ -146,7 +149,7 @@ impl ConduitApp {
     }
 
     pub(super) fn send_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.closing || !self.writable {
+        if self.closing || !self.writable || self.composer_save_pending() {
             return;
         }
         let target = self.composer_target();
@@ -251,7 +254,8 @@ impl ConduitApp {
                     pending.composer = composer;
                 }
                 self.input.read(cx).focus_handle(cx).focus(window, cx);
-                self.message = Some("正在保存消息…".into());
+                // Save progress belongs to the run activity, not the error banner.
+                self.message = None;
                 self.scroll_to_end();
                 cx.notify();
                 true
@@ -265,13 +269,11 @@ impl ConduitApp {
                         NoticeSource::Session,
                         NoticeLevel::Error,
                         "会话无法启动",
-                        error.clone(),
+                        error,
                     )
-                    .target(destination)
-                    .presentation(NoticePresentation::History),
+                    .target(destination),
                     cx,
                 );
-                self.message = Some(error);
                 cx.notify();
                 false
             }
@@ -332,10 +334,10 @@ impl ConduitApp {
         } else {
             provider
         };
-        let executable = cli::resolve(provider, &self.store.cli)
+        let executable = cli::resolve_for_launch(provider, &self.store.cli)
             .map_err(|error| {
                 format!(
-                    "{}：{error:#}。可在左下角「设置」中检查路径。",
+                    "{}：{error:#}。请打开「设置 → AI 引擎」检查启用状态与启动路径。",
                     provider.label()
                 )
             })?
@@ -576,6 +578,7 @@ impl ConduitApp {
     }
 
     pub(super) fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.poll_terminals(window, cx);
         self.poll_persistence(cx);
         self.poll_pending_sends(window, cx);
         if self.closing
@@ -736,6 +739,7 @@ impl ConduitApp {
         self.poll_streams(window, cx);
         if self.closing
             && !self.updater.preparing()
+            && !self.terminals.active()
             && self.session_control.runs.is_empty()
             && self.session_control.queue_saves.is_empty()
             && self.probes.is_empty()
@@ -748,9 +752,20 @@ impl ConduitApp {
             && self.persistence.error.is_none()
             && self.notifications.finish()
         {
-            self.discard_composer_attachments();
-            window.remove_window();
-            cx.quit();
+            match self.save_exit_drafts(cx) {
+                Ok(()) => {
+                    self.cleanup_attachments();
+                    window.remove_window();
+                    cx.quit();
+                }
+                Err(error) => {
+                    self.closing = false;
+                    self.message = Some(format!(
+                        "草稿保存失败，已取消退出；请保留输入并重试：{error:#}"
+                    ));
+                    cx.notify();
+                }
+            }
         }
     }
 

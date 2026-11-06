@@ -1,9 +1,11 @@
 //! Workspace navigation and session list.
 
 use super::*;
+use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::status_bar::StatusBar;
 
 mod cache;
+mod keyboard;
 pub(super) use cache::SidebarState;
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests;
@@ -59,7 +61,7 @@ impl Render for WorkspaceDragPreview {
             .child(div().flex_1().min_w_0().truncate().child(self.name.clone()))
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(px(12.))
                     .text_color(rgb(palette().faint))
                     .child("移动"),
             )
@@ -205,52 +207,78 @@ impl ConduitApp {
 
     pub(super) fn render_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         self.refresh_sidebar();
+        let focus = self
+            .sidebar
+            .focus
+            .get_or_insert_with(|| cx.focus_handle())
+            .clone();
         let can_edit = self.writable && !self.closing;
-        let mut sidebar = navigation_pane()
-            .id("sidebar")
-            .debug_selector(|| "sidebar".into())
-            .on_scroll_wheel(cx.listener(|this, _, _, cx| {
-                // A row-owned confirmation should not reopen when its row is recycled.
-                if this.delete_target.take().is_some() {
-                    cx.notify();
-                }
-            }))
-            // No bottom padding: the bottom bar aligns with the conversation toolbar.
-            .gap_0()
-            .child(
-                navigation_header()
-                    .gap_1()
-                    .child(
-                        Button::new("sidebar-new-session")
-                            .ghost()
-                            .small()
-                            .compact()
-                            .icon(IconName::Plus)
-                            .tooltip(format!("新建 {} 会话", self.new_session_provider.label()))
-                            .disabled(!can_edit || self.selected_workspace.is_none())
-                            .when(can_edit && self.selected_workspace.is_some(), |button| {
-                                button.cursor_pointer()
-                            })
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if let Some(index) = this.selected_workspace {
-                                    this.new_session_here(index, window, cx);
-                                }
-                            })),
-                    )
-                    .child(
-                        Button::new("sidebar-search")
-                            .ghost()
-                            .small()
-                            .compact()
-                            .icon(IconName::Search)
-                            .tooltip("搜索会话")
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_search_dialog(window, cx)
-                            })),
-                    )
-                    .child(div().flex_1()),
-            );
+        let mut sidebar =
+            navigation_pane()
+                .id("sidebar")
+                .debug_selector(|| "sidebar".into())
+                .relative()
+                .track_focus(&focus)
+                .role(Role::Tree)
+                .aria_label("工作区和会话")
+                .aria_description("方向键移动，左右键展开或折叠，Enter 打开，Shift+F10 会话菜单")
+                .tab_index(0)
+                .focus_visible(|style| style.border_1().border_color(rgb(palette().focus)))
+                .on_key_down(cx.listener(Self::sidebar_key))
+                .on_scroll_wheel(cx.listener(|this, _, _, cx| {
+                    // A row-owned confirmation should not reopen when its row is recycled.
+                    if this.delete_target.take().is_some() {
+                        cx.notify();
+                    }
+                }))
+                // No bottom padding: the bottom bar aligns with the conversation toolbar.
+                .gap_0()
+                .child(
+                    navigation_header()
+                        .gap_1()
+                        .child(
+                            Button::new("sidebar-new-session")
+                                .ghost()
+                                .small()
+                                .compact()
+                                .icon(IconName::Plus)
+                                .tooltip(format!("新建 {} 会话", self.new_session_provider.label()))
+                                .disabled(!can_edit || self.selected_workspace.is_none())
+                                .when(can_edit && self.selected_workspace.is_some(), |button| {
+                                    button.cursor_pointer()
+                                })
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    if let Some(index) = this.selected_workspace {
+                                        this.new_session_here(index, window, cx);
+                                    }
+                                })),
+                        )
+                        .child(
+                            Button::new("sidebar-search")
+                                .ghost()
+                                .small()
+                                .compact()
+                                .icon(IconName::Search)
+                                .tooltip("搜索会话")
+                                .cursor_pointer()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_search_dialog(window, cx)
+                                })),
+                        )
+                        .child(
+                            Button::new("sidebar-file-search")
+                                .icon(FullIconName::FileSearch)
+                                .small()
+                                .ghost()
+                                .tooltip("搜索文件（双击 Shift）")
+                                .accessibility_label("搜索文件")
+                                .disabled(self.selected_workspace.is_none())
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_file_search(window, cx)
+                                })),
+                        )
+                        .child(div().flex_1()),
+                );
         let rows = self.sidebar.rows.clone();
         let list = gpui_kit::component::v_virtual_list(
             cx.entity(),
@@ -282,7 +310,11 @@ impl ConduitApp {
                 .border_t_1()
                 .border_color(rgb(palette().border)),
         );
-        sidebar.into_any_element()
+        sidebar
+            .when_some(self.sidebar.menu.clone(), |sidebar, menu| {
+                sidebar.child(deferred(div().absolute().top(px(36.)).left_2().child(menu)))
+            })
+            .into_any_element()
     }
 
     fn render_sidebar_row(&self, row: &cache::Row, cx: &mut Context<Self>) -> AnyElement {
@@ -290,7 +322,6 @@ impl ConduitApp {
         self.sidebar
             .rendered_rows
             .set(self.sidebar.rendered_rows.get() + 1);
-        let can_edit = self.writable && !self.closing;
         let app_entity = cx.entity();
         let element = match row {
             cache::Row::Controls => self.sidebar_controls(cx),
@@ -317,7 +348,7 @@ impl ConduitApp {
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(px(12.))
                         .text_color(rgb(palette().faint))
                         .child("点击上方 + 添加一个本地目录"),
                 )
@@ -361,16 +392,18 @@ impl ConduitApp {
                             return div().h(px(row.height())).into_any_element();
                         };
                         let id = session.id;
-                        let native_id = session.native_id.clone();
                         let active = self.selected_session == Some(id);
                         let running = self.session_control.runs.contains_key(&id);
                         let unread = self.session_control.unread_completed.contains(&id);
                         let archived = session.archived;
                         let pinned = session.pinned;
-                        let can_ai_rename = can_edit && session.has_user_messages();
 
                         h_flex()
                             .id(("session", id))
+                            .role(Role::TreeItem)
+                            .aria_selected(active)
+                            .aria_label(format!("{} · {}{}{}", single_line_title(&session.title), session.provider.label(), if running { " · 运行中" } else { "" }, if archived { " · 已归档" } else { "" }))
+                            .when(self.sidebar.keyboard_row.as_ref().is_some_and(|row| matches!(row, cache::Row::Session { id: focused, .. } if *focused == id)), |row| row.aria_active_descendant())
                             .debug_selector(move || format!("session-row-{id}"))
                             .relative()
                             .h(px(30.))
@@ -400,87 +433,8 @@ impl ConduitApp {
                             }))
                             .context_menu({
                                 let menu_app = app_entity.clone();
-                                move |menu, _, _| {
-                                    let pin_app = menu_app.clone();
-                                    let rename_app = menu_app.clone();
-                                    let ai_rename_app = menu_app.clone();
-                                    let archive_app = menu_app.clone();
-                                    let delete_app = menu_app.clone();
-                                    let has_native_id = native_id.is_some();
-                                    let copy_native_id = native_id.clone();
-                                    menu.min_w(px(150.))
-                                        .item(
-                                            PopupMenuItem::new(if pinned {
-                                                "取消置顶"
-                                            } else {
-                                                "置顶会话"
-                                            })
-                                            .icon(if pinned {
-                                                FullIconName::PinOff
-                                            } else {
-                                                FullIconName::Pin
-                                            })
-                                            .disabled(!can_edit)
-                                            .on_click(move |_, _, cx| {
-                                                pin_app
-                                                    .update(cx, |this, cx| this.toggle_pin(id, cx));
-                                            }),
-                                        )
-                                        .item(
-                                            PopupMenuItem::new("重命名")
-                                                .icon(IconName::Replace)
-                                                .on_click(move |_, window, cx| {
-                                                    rename_app.update(cx, |this, cx| {
-                                                        this.open_rename_dialog(id, window, cx)
-                                                    });
-                                                }),
-                                        )
-                                        .item(
-                                            PopupMenuItem::new("AI 重命名")
-                                                .icon(gpui_kit::assets::IconName::Sparkles)
-                                                .disabled(!can_ai_rename)
-                                                .on_click(move |_, window, cx| {
-                                                    ai_rename_app.update(cx, |this, cx| {
-                                                        this.switch_sidebar_session(id, window, cx);
-                                                        this.ai_rename_session(id, cx);
-                                                    });
-                                                }),
-                                        )
-                                        .item(
-                                            PopupMenuItem::new("复制会话 ID")
-                                                .icon(IconName::Copy)
-                                                .disabled(!has_native_id)
-                                                .on_click(move |_, _, cx| {
-                                                    if let Some(native_id) = copy_native_id.clone()
-                                                    {
-                                                        cx.write_to_clipboard(
-                                                            ClipboardItem::new_string(native_id),
-                                                        );
-                                                    }
-                                                }),
-                                        )
-                                        .item(
-                                            PopupMenuItem::new(if archived {
-                                                "取消归档"
-                                            } else {
-                                                "归档"
-                                            })
-                                            .icon(IconName::Inbox)
-                                            .on_click(move |_, _, cx| {
-                                                archive_app.update(cx, |this, cx| {
-                                                    this.toggle_archive(id, cx)
-                                                });
-                                            }),
-                                        )
-                                        .item(
-                                            PopupMenuItem::new("删除")
-                                                .icon(IconName::Delete)
-                                                .on_click(move |_, _, cx| {
-                                                    delete_app.update(cx, |this, cx| {
-                                                        this.request_delete_session(id, cx)
-                                                    });
-                                                }),
-                                        )
+                                move |menu, _, cx| {
+                                    session_menu(menu, menu_app.clone(), id, menu_app.read(cx))
                                 }
                             })
                             .child(provider_icon(session.provider))
@@ -509,7 +463,7 @@ impl ConduitApp {
                             .when(archived, |row| {
                                 row.child(
                                     div()
-                                        .text_size(px(9.))
+                                        .text_size(px(12.))
                                         .text_color(rgb(palette().faint))
                                         .child("已归档"),
                                 )
@@ -534,7 +488,7 @@ impl ConduitApp {
                                         .py(px(1.))
                                         .rounded(px(4.))
                                         .bg(rgb(palette().surface_strong))
-                                        .text_size(px(9.))
+                                        .text_size(px(12.))
                                         .text_color(rgb(palette().faint))
                                         .child(age),
                                 )
@@ -549,38 +503,44 @@ impl ConduitApp {
                         let limit = self.store.ui.sessions_per_workspace.clamp(1, 30);
                         let toggle_app = app_entity.clone();
                         let more_label = if expanded {
-                            "收起".to_string()
+                            "收起会话列表".to_string()
                         } else {
                             format!("显示更多（还有 {} 条）", total - limit)
                         };
 
                         h_flex()
-                            .id(SharedString::from(format!(
-                                "workspace-more-{}",
-                                self.store.workspaces[index].path.display()
-                            )))
-                            .debug_selector(move || format!("workspace-more-{index}"))
-                            .h(px(24.))
-                            .flex_shrink_0()
-                            .pl(px(24.))
-                            .pr(px(4.))
+                            .h(px(28.))
+                            // Center the glyph under the 14px session icons at a 24px inset.
+                            .pl(px(17.))
                             .items_center()
-                            .rounded(px(6.))
-                            .cursor_pointer()
-                            .hover(|style| style.bg(rgb(palette().surface_hover)))
-                            .on_click(move |_, _, cx| {
-                                toggle_app.update(cx, |this, cx| {
-                                    if !this.expanded_workspaces.insert(index) {
-                                        this.expanded_workspaces.remove(&index);
-                                    }
-                                    cx.notify();
-                                });
-                            })
                             .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(palette().faint))
-                                    .child(more_label),
+                                Button::new(SharedString::from(format!(
+                                    "workspace-more-{}",
+                                    self.store.workspaces[index].path.display()
+                                )))
+                                .debug_selector(move || format!("workspace-more-{index}"))
+                                .icon(if expanded {
+                                    IconName::ChevronUp
+                                } else {
+                                    IconName::Ellipsis
+                                })
+                                .tooltip(more_label.clone())
+                                .accessibility_label(more_label)
+                                .small()
+                                .compact()
+                                .ghost()
+                                .h(px(28.))
+                                .w(px(28.))
+                                .text_color(rgb(palette().muted))
+                                .on_click(move |_, _, cx| {
+                                    cx.stop_propagation();
+                                    toggle_app.update(cx, |this, cx| {
+                                        if !this.expanded_workspaces.insert(index) {
+                                            this.expanded_workspaces.remove(&index);
+                                        }
+                                        cx.notify();
+                                    });
+                                }),
                             )
                             .into_any_element()
                     }
@@ -591,6 +551,13 @@ impl ConduitApp {
         div()
             .w_full()
             .h(px(row.height()))
+            .when(
+                self.sidebar
+                    .keyboard_row
+                    .as_ref()
+                    .is_some_and(|focused| focused.same_identity(row)),
+                |row| row.border_1().border_color(rgb(palette().focus)),
+            )
             .child(element)
             .into_any_element()
     }
@@ -605,15 +572,13 @@ impl ConduitApp {
         let can_edit = self.writable && !self.closing;
         h_flex()
             .w_full()
-            .h(px(26.))
-            .flex_shrink_0()
+            .h(px(30.))
             .px_2()
-            .pb_1()
             .items_center()
             .justify_between()
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(px(12.))
                     .text_color(rgb(palette().faint))
                     .child("工作区"),
             )
@@ -621,56 +586,29 @@ impl ConduitApp {
                 h_flex()
                     .gap_1()
                     .child(
-                        h_flex()
-                            .id("toggle-archived")
-                            .h(px(22.))
-                            .px_2()
-                            .gap_1()
-                            .items_center()
-                            .rounded(px(6.))
-                            .text_size(px(10.))
-                            .text_color(rgb(if self.show_archived {
-                                palette().text
-                            } else {
-                                palette().faint
-                            }))
-                            .when(self.show_archived, |row| {
-                                row.bg(rgb(palette().surface_hover))
-                            })
-                            .cursor_pointer()
-                            .hover(|style| {
-                                style
-                                    .bg(rgb(palette().surface_hover))
-                                    .text_color(rgb(palette().text))
-                            })
+                        Button::new("toggle-archived")
+                            .label("已归档")
+                            .icon(IconName::Inbox)
+                            .small()
+                            .ghost()
+                            .h(px(28.))
+                            .selected(self.show_archived)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.show_archived = !this.show_archived;
                                 cx.notify();
-                            }))
-                            .child(Icon::new(IconName::Inbox).small())
-                            .child("已归档"),
+                            })),
                     )
                     .child(
-                        h_flex()
-                            .id("add-workspace")
-                            .w(px(22.))
-                            .h(px(22.))
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(6.))
-                            .when(can_edit, |button| {
-                                button
-                                    .cursor_pointer()
-                                    .hover(|style| style.bg(rgb(palette().surface_hover)))
-                                    .on_click(cx.listener(Self::add_workspace))
-                            })
-                            .child(Icon::new(IconName::Plus).small().text_color(rgb(
-                                if can_edit {
-                                    palette().muted
-                                } else {
-                                    palette().faint
-                                },
-                            ))),
+                        Button::new("add-workspace")
+                            .icon(IconName::Plus)
+                            .small()
+                            .ghost()
+                            .w(px(28.))
+                            .h(px(28.))
+                            .tooltip("添加工作区")
+                            .accessibility_label("添加工作区")
+                            .disabled(!can_edit)
+                            .on_click(cx.listener(Self::add_workspace)),
                     ),
             )
             .into_any_element()
@@ -700,6 +638,11 @@ impl ConduitApp {
                 workspace.path.display()
             )))
             .debug_selector(move || format!("workspace-item-{index}"))
+            .role(Role::TreeItem)
+            .aria_label(workspace.name())
+            .aria_expanded(!collapsed)
+            .aria_selected(workspace_selected)
+            .when(self.sidebar.keyboard_row.as_ref().is_some_and(|row| matches!(row, cache::Row::Workspace { path, .. } if *path == workspace.path)), |row| row.aria_active_descendant())
             .group("workspace-row")
             .relative()
             .h(px(30.))
@@ -760,8 +703,8 @@ impl ConduitApp {
                     .ghost()
                     .small()
                     .compact()
-                    .w(px(18.))
-                    .h(px(22.))
+                    .w(px(24.))
+                    .h(px(24.))
                     .p_0()
                     .cursor_pointer()
                     .icon(if collapsed {
@@ -793,8 +736,8 @@ impl ConduitApp {
                     // Share one slot so the count and actions swap
                     // without moving the workspace title.
                     .relative()
-                    .w(px(44.))
-                    .h(px(22.))
+                    .w(px(48.))
+                    .h(px(24.))
                     .flex_shrink_0()
                     .gap_0()
                     .items_center()
@@ -803,7 +746,7 @@ impl ConduitApp {
                             .absolute()
                             .top_0()
                             .right_0()
-                            .h(px(22.))
+                            .h(px(24.))
                             .items_center()
                             .opacity(1.)
                             .group_hover("workspace-row", |style| style.opacity(0.))
@@ -821,7 +764,7 @@ impl ConduitApp {
                                     .justify_center()
                                     .rounded(px(4.))
                                     .bg(rgb(palette().surface_strong))
-                                    .text_size(px(10.))
+                                    .text_size(px(12.))
                                     .text_color(rgb(palette().faint))
                                     .child(count.to_string())
                                     .into_any_element()
@@ -832,8 +775,8 @@ impl ConduitApp {
                             .ghost()
                             .small()
                             .compact()
-                            .w(px(22.))
-                            .h(px(22.))
+                            .w(px(24.))
+                            .h(px(24.))
                             .p_0()
                             .opacity(0.)
                             .group_hover("workspace-row", |style| style.opacity(1.))
@@ -854,4 +797,86 @@ impl ConduitApp {
             )
             .into_any_element()
     }
+}
+
+fn session_menu(
+    menu: PopupMenu,
+    menu_app: Entity<ConduitApp>,
+    id: u64,
+    app: &ConduitApp,
+) -> PopupMenu {
+    let Some(session) = app.session(id) else {
+        return menu;
+    };
+    let native_id = session.native_id.clone();
+    let pinned = session.pinned;
+    let archived = session.archived;
+    let can_edit = app.writable && !app.closing;
+    let can_ai_rename = can_edit && session.has_user_messages();
+    let pin_app = menu_app.clone();
+    let rename_app = menu_app.clone();
+    let ai_rename_app = menu_app.clone();
+    let archive_app = menu_app.clone();
+    let delete_app = menu_app.clone();
+    let has_native_id = native_id.is_some();
+    let copy_native_id = native_id.clone();
+    menu.min_w(px(150.))
+        .item(
+            PopupMenuItem::new(if pinned {
+                "取消置顶"
+            } else {
+                "置顶会话"
+            })
+            .icon(if pinned {
+                FullIconName::PinOff
+            } else {
+                FullIconName::Pin
+            })
+            .disabled(!can_edit)
+            .on_click(move |_, _, cx| {
+                pin_app.update(cx, |this, cx| this.toggle_pin(id, cx));
+            }),
+        )
+        .item(
+            PopupMenuItem::new("重命名")
+                .icon(IconName::Replace)
+                .on_click(move |_, window, cx| {
+                    rename_app.update(cx, |this, cx| this.open_rename_dialog(id, window, cx));
+                }),
+        )
+        .item(
+            PopupMenuItem::new("AI 重命名")
+                .icon(gpui_kit::assets::IconName::Sparkles)
+                .disabled(!can_ai_rename)
+                .on_click(move |_, window, cx| {
+                    ai_rename_app.update(cx, |this, cx| {
+                        this.switch_sidebar_session(id, window, cx);
+                        this.ai_rename_session(id, cx);
+                    });
+                }),
+        )
+        .item(
+            PopupMenuItem::new("复制会话 ID")
+                .icon(IconName::Copy)
+                .disabled(!has_native_id)
+                .on_click(move |_, _, cx| {
+                    if let Some(native_id) = copy_native_id.clone() {
+                        cx.write_to_clipboard(ClipboardItem::new_string(native_id));
+                    }
+                }),
+        )
+        .item(
+            PopupMenuItem::new(if archived { "取消归档" } else { "归档" })
+                .icon(IconName::Inbox)
+                .on_click(move |_, _, cx| {
+                    archive_app.update(cx, |this, cx| this.toggle_archive(id, cx));
+                }),
+        )
+        .item(
+            PopupMenuItem::new("删除")
+                .icon(IconName::Delete)
+                .on_click(move |_, _, cx| {
+                    delete_app.update(cx, |this, cx| this.request_delete_session(id, cx));
+                }),
+        )
 }

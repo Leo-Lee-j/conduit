@@ -1,6 +1,7 @@
 //! Bounded, read-only discovery. A definition is not proof of runtime availability.
 pub mod connection;
 pub mod edit;
+pub mod management;
 pub mod mcp;
 
 use crate::domain::Provider;
@@ -43,6 +44,9 @@ pub struct Entry {
 }
 
 impl Entry {
+    pub fn managed(&self) -> bool {
+        self.scope.starts_with("插件")
+    }
     pub fn id(&self) -> String {
         format!("{:?}:{}:{}", self.kind, self.path.display(), self.name)
     }
@@ -356,7 +360,18 @@ impl<'a> Scan<'a> {
                 return;
             }
         };
-        let definition = folder.join("SKILL.md");
+        let active = folder.join("SKILL.md");
+        let disabled = folder.join(management::DISABLED_SKILL);
+        let definition = if active.exists() {
+            active
+        } else if disabled.exists() {
+            disabled
+        } else {
+            active
+        };
+        let is_disabled = definition
+            .file_name()
+            .is_some_and(|name| name == management::DISABLED_SKILL);
         if let Some(text) = self.read(&definition) {
             let (name, description) = skill_metadata(&text);
             match name.filter(|name| !name.trim().is_empty()) {
@@ -366,7 +381,7 @@ impl<'a> Scan<'a> {
                     path: definition,
                     scope: scope.into(),
                     kind: Kind::Skill,
-                    disabled: false,
+                    disabled: is_disabled,
                     transport: String::new(),
                     target: String::new(),
                 }),

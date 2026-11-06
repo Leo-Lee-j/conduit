@@ -61,7 +61,16 @@ impl ConduitApp {
             Err(error) => {
                 self.queued_messages.remove(&id);
                 self.dirty = true;
-                self.message = Some(error);
+                let mut notice = Notice::new(
+                    NoticeSource::Session,
+                    NoticeLevel::Error,
+                    "消息未加入队列",
+                    format!("保存失败：{error}。草稿已保留。"),
+                );
+                if let Some(target) = self.session_notice_target(id) {
+                    notice = notice.target(target);
+                }
+                self.notify_user(notice, cx);
                 cx.notify();
                 return false;
             }

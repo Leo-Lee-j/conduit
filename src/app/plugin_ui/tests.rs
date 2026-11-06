@@ -9,9 +9,9 @@ use conduit::plugins::{
     registry::{HostCatalog, Registry, RendererSpec},
 };
 use gpui_kit::{
-    AppContext as _, Entity, Focusable as _, InteractiveElement, IntoElement, Modifiers,
-    MouseButton, ParentElement, SharedString, TestAppContext, VisualTestContext,
-    base::test_support, div, px,
+    AppContext as _, Bounds, Entity, Focusable as _, InteractiveElement, IntoElement, Modifiers,
+    MouseButton, ParentElement, Pixels, Role, SharedString, TestAppContext, TestSupportExt,
+    VisualTestContext, base::test_support, div, px,
 };
 use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
 
@@ -159,6 +159,8 @@ fn plugins(count: usize) -> PluginUi {
             NavigationAdapter {
                 render: |app, _| {
                     div()
+                        .id("plugin-navigation-page")
+                        .test_support()
                         .debug_selector(|| "plugin-navigation-page".into())
                         .child(app.plugins.selected().to_string())
                         .into_any_element()
@@ -180,16 +182,56 @@ pub(super) fn draw(cx: &mut VisualTestContext) {
     });
 }
 
-pub(super) fn click(cx: &mut VisualTestContext, id: &'static str) {
-    let bounds = cx
-        .debug_bounds(id)
-        .or_else(|| {
-            cx.update(|window, _| {
-                test_support::find(window, &[], &SharedString::from(id.to_owned()).into())
-                    .map(|element| element.bounds())
-            })
+/// Query the same observed native elements in dev and release. Never fall back
+/// to debug selectors: their absence in release would invalidate hidden checks.
+pub(super) trait ElementBounds {
+    fn element_bounds(&mut self, id: &str) -> Option<Bounds<Pixels>>;
+    fn labeled_bounds(&mut self, role: Role, label: &str) -> Option<Bounds<Pixels>>;
+}
+
+impl ElementBounds for VisualTestContext {
+    fn element_bounds(&mut self, id: &str) -> Option<Bounds<Pixels>> {
+        self.update(|window, _| {
+            test_support::find(window, &[], &SharedString::from(id.to_owned()).into())
+                .filter(|element| element.visible())
+                .map(|element| element.bounds())
         })
+    }
+
+    fn labeled_bounds(&mut self, role: Role, label: &str) -> Option<Bounds<Pixels>> {
+        self.update(|window, _| {
+            let matches: Vec<_> = test_support::snapshots(window)
+                .into_iter()
+                .filter(|element| {
+                    element.visible()
+                        && element.role() == Some(role)
+                        && element.label() == Some(label)
+                })
+                .collect();
+            assert!(
+                matches.len() <= 1,
+                "ambiguous {role:?} labeled {label:?}: {matches:?}"
+            );
+            matches.first().map(|element| element.bounds())
+        })
+    }
+}
+
+pub(super) fn click(cx: &mut VisualTestContext, id: &str) {
+    let bounds = cx
+        .element_bounds(id)
         .unwrap_or_else(|| panic!("missing {id}"));
+    click_bounds(cx, bounds);
+}
+
+pub(super) fn click_labeled(cx: &mut VisualTestContext, role: Role, label: &str) {
+    let bounds = cx
+        .labeled_bounds(role, label)
+        .unwrap_or_else(|| panic!("missing {role:?} labeled {label:?}"));
+    click_bounds(cx, bounds);
+}
+
+fn click_bounds(cx: &mut VisualTestContext, bounds: Bounds<Pixels>) {
     cx.simulate_mouse_down(bounds.center(), MouseButton::Left, Modifiers::default());
     cx.simulate_mouse_up(bounds.center(), MouseButton::Left, Modifiers::default());
     draw(cx);
@@ -214,9 +256,9 @@ fn empty_workspace_navigation_collapse_and_git_shortcut(cx: &mut TestAppContext)
     selected(&app, cx, builtins::WORKSPACES);
     click(cx, "nav-git");
     selected(&app, cx, builtins::GIT);
-    assert!(cx.debug_bounds("git-navigation").is_some());
+    assert!(cx.element_bounds("git-navigation").is_some());
     click(cx, "nav-collapse");
-    assert!(cx.debug_bounds("navigation-panel").is_none());
+    assert!(cx.element_bounds("navigation-panel").is_none());
     cx.update(|window, cx| {
         app.read(cx)
             .input
@@ -227,7 +269,7 @@ fn empty_workspace_navigation_collapse_and_git_shortcut(cx: &mut TestAppContext)
     cx.simulate_keystrokes("ctrl-k");
     draw(cx);
     selected(&app, cx, builtins::GIT);
-    assert!(cx.debug_bounds("navigation-panel").is_some());
+    assert!(cx.element_bounds("navigation-panel").is_some());
     cx.simulate_keystrokes("ctrl-k");
     draw(cx);
     selected(&app, cx, builtins::WORKSPACES);
@@ -255,7 +297,10 @@ fn overflow_routes_owners_and_disables_unbound_actions(cx: &mut TestAppContext) 
     cx.simulate_resize(gpui_kit::size(px(900.), px(300.)));
     draw(cx);
     click(cx, "nav-more");
-    assert!(cx.debug_bounds("nav-more-test.navigation.hidden").is_none());
+    assert!(
+        cx.element_bounds("nav-more-test.navigation.hidden")
+            .is_none()
+    );
     for id in [
         "nav-more-test.navigation.entry-missing",
         "nav-more-test.navigation.command-entry",
@@ -265,7 +310,7 @@ fn overflow_routes_owners_and_disables_unbound_actions(cx: &mut TestAppContext) 
     }
     click(cx, "nav-more-example.workspace-overview.activity");
     selected(&app, cx, builtins::EXAMPLE_INDEX);
-    assert!(cx.debug_bounds("plugin-navigation-page").is_some());
+    assert!(cx.element_bounds("plugin-navigation-page").is_some());
     cx.update(|_, cx| {
         let app = app.read(cx);
         let item = app
@@ -284,13 +329,13 @@ fn overflow_routes_owners_and_disables_unbound_actions(cx: &mut TestAppContext) 
     click(cx, "nav-more");
     click(cx, "nav-more-example.workspace-overview.activity");
     selected(&app, cx, builtins::EXAMPLE_INDEX);
-    assert!(cx.debug_bounds("navigation-panel").is_some());
+    assert!(cx.element_bounds("navigation-panel").is_some());
 }
 
 #[gpui_kit::test]
 fn resizing_reflows_overflow_and_keeps_fixed_controls_visible(cx: &mut TestAppContext) {
     let (app, cx) = fixture(cx, store(), plugins(2));
-    assert!(cx.debug_bounds("nav-more").is_none());
+    assert!(cx.element_bounds("nav-more").is_none());
     for (width, height) in [
         (850., 300.),
         (900., 350.),
@@ -300,26 +345,26 @@ fn resizing_reflows_overflow_and_keeps_fixed_controls_visible(cx: &mut TestAppCo
     ] {
         cx.simulate_resize(gpui_kit::size(px(width), px(height)));
         draw(cx);
-        let bottom = cx.debug_bounds("nav-collapse").unwrap();
+        let bottom = cx.element_bounds("nav-collapse").unwrap();
         assert!(
             bottom.bottom() <= px(height),
             "collapse outside {height}: {bottom:?}"
         );
         let mut previous = cx
-            .debug_bounds("nav-more")
-            .or_else(|| cx.debug_bounds("nav-git"))
+            .element_bounds("nav-more")
+            .or_else(|| cx.element_bounds("nav-git"))
             .unwrap();
-        for id in ["git-branch-trigger", "nav-collapse"] {
-            let bounds = cx.debug_bounds(id).unwrap();
+        for id in ["nav-branches", "nav-collapse"] {
+            let bounds = cx.element_bounds(id).unwrap();
             assert!(
                 bounds.top() >= previous.bottom(),
                 "overlapping {id} at {height}"
             );
             previous = bounds;
         }
-        assert_eq!(cx.debug_bounds("nav-more").is_some(), height < 450.);
-        let settings = cx.debug_bounds("title-settings").unwrap();
-        let about = cx.debug_bounds("title-about").unwrap();
+        assert_eq!(cx.element_bounds("nav-more").is_some(), height < 450.);
+        let settings = cx.element_bounds("title-settings").unwrap();
+        let about = cx.element_bounds("title-about").unwrap();
         assert!(settings.left() > px(width / 2.));
         assert!(settings.right() <= about.left());
         assert_eq!(settings.top(), about.top());
@@ -330,8 +375,8 @@ fn resizing_reflows_overflow_and_keeps_fixed_controls_visible(cx: &mut TestAppCo
             assert!(settings.bottom() <= title.bounds().bottom());
             assert!(about.right() <= controls.bounds().left());
         });
-        assert!(cx.debug_bounds("nav-settings").is_none());
-        assert!(cx.debug_bounds("nav-about").is_none());
+        assert!(cx.element_bounds("nav-settings").is_none());
+        assert!(cx.element_bounds("nav-about").is_none());
     }
     // A resize is a sidebar invalidation even when neither context nor data changed.
     selected(&app, cx, builtins::WORKSPACES);
@@ -412,7 +457,7 @@ fn context_changes_and_revocation_reject_saved_navigation_requests(cx: &mut Test
     draw(cx);
     selected(&app, cx, builtins::WORKSPACES);
     cx.update(|_, cx| assert!(app.read(cx).plugins.collapsed()));
-    assert!(cx.debug_bounds(builtins::EXAMPLE_ACTIVITY).is_none());
+    assert!(cx.element_bounds(builtins::EXAMPLE_ACTIVITY).is_none());
     click(cx, "test.navigation.entry-0");
     selected(&app, cx, "test.navigation.view-0");
     cx.update(|_, cx| {
@@ -537,29 +582,19 @@ fn file_navigation_refreshes_and_preserves_expansion_across_workspace_picker(
     let repositories = Repositories::new();
     let (app, cx) = fixture(cx, repositories.store(), PluginUi::new());
     click(cx, "nav-files");
+    wait_for(cx, |cx| cx.element_bounds("tree-entry-alpha.txt").is_some());
+    click(cx, "tree-entry-folder");
     wait_for(cx, |cx| {
-        cx.debug_bounds("file-tree-entry-alpha.txt").is_some()
-    });
-    click(cx, "file-tree-entry-folder");
-    wait_for(cx, |cx| {
-        cx.debug_bounds("file-tree-entry-folder\\child.txt")
-            .is_some()
+        cx.element_bounds("tree-entry-folder\\child.txt").is_some()
     });
     std::fs::write(repositories.0.join("alpha/new.txt"), "new").unwrap();
     click(cx, "nav-files");
-    wait_for(cx, |cx| {
-        cx.debug_bounds("file-tree-entry-new.txt").is_some()
-    });
-    assert!(
-        cx.debug_bounds("file-tree-entry-folder\\child.txt")
-            .is_some()
-    );
+    wait_for(cx, |cx| cx.element_bounds("tree-entry-new.txt").is_some());
+    assert!(cx.element_bounds("tree-entry-folder\\child.txt").is_some());
     choose_workspace(cx, "files-workspace", "beta");
     selected(&app, cx, builtins::FILES);
-    wait_for(cx, |cx| {
-        cx.debug_bounds("file-tree-entry-beta.txt").is_some()
-    });
-    assert!(cx.debug_bounds("file-tree-entry-alpha.txt").is_none());
+    wait_for(cx, |cx| cx.element_bounds("tree-entry-beta.txt").is_some());
+    assert!(cx.element_bounds("tree-entry-alpha.txt").is_none());
     cx.update(|_, cx| {
         let app = app.read(cx);
         assert_eq!(app.selected_workspace, Some(1));
@@ -568,8 +603,7 @@ fn file_navigation_refreshes_and_preserves_expansion_across_workspace_picker(
     });
     choose_workspace(cx, "files-workspace", "alpha");
     wait_for(cx, |cx| {
-        cx.debug_bounds("file-tree-entry-folder\\child.txt")
-            .is_some()
+        cx.element_bounds("tree-entry-folder\\child.txt").is_some()
     });
     selected(&app, cx, builtins::FILES);
 }

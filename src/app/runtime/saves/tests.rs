@@ -1,7 +1,7 @@
 use crate::app::queue::tests::{fixture, running};
 use crate::app::{ComposerSelection, ConduitApp, Event, ModelChannel, Provider, Store, queue};
 use crate::persistence::Persistence;
-use gpui_kit::{Context, TestAppContext, Window};
+use gpui_kit::{Context, TestAppContext, Window, component::WindowExt as _};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc,
@@ -63,10 +63,20 @@ fn slow_save_retains_draft_and_attachments_and_gates_cli(cx: &mut TestAppContext
             assert_eq!(this.current_files().unwrap().references.len(), 1);
             assert!(this.composer_save_pending());
             assert!(this.session_control.namings.is_empty());
+            assert!(
+                this.message.is_none(),
+                "save progress must not use the error banner"
+            );
+            assert!(this.notifications.center.records().is_empty());
             this.send_prompt(window, cx);
             assert_eq!(this.session(1).unwrap().messages.len(), 1);
             assert!(this.queued_messages.is_empty());
+            assert!(
+                this.message.is_none(),
+                "a repeated send during saving stays silent"
+            );
             let run = &this.session_control.runs[&1];
+            assert_eq!(run.activity, "正在保存消息…");
             assert!(matches!(
                 run.runtime.events.recv_timeout(Duration::from_millis(100)),
                 Err(mpsc::RecvTimeoutError::Timeout)
@@ -144,6 +154,24 @@ fn failed_save_restores_existing_and_new_sessions_without_consuming_drafts(
                 assert_eq!(this.input.read(cx).value().as_ref(), "keep on failure");
                 assert_eq!(this.current_files().unwrap().references.len(), 1);
                 assert!(this.session_control.unread_completed.contains(&1));
+                assert!(
+                    this.message.is_none(),
+                    "send failures use unified notifications"
+                );
+                let notices = this
+                    .notifications
+                    .center
+                    .records()
+                    .iter()
+                    .filter(|notice| notice.title == "消息未发送")
+                    .collect::<Vec<_>>();
+                assert_eq!(notices.len(), if new_session { 2 } else { 1 });
+                assert!(notices.iter().all(|notice| {
+                    notice.message.contains("injected disk full")
+                        && notice.message.contains("草稿已保留")
+                }));
+                this.poll_notifications(window, cx);
+                assert!(!window.notifications(cx).is_empty());
             }
         })
     });
@@ -185,7 +213,17 @@ fn invalid_provider_does_not_create_session_or_submit_snapshot(cx: &mut TestAppC
                 sessions
             );
             assert_eq!(this.input.read(cx).value().as_ref(), "invalid route");
-            assert!(this.message.as_deref().unwrap().contains("Provider"));
+            assert!(this.message.is_none());
+            let notice = this
+                .notifications
+                .center
+                .records()
+                .iter()
+                .find(|notice| notice.title == "会话无法启动")
+                .unwrap();
+            assert!(notice.message.contains("Provider"));
+            this.poll_notifications(window, cx);
+            assert_eq!(window.notifications(cx).len(), 1);
         })
     });
 }
@@ -480,6 +518,7 @@ fn pending_queue_save_blocks_deletion_and_failure_preserves_composer(cx: &mut Te
             this.remove_workspace(0, cx);
             assert!(this.session(1).is_some());
             assert_eq!(this.store.workspaces.len(), 2);
+            let feedback = this.message.clone();
             release
                 .send(Err("injected queue save failure".into()))
                 .unwrap();
@@ -487,6 +526,22 @@ fn pending_queue_save_blocks_deletion_and_failure_preserves_composer(cx: &mut Te
             assert!(this.queued_messages.is_empty());
             assert!(this.session_control.queue_saves.is_empty());
             assert_eq!(this.input.read(cx).value().as_ref(), "unsaved queue");
+            assert_eq!(
+                this.message, feedback,
+                "save failures must not overwrite inline feedback"
+            );
+            let notices = this
+                .notifications
+                .center
+                .records()
+                .iter()
+                .filter(|notice| notice.title == "消息未加入队列")
+                .collect::<Vec<_>>();
+            assert_eq!(notices.len(), 1);
+            assert!(notices[0].message.contains("草稿已保留"));
+            assert_eq!(notices[0].target, this.session_notice_target(1));
+            this.poll_notifications(window, cx);
+            assert!(!window.notifications(cx).is_empty());
         })
     });
 }

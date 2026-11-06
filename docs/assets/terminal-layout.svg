@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="820" viewBox="0 0 1280 820" role="img" aria-labelledby="title desc">
+  <title id="title">Conduit 工作区终端面板设计示意</title>
+  <desc id="desc">左侧工作区和右侧详情保持全高。终端位于中间内容区底部与状态栏上方，有独立标签、启动目录、新建与收起操作。</desc>
+  <style>
+    text { font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif; fill: #d9e0eb; font-size: 14px; }
+    .muted { fill: #a1adbe; }
+    .small { font-size: 12px; }
+    .mono { font-family: Consolas, 'Microsoft YaHei', monospace; }
+    .line { stroke: #354254; stroke-width: 1; }
+    .accent { fill: #9abaff; }
+  </style>
+  <rect width="1280" height="820" fill="#f3f5f9"/>
+  <text x="28" y="36" style="fill:#172b4d;font-size:23px;font-weight:600">工作区 Terminal · 底部面板</text>
+  <text x="28" y="62" style="fill:#4c5e78">设计示意 / 中间内容区纵向分割 / 原生 GPUI 组件</text>
+  <rect x="28" y="88" width="1224" height="638" rx="10" fill="#131c29"/>
+  <path d="M28 126 H1252" class="line"/>
+  <text x="48" y="113" style="font-weight:600">Conduit</text>
+  <text x="1138" y="113" class="muted small">设置　关于</text>
+  <rect x="29" y="127" width="218" height="598" fill="#192332"/>
+  <rect x="1032" y="127" width="219" height="598" fill="#192332"/>
+  <path d="M247 126 V726 M1032 126 V726" class="line"/>
+  <text x="48" y="160" class="muted small">工作区与会话</text>
+  <rect x="40" y="179" width="195" height="38" rx="5" fill="#263b58"/>
+  <text x="54" y="203">项目 A</text>
+  <text x="181" y="203" class="accent small">当前</text>
+  <text x="62" y="244" class="muted">实现文件预览</text>
+  <text x="62" y="280" class="muted">修复会话加载</text>
+  <text x="54" y="330">项目 B</text>
+  <text x="54" y="355" class="muted small">切换后展示 B 的终端</text>
+  <text x="1050" y="160">工具详情</text>
+  <rect x="1048" y="180" width="184" height="86" rx="6" fill="#202c3e"/>
+  <text x="1062" y="206" class="muted small">文件变更</text>
+  <text x="1062" y="235" class="mono small">src/app/files.rs</text>
+  <text x="1050" y="302" class="muted small">右侧区域保持全高</text>
+  <path d="M247 168 H1032" class="line"/>
+  <text x="267" y="153">聊天</text>
+  <text x="340" y="153" class="muted">files.rs</text>
+  <text x="439" y="153" class="muted">Diff</text>
+  <text x="286" y="218" style="font-size:18px">聊天 / 文件 / Diff</text>
+  <text x="286" y="249" class="muted">继续使用现有主内容视图，终端输出独立刷新。</text>
+  <rect x="286" y="280" width="688" height="10" rx="4" fill="#263346"/>
+  <rect x="286" y="304" width="576" height="10" rx="4" fill="#263346"/>
+  <rect x="280" y="344" width="718" height="67" rx="8" fill="#202c3e" stroke="#40516b"/>
+  <text x="297" y="372" class="muted">聊天输入框保留在主内容区域</text>
+  <text x="892" y="395" class="small accent">发送</text>
+  <rect x="248" y="428" width="783" height="6" fill="#354254"/>
+  <rect x="607" y="429" width="62" height="4" rx="2" fill="#8da5c5"/>
+  <rect x="248" y="434" width="783" height="42" fill="#1c283a"/>
+  <text x="263" y="460" style="font-weight:600">终端 · 项目 A</text>
+  <rect x="380" y="441" width="145" height="29" rx="4" fill="#304566"/>
+  <text x="393" y="461" class="small">PowerShell 1</text>
+  <text x="545" y="461" class="muted small">cmd 2 · 已退出</text>
+  <text x="815" y="460">＋ ▾</text>
+  <text x="871" y="460" class="small">最大化</text>
+  <text x="947" y="460" class="small">收起 ∨</text>
+  <text x="266" y="499" class="small muted">启动目录　D:\projects\A</text>
+  <path d="M248 510 H1032" class="line"/>
+  <text x="267" y="540" class="mono">PS D:\projects\A&gt; cargo check</text>
+  <text x="267" y="567" class="mono" style="fill:#9bd5b6">    Finished dev profile in 1.28s</text>
+  <text x="267" y="604" class="mono">PS D:\projects\A&gt;</text>
+  <rect x="442" y="589" width="9" height="20" fill="#c0d1ef"/>
+  <text x="267" y="660" class="small muted">收起保留进程　·　Ctrl+Shift+C 复制选区　·　Ctrl+Shift+V 粘贴</text>
+  <path d="M248 690 H1032" class="line"/>
+  <text x="264" y="713" class="small muted">工作区 A</text>
+  <rect x="810" y="696" width="80" height="24" rx="4" fill="#304566"/>
+  <text x="824" y="712" class="small">终端 2</text>
+  <text x="906" y="713" class="small muted">性能　通知</text>
+  <text x="28" y="762" style="fill:#172b4d;font-weight:600">新建使用活动工作区；已有 shell 保留目录、输出与进程。</text>
+  <text x="28" y="790" style="fill:#52647d">窄窗保留新建/收起入口；高度不足时终端占满中间区，可一键返回。颜色为示意，实施沿用应用主题。</text>
+</svg>

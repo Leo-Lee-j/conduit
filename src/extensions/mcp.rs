@@ -2,6 +2,103 @@
 use super::*;
 use anyhow::{Result, ensure};
 
+/// Change one native setting while preserving comments, credentials and other servers.
+pub fn set_enabled_preview(
+    engine: Provider,
+    original: &str,
+    name: &str,
+    enabled: bool,
+) -> Result<String> {
+    ensure!(
+        engine.descriptor().capabilities.mcp_toggle,
+        "此引擎需要在来源配置中管理 MCP 启停"
+    );
+    if engine == Provider::Codex {
+        let mut document = original
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|_| anyhow::anyhow!("原配置 TOML 无效，请先修复"))?;
+        let server = document
+            .get_mut("mcp_servers")
+            .and_then(|servers| servers.get_mut(name))
+            .and_then(toml_edit::Item::as_table_like_mut)
+            .ok_or_else(|| anyhow::anyhow!("MCP 服务已移动或定义不是表，请刷新后重试"))?;
+        ensure!(
+            server.get("disabled").and_then(|v| v.as_bool()) != Some(true),
+            "此定义还有 disabled 字段，请编辑来源文件"
+        );
+        let mut value = toml_edit::Value::from(enabled);
+        if let Some(previous) = server.get("enabled").and_then(|v| v.as_value()) {
+            ensure!(
+                previous.as_bool().is_some(),
+                "enabled 必须是布尔值，请先修复配置"
+            );
+            *value.decor_mut() = previous.decor().clone();
+        }
+        server.insert("enabled", toml_edit::Item::Value(value));
+        return Ok(document.to_string());
+    }
+    let mut expected =
+        jsonc(original).ok_or_else(|| anyhow::anyhow!("原配置 JSON / JSONC 无效"))?;
+    let server = expected
+        .get_mut("mcp")
+        .and_then(|v| v.get_mut(name))
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| anyhow::anyhow!("MCP 服务已移动，请刷新后重试"))?;
+    ensure!(
+        server.get("disabled") != Some(&Value::Bool(true)),
+        "此定义还有 disabled 字段，请编辑来源文件"
+    );
+    ensure!(
+        server.get("enabled").is_none_or(Value::is_boolean),
+        "enabled 必须是布尔值，请先修复配置"
+    );
+    server.insert("enabled".into(), Value::Bool(enabled));
+    let (root, end) =
+        object_range(original, Some("mcp")).ok_or_else(|| anyhow::anyhow!("无法定位 MCP 对象"))?;
+    let (start, finish) = object_range(&original[root..=end], Some(name))
+        .ok_or_else(|| anyhow::anyhow!("无法定位 MCP 服务"))?;
+    let (start, finish) = (root + start, root + finish);
+    let items = tokens(&original[start..=finish]);
+    let mut depth = 0;
+    let mut replacement = None;
+    for (index, (_, _, token)) in items.iter().enumerate() {
+        if depth == 1
+            && serde_json::from_str::<String>(token).ok().as_deref() == Some("enabled")
+            && items.get(index + 1).is_some_and(|t| t.2 == ":")
+        {
+            let value = items
+                .get(index + 2)
+                .ok_or_else(|| anyhow::anyhow!("缺少 enabled 值"))?;
+            replacement = Some((start + value.0, start + value.1));
+            break;
+        }
+        if matches!(token.as_str(), "{" | "[") {
+            depth += 1;
+        }
+        if matches!(token.as_str(), "}" | "]") {
+            depth -= 1;
+        }
+    }
+    let mut result = original.to_owned();
+    if let Some((from, to)) = replacement {
+        result.replace_range(from..to, if enabled { "true" } else { "false" });
+    } else {
+        let body = tokens(&original[start + 1..finish]);
+        let comma = if body.is_empty() || body.last().is_some_and(|t| t.2 == ",") {
+            ""
+        } else {
+            ","
+        };
+        // Insert a newline before the comma so trailing // comments cannot eat it.
+        result.insert_str(finish, &format!("\n{comma}\"enabled\": {enabled}\n"));
+    }
+    ensure!(
+        jsonc(&result).as_ref() == Some(&expected),
+        "无法安全修改此定义，请编辑来源文件"
+    );
+    Ok(result)
+}
+
 pub fn add_preview(
     engine: Provider,
     original: Option<&str>,
@@ -225,6 +322,39 @@ fn object_range(text: &str, key: Option<&str>) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn toggles_preserve_jsonc_comments_nested_values_and_other_servers() {
+        for original in [
+            "{\"mcp\":{\"中文\":{\"command\":[\"node\",\"{enabled}\"],//keep\n},\"other\":{\"enabled\":true}},\"theme\":\"dark\"}",
+            "{\"mcp\":{\"中文\":{\"env\":{\"enabled\":\"secret\"},\"enabled\":true /*keep*/}}}",
+            "{\"mcp\":{\"中文\":{\"command\":[\"node\"] //keep\n}}}",
+        ] {
+            let disabled =
+                set_enabled_preview(Provider::OpenCode, original, "中文", false).unwrap();
+            assert!(disabled.contains("keep"));
+            assert_eq!(jsonc(&disabled).unwrap()["mcp"]["中文"]["enabled"], false);
+            let enabled = set_enabled_preview(Provider::OpenCode, &disabled, "中文", true).unwrap();
+            assert_eq!(jsonc(&enabled).unwrap()["mcp"]["中文"]["enabled"], true);
+        }
+        assert!(set_enabled_preview(Provider::Claude, "{}", "a", false).is_err());
+        assert!(set_enabled_preview(Provider::OpenCode, "{}", "missing", false).is_err());
+    }
+    #[test]
+    fn toggles_preserve_toml_comments_inline_tables_and_literal_names() {
+        for original in [
+            "# keep\nmodel='default'\n[mcp_servers.'a.b']\ncommand='node'\nenabled=true # keep enabled\n[mcp_servers.'a.b'.env]\nTOKEN='secret'\n",
+            "mcp_servers = { 'a.b' = { command = 'node' } } # keep\n",
+        ] {
+            let result = set_enabled_preview(Provider::Codex, original, "a.b", false).unwrap();
+            assert!(result.contains("# keep"));
+            let mut expected: toml::Table = toml::from_str(original).unwrap();
+            expected["mcp_servers"]["a.b"]
+                .as_table_mut()
+                .unwrap()
+                .insert("enabled".into(), toml::Value::Boolean(false));
+            assert_eq!(toml::from_str::<toml::Table>(&result).unwrap(), expected);
+        }
+    }
     #[test]
     fn previews_preserve_comments_other_fields_and_reject_duplicate_names() {
         for original in [

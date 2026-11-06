@@ -11,11 +11,7 @@ pub enum Provider {
 impl Provider {
     pub const ALL: [Self; 3] = [Self::Claude, Self::Codex, Self::OpenCode];
     pub fn label(self) -> &'static str {
-        match self {
-            Self::Claude => "Claude Code",
-            Self::Codex => "Codex",
-            Self::OpenCode => "OpenCode",
-        }
+        self.descriptor().label
     }
 
     #[cfg(test)]

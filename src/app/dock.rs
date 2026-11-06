@@ -67,6 +67,8 @@ impl ConduitApp {
                     .on_click(cx.listener(|app, _, window, cx| app.close_right_view(window, cx))),
             );
         let header = h_flex()
+            .id("detail-header")
+            .test_support()
             .debug_selector(|| "detail-header".into())
             .h(px(TAB_BAR_HEIGHT))
             .w_full()
@@ -85,6 +87,8 @@ impl ConduitApp {
                     RightBody::Content(_) => unreachable!(),
                 };
                 v_flex()
+                    .id(selector)
+                    .test_support()
                     .debug_selector(move || selector.into())
                     .flex_1()
                     .min_h_0()
@@ -117,6 +121,8 @@ impl ConduitApp {
     ) -> (Option<AnyElement>, Option<AnyElement>) {
         let narrow = window.viewport_size().width < px(1100.);
         let panel = v_flex()
+            .id("detail-panel")
+            .test_support()
             .debug_selector(|| "detail-panel".into())
             .occlude()
             .h_full()

@@ -66,19 +66,7 @@ impl ConduitApp {
                         })
                 });
                 let mut models = vec![(None, "跟随服务默认模型".to_string())];
-                let catalog = match &selection.channel {
-                    ModelChannel::Provider(id) => self
-                        .store
-                        .providers
-                        .iter()
-                        .find(|p| &p.id == id)
-                        .map(|p| p.catalog())
-                        .unwrap_or_default(),
-                    _ => self
-                        .engine_catalog(engine)
-                        .map(|c| c.models.clone())
-                        .unwrap_or_default(),
-                };
+                let catalog = self.channel_models(engine, &selection.channel).1;
                 models.extend(catalog.into_iter().map(|m| (Some(m.id), m.label)));
                 let label = selection.model.unwrap_or_else(|| "跟随服务默认模型".into());
                 let model_view = view.clone();

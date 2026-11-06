@@ -349,6 +349,13 @@ impl Render for OverviewView {
         }
         div()
             .id(SharedString::from(format!("overview-{location}-{path}")))
+            .test_support()
+            .role(Role::Group)
+            .aria_label(if summary {
+                "工作区摘要"
+            } else {
+                "工作区概览"
+            })
             .debug_selector(move || format!("workspace-overview-{location}"))
             .relative()
             .h_full()

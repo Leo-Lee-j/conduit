@@ -1,11 +1,14 @@
 //! Native extensions, scoped independently from connections and conversations.
 use super::*;
+use crate::extensions::management::{self, Filter};
 use crate::extensions::{self, Catalog, Kind};
 
 pub(in crate::app) struct ExtensionsUi {
     pub engine: Provider,
     pub feedback: Option<String>,
     pub importing: bool,
+    pub changing: bool,
+    pub filters: [Filter; 2],
     pub connection_probe: Option<extensions::connection::ConnectionProbe>,
     pub connection_results: HashMap<String, String>,
     pub workspace: Option<PathBuf>,
@@ -25,6 +28,8 @@ impl ExtensionsUi {
             engine,
             feedback: None,
             importing: false,
+            changing: false,
+            filters: [Filter::All; 2],
             connection_probe: None,
             connection_results: HashMap::new(),
             workspace: None,
@@ -376,16 +381,21 @@ impl ConduitApp {
         let kind = if mcp { Kind::Mcp } else { Kind::Skill };
         let mut rows: Vec<ExtensionRow> = Vec::new();
         let mut count = 0;
+        let total = catalog.map_or(0, |c| c.entries.iter().filter(|e| e.kind == kind).count());
+        let duplicates = catalog
+            .map(|c| management::duplicates(c, kind))
+            .unwrap_or_default();
+        let filter = self.extensions_ui.filters[selected];
         if let Some(catalog) = catalog {
             for entry in catalog.entries.iter().filter(|entry| entry.kind == kind) {
-                if !format!("{} {} {}", entry.name, entry.description, entry.scope)
-                    .to_lowercase()
-                    .contains(query.as_str())
-                {
+                if !filter.matches(entry, &duplicates, &query) {
                     continue;
                 }
                 count += 1;
-                rows.push(ExtensionRow::Entry(entry.clone()));
+                rows.push(ExtensionRow::Entry(
+                    entry.clone(),
+                    duplicates.contains(&entry.name),
+                ));
             }
             for error in &catalog.errors {
                 rows.push(ExtensionRow::Message(error.clone(), true));
@@ -408,7 +418,7 @@ impl ConduitApp {
             rows.push(ExtensionRow::Message(
                 if probing {
                     "正在读取本机定义…"
-                } else if !query.is_empty() {
+                } else if !query.is_empty() || filter != Filter::All {
                     "没有匹配的条目。"
                 } else if catalog.is_none() {
                     "尚未读取或读取已取消，请刷新。"
@@ -435,11 +445,12 @@ impl ConduitApp {
             .and_then(|c| c.updated)
             .map(|time| {
                 format!(
-                    "{count} 项 · 刷新于 {}",
+                    "{count} / {total} 项 · 刷新于 {}",
                     DateTime::<Local>::from(time).format("%H:%M:%S")
                 )
             })
-            .unwrap_or_else(|| format!("{count} 项"));
+            .unwrap_or_else(|| format!("{count} / {total} 项"));
+        let filter_view = view.clone();
         v_flex()
             .size_full()
             .text_color(rgb(palette().text))
@@ -475,8 +486,36 @@ impl ConduitApp {
                             .gap_2()
                             .child(
                                 div().flex_1().min_w_0().child(
-                                    Input::new(&self.extensions_ui.searches[selected]).small(),
+                                    Input::new(&self.extensions_ui.searches[selected])
+                                        .small()
+                                        .aria_label("搜索扩展名称、说明或来源"),
                                 ),
+                            )
+                            .child(
+                                Button::new("extensions-filter-trigger")
+                                    .debug_selector(|| "extensions-filter-trigger".into())
+                                    .small()
+                                    .outline()
+                                    .label(filter.label())
+                                    .icon(FullIconName::ChevronDown)
+                                    .dropdown_menu(move |mut menu, _, _| {
+                                        for option in Filter::ALL {
+                                            let view = filter_view.clone();
+                                            menu = menu.item(
+                                                PopupMenuItem::new(option.label()).on_click(
+                                                    move |_, _, cx| {
+                                                        view.update(cx, |app, cx| {
+                                                            app.extensions_ui.filters[selected] =
+                                                                option;
+                                                            app.extensions_ui.lists = new_lists();
+                                                            cx.notify();
+                                                        });
+                                                    },
+                                                ),
+                                            );
+                                        }
+                                        menu
+                                    }),
                             )
                             .child(
                                 Button::new("extensions-refresh")
@@ -565,7 +604,7 @@ fn new_lists() -> [gpui_kit::ListState; 2] {
 }
 
 enum ExtensionRow {
-    Entry(extensions::Entry),
+    Entry(extensions::Entry, bool),
     Message(String, bool),
     Source(PathBuf),
 }
@@ -578,7 +617,7 @@ fn render_extension_row(
 ) -> AnyElement {
     let disabled = !view.read(cx).writable || view.read(cx).closing;
     match row {
-        ExtensionRow::Entry(entry) => {
+        ExtensionRow::Entry(entry, duplicate) => {
             let mcp = entry.kind == Kind::Mcp;
             let id = entry.id();
             let expanded = expanded.contains(&id);
@@ -589,7 +628,19 @@ fn render_extension_row(
             let reveal_path = entry.path.clone();
             let kind = entry.kind;
             let edit_view = view.clone();
-            let managed = entry.scope.starts_with("插件");
+            let managed = entry.managed();
+            let toggle_supported = !mcp
+                || view
+                    .read(cx)
+                    .extensions_ui
+                    .engine
+                    .descriptor()
+                    .capabilities
+                    .mcp_toggle;
+            let state_view = view.clone();
+            let state_entry = entry.clone();
+            let quick_edit = view.clone();
+            let quick_path = entry.path.clone();
             let test_entry = entry.clone();
             let test_view = view.clone();
             let cancel_view = view.clone();
@@ -646,9 +697,10 @@ fn render_extension_row(
                                                 .text_size(px(11.))
                                                 .text_color(rgb(palette().muted))
                                                 .child(format!(
-                                                    "{} · {}",
+                                                    "{} · {}{}",
                                                     entry.scope,
-                                                    entry.status()
+                                                    entry.status(),
+                                                    if *duplicate { " · 同名定义" } else { "" }
                                                 )),
                                         ),
                                 )
@@ -660,6 +712,13 @@ fn render_extension_row(
                                         .child(summary),
                                 ),
                         )
+                .child(h_flex().gap_2().flex_wrap()
+                    .child(Button::new(("extension-quick-edit", index)).small().ghost().label(if managed { "插件托管" } else { "编辑" }).disabled(disabled || managed).tooltip(if managed { "由插件安装包管理，请在对应 CLI 中调整" } else { "编辑此条目的来源文件" })
+                        .on_click(move |_, window, cx| quick_edit.update(cx, |app, cx| app.open_native_config(quick_path.clone(), kind, false, window, cx))))
+                    .when(!managed && toggle_supported, |row| row.child(Button::new(("extension-toggle", index)).small().ghost()
+                        .label(if entry.disabled { "恢复" } else { "停用" }).disabled(disabled || view.read(cx).extensions_ui.changing)
+                        .on_click(move |_, window, cx| state_view.update(cx, |app, cx| app.open_extension_toggle(state_entry.clone(), window, cx)))))
+                    .when(!managed && !toggle_supported, |row| row.child(Button::new(("extension-native-toggle", index)).small().ghost().label("原生管理").disabled(true).tooltip("此引擎的启停请编辑来源配置"))))
                         .child(
                             Button::new(("extension-detail", index))
                                 .debug_selector(move || format!("extension-detail-{index}"))

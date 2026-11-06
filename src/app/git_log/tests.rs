@@ -307,7 +307,10 @@ fn expanded_git_lists_keep_row_heights_scroll_and_show_loading(cx: &mut TestAppC
     let last = cx.debug_bounds("git-change-file-file-79.txt").unwrap();
     let body = cx.debug_bounds("git-panel-body").unwrap();
     assert_eq!(last.size.height, px(22.));
-    assert!(last.top() >= body.top() && last.bottom() <= body.bottom() + px(1.));
+    assert!(
+        last.top() >= body.top() && last.bottom() <= body.bottom() + px(1.),
+        "last change {last:?} is outside the scroll viewport {body:?}"
+    );
     cx.update(|window, _| window.remove_window());
     output.borrow_mut().take();
     drop(manager);

@@ -3,8 +3,8 @@ use conduit::update::{self as service, Event as UpdateEvent, Release, Task, inst
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc;
 
-#[derive(Default, PartialEq)]
-enum Phase {
+#[derive(Debug, Default, PartialEq)]
+pub(super) enum Phase {
     #[default]
     Idle,
     Checking,
@@ -16,13 +16,13 @@ enum Phase {
 }
 
 pub(super) struct UpdateUi {
-    phase: Phase,
+    pub(super) phase: Phase,
     task: Option<Task>,
     release: Option<Release>,
     package: Option<PathBuf>,
-    status: String,
+    pub(super) status: String,
     next_check: Instant,
-    install_requested: bool,
+    pub(super) install_requested: bool,
     snoozed: bool,
     preparation: Option<mpsc::Receiver<Result<install::Pending, String>>>,
     pending: Option<install::Pending>,
@@ -89,7 +89,8 @@ impl ConduitApp {
     }
 
     fn update_idle(&self) -> bool {
-        self.session_control.runs.is_empty()
+        !self.terminals.active()
+            && self.session_control.runs.is_empty()
             && self.session_control.queue_saves.is_empty()
             && self.probes.is_empty()
             && self.opencode_model_probes.is_empty()
@@ -212,9 +213,16 @@ impl ConduitApp {
         {
             if self.update_idle() {
                 self.begin_update_install(window, cx);
-            } else if self.updater.status != "等待后台任务结束后安装；可选择稍后" {
-                self.updater.status = "等待后台任务结束后安装；可选择稍后".into();
-                cx.notify();
+            } else {
+                let waiting = if self.terminals.active() {
+                    "等待终端退出后安装；可终止终端后继续，或选择稍后"
+                } else {
+                    "等待后台任务结束后安装；可选择稍后"
+                };
+                if self.updater.status != waiting {
+                    self.updater.status = waiting.into();
+                    cx.notify();
+                }
             }
         }
 
@@ -320,6 +328,17 @@ impl ConduitApp {
     }
 
     fn save_update_drafts(&mut self, cx: &mut Context<Self>) -> anyhow::Result<()> {
+        self.save_drafts("update-recovery.json", cx)
+    }
+
+    pub(super) fn save_exit_drafts(&mut self, cx: &mut Context<Self>) -> anyhow::Result<()> {
+        if !self.writable {
+            return Ok(());
+        }
+        self.save_drafts("draft-recovery.json", cx)
+    }
+
+    fn save_drafts(&mut self, filename: &str, cx: &mut Context<Self>) -> anyhow::Result<()> {
         if let Some(id) = self.selected_session {
             self.drafts
                 .insert(id, self.input.read(cx).value().to_string());
@@ -363,27 +382,52 @@ impl ConduitApp {
         };
         // Store's atomic replacement protects transcripts; the recovery file is
         // synced before the old process is allowed to exit.
-        install::write_json(
-            &Store::path().with_file_name("update-recovery.json"),
-            &recovery,
-        )?;
+        let path = Store::path().with_file_name(filename);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        install::write_json(&path, &recovery)?;
         Ok(())
     }
 
     pub(super) fn restore_update_drafts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let path = Store::path().with_file_name("update-recovery.json");
+        let mut snapshots = ["draft-recovery.json", "update-recovery.json"];
+        snapshots.sort_by_cached_key(|filename| {
+            std::fs::metadata(Store::path().with_file_name(filename))
+                .and_then(|metadata| metadata.modified())
+                .ok()
+        });
+        // A failed restart can leave both snapshots behind. The latest complete
+        // snapshot wins, including removals of attachments and commit drafts.
+        for filename in snapshots {
+            self.restore_drafts(filename, window, cx);
+        }
+    }
+
+    fn restore_drafts(&mut self, filename: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let path = Store::path().with_file_name(filename);
         if !path.exists() || !self.writable {
             return;
         }
         let result = (|| -> anyhow::Result<()> {
             let recovery: Recovery = serde_json::from_slice(&std::fs::read(&path)?)?;
-            anyhow::ensure!(recovery.schema == 1, "未知的更新恢复格式");
+            anyhow::ensure!(recovery.schema == 1, "未知的草稿恢复格式");
+            let normalize = |path: PathBuf| path.canonicalize().unwrap_or(path);
             self.drafts = recovery.drafts;
-            self.workspace_drafts = recovery.workspace_drafts.into_iter().collect();
+            self.workspace_drafts = recovery
+                .workspace_drafts
+                .into_iter()
+                .map(|(path, value)| (normalize(path), value))
+                .collect();
+            self.composer_files.clear();
+            self.git.drafts.clear();
             for (workspace, session, paths) in recovery.attachments {
                 let (references, rejected) = file_ref::resolve(&paths, &workspace);
                 self.composer_files.insert(
-                    ComposerTarget { workspace, session },
+                    ComposerTarget {
+                        workspace: normalize(workspace),
+                        session,
+                    },
                     ComposerFiles {
                         references,
                         feedback: (!rejected.is_empty())
@@ -391,11 +435,16 @@ impl ConduitApp {
                     },
                 );
             }
-            let tags: HashMap<_, _> = recovery.commit_tags.into_iter().collect();
+            let tags: HashMap<_, _> = recovery
+                .commit_tags
+                .into_iter()
+                .map(|(path, value)| (normalize(path), value))
+                .collect();
             for (path, value) in recovery.commits {
+                let path = normalize(path);
                 let input = cx.new(|cx| {
                     TextareaState::new(window, cx)
-                        .placeholder("填写 Commit Message…")
+                        .placeholder("填写提交说明…")
                         .auto_grow(3, 3)
                 });
                 input.update(cx, |input, cx| input.set_value(value, window, cx));
@@ -416,10 +465,12 @@ impl ConduitApp {
                     },
                 );
             }
-            if let Some(workspace) = recovery
-                .workspace
-                .and_then(|path| self.store.workspaces.iter().position(|w| w.path == path))
-            {
+            if let Some(workspace) = recovery.workspace.and_then(|path| {
+                self.store
+                    .workspaces
+                    .iter()
+                    .position(|w| normalize(w.path.clone()) == normalize(path.clone()))
+            }) {
                 let session = recovery.session.filter(|id| {
                     self.store.workspaces[workspace]
                         .sessions
@@ -434,7 +485,7 @@ impl ConduitApp {
             Ok(())
         })();
         if let Err(error) = result {
-            self.message = Some(format!("更新后草稿恢复失败，恢复文件已保留：{error:#}"));
+            self.message = Some(format!("草稿恢复失败，恢复文件已保留：{error:#}"));
         }
     }
 
@@ -517,6 +568,19 @@ impl ConduitApp {
             );
         }
         if self.updater.phase == Phase::Ready {
+            if self.terminals.active() {
+                let stop_view = view.clone();
+                actions=actions.child(Button::new("update-stop-terminals").label("终止全部终端后安装").small().disabled(self.closing || !self.writable)
+                    .on_click(move|_,window,cx| {
+                        let stop_view=stop_view.clone();
+                        window.open_dialog(cx,move|dialog,_,_| {
+                            let stop_view=stop_view.clone();
+                            dialog.title("终止全部终端后安装？")
+                                .content(|content,_,_|content.child("所有终端及其子进程将被终止，未完成的命令会被中断。清理完成后再安装更新。"))
+                                .on_ok(move|_,_,cx| {stop_view.update(cx,|app,cx| {app.terminals.stop_all();app.updater.install_requested=true;cx.notify();});true})
+                        });
+                    }));
+            }
             let install_view = view.clone();
             let later_view = view.clone();
             actions = actions
@@ -646,31 +710,76 @@ impl ConduitApp {
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests {
     use super::{
-        ComposerFiles, ComposerTarget, ConduitApp, PathBuf, Phase, Store, Workspace, file_ref,
+        ComposerFiles, ComposerTarget, ConduitApp, Duration, HashMap, PathBuf, Phase, Recovery,
+        Store, Workspace, file_ref, install,
     };
     use conduit::update::{Release, manifest::Manifest};
     use gpui_kit::component::WindowExt;
     use gpui_kit::{AppContext as _, TestAppContext, px, size};
 
     #[gpui_kit::test]
+    fn terminal_runtime_blocks_auto_install(cx: &mut TestAppContext) {
+        let (app, cx, _) = crate::app::queue::tests::fixture(cx, "terminal-update");
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.new_terminal(crate::terminal::ShellProfile::Cmd, window, cx);
+                app.updater.phase = Phase::Ready;
+                app.updater.install_requested = true;
+                app.poll_updates(window, cx);
+                assert!(app.updater.phase == Phase::Ready);
+                assert!(app.updater.status.contains("等待终端"));
+                assert!(!app.closing);
+                app.terminals.stop_all();
+            })
+        });
+        let start = std::time::Instant::now();
+        while cx.update(|_, cx| app.read(cx).terminals.active()) {
+            assert!(start.elapsed() < Duration::from_secs(10));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[gpui_kit::test]
     fn update_restart_restores_chat_commit_and_attachment_drafts(cx: &mut TestAppContext) {
+        recovery_roundtrip(cx, true);
+    }
+
+    #[gpui_kit::test]
+    fn normal_exit_restores_all_drafts_from_disk_without_dispatching(cx: &mut TestAppContext) {
+        recovery_roundtrip(cx, false);
+    }
+
+    fn recovery_roundtrip(cx: &mut TestAppContext, updating: bool) {
         cx.update(gpui_kit::init);
         let workspace = Store::path().with_file_name("update-draft-fixture");
         std::fs::create_dir_all(&workspace).unwrap();
         let attachment = workspace.join("reference.txt");
         std::fs::write(&attachment, b"reference").unwrap();
+        let mut second = super::super::tests::session();
+        second.id = 2;
         let store = Store {
             version: 2,
             workspaces: vec![Workspace {
                 path: workspace.clone(),
-                sessions: vec![super::super::tests::session()],
+                sessions: vec![super::super::tests::session(), second],
             }],
             ..Default::default()
         };
-        let copy: Store = serde_json::from_value(serde_json::to_value(&store).unwrap()).unwrap();
         cx.add_window_view(|window, cx| {
             let original = cx.new(|cx| ConduitApp::with_store(window, cx, Ok(store), false, false));
             original.update(cx, |app, cx| {
+                app.switch(0, Some(1), window, cx);
+                app.drafts.insert(2, "另一会话的草稿".into());
+                app.workspace_drafts
+                    .insert(workspace.clone(), "新会话草稿".into());
+                app.queued_messages.insert(
+                    2,
+                    crate::store::QueuedMessage {
+                        text: "确认后才发送".into(),
+                        references: vec![],
+                        paused: None,
+                    },
+                );
                 app.input
                     .update(cx, |input, cx| input.set_value("未发送的草稿", window, cx));
                 app.composer_files.insert(
@@ -691,14 +800,39 @@ mod tests {
                 app.git.drafts[&workspace]
                     .input
                     .update(cx, |input, cx| input.set_value("待提交说明", window, cx));
+                app.git.drafts[&workspace]
+                    .tag
+                    .update(cx, |input, cx| input.set_value("v0.2.0", window, cx));
                 assert!(app.persist());
                 app.persistence.flush();
-                app.save_update_drafts(cx).unwrap();
+                if updating {
+                    app.save_update_drafts(cx).unwrap();
+                } else {
+                    app.save_exit_drafts(cx).unwrap();
+                }
             });
-            let restored = cx.new(|cx| ConduitApp::with_store(window, cx, Ok(copy), false, false));
+            let restored = cx.new(|cx| {
+                ConduitApp::with_store(
+                    window,
+                    cx,
+                    Store::load().map_err(|e| e.to_string()),
+                    false,
+                    false,
+                )
+            });
             restored.update(cx, |app, cx| {
+                let workspace = workspace.canonicalize().unwrap();
                 assert_eq!(app.input.read(cx).value().as_str(), "未发送的草稿");
                 assert_eq!(app.selected_session, Some(1));
+                assert_eq!(app.drafts[&2], "另一会话的草稿");
+                assert_eq!(app.workspace_drafts[&workspace], "新会话草稿");
+                assert_eq!(app.queued_messages[&2].text, "确认后才发送");
+                assert!(app.queued_messages[&2].paused.is_some());
+                assert!(app.session_control.runs.is_empty());
+                assert_eq!(
+                    app.git.drafts[&workspace].tag.read(cx).value().as_str(),
+                    "v0.2.0"
+                );
                 assert_eq!(
                     app.current_files().unwrap().references[0].path,
                     attachment.canonicalize().unwrap()
@@ -709,13 +843,106 @@ mod tests {
                 );
                 assert!(
                     !Store::path()
-                        .with_file_name("update-recovery.json")
+                        .with_file_name(if updating {
+                            "update-recovery.json"
+                        } else {
+                            "draft-recovery.json"
+                        })
                         .exists()
                 );
             });
             gpui_kit::component::Root::new(restored, window, cx)
         });
         std::fs::remove_file(attachment).unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn newest_recovery_snapshot_wins_without_reviving_removed_attachments(cx: &mut TestAppContext) {
+        let (app, cx, root) = super::super::queue::tests::fixture(cx, "draft-recovery-order");
+        std::fs::create_dir_all(Store::path().parent().unwrap()).unwrap();
+        let attachment = root.join("removed.txt");
+        std::fs::write(&attachment, "reference").unwrap();
+        for latest in ["draft-recovery.json", "update-recovery.json"] {
+            for filename in ["draft-recovery.json", "update-recovery.json"] {
+                let newest = filename == latest;
+                let recovery = Recovery {
+                    schema: 1,
+                    workspace: Some(root.clone()),
+                    session: Some(1),
+                    drafts: HashMap::from([(1, if newest { "最新草稿" } else { "旧草稿" }.into())]),
+                    attachments: if newest {
+                        vec![]
+                    } else {
+                        vec![(root.clone(), Some(1), vec![attachment.clone()])]
+                    },
+                    commits: if newest {
+                        vec![]
+                    } else {
+                        vec![(root.clone(), "旧提交说明".into())]
+                    },
+                    ..Default::default()
+                };
+                let path = Store::path().with_file_name(filename);
+                install::write_json(&path, &recovery).unwrap();
+                std::fs::File::options()
+                    .write(true)
+                    .open(path)
+                    .unwrap()
+                    .set_times(std::fs::FileTimes::new().set_modified(
+                        std::time::SystemTime::UNIX_EPOCH
+                            + Duration::from_secs(if newest { 200 } else { 100 }),
+                    ))
+                    .unwrap();
+            }
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    app.restore_update_drafts(window, cx);
+                    assert_eq!(app.input.read(cx).value().as_str(), "最新草稿");
+                    assert!(
+                        app.composer_files
+                            .values()
+                            .all(|files| files.references.is_empty())
+                    );
+                    assert!(
+                        app.git.drafts.values().all(|draft| draft
+                            .input
+                            .read(cx)
+                            .value()
+                            .is_empty())
+                    );
+                    assert!(app.session_control.runs.is_empty());
+                });
+            });
+            assert!(!Store::path().with_file_name("draft-recovery.json").exists());
+            assert!(
+                !Store::path()
+                    .with_file_name("update-recovery.json")
+                    .exists()
+            );
+        }
+    }
+
+    #[gpui_kit::test]
+    fn normal_exit_draft_write_failure_keeps_input_and_attachments(cx: &mut TestAppContext) {
+        let (app, cx, root) = super::super::queue::tests::fixture(cx, "draft-save-failure");
+        let attachment = root.join("keep.txt");
+        std::fs::write(&attachment, "keep").unwrap();
+        let path = Store::path().with_file_name("draft-recovery.json");
+        std::fs::create_dir_all(&path).unwrap();
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.input
+                    .update(cx, |input, cx| input.set_value("不能丢失", window, cx));
+                app.attach_paths(std::slice::from_ref(&attachment), window, cx);
+                app.persist();
+                app.persistence.flush();
+                assert!(app.save_exit_drafts(cx).is_err());
+                assert_eq!(app.input.read(cx).value().as_str(), "不能丢失");
+                assert_eq!(app.current_files().unwrap().references.len(), 1);
+                assert!(attachment.exists());
+            })
+        });
+        std::fs::remove_dir(path).unwrap();
     }
 
     #[cfg(conduit_shell_desktop)]

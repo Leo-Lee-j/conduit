@@ -342,6 +342,9 @@ impl ConduitApp {
             }
             div()
                 .id(SharedString::from(scope))
+                .test_support()
+                .role(Role::Group)
+                .aria_label("工具调用详情")
                 .debug_selector(|| "detail-content".into())
                 .relative()
                 .flex_1()

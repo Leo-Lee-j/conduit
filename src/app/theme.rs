@@ -22,7 +22,6 @@ pub(super) struct Palette {
     pub(super) activity_completed: u32,
     pub(super) focus: u32,
     pub(super) on_text: u32,
-    pub(super) control_hover: u32,
     pub(super) highlight_text: u32,
     pub(super) highlight_bg: u32,
     pub(super) diff_add_text: u32,
@@ -57,13 +56,12 @@ const DARK_PALETTE: Palette = Palette {
     border: 0x29292e,
     text: 0xf3f3f4,
     muted: 0xa1a1a8,
-    faint: 0x717179,
+    faint: 0x92929b,
     loading: 0x8fb8e6,
     activity_running: 0x60a5fa,
     activity_completed: 0x4ade80,
-    focus: 0x4b4b54,
+    focus: 0x8ab4f8,
     on_text: 0x111113,
-    control_hover: 0xffffff,
     highlight_text: 0xf0d49b,
     highlight_bg: 0x3a3220,
     diff_add_text: 0x9fdcab,
@@ -98,13 +96,12 @@ const LIGHT_PALETTE: Palette = Palette {
     border: 0xe4e4e9,
     text: 0x1c1c20,
     muted: 0x5f5f68,
-    faint: 0x8e8e97,
+    faint: 0x666670,
     loading: 0x60a5df,
     activity_running: 0x2563eb,
     activity_completed: 0x15803d,
-    focus: 0xb4b4bd,
+    focus: 0x356ac3,
     on_text: 0xffffff,
-    control_hover: 0xe8e8ec,
     highlight_text: 0x6b4a00,
     highlight_bg: 0xfff0bf,
     diff_add_text: 0x1e6631,
@@ -199,6 +196,42 @@ pub(crate) fn install_theme_packs(cx: &mut gpui_kit::App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn functional_text_and_focus_have_contrast_on_all_base_surfaces() {
+        fn luminance(color: u32) -> f64 {
+            let channel = |shift: u32| {
+                let value = ((color >> shift) & 255u32) as f64 / 255.;
+                if value <= 0.04045 {
+                    value / 12.92
+                } else {
+                    ((value + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+        }
+        let contrast = |a, b| {
+            let (a, b) = (luminance(a), luminance(b));
+            (a.max(b) + 0.05) / (a.min(b) + 0.05)
+        };
+        for palette in [DARK_PALETTE, LIGHT_PALETTE] {
+            for background in [
+                palette.canvas,
+                palette.sidebar_bg,
+                palette.surface,
+                palette.surface_hover,
+                palette.surface_strong,
+            ] {
+                for text in [palette.text, palette.muted, palette.faint] {
+                    assert!(
+                        contrast(text, background) >= 4.5,
+                        "{text:06x}/{background:06x}"
+                    );
+                }
+                assert!(contrast(palette.focus, background) >= 3.);
+            }
+        }
+    }
 
     #[test]
     fn builtin_packs_cover_both_modes_and_own_the_tab_tokens() {

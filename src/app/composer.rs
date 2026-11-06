@@ -52,6 +52,7 @@ impl ConduitApp {
             || Store::path()
                 .with_file_name("update-recovery.json")
                 .exists()
+            || Store::path().with_file_name("draft-recovery.json").exists()
         {
             return;
         }
@@ -100,6 +101,7 @@ impl ConduitApp {
         self.persist();
     }
 
+    #[cfg(all(test, feature = "ui-tests"))]
     pub(super) fn discard_composer_attachments(&mut self) {
         self.composer_files.clear();
         // Draft attachments are in memory only. The close path has already
@@ -386,8 +388,8 @@ impl ConduitApp {
                                 .ghost()
                                 .small()
                                 .compact()
-                                .w(px(18.))
-                                .h(px(18.))
+                                .w(px(24.))
+                                .h(px(24.))
                                 .flex_shrink_0()
                                 .icon(FullIconName::X)
                                 .tooltip("移除文件")
@@ -490,6 +492,22 @@ impl ConduitApp {
 }
 
 impl ConduitApp {
+    pub(super) fn stop_reply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing || self.composer_is_composing(window, cx) {
+            return;
+        }
+        if let Some(id) = self.selected_session
+            && self.session_control.runs.contains_key(&id)
+        {
+            self.pause_queued_message(id, "当前回复已停止；待发送消息不会自动发送。");
+            if let Some(run) = self.session_control.runs.get_mut(&id) {
+                run.cancel();
+            }
+            self.input.read(cx).focus_handle(cx).focus(window, cx);
+            cx.notify();
+        }
+    }
+
     pub(super) fn render_composer(
         &mut self,
         selected: Option<&SessionSummary>,
@@ -498,7 +516,8 @@ impl ConduitApp {
     ) -> AnyElement {
         let app_entity = cx.entity();
         let typography = self.chat_typography();
-        let busy = self.composer_send_blocked().is_some();
+        let blocked = self.composer_send_blocked();
+        let busy = blocked.is_some();
         let has_workspace = self.selected_workspace.is_some();
         let can_edit = self.writable && !self.closing;
         let input_focused = self.input.read(cx).focus_handle(cx).is_focused(window);
@@ -508,9 +527,11 @@ impl ConduitApp {
                 .current_files()
                 .is_some_and(|files| !files.references.is_empty());
         let send_ready = can_edit && !busy && has_workspace && has_content;
-        let composer_active = self
-            .send_target(true)
-            .is_some_and(|id| self.session_control.runs.contains_key(&id));
+        let selected_run = self
+            .selected_session
+            .and_then(|id| self.session_control.runs.get(&id));
+        let show_stop = selected_run.is_some();
+        let stopping = selected_run.is_some_and(|run| run.runtime.is_cancelled());
         // The latest-message arrow appears
         // only when the user has scrolled away from the end of the message list.
         let show_latest_button = !self.at_bottom
@@ -546,6 +567,10 @@ impl ConduitApp {
                 } else {
                     this.send_prompt(window, cx);
                 }
+            }))
+            .on_action(cx.listener(|this, _: &StopReply, window, cx| {
+                cx.stop_propagation();
+                this.stop_reply(window, cx);
             }))
             .on_action(cx.listener(|this, _: &PreviousFileMention, window, cx| {
                 cx.stop_propagation();
@@ -624,6 +649,11 @@ impl ConduitApp {
                     .bordered(false)
                     .text_size(px(typography.body_size))
                     .line_height(relative(typography.line_height))
+                    // The shared input uses its muted theme color for placeholders.
+                    // Fade only the empty field so typed text keeps full contrast.
+                    .when(self.input.read(cx).value().is_empty(), |input| {
+                        input.opacity(0.65)
+                    })
                     .disabled(self.closing || !composer_enabled);
                 if let Some(family) = typography.body_font.clone() {
                     composer_input = composer_input.font_family(family);
@@ -635,6 +665,8 @@ impl ConduitApp {
             }))
             .child(
                 h_flex()
+                    .id("composer-actions")
+                    .debug_selector(|| "composer-actions".into())
                     .px(px(3.))
                     .pb(px(3.))
                     .pt(px(3.))
@@ -645,7 +677,7 @@ impl ConduitApp {
                             .ghost()
                             .small()
                             .compact()
-                            .h(px(22.))
+                            .h(px(28.))
                             .icon(IconName::Plus)
                             .tooltip(format!(
                                 "在当前工作区新建 {} 会话",
@@ -667,8 +699,13 @@ impl ConduitApp {
                     .when_some(usage_parts, |row, parts| {
                         row.child(h_flex().gap_3().items_center().min_w_0().children(parts))
                     })
-                    .child(div().flex_1())
-                    .child(model_picker)
+                    .child(
+                        h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .justify_end()
+                            .child(model_picker),
+                    )
                     .when(composer_enabled, |row| {
                         row.child(
                             message_action_button(
@@ -679,66 +716,51 @@ impl ConduitApp {
                             .on_click(cx.listener(Self::pick_files)),
                         )
                     })
-                    .child(if composer_active {
-                        h_flex()
-                            .id("stop")
+                    .child(if show_stop {
+                        Button::new("stop")
                             .debug_selector(|| "stop".into())
-                            .w(px(30.))
-                            .h(px(30.))
-                            .items_center()
-                            .justify_center()
-                            .rounded_full()
-                            .bg(rgb(palette().text))
-                            .cursor_pointer()
-                            .hover(|style| style.bg(rgb(palette().control_hover)))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if let Some(id) = this.selected_session {
-                                    this.pause_queued_message(
-                                        id,
-                                        "当前回复已停止；待发送消息不会自动发送。",
-                                    );
-                                    if let Some(run) = this.session_control.runs.get_mut(&id) {
-                                        run.cancel();
-                                    }
-                                }
-                                this.input.read(cx).focus_handle(cx).focus(window, cx);
-                                cx.notify();
-                            }))
-                            .child(
-                                div()
-                                    .w(px(8.))
-                                    .h(px(8.))
-                                    .rounded(px(2.))
-                                    .bg(rgb(palette().on_text)),
-                            )
-                            .into_any_element()
-                    } else {
-                        h_flex()
-                            .id("send")
-                            .w(px(30.))
-                            .h(px(30.))
-                            .items_center()
-                            .justify_center()
-                            .rounded_full()
-                            .bg(rgb(if send_ready {
-                                palette().text
+                            .icon(Icon::new(FullIconName::Square).size(px(12.)))
+                            .accessibility_label(if stopping {
+                                "正在停止当前会话回复"
                             } else {
-                                palette().surface_strong
-                            }))
-                            .when(send_ready, |button| {
-                                button
-                                    .cursor_pointer()
-                                    .hover(|style| style.bg(rgb(palette().control_hover)))
-                                    .on_click(cx.listener(Self::send_message))
+                                "停止当前会话回复"
                             })
-                            .child(Icon::new(IconName::ArrowUp).small().text_color(rgb(
-                                if send_ready {
-                                    palette().on_text
-                                } else {
-                                    palette().faint
-                                },
-                            )))
-                            .into_any_element()
+                            .tooltip(if stopping {
+                                "正在停止当前会话回复…"
+                            } else {
+                                "停止当前会话回复（Ctrl+Shift+X）"
+                            })
+                            .small()
+                            .compact()
+                            .w(px(30.))
+                            .h(px(30.))
+                            .flex_shrink_0()
+                            .rounded_full()
+                            .primary()
+                            .loading(stopping)
+                            .disabled(self.closing || stopping)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.stop_reply(window, cx);
+                            }))
+                    } else {
+                        Button::new("send")
+                            .debug_selector(|| "send".into())
+                            .accessibility_label("发送消息")
+                            .tooltip(blocked.unwrap_or("发送消息（Enter）"))
+                            .icon(IconName::ArrowUp)
+                            .small()
+                            .compact()
+                            .w(px(30.))
+                            .h(px(30.))
+                            .flex_shrink_0()
+                            .rounded_full()
+                            .primary()
+                            .disabled(!send_ready)
+                            .on_click(cx.listener(|this, event, window, cx| {
+                                cx.stop_propagation();
+                                this.send_message(event, window, cx);
+                            }))
                     }),
             );
         if !self.store.ui.full_width_content {

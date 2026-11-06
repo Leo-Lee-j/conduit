@@ -88,8 +88,6 @@ mod outline;
 mod performance_view;
 mod plugin_ui;
 mod queue;
-#[cfg(all(test, feature = "ui-tests"))]
-mod review_tests;
 mod runtime;
 mod search;
 mod search_worker;
@@ -100,6 +98,7 @@ mod shell;
 mod sidebar;
 mod state;
 mod stream_events;
+mod terminal;
 mod theme;
 mod tool_analysis;
 mod tool_details;
@@ -133,6 +132,7 @@ actions!(
     conduit,
     [
         SendPrompt,
+        StopReply,
         Newline,
         PreviousPrompt,
         NextPrompt,
@@ -148,7 +148,12 @@ actions!(
         RecentSessions,
         OpenSessionSearch,
         OpenSettingsShortcut,
-        ToggleGitNavigation
+        ToggleGitNavigation,
+        ToggleTerminal,
+        NewTerminal,
+        LeaveTerminal,
+        NextTerminal,
+        PreviousTerminal
     ]
 );
 
@@ -160,6 +165,7 @@ pub struct ConduitApp {
     attachments_cleanup_pending: bool,
     session_control: session_controller::SessionController,
     transcripts: transcripts::TranscriptUi,
+    terminals: terminal::TerminalUi,
     updater: update::UpdateUi,
     notifications: notifications::NotificationUi,
     connection_settings: settings::ConnectionsUi,
@@ -248,6 +254,8 @@ pub struct ConduitApp {
     /// Whether the message list is scrolled to (or near) its end. Drives the
     /// floating "jump to latest" arrow so it only shows once the user scrolls up.
     at_bottom: bool,
+    reading_positions: HashMap<u64, (String, Pixels, bool)>,
+    restore_reading_position: bool,
     /// Scoped by session and tool key, independent of the right detail dock.
     expanded_tools: HashSet<(u64, String)>,
     /// Groups manually pinned open after the assistant starts replying.
@@ -303,6 +311,8 @@ impl ConduitApp {
             // handling) and at composer depth for when focus is nearby.
             KeyBinding::new("enter", SendPrompt, Some("ConduitComposer > Input")),
             KeyBinding::new("enter", SendPrompt, Some("ConduitComposer")),
+            KeyBinding::new("ctrl-shift-x", StopReply, Some("ConduitComposer > Input")),
+            KeyBinding::new("ctrl-shift-x", StopReply, Some("ConduitComposer")),
             KeyBinding::new("ctrl-enter", Newline, Some("ConduitComposer > Input")),
             KeyBinding::new("ctrl-enter", Newline, Some("ConduitComposer")),
             KeyBinding::new("shift-enter", Newline, Some("ConduitComposer > Input")),
@@ -332,6 +342,7 @@ impl ConduitApp {
             KeyBinding::new("ctrl-,", OpenSettingsShortcut, None),
             KeyBinding::new("ctrl-k", ToggleGitNavigation, None),
         ]);
+        terminal::init(cx);
         let (mut store, message, writable) = match loaded {
             Ok(store) => (store, None, true),
             Err(error) => (Store::default(), Some(error), false),
@@ -465,7 +476,9 @@ impl ConduitApp {
             .unwrap_or(Provider::Claude);
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder("描述任务，输入 @ 引用文件…")
+                .placeholder(
+                    "描述任务，输入 @ 引用文件…\nEnter 发送（运行中自动排队）· Shift+Enter 换行",
+                )
                 .auto_grow(3, 8)
         });
         let input_subscription = cx.subscribe(&input, |_, _, event: &InputEvent, cx| {
@@ -490,6 +503,15 @@ impl ConduitApp {
             }
         });
         let settings_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索设置…"));
+        let model_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("搜索模型名称、ID 或备注…"));
+        let model_search_subscription =
+            cx.subscribe(&model_search, |app, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    app.connection_settings.model_limit = 50;
+                    cx.notify();
+                }
+            });
         let settings_search_subscription =
             cx.subscribe(&settings_search, |_, _, _: &InputEvent, cx| cx.notify());
         let skill_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索名称或简介…"));
@@ -535,62 +557,9 @@ impl ConduitApp {
             });
         }
         let weak = cx.weak_entity();
-        window.on_window_should_close(cx, move |_window, cx| {
-            weak.update(cx, |this, cx| {
-                this.extensions_ui.probe = None;
-                this.plugins.stop_instances();
-                #[cfg(conduit_shell_desktop)]
-                gpui_shell::ShellRoot::update(_window, cx, |root, window, cx| {
-                    root.clear_stopped_overlays(window, cx);
-                });
-                if this.updater.exiting {
-                    return true;
-                }
-                if this.updater.preparing() {
-                    return false;
-                }
-                this.closing = true;
-                this.session_control.cancel_imports();
-                this.history_loading.clear();
-                if this.dirty {
-                    this.persist();
-                }
-                this.git.probe = None;
-                this.git.branch_probe = None;
-                if !this.session_control.runs.is_empty()
-                    || !this.probes.is_empty()
-                    || !this.opencode_model_probes.is_empty()
-                    || this.git.operation.is_some()
-                    || this.git.generation.is_some()
-                    || !this.session_control.namings.is_empty()
-                {
-                    this.closing = true;
-                    if let Some(operation) = &this.git.operation {
-                        operation.probe.cancel();
-                    }
-                    if let Some(generation) = &this.git.generation {
-                        generation.runtime.cancel();
-                    }
-                    for naming in this.session_control.namings.values_mut() {
-                        naming.runtime.cancel();
-                    }
-                    for run in this.session_control.runs.values_mut() {
-                        run.cancel();
-                    }
-                    for probe in this.probes.values() {
-                        probe.cancel();
-                    }
-                    for probe in this.opencode_model_probes.values() {
-                        probe.cancel();
-                    }
-                    cx.notify();
-                    false
-                } else {
-                    cx.notify();
-                    false
-                }
-            })
-            .unwrap_or(true)
+        window.on_window_should_close(cx, move |window, cx| {
+            weak.update(cx, |this, cx| this.request_close(window, cx))
+                .unwrap_or(true)
         });
         cx.spawn_in(window, async move |this, cx| {
             loop {
@@ -623,12 +592,13 @@ impl ConduitApp {
             attachments_cleanup_pending: false,
             session_control: session_controller::SessionController::default(),
             transcripts: Default::default(),
+            terminals: Default::default(),
             store,
             git: git_ui::GitUi::default(),
             branch_manager: None,
             updater: update::UpdateUi::default(),
             notifications: notifications::NotificationUi::new(writable, cx),
-            connection_settings: settings::ConnectionsUi::new(new_session_provider),
+            connection_settings: settings::ConnectionsUi::new(new_session_provider, model_search),
             settings_ui: settings::SettingsUi {
                 open: false,
                 focus: cx.focus_handle(),
@@ -701,6 +671,7 @@ impl ConduitApp {
             _subscriptions: vec![
                 settings_search_subscription,
                 skill_search_subscription,
+                model_search_subscription,
                 mcp_search_subscription,
                 input_subscription,
                 mention_subscription,
@@ -723,6 +694,8 @@ impl ConduitApp {
             chat_rows: Default::default(),
             outline: MessageOutlineCache::default(),
             at_bottom: true,
+            reading_positions: HashMap::new(),
+            restore_reading_position: false,
             expanded_tools: HashSet::new(),
             expanded_tool_groups: HashSet::new(),
             expanded_reasoning: HashSet::new(),
@@ -772,6 +745,65 @@ impl ConduitApp {
             started: Instant::now(),
             imports_done: false,
         });
+    }
+
+    pub(super) fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.confirm_terminal_exit(window, cx) {
+            return false;
+        }
+        self.extensions_ui.probe = None;
+        self.plugins.stop_instances();
+        #[cfg(conduit_shell_desktop)]
+        gpui_shell::ShellRoot::update(window, cx, |root, window, cx| {
+            root.clear_stopped_overlays(window, cx);
+        });
+        if self.updater.exiting {
+            return true;
+        }
+        if self.updater.preparing() {
+            return false;
+        }
+        self.closing = true;
+        self.terminals.stop_all();
+        self.session_control.cancel_imports();
+        self.history_loading.clear();
+        if self.dirty {
+            self.persist();
+        }
+        self.git.probe = None;
+        self.git.branch_probe = None;
+        if !self.session_control.runs.is_empty()
+            || !self.probes.is_empty()
+            || !self.opencode_model_probes.is_empty()
+            || self.git.operation.is_some()
+            || self.git.generation.is_some()
+            || !self.session_control.namings.is_empty()
+        {
+            self.closing = true;
+            if let Some(operation) = &self.git.operation {
+                operation.probe.cancel();
+            }
+            if let Some(generation) = &self.git.generation {
+                generation.runtime.cancel();
+            }
+            for naming in self.session_control.namings.values_mut() {
+                naming.runtime.cancel();
+            }
+            for run in self.session_control.runs.values_mut() {
+                run.cancel();
+            }
+            for probe in self.probes.values() {
+                probe.cancel();
+            }
+            for probe in self.opencode_model_probes.values() {
+                probe.cancel();
+            }
+            cx.notify();
+            false
+        } else {
+            cx.notify();
+            false
+        }
     }
 
     fn persist(&mut self) -> bool {

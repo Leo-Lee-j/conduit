@@ -20,13 +20,49 @@ use std::{
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CliSettings {
+    #[serde(default)]
+    pub engines: std::collections::HashMap<Provider, EngineSettings>,
     pub claude_path: Option<PathBuf>,
     pub codex_path: Option<PathBuf>,
     #[serde(default)]
     pub opencode_path: Option<PathBuf>,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct EngineSettings {
+    pub enabled: bool,
+    pub path: Option<PathBuf>,
+    pub models: crate::models::preferences::ModelPreferences,
+}
+impl Default for EngineSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            path: None,
+            models: Default::default(),
+        }
+    }
+}
 impl CliSettings {
+    pub fn models_mut(
+        &mut self,
+        provider: Provider,
+    ) -> &mut crate::models::preferences::ModelPreferences {
+        let path = self.path(provider).map(Path::to_path_buf);
+        &mut self
+            .engines
+            .entry(provider)
+            .or_insert_with(|| EngineSettings {
+                path,
+                ..Default::default()
+            })
+            .models
+    }
     pub fn path(&self, provider: Provider) -> Option<&Path> {
+        if let Some(settings) = self.engines.get(&provider) {
+            return settings.path.as_deref();
+        }
         match provider {
             Provider::Claude => &self.claude_path,
             Provider::Codex => &self.codex_path,
@@ -35,11 +71,22 @@ impl CliSettings {
         .as_deref()
     }
     pub fn set(&mut self, provider: Provider, path: Option<PathBuf>) {
+        self.engines.entry(provider).or_default().path = path;
         *match provider {
             Provider::Claude => &mut self.claude_path,
             Provider::Codex => &mut self.codex_path,
             Provider::OpenCode => &mut self.opencode_path,
-        } = path;
+        } = None;
+    }
+    pub fn enabled(&self, provider: Provider) -> bool {
+        self.engines
+            .get(&provider)
+            .is_none_or(|settings| settings.enabled)
+    }
+    pub fn set_enabled(&mut self, provider: Provider, enabled: bool) {
+        let path = self.path(provider).map(Path::to_path_buf);
+        self.set(provider, path);
+        self.engines.get_mut(&provider).unwrap().enabled = enabled;
     }
 }
 
@@ -144,11 +191,8 @@ fn resolve_candidates(
 }
 
 pub fn resolve(provider: Provider, settings: &CliSettings) -> Result<ResolvedCli> {
-    let (key, filename) = match provider {
-        Provider::Claude => ("CONDUIT_CLAUDE_PATH", "claude.exe"),
-        Provider::Codex => ("CONDUIT_CODEX_PATH", "codex.exe"),
-        Provider::OpenCode => ("CONDUIT_OPENCODE_PATH", "opencode.exe"),
-    };
+    let descriptor = provider.descriptor();
+    let (key, filename) = (descriptor.path_env, descriptor.executable);
     let explicit = std::env::var_os(key)
         .map(|p| (PathBuf::from(p), PathSource::Environment))
         .or_else(|| {
@@ -169,25 +213,15 @@ pub fn resolve(provider: Provider, settings: &CliSettings) -> Result<ResolvedCli
                 .collect()
         })
         .unwrap_or_default();
-    if provider == Provider::OpenCode
+    if let Some(binary) = descriptor.npm_binary
         && let Some(paths) = std::env::var_os("PATH")
     {
-        candidates.extend(std::env::split_paths(&paths).map(|p| {
-            (
-                p.join("node_modules/opencode-ai/bin/opencode.exe"),
-                PathSource::SearchPath,
-            )
-        }));
+        candidates.extend(
+            std::env::split_paths(&paths).map(|p| (p.join(binary), PathSource::SearchPath)),
+        );
     }
-    let common = match provider {
-        Provider::Claude => {
-            std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join(".local/bin/claude.exe"))
-        }
-        Provider::OpenCode => std::env::var_os("USERPROFILE")
-            .map(|p| PathBuf::from(p).join(".opencode/bin/opencode.exe")),
-        Provider::Codex => std::env::var_os("LOCALAPPDATA")
-            .map(|p| PathBuf::from(p).join("Programs/OpenAI/Codex/bin/codex.exe")),
-    };
+    let common = std::env::var_os(descriptor.install_env)
+        .map(|p| PathBuf::from(p).join(descriptor.install_path));
     if let Some(path) = common {
         candidates.push((path, PathSource::CommonLocation));
     }
@@ -195,11 +229,17 @@ pub fn resolve(provider: Provider, settings: &CliSettings) -> Result<ResolvedCli
 }
 
 pub fn tested_version(provider: Provider) -> &'static str {
-    match provider {
-        Provider::Claude => "2.1.301",
-        Provider::Codex => "0.163.0",
-        Provider::OpenCode => "1.19.2",
-    }
+    provider.descriptor().tested_version
+}
+
+/// Diagnostics remain available for disabled engines; every model launch uses this gate.
+pub fn resolve_for_launch(provider: Provider, settings: &CliSettings) -> Result<ResolvedCli> {
+    anyhow::ensure!(
+        settings.enabled(provider),
+        "{} 已停用，请在 AI 引擎设置中启用",
+        provider.label()
+    );
+    resolve(provider, settings)
 }
 
 #[derive(Debug)]
@@ -208,15 +248,11 @@ pub struct VersionInfo {
     pub verified_version: bool,
 }
 fn parse_version(provider: Provider, output: &str) -> Result<VersionInfo> {
-    let signature = match provider {
-        Provider::Claude => "Claude Code",
-        Provider::Codex => "codex-cli",
-        Provider::OpenCode => "",
-    };
+    let signature = provider.descriptor().version_signature;
     let line = output
         .lines()
         .find(|line| {
-            if provider == Provider::OpenCode {
+            if signature.is_empty() {
                 let value = line.trim();
                 let base = value.split(['-', '+']).next().unwrap_or("");
                 base.split('.').count() == 3
@@ -372,6 +408,50 @@ pub(crate) fn capture_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_paths_migrate_without_losing_enabled_state_or_model_preferences() {
+        let mut settings: CliSettings = serde_json::from_value(serde_json::json!({
+            "claude_path":"C:/old/claude.exe", "codex_path":"C:/old/codex.exe"
+        }))
+        .unwrap();
+        assert!(Provider::ALL.into_iter().all(|p| settings.enabled(p)));
+        assert_eq!(
+            settings.path(Provider::Codex),
+            Some(Path::new("C:/old/codex.exe"))
+        );
+        settings
+            .models_mut(Provider::Codex)
+            .hidden
+            .insert("hidden".into());
+        assert_eq!(
+            settings.path(Provider::Codex),
+            Some(Path::new("C:/old/codex.exe"))
+        );
+        settings.set_enabled(Provider::Codex, false);
+        assert!(settings.codex_path.is_none());
+        assert!(
+            resolve_for_launch(Provider::Codex, &settings)
+                .unwrap_err()
+                .to_string()
+                .contains("已停用")
+        );
+        settings.set(Provider::Codex, None);
+        assert_eq!(settings.path(Provider::Codex), None);
+        assert!(!settings.enabled(Provider::Codex));
+        let loaded: CliSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(loaded, settings);
+        assert!(
+            loaded.engines[&Provider::Codex]
+                .models
+                .hidden
+                .contains("hidden")
+        );
+        assert_eq!(
+            loaded.path(Provider::Claude),
+            Some(Path::new("C:/old/claude.exe"))
+        );
+    }
     #[test]
     fn unknown_versions_are_visible_without_claiming_compatibility() {
         assert!(

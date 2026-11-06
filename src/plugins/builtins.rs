@@ -11,6 +11,8 @@ pub const BRANCHES: &str = "conduit.core.branches";
 pub const TOOL_DETAILS: &str = "conduit.core.tool-details";
 pub const NOTIFICATIONS: &str = "conduit.core.notifications";
 pub const SHOW_TOOL_DETAILS: &str = "conduit.core.show-tool-details";
+pub const TOGGLE_TERMINAL: &str = "conduit.core.toggle-terminal";
+pub const NEW_TERMINAL: &str = "conduit.core.new-terminal";
 pub const WORKSPACE_STATUS: &str = "conduit.core.workspace-status";
 pub const EXAMPLE: &str = "example.workspace-overview";
 pub const EXAMPLE_INDEX: &str = "example.workspace-overview.index";
@@ -81,6 +83,19 @@ pub fn core() -> Result<ContributionSet> {
         required_capabilities: BTreeSet::from([Capability::SessionSummary]),
         requires_writable: false,
     });
+    for (id, title, scope, requires_writable) in [
+        (TOGGLE_TERMINAL, "打开或收起终端", Scope::Global, false),
+        (NEW_TERMINAL, "在当前工作区新建终端", Scope::Workspace, true),
+    ] {
+        set.commands.push(CommandDescriptor {
+            id: CommandId::new(id)?,
+            title: title.into(),
+            scope,
+            arguments: ArgumentPolicy::None,
+            required_capabilities: BTreeSet::new(),
+            requires_writable,
+        });
+    }
     set.status_items.push(StatusItem {
         id: ItemId::new(WORKSPACE_STATUS)?,
         scope: Scope::Workspace,

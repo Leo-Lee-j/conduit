@@ -959,6 +959,7 @@ impl ConduitApp {
                                             );
                                         }
                                     }))
+                                    .test_support()
                                     .into_any_element()
                             }
                         })
@@ -1450,6 +1451,8 @@ impl ConduitApp {
         let app = cx.entity();
         let resize_app = app.downgrade();
         div()
+            .id("document-tab-strip")
+            .test_support()
             .debug_selector(|| "document-tab-strip".into())
             .relative()
             .h(px(TAB_BAR_HEIGHT))
@@ -1713,6 +1716,7 @@ impl ConduitApp {
         let app = cx.entity();
         let mut pane = sidebar::navigation_pane()
             .id("git-navigation")
+            .test_support()
             .debug_selector(|| "git-navigation".into());
         if let Some(i) = self.selected_workspace {
             let workspace = &self.store.workspaces[i];
@@ -1734,7 +1738,7 @@ impl ConduitApp {
                             .text_color(rgb(palette().activity_running))
                             .text_size(px(12.))
                             .font_semibold()
-                            .child("Commit"),
+                            .child("提交"),
                     )
                     .child(div().flex_1())
                     .child(self.navigation_workspace_picker(
@@ -1763,7 +1767,7 @@ impl ConduitApp {
                 .id("git-commit-scroll")
                 .debug_selector(|| "git-commit-section".into())
                 .h(relative(0.42))
-                .min_h(px(200.))
+                .min_h(px(244.))
                 .flex_shrink_1()
                 .min_w_0()
                 .border_t_1()
@@ -1824,6 +1828,26 @@ impl ConduitApp {
             self.open_tabs.retain(|t| *t != DocumentTab::Diff(old));
         }
         self.select_document(DocumentTab::Diff(id), window, cx);
+    }
+
+    pub(super) fn open_staged_diff_document(
+        &mut self,
+        file: git::ChangedFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(workspace) = self.selected_workspace_path() else {
+            return;
+        };
+        self.open_diff_document(workspace, file, window, cx);
+        if let Some(document) = self.active_diff.and_then(|id| self.files.diffs.get(&id)) {
+            document.view.update(cx, |view, cx| {
+                if view.scope != git::FileDiffScope::Staged {
+                    view.scope = git::FileDiffScope::Staged;
+                    view.reload(window, cx);
+                }
+            });
+        }
     }
 
     /// Refresh only matching HEAD/worktree diffs; branch comparison dialogs keep their own lifecycle.

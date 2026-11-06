@@ -1,14 +1,16 @@
 use super::bind;
 use crate::app::plugin_ui::{
     PluginUi,
-    tests::{click, draw, fixture, store},
+    tests::{ElementBounds as _, click, draw, fixture, store},
 };
 use conduit::plugins::{
     builtins,
     commands::Capability,
     ids::{ItemId, PluginId},
 };
-use gpui_kit::{ScrollDelta, ScrollWheelEvent, TestAppContext, VisualTestContext, point, px, size};
+use gpui_kit::{
+    Role, ScrollDelta, ScrollWheelEvent, TestAppContext, VisualTestContext, point, px, size,
+};
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 fn plugins() -> PluginUi {
@@ -43,11 +45,11 @@ fn three_surfaces_share_commands_and_keep_independent_workspace_scrolls(cx: &mut
     cx.simulate_resize(size(px(1600.), px(700.)));
     draw(cx);
     click(cx, builtins::EXAMPLE_ACTIVITY);
-    assert!(cx.debug_bounds("workspace-overview-index").is_some());
+    assert!(cx.labeled_bounds(Role::Group, "工作区概览").is_some());
     click(cx, "overview-show-summary");
     draw(cx);
-    assert!(cx.debug_bounds("workspace-overview-summary").is_some());
-    assert!(cx.debug_bounds(builtins::EXAMPLE_STATUS).is_some());
+    assert!(cx.labeled_bounds(Role::Group, "工作区摘要").is_some());
+    assert!(cx.element_bounds(builtins::EXAMPLE_STATUS).is_some());
     let (navigation, summary, navigation_key, summary_key) = cx.update(|_, cx| {
         let app = app.read(cx);
         let nav = app.plugins.state.navigation_key().unwrap().clone();
@@ -75,11 +77,8 @@ fn three_surfaces_share_commands_and_keep_independent_workspace_scrolls(cx: &mut
             right,
         )
     });
-    for (id, delta) in [
-        ("workspace-overview-index", -140.),
-        ("workspace-overview-summary", -220.),
-    ] {
-        let body = cx.debug_bounds(id).unwrap();
+    for (id, delta) in [("工作区概览", -140.), ("工作区摘要", -220.)] {
+        let body = cx.labeled_bounds(Role::Group, id).unwrap();
         cx.simulate_event(ScrollWheelEvent {
             position: body.center(),
             delta: ScrollDelta::Pixels(point(px(0.), px(delta))),
@@ -106,7 +105,7 @@ fn three_surfaces_share_commands_and_keep_independent_workspace_scrolls(cx: &mut
     draw(cx);
     click(cx, "close-workspace-overview");
     click(cx, builtins::EXAMPLE_STATUS);
-    assert!(cx.debug_bounds("workspace-overview-summary").is_some());
+    assert!(cx.labeled_bounds(Role::Group, "工作区摘要").is_some());
     for (workspace, session) in [(1, 101), (0, 1)] {
         cx.update(|window, cx| {
             app.update(cx, |app, cx| {
@@ -179,13 +178,14 @@ fn unregister_clears_three_surfaces_and_rebinding_cannot_revive_old_clicks(
         })
     });
     draw(cx);
-    for id in [
-        builtins::EXAMPLE_ACTIVITY,
-        builtins::EXAMPLE_STATUS,
-        "workspace-overview-index",
-        "workspace-overview-summary",
-    ] {
-        assert!(cx.debug_bounds(id).is_none(), "remaining {id}");
+    for id in [builtins::EXAMPLE_ACTIVITY, builtins::EXAMPLE_STATUS] {
+        assert!(cx.element_bounds(id).is_none(), "remaining {id}");
+    }
+    for label in ["工作区概览", "工作区摘要"] {
+        assert!(
+            cx.labeled_bounds(Role::Group, label).is_none(),
+            "remaining {label}"
+        );
     }
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
@@ -213,7 +213,7 @@ fn unregister_clears_three_surfaces_and_rebinding_cannot_revive_old_clicks(
     });
     draw(cx);
     click(cx, builtins::EXAMPLE_STATUS);
-    assert!(cx.debug_bounds("workspace-overview-summary").is_some());
+    assert!(cx.labeled_bounds(Role::Group, "工作区摘要").is_some());
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
             app.store.workspaces.remove(0);

@@ -3,7 +3,7 @@ use crate::app::{
     ConduitApp, Store,
     plugin_ui::{
         PluginUi,
-        tests::{click, draw, fixture, store},
+        tests::{ElementBounds as _, click, draw, fixture, store},
     },
 };
 use conduit::plugins::{
@@ -150,10 +150,10 @@ fn toolbar_reflows_around_core_controls_in_wide_narrow_and_docked_layouts(cx: &m
         cx.simulate_resize(size(px(width), px(700.)));
         draw(cx);
         draw(cx); // measured remaining width is applied on the next frame
-        let toolbar = cx.debug_bounds("conversation-toolbar").unwrap();
-        let region = cx.debug_bounds("toolbar-contributions").unwrap();
-        let controls = cx.debug_bounds("toolbar-controls").unwrap();
-        let more = cx.debug_bounds("toolbar-more").unwrap();
+        let toolbar = cx.element_bounds("conversation-toolbar").unwrap();
+        let region = cx.element_bounds("toolbar-contributions").unwrap();
+        let controls = cx.element_bounds("toolbar-controls").unwrap();
+        let more = cx.element_bounds("toolbar-more").unwrap();
         assert_eq!(toolbar.size.height, px(34.));
         assert!(
             controls.right() <= toolbar.right() && controls.right() <= px(width),
@@ -166,21 +166,15 @@ fn toolbar_reflows_around_core_controls_in_wide_narrow_and_docked_layouts(cx: &m
         );
         for id in ["notification-bell", "performance-monitor", "toolbar-hints"] {
             let bounds = cx
-                .debug_bounds(id)
-                .or_else(|| {
-                    cx.update(|window, _| {
-                        test_support::find(window, &[], &gpui_kit::SharedString::from(id).into())
-                            .map(|e| e.bounds())
-                    })
-                })
+                .element_bounds(id)
                 .unwrap_or_else(|| panic!("missing {id}"));
             assert!(
                 bounds.left() >= region.right() && bounds.right() <= toolbar.right(),
                 "core {id} at {width}"
             );
         }
-        let branch = cx.debug_bounds("git-branch-trigger").unwrap();
-        let badge = cx.debug_bounds("nav-branches-badge").unwrap();
+        let branch = cx.element_bounds("nav-branches").unwrap();
+        let badge = cx.element_bounds("nav-branches-badge").unwrap();
         assert!(badge.left() >= branch.left() && badge.right() <= branch.right());
         assert!(badge.top() >= branch.top() && badge.bottom() <= branch.bottom());
         cx.update(|window, _| {
@@ -206,19 +200,19 @@ fn toolbar_reflows_around_core_controls_in_wide_narrow_and_docked_layouts(cx: &m
     });
     draw(cx);
     draw(cx);
-    let toolbar = cx.debug_bounds("conversation-toolbar").unwrap();
-    let dock = cx.debug_bounds("detail-panel").unwrap();
+    let toolbar = cx.element_bounds("conversation-toolbar").unwrap();
+    let dock = cx.element_bounds("detail-panel").unwrap();
     assert!(toolbar.right() <= dock.left());
-    let controls = cx.debug_bounds("toolbar-controls").unwrap();
+    let controls = cx.element_bounds("toolbar-controls").unwrap();
     assert!(controls.right() <= toolbar.right());
     cx.simulate_resize(size(px(1100.), px(700.)));
     draw(cx);
     draw(cx);
-    let toolbar = cx.debug_bounds("conversation-toolbar").unwrap();
-    assert!(cx.debug_bounds("toolbar-controls").unwrap().right() <= toolbar.right());
-    assert!(cx.debug_bounds("toolbar-more").is_some());
+    let toolbar = cx.element_bounds("conversation-toolbar").unwrap();
+    assert!(cx.element_bounds("toolbar-controls").unwrap().right() <= toolbar.right());
+    assert!(cx.element_bounds("toolbar-more").is_some());
     assert!(
-        cx.debug_bounds("toolbar-workspace").is_none(),
+        cx.element_bounds("toolbar-workspace").is_none(),
         "when no complete item fits, only More remains"
     );
 }
@@ -431,7 +425,7 @@ fn dynamic_status_uses_metadata_without_mutating_registry_and_empty_scope_hides_
         })
     });
     draw(cx);
-    assert!(cx.debug_bounds("toolbar-more").is_none());
-    assert!(cx.debug_bounds("toolbar-workspace").is_none());
-    assert!(cx.debug_bounds("notification-bell").is_some());
+    assert!(cx.element_bounds("toolbar-more").is_none());
+    assert!(cx.element_bounds("toolbar-workspace").is_none());
+    assert!(cx.element_bounds("notification-bell").is_some());
 }

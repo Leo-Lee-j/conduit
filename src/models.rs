@@ -4,6 +4,7 @@
 //! credentials are inspected, and neither configuration file is modified.
 use crate::domain::Provider;
 mod opencode;
+pub mod preferences;
 pub use opencode::CACHE_TTL as OPENCODE_CACHE_TTL;
 pub use opencode::OpenCodeModelsProbe;
 use std::{

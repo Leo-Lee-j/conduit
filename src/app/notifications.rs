@@ -8,6 +8,7 @@ use conduit::plugins::{builtins, ids::ViewId, state::ViewInstanceKey};
 
 mod approvals;
 use approvals::ApprovalBinding;
+pub(super) use approvals::approval_message;
 use gpui_kit::component::{
     alert::Alert,
     badge::Badge,
@@ -279,6 +280,7 @@ impl ConduitApp {
         };
         let body = div()
             .id("notification-panel")
+            .test_support()
             .debug_selector(|| "notification-panel".into())
             .flex_1()
             .min_h_0()

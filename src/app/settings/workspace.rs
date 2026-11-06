@@ -20,6 +20,7 @@ impl ConduitApp {
             );
         v_flex()
             .id("settings-workspace")
+            .test_support()
             .debug_selector(|| "settings-workspace".into())
             .track_focus(&self.settings_ui.focus)
             .size_full()

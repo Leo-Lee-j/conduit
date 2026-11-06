@@ -21,7 +21,7 @@ impl ConduitApp {
                     return;
                 }
             };
-        let executable = match cli::resolve(provider, &self.store.cli) {
+        let executable = match cli::resolve_for_launch(provider, &self.store.cli) {
             Ok(cli) => cli.path,
             Err(error) => {
                 self.session_control

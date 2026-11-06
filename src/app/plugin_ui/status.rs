@@ -229,6 +229,7 @@ impl ConduitApp {
         let weak = cx.weak_entity();
         let mut row = h_flex()
             .id("toolbar-contributions")
+            .test_support()
             .debug_selector(|| "toolbar-contributions".into())
             .flex_1()
             .min_w(px(MORE_WIDTH + GAP))

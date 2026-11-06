@@ -20,18 +20,26 @@ pub(super) const PAGES: [(&str, &str, &str); 11] = [
     (
         "AI 连接",
         "AI 引擎",
-        "CLI Claude Codex OpenCode 路径 安装 登录 版本 PATH 环境变量",
+        "CLI Claude Codex OpenCode 路径 安装 登录 版本 PATH 环境变量 启用 停用 能力",
     ),
-    ("扩展能力", "Skills", "skill 技能 插件 导入 编辑"),
+    (
+        "扩展能力",
+        "Skills",
+        "skill 技能 插件 导入 编辑 停用 恢复 同名 来源",
+    ),
     ("自动化", "自动命名", "会话 标题 模型 触发"),
     ("自动化", "Git 提交", "提交 提示词 模型"),
     ("应用", "数据与更新", "目录 配置文件 下载 重启 诊断 性能"),
     (
         "AI 连接",
         "模型与服务",
-        "API Key Base URL Provider CCS cc-switch 凭据 端点 连接",
+        "API Key Base URL Provider CCS cc-switch 凭据 端点 连接 模型 隐藏 恢复 添加 编辑",
     ),
-    ("扩展能力", "MCP 服务", "MCP 工具 配置 服务器 添加 编辑"),
+    (
+        "扩展能力",
+        "MCP 服务",
+        "MCP 工具 配置 服务器 添加 编辑 停用 恢复 同名 来源",
+    ),
     ("AI 连接", "新会话默认", "默认 模型 服务 引擎 新建 对话"),
 ];
 

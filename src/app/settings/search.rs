@@ -74,8 +74,8 @@ const ENTRIES: &[(usize, usize, &str, &str, &str)] = &[
         3,
         1,
         "CLI 路径与版本",
-        "检测本机引擎，选择或恢复启动路径",
-        "cli 安装 登录 版本 path Claude Codex OpenCode",
+        "启用或停用引擎，检测版本并管理启动路径",
+        "cli 安装 登录 版本 path Claude Codex OpenCode 启用 停用 能力",
     ),
     (
         8,
@@ -87,9 +87,9 @@ const ENTRIES: &[(usize, usize, &str, &str, &str)] = &[
     (
         8,
         2,
-        "可用模型",
-        "查看从配置读取的模型目录",
-        "列表 模型 catalog",
+        "管理 CLI 模型",
+        "添加或编辑模型，隐藏目录项，设置新会话默认",
+        "列表 模型 catalog 添加 编辑 隐藏 恢复 默认",
     ),
     (
         10,
@@ -220,6 +220,31 @@ impl ConduitApp {
                     title: provider.name.clone(),
                     description: format!("{} · 模型服务", provider.engine.label()),
                     engine: Some(provider.engine),
+                });
+            }
+        }
+        for engine in Provider::ALL {
+            for model in self
+                .managed_native_models(engine, true)
+                .into_iter()
+                .filter(|model| {
+                    matches_search(
+                        &format!("{} {} {}", model.id, model.label, model.note),
+                        query,
+                    )
+                })
+                .take(20)
+            {
+                results.push(SettingsResult {
+                    page: 8,
+                    group: Some(if engine.descriptor().capabilities.model_services {
+                        2
+                    } else {
+                        1
+                    }),
+                    title: model.label,
+                    description: format!("{} · CLI 模型 · {}", engine.label(), model.id),
+                    engine: Some(engine),
                 });
             }
         }

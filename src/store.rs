@@ -28,6 +28,10 @@ pub enum NamingMode {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UiSettings {
+    #[serde(default)]
+    pub terminal_profile: crate::terminal::ShellProfile,
+    #[serde(default = "default_terminal_height")]
+    pub terminal_height: f32,
     /// Session ids ordered by most recently opened.
     #[serde(default)]
     pub recent_sessions: Vec<u64>,
@@ -92,6 +96,10 @@ pub struct UiSettings {
     pub code_line_numbers: bool,
 }
 
+fn default_terminal_height() -> f32 {
+    280.
+}
+
 pub const MIN_CHAT_FONT_SIZE: f32 = 12.0;
 pub const MAX_CHAT_FONT_SIZE: f32 = 20.0;
 pub const MIN_CHAT_LINE_HEIGHT: f32 = 1.2;
@@ -145,6 +153,8 @@ fn default_max_tabs() -> usize {
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
+            terminal_profile: Default::default(),
+            terminal_height: default_terminal_height(),
             recent_sessions: Vec::new(),
             sessions_per_workspace: default_sessions_per_workspace(),
             last_provider: None,
@@ -321,7 +331,7 @@ impl Store {
     }
 
     pub fn path() -> PathBuf {
-        std::env::var_os("CONDUIT_DATA_DIR")
+        let directory = std::env::var_os("CONDUIT_DATA_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
                 // UI tests invoke the same persistence paths as user actions.
@@ -333,8 +343,17 @@ impl Store {
                 #[cfg(not(test))]
                 PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_else(|| ".".into()))
                     .join("Conduit")
-            })
-            .join("state.json")
+            });
+        // Detached saves can outlive a test even with --test-threads=1. Give
+        // each test thread its own files, including under an explicit data root.
+        // Persistence captures this path before handing it to its worker.
+        #[cfg(test)]
+        let directory = directory.join(format!(
+            "test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        directory.join("state.json")
     }
     pub fn load() -> Result<Self> {
         let path = Self::path();

@@ -249,6 +249,36 @@ impl ConduitApp {
                 }
             }
         }
+        if self.at_bottom || self.pending_message_jump.is_some() {
+            self.restore_reading_position = false;
+        }
+        if self.restore_reading_position && !self.chat_rows.rows.is_empty() {
+            if let Some((key, offset, _)) = self
+                .selected_session
+                .and_then(|id| self.reading_positions.get(&id))
+            {
+                let row = self
+                    .chat_rows
+                    .rows
+                    .iter()
+                    .position(|row| row.key == *key)
+                    .or_else(|| {
+                        self.selected_session
+                            .and_then(|id| self.session(id))
+                            .and_then(|session| {
+                                session.messages.iter().position(|item| item.key == *key)
+                            })
+                            .and_then(|message| self.chat_rows.row(message))
+                    });
+                if let Some(row) = row {
+                    self.scroll.scroll_to(ListOffset {
+                        item_ix: row,
+                        offset_in_item: *offset,
+                    });
+                }
+            }
+            self.restore_reading_position = false;
+        }
     }
     pub(in crate::app) fn remeasure_message(&self, index: usize) {
         if let Some(row) = self.chat_rows.row(index)
@@ -320,6 +350,58 @@ mod tests {
         rows.refresh(Some(&session), &HashSet::new());
         assert_eq!(rows.rows.len(), 5);
         assert_eq!(rows.row(402), Some(3));
+    }
+
+    #[cfg(feature = "ui-tests")]
+    #[gpui_kit::test]
+    fn session_switch_restores_stable_reading_anchor_and_bottom_preference(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (app, cx, _) = crate::app::queue::tests::fixture(cx, "reading-anchor");
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.session_mut(1).unwrap().messages =
+                    (0..120).map(|i| message(i, "User", "history")).collect();
+                app.session_mut(2).unwrap().messages = (0..20)
+                    .map(|i| message(i, "User", "other history"))
+                    .collect();
+                app.sync_chat_rows();
+                app.at_bottom = false;
+                app.scroll.scroll_to(super::ListOffset {
+                    item_ix: 40,
+                    offset_in_item: super::px(7.),
+                });
+                for _ in 0..10 {
+                    app.switch(1, Some(2), window, cx);
+                    app.sync_chat_rows();
+                    assert!(app.at_bottom);
+                    app.switch(0, Some(1), window, cx);
+                    app.sync_chat_rows();
+                    let top = app.scroll.logical_scroll_top();
+                    assert_eq!(app.chat_rows.rows[top.item_ix].key, "m-40");
+                    assert_eq!(top.offset_in_item, super::px(7.));
+                    assert!(!app.at_bottom);
+                }
+                app.switch(1, Some(2), window, cx);
+                app.sync_chat_rows();
+                app.session_mut(1)
+                    .unwrap()
+                    .messages
+                    .insert(0, message(999, "User", "inserted"));
+                app.switch(0, Some(1), window, cx);
+                app.sync_chat_rows();
+                assert_eq!(
+                    app.chat_rows.rows[app.scroll.logical_scroll_top().item_ix].key,
+                    "m-40"
+                );
+                app.jump_to_message(1, "m-80", cx);
+                app.sync_chat_rows();
+                assert_eq!(
+                    app.chat_rows.rows[app.scroll.logical_scroll_top().item_ix].key,
+                    "m-80"
+                );
+            })
+        });
     }
 
     #[cfg(feature = "ui-tests")]

@@ -101,11 +101,7 @@ pub enum ProviderSource {
 
 impl ModelProvider {
     pub fn ccs_id(engine: Provider, id: &str) -> String {
-        let engine = match engine {
-            Provider::Claude => "claude",
-            Provider::Codex => "codex",
-            Provider::OpenCode => "opencode",
-        };
+        let engine = engine.descriptor().id;
         format!("ccs:{engine}:{id}")
     }
 

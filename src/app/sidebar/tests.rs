@@ -79,6 +79,45 @@ fn visible_sessions(app: &Entity<ConduitApp>, cx: &mut VisualTestContext) -> Vec
 }
 
 #[gpui_kit::test]
+fn virtual_sidebar_keyboard_opens_hundredth_session_and_restores_menu_focus(
+    cx: &mut TestAppContext,
+) {
+    let (app, cx) = fixture(cx, 120);
+    cx.update(|window, cx| {
+        let focus = app.read(cx).sidebar.focus.clone().unwrap();
+        focus.focus(window, cx);
+    });
+    cx.simulate_keystrokes("home");
+    for _ in 0..100 {
+        cx.simulate_keystrokes("down");
+    }
+    draw(&app, cx);
+    cx.simulate_keystrokes("enter");
+    draw(&app, cx);
+    cx.update(|window, cx| {
+        let app = app.read(cx);
+        assert_eq!(app.selected_session, Some(21));
+        assert!(app.sidebar.focus.as_ref().unwrap().is_focused(window));
+    });
+    cx.simulate_keystrokes("shift-f10");
+    draw(&app, cx);
+    cx.update(|_, cx| assert!(app.read(cx).sidebar.menu.is_some()));
+    cx.simulate_keystrokes("escape");
+    draw(&app, cx);
+    cx.update(|window, cx| {
+        let app = app.read(cx);
+        assert!(app.sidebar.menu.is_none());
+        assert!(app.sidebar.focus.as_ref().unwrap().is_focused(window));
+    });
+    cx.simulate_keystrokes("home left");
+    draw(&app, cx);
+    assert!(visible_sessions(&app, cx).is_empty());
+    cx.simulate_keystrokes("right");
+    draw(&app, cx);
+    assert_eq!(visible_sessions(&app, cx).len(), 120);
+}
+
+#[gpui_kit::test]
 fn session_context_menu_pins_and_unpins_without_switching_the_conversation(
     cx: &mut TestAppContext,
 ) {

@@ -140,10 +140,14 @@ pub fn read(path: &Path) -> Result<Option<String>> {
 
 pub fn validate(path: &Path, text: &str) -> Result<()> {
     ensure!(text.len() as u64 <= FILE_LIMIT, "内容超过 2 MiB");
-    if path.file_name().is_some_and(|n| n == "SKILL.md") {
+    if path
+        .file_name()
+        .is_some_and(|n| n == "SKILL.md" || n == management::DISABLED_SKILL)
+    {
         let (name, description) = skill_metadata(text);
         ensure!(
-            name.is_some() && !description.is_empty(),
+            name.as_ref().is_some_and(|name| !name.trim().is_empty())
+                && !description.trim().is_empty(),
             "SKILL.md 需要 YAML 头部中的 name 和 description"
         );
     } else if path.extension().is_some_and(|e| e == "toml") {
@@ -180,7 +184,15 @@ pub fn save(path: &Path, original: Option<&str>, text: &str) -> Result<()> {
     }
     let parent = path.parent().ok_or_else(|| anyhow::anyhow!("无效路径"))?;
     fs::create_dir_all(parent)?;
-    let temp = companion_path(path, ".conduit-edit-lock");
+    let lock_source = if path
+        .file_name()
+        .is_some_and(|n| n == management::DISABLED_SKILL)
+    {
+        path.with_file_name("SKILL.md")
+    } else {
+        path.to_path_buf()
+    };
+    let temp = companion_path(&lock_source, ".conduit-edit-lock");
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
