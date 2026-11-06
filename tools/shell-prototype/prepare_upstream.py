@@ -19,7 +19,8 @@ PATCHES = (PATCH, ROOT / "patches" / "base-fast-compat.patch",
            ROOT / "patches" / "kit-fast-compat.patch",
            ROOT / "patches" / "shell-fast-compat.patch",
            ROOT / "patches" / "shell-targeted-commands.patch",
-           ROOT / "patches" / "shell-owned-overlays.patch")
+           ROOT / "patches" / "shell-owned-overlays.patch",
+           ROOT / "patches" / "shell-resource-diagnostics.patch")
 DEST = ROOT / ".upstream"
 
 

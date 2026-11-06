@@ -1,5 +1,11 @@
 # Conduit GPUI Shell 验证原型
 
+2026-11-06 G5 重跑：固定源码与工具链下，dev / release 共 36 个 stress、12 个 diagnostics、18 个 breakdown 进程及 3 项资源探针通过；常规桌面回归各 48 项、Python 23 项通过。本轮证据独立保存在 `artifacts/g5-rerun-20261106T194814/`，原 3,216 个非二进制证据哈希未变。普通路径超时未复现，但长会话仍超参考预算，见 [重跑记录](../../docs/plugins/p2-g5-rerun-2026-11-06.md)。
+
+2026-11-06 G5 diagnostics：`verify-desktop.py --phase diagnostics --profile dev|release --samples 60 --warmup 10 --repeats 3` 对照 `explicit-draw` / `effects-only`，记录命令阶段、实际测试根绘制与运行时计数。失败保留 JSONL 和首次故障详情，整轮不发布成功汇总；唯一目录 `artifacts/desktop-diagnostics/<run>/run-results.json` 留存每轮结果。生产代码已修复成功结果收尾的冗余通知；普通路径截止时间故障仍待定位，见 [本轮记录](../../docs/plugins/p2-command-diagnostics-2026-11-06.md)。
+
+2026-11-06 G5 breakdown 后续：`verify-desktop.py --phase breakdown --profile dev|release --samples 60 --warmup 10 --repeats 3` 测量 host / registered / plugin 三场景，单列同步分发、更新副作用、结果收尾和显式绘制。输出 `desktop-breakdown-{profile}-results.json` 及独立原始目录，保留 performance/stress 证据。同工具链对照、计时边界、一次未定位的 dev 截止时间故障和复测结果见 [分项测量记录](../../docs/plugins/p2-breakdown-probe-2026-11-06.md)。
+
 2026-11-06 G5 stress 后续：`verify-desktop.py --phase stress --profile dev|release --samples 60 --warmup 10 --repeats 3 --cycles 20` 增加固定长会话、20 个注册包、3 个活动 VM、故障隔离和启停/空闲内存曲线。dev / release 各完成 18 个采样进程与 45 项常规回归。stress 结果独立保存，不覆盖 performance 六场景报告；长会话仍有预算超出，负载、校验与实测见 [stress 记录](../../docs/plugins/p2-stress-probe-2026-11-06.md)。
 
 2026-11-06 回归后续：`verify-desktop.py --phase test --profile release` 已支持普通 release 常规测试，插件定位改为组件 ID / 原生语义，原先 18 项失败全部解决；dev / release 各 45 项通过。`--profile` 同样适用于 check / build，日志、数据目录和报告按 profile 分开，空测试组或检查期间源码变化会使验证失败。详见 [release 回归记录](../../docs/plugins/p2-release-ui-regression-2026-11-06.md)。

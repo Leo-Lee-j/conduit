@@ -474,7 +474,23 @@ fn native_work_is_charged_after_return_and_cannot_revive_host_calls(cx: &mut Tes
         0,
         "a caught resource exception must not allow a later zero-argument host call"
     );
+    let fault = runtime.resource_diagnostic().unwrap();
+    for detail in [
+        "entry=render",
+        "elapsed_ms=",
+        "limit_ms=10.000",
+        "native_calls=",
+        "bridge_values=",
+        "site=",
+    ] {
+        assert!(fault.contains(detail), "missing {detail}: {fault}");
+    }
     runtime.stop();
+    assert_eq!(
+        runtime.resource_diagnostic().unwrap(),
+        fault,
+        "stop must preserve the first fault's evidence"
+    );
     drop(runtime);
     close(host, cx);
 }

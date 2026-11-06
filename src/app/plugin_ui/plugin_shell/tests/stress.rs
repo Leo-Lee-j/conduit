@@ -7,17 +7,17 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{path::PathBuf, time::Instant};
 
-const PACKAGES: usize = 20;
-const ACTIVE: usize = 3;
-const SESSIONS: usize = 24;
-const MESSAGES: usize = 120;
-const PARAGRAPH: &str = "固定工作负载：中文与 emoji 😀。 Review the plugin lifecycle and preserve host input.\n\n- deterministic item\n- bounded data\n\n```rust\nlet count = 42;\n```\n\n";
+pub(super) const PACKAGES: usize = 20;
+pub(super) const ACTIVE: usize = 3;
+pub(super) const SESSIONS: usize = 24;
+pub(super) const MESSAGES: usize = 120;
+pub(super) const PARAGRAPH: &str = "固定工作负载：中文与 emoji 😀。 Review the plugin lifecycle and preserve host input.\n\n- deterministic item\n- bounded data\n\n```rust\nlet count = 42;\n```\n\n";
 
-fn owner(index: usize) -> PluginId {
+pub(super) fn owner(index: usize) -> PluginId {
     PluginId::new(format!("stress.plugin-{index:02}")).unwrap()
 }
 
-fn dataset() -> (crate::store::Store, Value) {
+pub(super) fn dataset() -> (crate::store::Store, Value) {
     let mut store = store();
     let mut digest = Sha256::new();
     let mut bytes = 0;
@@ -66,7 +66,7 @@ fn dataset() -> (crate::store::Store, Value) {
     (store, metadata)
 }
 
-fn packages(count: usize) -> Vec<ApprovedPackage> {
+pub(super) fn packages(count: usize) -> Vec<ApprovedPackage> {
     let root = PathBuf::from(std::env::var_os("CONDUIT_STRESS_PACKAGES").unwrap());
     let staging = PathBuf::from(std::env::var_os("CONDUIT_DATA_DIR").unwrap()).join("snapshots");
     (0..count)

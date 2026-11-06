@@ -108,7 +108,12 @@ def built_executable(log):
     return path
 
 
-def measure(common, samples=200, warmup=20, repeats=3, profile="dev", stress_cycles=None):
+def measure(common, samples=200, warmup=20, repeats=3, profile="dev", stress_cycles=None, *, breakdown=False):
+    if breakdown:
+        if stress_cycles is not None:
+            raise ValueError("breakdown and stress cannot share a run")
+        from desktop_breakdown import measure as measure_breakdown
+        return measure_breakdown(common, samples, warmup, repeats, profile)
     suite = "stress" if stress_cycles is not None else "performance"
     scenarios, probe = SCENARIOS, PROBE
     if stress_cycles is not None:

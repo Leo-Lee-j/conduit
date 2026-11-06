@@ -1,0 +1,133 @@
+--- a/crates/shell/src/limits.rs
++++ b/crates/shell/src/limits.rs
+@@ -91,6 +91,8 @@
+     pub enabled: Cell<bool>,
+     pub(crate) overlays: crate::overlay_owner::OverlayOwner,
+     fault: Cell<Option<&'static str>>,
++    diagnostic: RefCell<Option<String>>,
++    entry: Cell<&'static str>,
+     active: Cell<Option<(Instant, Duration)>>,
+     samples: RefCell<VecDeque<(Instant, Duration)>>,
+     used: Cell<Duration>,
+@@ -107,6 +109,8 @@
+             enabled: Cell::new(false),
+             overlays: Default::default(),
+             fault: Cell::new(None),
++            diagnostic: RefCell::new(None),
++            entry: Cell::new("inactive"),
+             active: Cell::new(None),
+             samples: RefCell::new(VecDeque::new()),
+             used: Cell::new(Duration::ZERO),
+@@ -117,10 +121,37 @@
+         })
+     }
+ 
++    #[track_caller]
+     pub fn fail(&self, reason: &'static str) -> anyhow::Error {
+-        self.fault.set(self.fault.get().or(Some(reason)));
++        // Capture only the first failure, before unwinding clears the active entry.
++        // These are wall times, not CPU usage; native calls include builder calls.
++        if self.fault.get().is_none() {
++            self.fault.set(Some(reason));
++            let site = std::panic::Location::caller();
++            let active = self
++                .active
++                .get()
++                .map(|(started, limit)| {
++                    format!(
++                        "entry={} elapsed_ms={:.3} limit_ms={:.3}",
++                        self.entry.get(),
++                        started.elapsed().as_secs_f64() * 1000.,
++                        limit.as_secs_f64() * 1000.
++                    )
++                })
++                .unwrap_or_else(|| "entry=inactive".into());
++            *self.diagnostic.borrow_mut() = Some(format!(
++                "{reason} [{active} native_calls={} bridge_values={} bridge_bytes={} used_ms={:.3} site={}:{}]",
++                self.native_calls.get(),
++                self.bridge_values.get(),
++                self.bridge_bytes.get(),
++                self.used.get().as_secs_f64() * 1000.,
++                site.file(),
++                site.line()
++            ));
++        }
+         self.overlays.stop();
+-        anyhow::anyhow!("script runtime disabled: {}", self.fault.get().unwrap())
++        self.error().unwrap()
+     }
+ 
+     pub fn error(&self) -> Option<anyhow::Error> {
+@@ -129,6 +160,11 @@
+             .map(|reason| anyhow::anyhow!("script runtime disabled: {reason}"))
+     }
+ 
++    pub fn diagnostic(&self) -> Option<String> {
++        self.diagnostic.borrow().clone()
++    }
++
++    #[track_caller]
+     pub fn check(&self) -> anyhow::Result<()> {
+         if !self.enabled.get() {
+             return Ok(());
+@@ -149,15 +185,18 @@
+     }
+ 
+     pub fn enter(self: &Rc<Self>) -> anyhow::Result<Execution> {
+-        self.enter_with_limit(self.limits.deadline())
++        self.enter_with_limit(
++            self.limits.deadline(),
++            crate::scope::current_phase().map_or("detached", ScopePhase::as_str),
++        )
+     }
+ 
+     pub fn enter_module(self: &Rc<Self>) -> anyhow::Result<Execution> {
+-        self.enter_with_limit(self.limits.module)
++        self.enter_with_limit(self.limits.module, "module")
+     }
+ 
+     pub fn enter_materialize(self: &Rc<Self>) -> anyhow::Result<Execution> {
+-        self.enter_with_limit(self.limits.render)
++        self.enter_with_limit(self.limits.render, "materialize")
+     }
+ 
+     pub fn validate_tree(
+@@ -200,7 +239,11 @@
+         Ok(())
+     }
+ 
+-    fn enter_with_limit(self: &Rc<Self>, limit: Duration) -> anyhow::Result<Execution> {
++    fn enter_with_limit(
++        self: &Rc<Self>,
++        limit: Duration,
++        entry: &'static str,
++    ) -> anyhow::Result<Execution> {
+         self.check()?;
+         let outer = self.enabled.get() && self.active.get().is_none();
+         if outer {
+@@ -223,6 +266,7 @@
+             self.bridge_values.set(0);
+             self.bridge_bytes.set(0);
+             self.active.set(Some((now, limit)));
++            self.entry.set(entry);
+         }
+         Ok(Execution {
+             resources: self.clone(),
+--- a/crates/shell/src/engine/quickjs/mod.rs
++++ b/crates/shell/src/engine/quickjs/mod.rs
+@@ -1657,6 +1657,15 @@
+             .as_ref()
+             .and_then(|resources| resources.error())
+             .map(|e| e.to_string())
++    }
++
++    /// First resource failure's entry, wall time, counters and check site.
++    /// Intended for diagnostic reports; the user-facing error remains concise.
++    /// Stopping a faulted runtime preserves this evidence.
++    pub fn resource_diagnostic(&self) -> Option<String> {
++        self.resources
++            .as_ref()
++            .and_then(|resources| resources.diagnostic())
+     }
+ 
+     /// Revokes tasks and prevents subsequent entry, even if a view is retained.

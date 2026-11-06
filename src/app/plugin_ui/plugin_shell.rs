@@ -365,6 +365,7 @@ impl ConduitApp {
                 app.sync_plugin_context();
                 app.refresh_shell_context(cx);
                 if let Some(shell) = &mut app.plugins.shell {
+                    let previous_error = shell.error.clone();
                     match shell.host.accept(completed, cx) {
                         Ok(Some(value)) => {
                             shell.result = Some(format!("{value:?}"));
@@ -374,7 +375,11 @@ impl ConduitApp {
                         Err(error) => shell.error = Some(format!("{error:#}")),
                     }
                     shell.tasks.remove(&task_key);
-                    cx.notify();
+                    // Successful replies only update bookkeeping. Script changes
+                    // notify their own view; repaint the host for error changes.
+                    if shell.error != previous_error {
+                        cx.notify();
+                    }
                 }
             });
         });

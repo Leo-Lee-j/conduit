@@ -5,6 +5,10 @@ use gpui_kit::component::WindowExt;
 use gpui_kit::{AppContext, Entity, Focusable, TestAppContext, VisualTestContext, px, size};
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
+#[path = "tests/breakdown.rs"]
+mod breakdown;
+#[path = "tests/diagnostics.rs"]
+mod diagnostics;
 #[path = "tests/interaction.rs"]
 mod interaction;
 #[path = "tests/performance.rs"]
@@ -43,6 +47,15 @@ fn fixture_with_store(
     packages: Vec<ApprovedPackage>,
     store: crate::store::Store,
 ) -> (Entity<ConduitApp>, &mut VisualTestContext) {
+    fixture_with_frame_counter(cx, packages, store, None)
+}
+
+fn fixture_with_frame_counter(
+    cx: &mut TestAppContext,
+    packages: Vec<ApprovedPackage>,
+    store: crate::store::Store,
+    frames: Option<Rc<std::cell::Cell<u64>>>,
+) -> (Entity<ConduitApp>, &mut VisualTestContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_shell::init(cx);
@@ -59,7 +72,16 @@ fn fixture_with_store(
         });
         *slot.borrow_mut() = Some(app.clone());
         let shell = cx.new(|cx| gpui_shell::ShellRoot::new(app.into(), window, cx));
-        gpui_kit::component::Root::new(shell, window, cx)
+        let content: gpui_kit::AnyView = match frames {
+            Some(frames) => cx
+                .new(|_| diagnostics::FrameProbe {
+                    content: shell.into(),
+                    frames,
+                })
+                .into(),
+            None => shell.into(),
+        };
+        gpui_kit::component::Root::new(content, window, cx)
     });
     cx.simulate_resize(size(px(1600.), px(800.)));
     draw(cx);

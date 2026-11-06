@@ -1,11 +1,14 @@
 """Fixed, versioned G5 stress workloads and strict report validation."""
 import hashlib
+import json
 import statistics
 
 from desktop_performance import distribution, summarize
 from verify import ROOT
 
 STRESS_SCENARIOS = ("baseline", "registered", "active", "mixed", "lifecycle", "idle")
+PACKAGES = 20
+ACTIVE = 3
 STRESS_PROBE = "app::plugin_ui::shell::tests::stress::desktop_stress_probe"
 PARAGRAPH = ("固定工作负载：中文与 emoji 😀。 Review the plugin lifecycle and preserve host input.\n\n"
              "- deterministic item\n- bounded data\n\n```rust\nlet count = 42;\n```\n\n")
@@ -26,7 +29,7 @@ def dataset_metadata():
             "longest_message_bytes": longest, "text_sha256": digest.hexdigest()}
 
 
-def prepare_packages(destination):
+def prepare_packages(destination, *, breakdown=False):
     source = ROOT / "fixtures/development-overview"
     digest = hashlib.sha256()
     for index in range(20):
@@ -35,10 +38,49 @@ def prepare_packages(destination):
         folder.mkdir(parents=True, exist_ok=False)
         for name in ("conduit-plugin.json", "gpui-shell.json", "navigation.js", "summary.js"):
             text = (source / name).read_text(encoding="utf-8").replace("example.workspace-overview", owner)
+            if breakdown and name == "conduit-plugin.json":
+                manifest = json.loads(text)
+                manifest["contributes"]["commands"].extend([
+                    {"id": f"{owner}.local", "title": "Local increment", "scope": "workspace",
+                     "binding": {"view": f"{owner}.summary", "command": "local"}},
+                    {"id": f"{owner}.metadata", "title": "Read metadata", "scope": "workspace",
+                     "requiredPermissions": ["workspace.metadata.read", "session.summary.read"],
+                     "binding": {"view": f"{owner}.summary", "command": "metadata"}},
+                ])
+                text = json.dumps(manifest, separators=(",", ":")) + "\n"
+            if breakdown and name == "summary.js":
+                imports = 'import { getContext, getWorkspaceMetadata } from "conduit";'
+                if text.count(imports) != 1:
+                    raise ValueError("HostModule fixture import changed")
+                text = text.replace(imports, 'import { getContext, getWorkspaceMetadata, getSessionSummary } from "conduit";')
+                marker = '    if (name === "increment") {'
+                if text.count(marker) != 1:
+                    raise ValueError("increment fixture injection point changed")
+                text = text.replace(
+                    marker,
+                    '    if (name === "local") {\n'
+                    '      this.count += 1;\n'
+                    '      cx.notify();\n'
+                    '      return { count: this.count };\n'
+                    '    }\n'
+                    '    if (name === "metadata") {\n'
+                    '      const workspace = getWorkspaceMetadata();\n'
+                    '      const session = getSessionSummary();\n'
+                    '      if (!workspace?.id || session?.workspaceId !== workspace.id || session.count !== 24) {\n'
+                    '        throw new Error("unexpected HostModule workload");\n'
+                    '      }\n'
+                    '      this.count += 1;\n'
+                    '      cx.notify();\n'
+                    '      return { count: this.count };\n'
+                    '    }\n'
+                    + marker,
+                    1,
+                )
             if index == 19 and name == "summary.js":
-                if text.count("this.count += 1;") != 1:
+                marker = '    if (name === "increment") {\n      this.count += 1;'
+                if text.count(marker) != 1:
                     raise ValueError("fault fixture injection point changed")
-                text = text.replace("this.count += 1;", "while (true) {}")
+                text = text.replace(marker, '    if (name === "increment") {\n      while (true) {}', 1)
             data = text.encode("utf-8")
             (folder / name).write_bytes(data)
             digest.update(f"{owner}/{name}\0".encode("utf-8"))
