@@ -174,9 +174,6 @@ impl Render for ConduitApp {
         }
         self.sync_plugin_context();
         self.refresh_plugin_views(cx);
-        if self.settings_ui.open {
-            return self.render_settings_workspace(window, cx);
-        }
         self.ensure_selected_transcript(cx);
         let render_started = Instant::now();
         let app_entity = cx.entity();
@@ -217,7 +214,15 @@ impl Render for ConduitApp {
             .sidebar_view
             .clone()
             .cached(StyleRefinement::default().size_full());
-        let mut conversation = if self.branch_navigation_open() {
+        let mut conversation = if self.settings_ui.open {
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .h_full()
+                .child(self.session_tab_bar(cx))
+                .child(self.render_settings_workspace(window, cx))
+        } else if self.branch_navigation_open() {
             v_flex()
                 .flex_1()
                 .min_w_0()
@@ -759,13 +764,17 @@ impl Render for ConduitApp {
                         })),
                 ),
         );
-        let conversation = self.with_terminal_panel(conversation.into_any_element(), window, cx);
+        let conversation = if self.settings_ui.open {
+            conversation.into_any_element()
+        } else {
+            self.with_terminal_panel(conversation.into_any_element(), window, cx)
+        };
         let conversation = v_flex()
             .flex_1()
             .min_w_0()
             .h_full()
             .child(div().flex_1().min_h_0().child(conversation))
-            .child(toolbar);
+            .when(!self.settings_ui.open, |layout| layout.child(toolbar));
         // The left workspace rail stays a resizable group. The right sidebar is
         // laid out by hand so dragging its edge follows the pointer 1:1 and its
         // width can be capped at half of the remaining content area.

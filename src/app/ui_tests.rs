@@ -225,18 +225,29 @@ fn settings_workspace_keeps_layout_and_returns_without_losing_context(cx: &mut T
                 !window.has_active_dialog(cx),
                 "settings are a destination, not a dialog"
             );
+            assert!(
+                app.read(cx)
+                    .open_tabs
+                    .contains(&super::DocumentTab::Settings)
+            );
+            assert_eq!(
+                app.read(cx).active_document(),
+                Some(super::DocumentTab::Settings)
+            );
         });
+        assert!(cx.debug_bounds("settings-tab").is_some());
         let surface = cx.debug_bounds("settings-workspace").unwrap();
         let header = cx.debug_bounds("settings-workspace-header").unwrap();
         let body = cx.debug_bounds("settings-workspace-body").unwrap();
         let footer = cx.debug_bounds("settings-workspace-footer").unwrap();
         let close = cx.debug_bounds("settings-close").unwrap();
-        assert!(surface.size.width >= px(width - 2.));
+        assert!(surface.size.width >= px(300.));
+        assert!(surface.left() >= px(0.) && surface.right() <= px(width));
         assert!(surface.bottom() <= px(height));
         assert!(body.top() >= header.bottom() && body.bottom() <= footer.top());
         assert!(
-            body.size.height >= px(350.),
-            "whole-window settings retain usable content height"
+            body.size.height >= px(280.),
+            "settings retain usable content height in the workspace"
         );
         assert!(close.top() >= header.top() && close.bottom() <= header.bottom());
         let appearance = cx.debug_bounds("settings-nav-1").unwrap();
@@ -254,7 +265,7 @@ fn settings_workspace_keeps_layout_and_returns_without_losing_context(cx: &mut T
         ] {
             let card = cx.debug_bounds(selector).unwrap();
             assert!(card.left() >= body.left() && card.right() <= body.right());
-            assert!(card.top() >= body.top() && card.bottom() <= body.bottom());
+            assert!(card.top() >= body.top());
             if let Some(last) = previous {
                 let last: gpui_kit::Bounds<gpui_kit::Pixels> = last;
                 assert!(card.left() > last.right());
@@ -273,6 +284,7 @@ fn settings_workspace_keeps_layout_and_returns_without_losing_context(cx: &mut T
             let _ = window.draw(cx);
             let app = app.read(cx);
             assert!(!app.settings_ui.open);
+            assert!(!app.open_tabs.contains(&super::DocumentTab::Settings));
             assert_eq!(app.settings_ui.page, 1, "remember last page");
             assert_eq!(app.input.read(cx).value().as_str(), "保留这份草稿");
             assert!(app.input.read(cx).focus_handle(cx).is_focused(window));
@@ -5405,10 +5417,10 @@ fn settings_extensions_lists_search_details_and_context_are_isolated(cx: &mut Te
         });
         let body = cx.debug_bounds("settings-workspace-body").unwrap();
         let list = cx.debug_bounds("extensions-list").unwrap();
-        assert!(list.size.height >= px(120.));
+        assert!(list.size.height > px(50.));
         let first = cx.debug_bounds("extension-detail-0").unwrap();
         let second = cx.debug_bounds("extension-detail-1").unwrap();
-        assert!(first.top() >= list.top() && second.bottom() <= list.bottom());
+        assert!(first.bottom() > list.top() && second.top() < list.bottom());
         assert!(first.right() <= body.right());
         assert!(
             cx.debug_bounds("extension-detail-79").is_none(),

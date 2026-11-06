@@ -7,26 +7,16 @@ impl ConduitApp {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let title_bar = TitleBar::new()
-            .bg(rgb(palette().sidebar_bg))
-            .border_color(rgb(palette().border))
-            .child(
-                h_flex().gap_2().child(app_icon(20.)).child(
-                    div()
-                        .text_size(px(13.))
-                        .font_semibold()
-                        .child("Conduit · 设置"),
-                ),
-            );
         v_flex()
             .id("settings-workspace")
             .test_support()
             .debug_selector(|| "settings-workspace".into())
             .track_focus(&self.settings_ui.focus)
-            .size_full()
+            .flex_1()
+            .min_h_0()
+            .w_full()
             .bg(rgb(palette().surface))
             .text_color(rgb(palette().text))
-            .child(title_bar)
             .child(
                 h_flex()
                     .id("settings-workspace-header")

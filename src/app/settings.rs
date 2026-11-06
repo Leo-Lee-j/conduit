@@ -436,10 +436,16 @@ impl ConduitApp {
                 .focus(window, cx);
             return;
         }
-        self.settings_ui.return_focus = window.focused(cx);
+        if !self.open_tabs.contains(&files::DocumentTab::Settings) {
+            self.open_tabs.push(files::DocumentTab::Settings);
+        }
         self.settings_ui.open = true;
         self.double_shift.cancel();
-        self.settings_ui.focus.focus(window, cx);
+        self.settings_ui
+            .search
+            .read(cx)
+            .focus_handle(cx)
+            .focus(window, cx);
         self.reload_all_models_async(false, window, cx);
         if matches!(self.settings_ui.page, 4 | 9) {
             self.ensure_extensions(window, cx, false);
@@ -449,13 +455,15 @@ impl ConduitApp {
 
     pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings_ui.open = false;
+        self.open_tabs
+            .retain(|tab| *tab != files::DocumentTab::Settings);
         self.extensions_ui.probe = None;
         self.extensions_ui.connection_probe = None;
         self.settings_ui
             .search
             .update(cx, |input, cx| input.set_value("", window, cx));
-        if let Some(focus) = self.settings_ui.return_focus.take() {
-            focus.focus(window, cx);
+        if let Some(active) = self.active_document() {
+            self.select_document(active, window, cx);
         } else {
             self.input.read(cx).focus_handle(cx).focus(window, cx);
         }

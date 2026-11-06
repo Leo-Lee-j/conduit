@@ -4,7 +4,6 @@ use super::*;
 pub(in crate::app) struct SettingsUi {
     pub open: bool,
     pub focus: FocusHandle,
-    pub return_focus: Option<FocusHandle>,
     pub page: usize,
     pub group: Option<usize>,
     pub search: Entity<InputState>,

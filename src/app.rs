@@ -602,7 +602,6 @@ impl ConduitApp {
             settings_ui: settings::SettingsUi {
                 open: false,
                 focus: cx.focus_handle(),
-                return_focus: None,
                 page: 0,
                 group: None,
                 search: settings_search,

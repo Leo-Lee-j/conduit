@@ -76,6 +76,8 @@ Codex 与 OpenCode 的 MCP 使用原生 `enabled` 字段，保留 TOML / JSONC �
 - 被排除的 `models::opencode::tests::native_cache_survives_restart_expires_daily_and_manual_refresh_bypasses_it` 单独运行仍超过 35 秒，测试进程已终止，没有计为通过；前次设置工作区验收也记录过同一测试停滞。
 - 未执行真实桌面截图或付费模型请求。UI 验证来自 GPUI 交互与边界测试，不能替代真实窗口的视觉验收。
 
-后续阶段：动态协议适配器接口、Claude MCP 精确作用域启停、逐条 MCP 删除/引用检查、模型收藏排序。现有实现保留这些能力边界，不宣称任意 CLI 可以仅填路径直接接入。
+CLI 扩展的下一阶段已落地为编译期 `CliAdapter` 契约与注册工厂，详见 [CLI 适配层与接入契约](cli-adapter-design.md)。运行时只消费启动描述与统一事件，OpenCode 旁路问答归属其适配器；新的 wire 实现可绕过旧 Protocol 分支独立接入。模型/扩展发现、历史导入和服务路由等引擎特有逻辑仍需按各 CLI 格式接入。
+
+后续增强：动态适配器加载、既有 Protocol 按引擎继续拆分、Claude MCP 精确作用域启停、逐条 MCP 删除/引用检查、模型收藏排序。现有实现保留这些能力边界，不宣称任意 CLI 可以仅填路径直接接入。
 
 设计使用 `ui-ux-pro-max` 中的信息层级、状态文字与渐进展示原则。技能包的 `scripts` 是指向未安装源码的文本占位，设计搜索脚本不可用；实现沿用项目既有主题和控件，并通过本地测试校验。

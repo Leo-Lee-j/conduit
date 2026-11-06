@@ -17,6 +17,7 @@ fn is_markdown(path: &Path) -> bool {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DocumentTab {
+    Settings,
     Chat(u64),
     File(u64),
     Diff(u64),
@@ -237,10 +238,15 @@ impl Render for FileDocumentView {
 
 impl ConduitApp {
     pub(super) fn active_document(&self) -> Option<DocumentTab> {
-        self.active_diff
-            .map(DocumentTab::Diff)
-            .or_else(|| self.active_file.map(DocumentTab::File))
-            .or_else(|| self.selected_session.map(DocumentTab::Chat))
+        self.settings_ui
+            .open
+            .then_some(DocumentTab::Settings)
+            .or_else(|| {
+                self.active_diff
+                    .map(DocumentTab::Diff)
+                    .or_else(|| self.active_file.map(DocumentTab::File))
+                    .or_else(|| self.selected_session.map(DocumentTab::Chat))
+            })
     }
 
     pub(super) fn select_document(
@@ -250,7 +256,16 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) {
         self.leave_branch_navigation();
+        if !matches!(tab, DocumentTab::Settings) && self.settings_ui.open {
+            self.settings_ui.open = false;
+            self.extensions_ui.probe = None;
+            self.extensions_ui.connection_probe = None;
+            self.settings_ui
+                .search
+                .update(cx, |input, cx| input.set_value("", window, cx));
+        }
         match tab {
+            DocumentTab::Settings => self.open_settings(window, cx),
             DocumentTab::Chat(id) => {
                 self.active_diff = None;
                 if let Some(index) = self
@@ -375,6 +390,15 @@ impl ConduitApp {
         let closing_active = self
             .active_document()
             .is_some_and(|tab| tabs.contains(&tab));
+        let closing_settings = tabs.contains(&DocumentTab::Settings);
+        if closing_settings {
+            self.settings_ui.open = false;
+            self.extensions_ui.probe = None;
+            self.extensions_ui.connection_probe = None;
+            self.settings_ui
+                .search
+                .update(cx, |input, cx| input.set_value("", window, cx));
+        }
         if closing_active && let Some(id) = self.selected_session {
             self.drafts
                 .insert(id, self.input.read(cx).value().to_string());
@@ -391,7 +415,7 @@ impl ConduitApp {
                 }
             }
         }
-        if closing_active {
+        if closing_active && !closing_settings {
             self.active_diff = None;
             self.active_file = None;
             if let Some(next) = self.open_tabs.last().copied() {
@@ -400,6 +424,22 @@ impl ConduitApp {
                 self.switch(workspace, None, window, cx);
             } else {
                 self.clear_workspace_selection(window, cx);
+            }
+        } else if closing_settings {
+            let next = self
+                .active_document()
+                .filter(|tab| self.open_tabs.contains(tab))
+                .or_else(|| self.open_tabs.last().copied());
+            if let Some(active) = next {
+                self.select_document(active, window, cx);
+            } else if tabs.iter().any(|tab| *tab != DocumentTab::Settings) {
+                if let Some(workspace) = self.selected_workspace {
+                    self.switch(workspace, None, window, cx);
+                } else {
+                    self.clear_workspace_selection(window, cx);
+                }
+            } else {
+                self.input.read(cx).focus_handle(cx).focus(window, cx);
             }
         }
         cx.notify();
@@ -1294,6 +1334,14 @@ impl ConduitApp {
             .when_some(selected, |bar, i| bar.selected_index(i));
         for tab in self.open_tabs.iter().copied() {
             let (title, tooltip, icon, running, unread, selector) = match tab {
+                DocumentTab::Settings => (
+                    "设置".to_owned(),
+                    "设置".to_owned(),
+                    Icon::new(IconName::Settings).small().into_any_element(),
+                    false,
+                    false,
+                    "settings-tab".to_owned(),
+                ),
                 DocumentTab::Chat(id) => {
                     let Some(s) = self.session(id) else {
                         continue;
@@ -1383,6 +1431,7 @@ impl ConduitApp {
                 }
             };
             let selector_close = match tab {
+                DocumentTab::Settings => "settings-tab-close".to_owned(),
                 DocumentTab::Chat(id) => format!("session-tab-close-{id}"),
                 DocumentTab::File(id) => format!("file-tab-close-{id}"),
                 DocumentTab::Diff(id) => format!("diff-tab-close-{id}"),
