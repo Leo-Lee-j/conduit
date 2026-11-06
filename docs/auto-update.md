@@ -44,11 +44,13 @@ $env:CONDUIT_UPDATE_PUBLIC_KEY = '<Base64 公钥>'
 
 1. 先合并/提交功能与版本号变更，更新 `Cargo.toml` 和 `Cargo.lock`，运行项目验证。
 2. 创建并推送与 Cargo 版本完全一致的稳定标签，例如 `v0.2.0`。推送后的标签不可移动；构建失败时修复代码并提升版本号发布新标签。
-3. `Release Windows` workflow 在 `windows-2025` 上使用 Rust 1.99.1 构建，安装 NSIS，打包主程序、更新助手及 MSVC CRT。
-4. CI 自动生成 Release notes，签名清单，再将安装包、SHA-256、`update.json`、`update.json.sig` 上传到 draft Release。
+3. `Release Windows` workflow 并行验证标签提交和构建安装包。验证只复用该提交在本仓库 `ci.yml` 中由分支 push 触发的最新 CI：已成功则跳过重复检查，尚未结束则最多等待 60 分钟，失败或取消则阻止发布；没有对应 CI 时补跑完整检查和测试。手动发布旧标签也按标签实际提交查询，不使用主分支最新提交的 CI 结果。
+4. 打包 job 在 `windows-2025` 上使用 Rust 1.99.1 构建，安装 NSIS，打包主程序、更新助手及 MSVC CRT，并预编译清单签名工具。验证和打包均成功且提交一致后，发布 job 下载本次运行的构建产物，生成 Release notes，签名清单，再将安装包、SHA-256、`update.json`、`update.json.sig` 上传到 draft Release。
 5. 所有资产上传并通过大小校验后，才发布并设置 Latest。失败保留 draft；可手动指定同一标签重跑。已经发布的版本不能被此 workflow 覆盖，修复请使用新版本。
 
 Release notes 根据 `.github/release.yml` 的 PR 标签分类。没有 PR 记录时，尚无已发布版本的首版使用 README 功能简介，后续版本使用上一个已发布版本标签以来的提交记录。仅有失败构建的标签不算已发布版本。预发布标签目前会被拒绝；首版只支持稳定版，不做 beta 通道或差分包。仓库必须允许 Actions 发布 Release，并为 `release` Environment 配置所需权限。若配置了 Environment 审批，GitHub 会在发布 job 前等待维护者审批。
+
+普通 CI、发布补充验证和打包使用相同的 Rust 缓存共享键，并在失败时也保存依赖缓存。默认分支生成的缓存可供标签运行恢复；不同标签之间的缓存不能直接互用，且开发/测试缓存不等于已有正式版编译产物，因此首次正式构建仍可能较慢。默认分支 CI 完成一次新配置后才能供后续标签复用缓存。构建中间产物保留 3 天；最终发布资产继续保存在 Release 中。`release` Environment 同时用于打包 job 读取更新公钥及发布 job 读取签名私钥，若启用环境审批，这两个 job 都受审批规则约束。
 
 下载地址固定为 `Leo-Lee-j/conduit`。Fork 必须同步修改协议仓库常量和发布校验。客户端使用匿名 GitHub API，请使用可公开读取的 Release；私有仓库需要额外设计更新源授权，不能在客户端打包 PAT。
 

@@ -14,11 +14,92 @@ concurrency:
   group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 jobs:
-  release:
+  validate:
+    name: Verify release commit
+    runs-on: windows-2025
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+      - name: Resolve release commit
+        id: source
+        shell: pwsh
+        run: |
+          $commit = git rev-parse HEAD
+          if ($LASTEXITCODE) { throw 'Cannot resolve release commit.' }
+          "commit=$commit" >> $env:GITHUB_OUTPUT
+      - name: Reuse or wait for CI on this commit
+        id: ci
+        timeout-minutes: 65
+        shell: pwsh
+        env:
+          RELEASE_COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $deadline = [DateTime]::UtcNow.AddMinutes(60)
+          $missing = 0
+          while ($true) {
+            $response = gh api --method GET "repos/$env:GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" -f "head_sha=$env:RELEASE_COMMIT" -f event=push -f per_page=1
+            if ($LASTEXITCODE) { throw 'Cannot inspect CI runs; refusing to skip verification.' }
+            $runs = @(($response | ConvertFrom-Json).workflow_runs)
+            if ($runs.Count -eq 0) {
+              # A branch push and tag push can arrive before CI has been registered.
+              if (++$missing -lt 4) { Start-Sleep -Seconds 10; continue }
+              Write-Host 'No push CI exists for this commit; running full verification here.'
+              'reused=false' >> $env:GITHUB_OUTPUT
+              break
+            }
+            $ci = $runs[0]
+            if ($ci.head_sha -cne $env:RELEASE_COMMIT -or $ci.event -cne 'push' -or $ci.head_repository.full_name -cne $env:GITHUB_REPOSITORY) {
+              throw 'CI run does not belong to the release commit and repository.'
+            }
+            if ($ci.status -eq 'completed') {
+              if ($ci.conclusion -ne 'success') { throw "CI run $($ci.id) did not pass ($($ci.conclusion)). Re-run CI before releasing." }
+              Write-Host "Reusing successful CI run $($ci.id) for $env:RELEASE_COMMIT."
+              'reused=true' >> $env:GITHUB_OUTPUT
+              break
+            }
+            if ([DateTime]::UtcNow -ge $deadline) { throw "Timed out waiting for CI run $($ci.id)." }
+            Write-Host "Waiting for CI run $($ci.id): $($ci.status)."
+            Start-Sleep -Seconds 20
+          }
+      - name: Rust toolchain
+        if: steps.ci.outputs.reused == 'false'
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+          rustup override set 1.99.1
+      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+        if: steps.ci.outputs.reused == 'false'
+        with:
+          shared-key: windows-msvc
+          cache-on-failure: true
+      - run: cargo fmt --all --check
+        if: steps.ci.outputs.reused == 'false'
+      - run: cargo clippy --locked --all-targets -- -D warnings
+        if: steps.ci.outputs.reused == 'false'
+      - run: cargo clippy --locked --all-targets --features ui-tests -- -D warnings
+        if: steps.ci.outputs.reused == 'false'
+      - run: cargo test --locked -- --test-threads=1
+        if: steps.ci.outputs.reused == 'false'
+      - run: "cargo test --locked --features ui-tests --bin conduit app:: -- --test-threads=1"
+        if: steps.ci.outputs.reused == 'false'
+      - run: cargo build --locked --bin conduit --bin conduit-updater
+        if: steps.ci.outputs.reused == 'false'
+  build:
+    name: Build Windows installer
     runs-on: windows-2025
     environment: release
-    permissions:
-      contents: write
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+      artifact-id: ${{ steps.artifact.outputs.artifact-id }}
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
@@ -28,6 +109,13 @@ jobs:
         with:
           ref: refs/tags/${{ inputs.tag || github.ref_name }}
           fetch-depth: 0
+      - name: Resolve release commit
+        id: source
+        shell: pwsh
+        run: |
+          $commit = git rev-parse HEAD
+          if ($LASTEXITCODE) { throw 'Cannot resolve release commit.' }
+          "commit=$commit" >> $env:GITHUB_OUTPUT
       - name: Verify version and signing configuration
         shell: pwsh
         run: |
@@ -45,20 +133,70 @@ jobs:
       - name: Rust toolchain
         shell: pwsh
         run: |
-          rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+          rustup toolchain install 1.99.1 --profile minimal
           rustup override set 1.99.1
       - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
-      - run: cargo fmt --all --check
-      - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo clippy --locked --all-targets --features ui-tests -- -D warnings
-      - run: cargo test --locked -- --test-threads=1
-      - run: "cargo test --locked --features ui-tests --bin conduit app:: -- --test-threads=1"
+        with:
+          shared-key: windows-msvc
+          cache-on-failure: true
       - name: Build and package
         shell: pwsh
         run: |
           choco install nsis --yes --no-progress
           if ($LASTEXITCODE) { throw 'NSIS installation failed.' }
           ./scripts/package-windows.ps1 -MakeNsis "${env:ProgramFiles(x86)}/NSIS/makensis.exe"
+      - name: Build manifest signing tool
+        run: cargo build --locked --release --bin release-manifest
+      - name: Retain installer and signing tool
+        id: artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-release
+          path: |
+            target/dist/Conduit-*-windows-x64-setup.exe
+            target/dist/Conduit-*-windows-x64-setup.exe.sha256
+            target/release/release-manifest.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+  release:
+    name: Sign and publish verified installer
+    needs: [validate, build]
+    runs-on: windows-2025
+    environment: release
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      CONDUIT_UPDATE_PUBLIC_KEY: ${{ vars.CONDUIT_UPDATE_PUBLIC_KEY }}
+    steps:
+      - name: Require matching verified and packaged commits
+        shell: pwsh
+        env:
+          VERIFIED_COMMIT: ${{ needs.validate.outputs.commit }}
+          PACKAGED_COMMIT: ${{ needs.build.outputs.commit }}
+        run: |
+          if (-not $env:VERIFIED_COMMIT -or $env:VERIFIED_COMMIT -cne $env:PACKAGED_COMMIT) {
+            throw 'Verified commit does not match the packaged commit.'
+          }
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.build.outputs.commit }}
+          fetch-depth: 0
+      - name: Verify release tag still identifies packaged commit
+        shell: pwsh
+        env:
+          PACKAGED_COMMIT: ${{ needs.build.outputs.commit }}
+        run: |
+          $commit = git rev-parse "refs/tags/$env:RELEASE_TAG^{commit}"
+          if ($LASTEXITCODE -or $commit -cne $env:PACKAGED_COMMIT) { throw 'Release tag changed during the build.' }
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          merge-multiple: true
+          path: target
       - name: Generate release notes and sign manifest
         shell: pwsh
         env:
@@ -89,7 +227,7 @@ jobs:
           }
           [IO.File]::WriteAllText('target/dist/release-notes.md', $notes.body)
           $installer = "target/dist/Conduit-$($env:RELEASE_TAG.Substring(1))-windows-x64-setup.exe"
-          cargo run --locked --release --bin release-manifest -- $installer target/dist/release-notes.md
+          & ./target/release/release-manifest.exe $installer target/dist/release-notes.md
           if ($LASTEXITCODE) { throw 'Manifest signing failed.' }
       - name: Upload complete draft and publish
         shell: pwsh
