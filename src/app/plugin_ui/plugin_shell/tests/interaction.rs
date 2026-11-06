@@ -171,17 +171,17 @@ fn desktop_settings_and_narrow_dock_preserve_plugin_input(cx: &mut TestAppContex
     let input = focused(cx);
     cx.update(|window, cx| app.update(cx, |app, cx| app.open_settings(window, cx)));
     draw(cx);
-    assert!(cx.debug_bounds("settings-workspace").is_some());
+    assert!(cx.element_bounds("settings-workspace").is_some());
     cx.simulate_keystrokes("escape");
     draw(cx);
-    assert!(cx.debug_bounds("settings-workspace").is_none());
+    assert!(cx.element_bounds("settings-workspace").is_none());
     cx.update(|window, _| assert!(input.is_focused(window)));
     for width in [850., 1100., 1600., 850.] {
         cx.simulate_resize(size(px(width), px(700.)));
         draw(cx);
         draw(cx);
-        let dock = cx.debug_bounds("detail-panel").unwrap();
-        let toolbar = cx.debug_bounds("conversation-toolbar").unwrap();
+        let dock = cx.element_bounds("detail-panel").unwrap();
+        let toolbar = cx.element_bounds("conversation-toolbar").unwrap();
         let field = cx.update(|window, _| {
             gpui_kit::base::test_support::find(window, &[], &"plugin-summary-input".into())
                 .unwrap()
@@ -198,8 +198,8 @@ fn desktop_settings_and_narrow_dock_preserve_plugin_input(cx: &mut TestAppContex
     }
     cx.update(|window, cx| app.update(cx, |app, cx| app.close_right_view(window, cx)));
     draw(cx);
-    assert!(cx.debug_bounds("detail-panel").is_none());
-    let toolbar = cx.debug_bounds("conversation-toolbar").unwrap();
+    assert!(cx.element_bounds("detail-panel").is_none());
+    let toolbar = cx.element_bounds("conversation-toolbar").unwrap();
     assert!(toolbar.right() <= px(850.));
     open_summary(&app, cx);
     assert!(text(&app, true, cx).contains("Input: 窄窗草稿"));

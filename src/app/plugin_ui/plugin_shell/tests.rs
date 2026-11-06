@@ -1,5 +1,5 @@
 use super::{ApprovedPackage, ConduitApp, PluginId, builtins};
-use crate::app::plugin_ui::tests::{click, draw, store};
+use crate::app::plugin_ui::tests::{ElementBounds as _, click, draw, store};
 use conduit_shell_prototype::package::PackageSnapshot;
 use gpui_kit::component::WindowExt;
 use gpui_kit::{AppContext, Entity, Focusable, TestAppContext, VisualTestContext, px, size};
@@ -7,21 +7,41 @@ use std::{cell::RefCell, rc::Rc, time::Duration};
 
 #[path = "tests/interaction.rs"]
 mod interaction;
+#[path = "tests/performance.rs"]
+mod performance;
+#[path = "tests/stress.rs"]
+mod stress;
 
 fn package() -> ApprovedPackage {
     let source =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/development-overview");
-    let snapshot = PackageSnapshot::prepare(
-        &source,
-        &std::env::temp_dir().join("conduit-desktop-plugin-tests"),
-    )
-    .unwrap();
+    let staging = std::env::var_os("CONDUIT_DATA_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("plugin-test-snapshots")
+        .join(std::process::id().to_string());
+    let snapshot = PackageSnapshot::prepare(&source, &staging).unwrap();
     let grants = snapshot.manifest().permissions().clone();
     ApprovedPackage::new(snapshot, grants).unwrap()
 }
 
 pub(in crate::app) fn fixture(
     cx: &mut TestAppContext,
+) -> (Entity<ConduitApp>, &mut VisualTestContext) {
+    fixture_with_packages(cx, vec![package()])
+}
+
+fn fixture_with_packages(
+    cx: &mut TestAppContext,
+    packages: Vec<ApprovedPackage>,
+) -> (Entity<ConduitApp>, &mut VisualTestContext) {
+    fixture_with_store(cx, packages, store())
+}
+
+fn fixture_with_store(
+    cx: &mut TestAppContext,
+    packages: Vec<ApprovedPackage>,
+    store: crate::store::Store,
 ) -> (Entity<ConduitApp>, &mut VisualTestContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
@@ -31,9 +51,10 @@ pub(in crate::app) fn fixture(
     let slot = output.clone();
     let (_, cx) = cx.add_window_view(|window, cx| {
         let app = cx.new(|cx| {
-            let mut app = ConduitApp::with_store(window, cx, Ok(store()), false, false);
-            app.install_development_packages(vec![package()], cx)
-                .unwrap();
+            let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
+            if !packages.is_empty() {
+                app.install_development_packages(packages, cx).unwrap();
+            }
             app
         });
         *slot.borrow_mut() = Some(app.clone());
@@ -306,8 +327,8 @@ fn desktop_stop_revokes_saved_actions_and_pending_results(cx: &mut TestAppContex
     click(cx, "shell-stop-example.workspace-overview.summary");
     cx.executor().advance_clock(Duration::from_secs(2));
     draw(cx);
-    assert!(cx.debug_bounds(builtins::EXAMPLE_ACTIVITY).is_none());
-    assert!(cx.debug_bounds(builtins::EXAMPLE_STATUS).is_none());
+    assert!(cx.element_bounds(builtins::EXAMPLE_ACTIVITY).is_none());
+    assert!(cx.element_bounds(builtins::EXAMPLE_STATUS).is_none());
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
             assert!(app.plugins.shell.is_none());
@@ -326,8 +347,8 @@ fn desktop_narrow_dock_keeps_toolbar_and_host_dialog_focus(cx: &mut TestAppConte
         cx.simulate_resize(size(px(width), px(700.)));
         draw(cx);
         draw(cx);
-        let toolbar = cx.debug_bounds("conversation-toolbar").unwrap();
-        let dock = cx.debug_bounds("detail-panel").unwrap();
+        let toolbar = cx.element_bounds("conversation-toolbar").unwrap();
+        let dock = cx.element_bounds("detail-panel").unwrap();
         assert!(dock.right() <= px(width));
         assert_eq!(toolbar.size.height, px(34.));
         if width < 1100. {

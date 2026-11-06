@@ -15,13 +15,13 @@ TARGET = REPO / "target" / "shell-prototype"
 OUT = ROOT / "artifacts"
 
 
-def run(name, args, timeout=1800):
+def run(name, args, timeout=1800, env=None):
     started = time.monotonic()
     print(f"[{name}] {' '.join(str(arg) for arg in args)}", flush=True)
     log = OUT / f"{name}.log"
     with log.open("w", encoding="utf-8") as stream:
         try:
-            process = subprocess.Popen(args, cwd=REPO, stdout=stream, stderr=subprocess.STDOUT,
+            process = subprocess.Popen(args, cwd=REPO, env=env, stdout=stream, stderr=subprocess.STDOUT,
                                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
             try:
                 code = process.wait(timeout=timeout)

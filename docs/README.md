@@ -13,6 +13,7 @@
 - [OpenCode 接入](opencode-cli.md)
 - [Git 界面](git-ui-design.md)
 - [CLI 与模型服务设置](cli-model-services-design.md)
+- [AI 设置专项完善](ai-settings-management-design.md)：引擎注册与启停、模型管理、Skills / MCP 展示和原生配置管理。
 - [文件引用](chat-file-mentions.md)
 - [会话并发](session-concurrency.md)
 - [Mermaid 预览](mermaid.md)
@@ -22,6 +23,9 @@
 
 以下文档记录特定阶段的评估或验收，日期和结果仅代表当时状态。
 
+- [工作区 Terminal 设计评估](terminal-design.md)：活动工作区目录语义、组件复用、底部面板、性能预算和进程清理；首版已接入，测试结果与待验收项见第 11 节。
+- [应用整体人机工效审查](human-factors-review-2026-11-06.md)：首次使用、输入与审批、多会话、Git、设置、可访问性；11 项问题、实施顺序与实机验收矩阵。
+- [人机工效实施记录](human-factors-implementation-2026-11-06.md)：草稿恢复、输入操作、审批、Git Diff、阅读位置与键盘导航的实施和验证。
 - [性能设计审查](performance-design-review-2026-11-05.md)：聊天分组与工具统计、搜索进展、正文写放大，以及隔离探针和定向回归结果。
 - [通知中心实现进度与验收](notification-center-evaluation.md)：首版已实现；第 11 节记录集成回归结果及剩余人工验收项，前文保留设计依据。
 - [工作台界面插件扩展性评估](ui-plugin-extensibility-evaluation.md)
@@ -34,6 +38,9 @@
 - [P2-A 真实桌面开发接入](plugins/p2-desktop-integration-2026-11-05.md)：真实导航、右侧与底栏、工作区摘要、关闭 / 更新停止及 Windows 验证。
 - [P2-A G6 浮层所有权与清理](plugins/p2-overlay-cleanup-2026-11-05.md)：停止时按运行时撤销浮层、焦点恢复和更新前同步清理；下一步 G4 输入与焦点、G5 性能验收。
 - [P2-A G4 输入、焦点与主题](plugins/p2-input-focus-2026-11-05.md)：组合输入接口、插件编辑、主题切换、浮层 Esc 和窄窗状态回归；真实 Windows IME 仍待验收。
+- [P2-A G5 桌面性能测量入口](plugins/p2-performance-probe-2026-11-06.md)：六种插件状态的独立进程 CPU / 布局与进程内存采样、原始数据及校验；尚不代表生产性能准入。
+- [P2-A G5 stress 测量](plugins/p2-stress-probe-2026-11-06.md)：长会话、20 个注册包、3 个活动 VM、故障隔离与重复启停内存曲线，独立报告及数据校验。
+- [P2-A release 界面回归适配](plugins/p2-release-ui-regression-2026-11-06.md)：组件 ID / 原生语义定位，解决 18 项 release 失败；dev / release 各 45 项回归通过及独立归档。
 - [GPUI Shell 复用评估](plugins/gpui-shell-reuse-assessment.md)：官网与锁定版本对照、三处扩展分工及接入验证条件。
 - [发布与更新评估](github-release-and-updater-evaluation.md)
 - [OpenCode 接入评估](opencode-cli-evaluation.md)

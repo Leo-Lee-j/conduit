@@ -1,5 +1,11 @@
 # Conduit GPUI Shell 验证原型
 
+2026-11-06 G5 stress 后续：`verify-desktop.py --phase stress --profile dev|release --samples 60 --warmup 10 --repeats 3 --cycles 20` 增加固定长会话、20 个注册包、3 个活动 VM、故障隔离和启停/空闲内存曲线。dev / release 各完成 18 个采样进程与 45 项常规回归。stress 结果独立保存，不覆盖 performance 六场景报告；长会话仍有预算超出，负载、校验与实测见 [stress 记录](../../docs/plugins/p2-stress-probe-2026-11-06.md)。
+
+2026-11-06 回归后续：`verify-desktop.py --phase test --profile release` 已支持普通 release 常规测试，插件定位改为组件 ID / 原生语义，原先 18 项失败全部解决；dev / release 各 45 项通过。`--profile` 同样适用于 check / build，日志、数据目录和报告按 profile 分开，空测试组或检查期间源码变化会使验证失败。详见 [release 回归记录](../../docs/plugins/p2-release-ui-regression-2026-11-06.md)。
+
+2026-11-06 G5 后续：`verify-desktop.py --phase performance` 在六种插件状态下启动独立测试进程，测量宿主编辑 / 绘制、插件命令及进程内存；dev / release 均已采样并保存原始数据、二进制和源码摘要。支持 `--samples 200 --warmup 20 --repeats 3`、`--profile release` 和 `--target-dir`，默认使用 dev 构建。测试平台没有原生 GPU 呈现；性能探针使用实际视图状态校验，历史数据仅对应各自源码快照。详见 [G5 进度与边界](../../docs/plugins/p2-performance-probe-2026-11-06.md)。
+
 2026-11-05 G4 后续：开发夹具的摘要、dialog、sheet 新增原生输入框，显示输入值和当前主题。桌面回归覆盖组合输入接口、粘贴、主题、Tab / Esc、设置页返回与窄窗状态保留；真实 Windows IME 尚未验收，详见 [G4 进度](../../docs/plugins/p2-input-focus-2026-11-05.md)。
 
 2026-11-05 G6 后续：增加运行时浮层所有权补丁，停止时撤销 dialog / sheet / toast / HUD / tooltip，保留其他 owner，修复焦点恢复。桌面停用、关闭与更新准备支持同步清理，详见 [G6 实现及验证](../../docs/plugins/p2-overlay-cleanup-2026-11-05.md)。真实 IME、完整浮层交互、生产性能和未来插件存储写入屏障继续验收。
