@@ -143,6 +143,7 @@ impl ClaudeUsage {
 
 pub struct Protocol {
     provider: Provider,
+    initialized: bool,
     acp: opencode::State,
     cwd: String,
     prompt: String,
@@ -258,6 +259,7 @@ impl Protocol {
     pub fn new(provider: Provider, cwd: String, prompt: String, native_id: Option<String>) -> Self {
         Self {
             provider,
+            initialized: false,
             acp: Default::default(),
             cwd,
             prompt,
@@ -286,6 +288,10 @@ impl Protocol {
     pub fn with_model(mut self, model: Option<String>) -> Self {
         self.model = model;
         self
+    }
+    #[cfg(test)]
+    pub(crate) fn provider(&self) -> Provider {
+        self.provider
     }
     pub fn with_permission(mut self, permission: PermissionLevel) -> Self {
         self.permission = permission;
@@ -379,7 +385,7 @@ impl Protocol {
                 "--hostname".into(),
                 "127.0.0.1".into(),
                 "--port".into(),
-                "0".into(),
+                self.acp.port().to_string(),
                 "--mdns=false".into(),
                 "--cwd".into(),
                 self.cwd.clone(),
@@ -483,7 +489,11 @@ impl Protocol {
         Some(json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":id}}))
     }
     pub fn startup_pending(&self) -> bool {
-        self.provider == Provider::OpenCode && !self.text_only && self.acp.startup_pending()
+        if self.provider == Provider::OpenCode && !self.text_only {
+            self.acp.startup_pending()
+        } else {
+            !self.initialized
+        }
     }
     pub fn opencode_text_run(&self) -> bool {
         self.provider == Provider::OpenCode && self.text_only
@@ -505,6 +515,17 @@ impl Protocol {
         }
     }
     pub fn accept(&mut self, value: Value) -> Step {
+        self.initialized |= match self.provider {
+            Provider::Codex => {
+                value["id"] == 1 && value.get("result").is_some() && value.get("error").is_none()
+            }
+            Provider::Claude => {
+                value["type"] == "control_response"
+                    && value["response"]["request_id"] == "conduit-init"
+                    && value["response"]["subtype"] == "success"
+            }
+            Provider::OpenCode => self.text_only && value["type"] == "text",
+        };
         match self.provider {
             Provider::Codex => self.codex(value),
             Provider::Claude => self.claude(value),

@@ -93,6 +93,9 @@ pub(super) struct State {
 }
 
 impl State {
+    pub(super) fn port(&self) -> u16 {
+        self.question_port
+    }
     pub fn startup_pending(&self) -> bool {
         matches!(
             self.stage,

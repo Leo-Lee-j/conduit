@@ -14,6 +14,7 @@
 - [Git 界面](git-ui-design.md)
 - [CLI 与模型服务设置](cli-model-services-design.md)
 - [AI 设置专项完善](ai-settings-management-design.md)：引擎注册与启停、模型管理、Skills / MCP 展示和原生配置管理。
+- [CLI 适配层与接入契约](cli-adapter-design.md)：注册工厂、通用运行时边界、新 CLI 接入步骤与生命周期验证。
 - [文件引用](chat-file-mentions.md)
 - [会话并发](session-concurrency.md)
 - [Mermaid 预览](mermaid.md)

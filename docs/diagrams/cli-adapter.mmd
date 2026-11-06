@@ -1,0 +1,13 @@
+flowchart TD
+    UI["Chat and helper tasks"] --> Registry["Engine registry and factory"]
+    Registry --> Adapter["CliAdapter instance"]
+    Adapter --> Launch["LaunchSpec: args, environment, initial input"]
+    Launch --> Runtime["ChatRuntime: save gate, stdio, approvals, cancellation"]
+    Runtime --> Process["Windows Job: CLI process tree"]
+    Process --> Adapter
+    Adapter --> Events["Shared events and responses"]
+    Events --> Runtime
+    Runtime --> UI
+    Adapter --> Native["Optional native side channel"]
+    Process --> Cleanup["Verified cleanup"]
+    Cleanup --> Release["Drop adapter resources, then Finished"]

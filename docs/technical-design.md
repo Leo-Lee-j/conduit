@@ -8,6 +8,7 @@ Conduit 使用 Rust、GPUI 和 GPUI Kit 构建 Windows 原生界面，通过本�
 | --- | --- |
 | `main.rs`、`app.rs`、`app/` | 窗口、应用状态、聊天、文件、Git、设置与更新界面 |
 | `protocol.rs`、`protocol/` | 引擎请求、流式事件、审批与原生会话身份 |
+| `engines.rs`、`cli_adapter.rs`、`cli_adapter/` | 引擎注册工厂、启动描述、运行时适配器与原生旁路通信 |
 | `chat_runtime.rs`、`child.rs` | 后台任务、stdio、取消、Windows Job 与进程树清理 |
 | `cli.rs`、`models.rs`、`providers.rs`、`ccs.rs` | CLI 定位、模型目录与 Provider 路由 |
 | `history.rs`、`domain.rs`、`store.rs` | 历史导入、数据模型、兼容读取与原子保存 |
@@ -25,6 +26,8 @@ Conduit 使用 Rust、GPUI 和 GPUI Kit 构建 Windows 原生界面，通过本�
 - OpenCode 使用 ACP；自动命名与提交说明使用独立文本任务。
 
 每轮对话有独立运行时、事件通道、审批队列和取消标记。后台线程读取协议，UI 线程合并事件、刷新视图并保存状态。Windows Job Objects 管理子进程树，确认进程退出后才释放任务。
+
+聊天和辅助任务通过引擎注册表创建 `CliAdapter`。保存确认后，适配器返回最终参数、环境和首次输入方式；运行时统一处理 stdio、审批票据、取消和进程树清理。OpenCode 的原生问答通信由它的适配器负责，适配器资源在进程清理后释放。新 CLI 可独立实现该接口，具体边界、兼容范围和接入步骤见 [CLI 适配层与接入契约](cli-adapter-design.md)。
 
 会话固定工作区、引擎和原生会话 ID；续接失败会显示错误，不自动另建丢失上下文的会话。不同会话可以并行，同引擎同原生 ID 防重。Git 写操作按仓库范围与聊天协调，详见 [会话并发](session-concurrency.md)。
 

@@ -14,6 +14,7 @@ pub struct EngineDescriptor {
     pub version_signature: &'static str,
     pub guide: &'static str,
     pub capabilities: EngineCapabilities,
+    pub adapter: crate::cli_adapter::AdapterFactory,
 }
 
 pub struct EngineCapabilities {
@@ -40,6 +41,7 @@ pub const REGISTRY: &[EngineDescriptor] = &[
             mcp_toggle: false,
             protocol: "Stream JSON",
         },
+        adapter: crate::cli_adapter::claude,
     },
     EngineDescriptor {
         provider: Provider::Codex,
@@ -58,6 +60,7 @@ pub const REGISTRY: &[EngineDescriptor] = &[
             mcp_toggle: true,
             protocol: "App Server",
         },
+        adapter: crate::cli_adapter::codex,
     },
     EngineDescriptor {
         provider: Provider::OpenCode,
@@ -76,6 +79,7 @@ pub const REGISTRY: &[EngineDescriptor] = &[
             mcp_toggle: true,
             protocol: "ACP",
         },
+        adapter: crate::cli_adapter::opencode,
     },
 ];
 

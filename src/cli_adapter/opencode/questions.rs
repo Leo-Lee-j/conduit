@@ -1,9 +1,12 @@
 //! ACP does not forward OpenCode's native question events. Poll the same
 //! authenticated loopback server for the active session's pending requests.
-use super::*;
+use crate::protocol::Approval;
 use anyhow::Context;
+use anyhow::{Result, bail};
 use base64::Engine as _;
+use serde_json::Value;
 use std::collections::HashSet;
+use std::time::Duration;
 
 pub(super) struct QuestionBridge {
     agent: ureq::Agent,
@@ -98,20 +101,5 @@ impl QuestionBridge {
             .send_json(response)
             .context("OpenCode 回答提交失败")?;
         Ok(())
-    }
-}
-
-pub(super) fn respond(
-    writer: &SyncSender<Vec<u8>>,
-    bridge: Option<&QuestionBridge>,
-    approval: &Approval,
-    response: Value,
-) -> Result<()> {
-    if approval.kind == crate::protocol::ApprovalKind::OpenCodeUserInput {
-        bridge
-            .context("OpenCode 问答连接不可用")?
-            .respond(approval, response)
-    } else {
-        send(writer, response)
     }
 }

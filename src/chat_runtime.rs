@@ -1,7 +1,8 @@
 use crate::{
     child::{Child, available},
+    cli_adapter::{AdapterRequest, CliAdapter, Completion, InitialInput, LaunchSpec},
     domain::{PermissionLevel, Provider},
-    protocol::{Approval, Event, Protocol},
+    protocol::{Approval, Event},
 };
 use anyhow::{Result, bail};
 use serde_json::Value;
@@ -21,7 +22,10 @@ use std::{
 
 const PROCESS_CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 
-mod opencode_questions;
+#[cfg(test)]
+use crate::protocol::Protocol;
+#[cfg(test)]
+mod adapter_tests;
 #[cfg(test)]
 mod opencode_tests;
 
@@ -172,12 +176,17 @@ impl ChatRuntime {
         route: crate::providers::RuntimeRoute,
         cwd: PathBuf,
     ) -> Self {
-        let protocol = Protocol::new(provider, cwd.to_string_lossy().into_owned(), prompt, None)
-            .with_model(model)
-            .with_options(Default::default(), route)
-            .text_only();
-        let args = protocol.args();
-        Self::start_command(protocol, executable, args, cwd)
+        let adapter = (provider.descriptor().adapter)(AdapterRequest {
+            cwd: cwd.clone(),
+            prompt,
+            native_id: None,
+            model,
+            permission: PermissionLevel::ReadOnly,
+            effort: Default::default(),
+            route,
+            text_only: true,
+        });
+        Self::start_adapter_gated(adapter, executable, None, cwd, None)
     }
     #[cfg(test)]
     pub fn start(
@@ -221,17 +230,17 @@ impl ChatRuntime {
             effort,
             route,
         } = request;
-        let protocol = Protocol::new(
-            provider,
-            cwd.to_string_lossy().into_owned(),
+        let adapter = (provider.descriptor().adapter)(AdapterRequest {
+            cwd: cwd.clone(),
             prompt,
             native_id,
-        )
-        .with_model(model)
-        .with_permission(permission)
-        .with_options(effort, route);
-        let args = protocol.args();
-        Self::start_command_gated(protocol, executable, args, cwd, gate)
+            model,
+            permission,
+            effort,
+            route,
+            text_only: false,
+        });
+        Self::start_adapter_gated(adapter, executable, None, cwd, gate)
     }
 
     #[cfg(test)]
@@ -251,23 +260,30 @@ impl ChatRuntime {
         let args = protocol.args();
         Self::start_command(protocol, executable, args, cwd)
     }
+    #[cfg(test)]
     fn start_command(
         protocol: Protocol,
         executable: PathBuf,
         args: Vec<String>,
         cwd: PathBuf,
     ) -> Self {
-        Self::start_command_gated(protocol, executable, args, cwd, None)
+        let adapter = crate::cli_adapter::from_protocol(protocol, cwd.clone());
+        Self::start_adapter_gated(adapter, executable, Some(args), cwd, None)
     }
-    fn start_command_gated(
-        protocol: Protocol,
+    fn start_adapter_gated(
+        mut adapter: Box<dyn CliAdapter>,
         executable: PathBuf,
-        args: Vec<String>,
+        args: Option<Vec<String>>,
         cwd: PathBuf,
         gate: Option<Receiver<()>>,
     ) -> Self {
+        let command = LaunchCommand {
+            executable,
+            args,
+            cwd,
+        };
         Self::start_worker(move |stop, rx, tx, child| {
-            if let Some(gate) = gate {
+            if let Some(gate) = &gate {
                 loop {
                     if stop.load(Ordering::Acquire) {
                         return Ok(());
@@ -282,23 +298,12 @@ impl ChatRuntime {
             if stop.load(Ordering::Acquire) {
                 return Ok(());
             }
-            execute(
-                protocol,
-                LaunchCommand {
-                    executable,
-                    args,
-                    cwd,
-                },
-                stop,
-                rx,
-                tx,
-                child,
-            )
+            execute(adapter.as_mut(), &command, stop, rx, tx, child)
         })
     }
 
     fn start_worker(
-        work: impl FnOnce(
+        mut work: impl FnMut(
             Arc<AtomicBool>,
             Receiver<Control>,
             &crate::event_queue::Sender,
@@ -323,6 +328,9 @@ impl ChatRuntime {
             if let Some(child) = child {
                 cleanup_process(&child, &sender, &mut finished, PROCESS_CLEANUP_TIMEOUT);
             }
+            // Retain adapter resources through verified process cleanup, even
+            // when the launch or protocol loop panics.
+            drop(work);
             if let Event::Finished { cancelled, .. } = &mut finished {
                 *cancelled = stop.load(Ordering::Acquire);
             }
@@ -439,39 +447,50 @@ fn send(writer: &SyncSender<Vec<u8>>, value: Value) -> Result<()> {
         .map_err(|_| anyhow::anyhow!("CLI 输入队列不可用，任务未继续"))
 }
 
+fn respond(
+    writer: &SyncSender<Vec<u8>>,
+    approval: &Approval,
+    response: Value,
+    adapter: &mut dyn CliAdapter,
+) -> Result<()> {
+    if let Some(value) = adapter.route_response(approval, response)? {
+        send(writer, value)?;
+    }
+    Ok(())
+}
+
 struct LaunchCommand {
     executable: PathBuf,
-    args: Vec<String>,
+    // Fixtures may substitute a synthetic executable's arguments.
+    args: Option<Vec<String>>,
     cwd: PathBuf,
 }
 
 fn execute(
-    mut protocol: Protocol,
-    command: LaunchCommand,
+    protocol: &mut dyn CliAdapter,
+    command: &LaunchCommand,
     cancel: Arc<AtomicBool>,
     controls: Receiver<Control>,
     events: &crate::event_queue::Sender,
     owned_child: &mut Option<Child>,
 ) -> Result<()> {
-    let LaunchCommand {
-        executable,
-        mut args,
-        cwd,
-    } = command;
-    protocol.prepare()?;
-    let mut question_bridge = protocol
-        .opencode_question_connection()
-        .map(|(port, password)| {
-            if let Some(index) = args.iter().position(|arg| arg == "--port") {
-                args[index + 1] = port.to_string();
-            }
-            opencode_questions::QuestionBridge::new(port, password, &cwd)
-        });
-    let text_run = protocol.opencode_text_run();
-    let text_input = protocol.opencode_text_input();
-    let (program, full_args) = crate::cli::command_for(&executable, &args);
+    let LaunchSpec {
+        args,
+        environment,
+        input: initial_input,
+        completion,
+    } = protocol.launch()?;
+    if cancel.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    let args = command.args.as_deref().unwrap_or(&args);
+    let (initial_message, text_input) = match initial_input {
+        InitialInput::Json(value) => (Some(value), None),
+        InitialInput::TextToEof(text) => (None, Some(text)),
+    };
+    let (program, full_args) = crate::cli::command_for(&command.executable, args);
     let (child, mut pipes) =
-        Child::spawn_with_env(&program, &full_args, &cwd, protocol.environment())?;
+        Child::spawn_with_env(&program, &full_args, &command.cwd, &environment)?;
     *owned_child = Some(child);
     let child = owned_child.as_ref().unwrap();
     let (writer, input) = mpsc::sync_channel::<Vec<u8>>(128);
@@ -479,8 +498,7 @@ fn execute(
     let writer_done = done.clone();
     let (writer_error, failures) = mpsc::channel();
     thread::spawn(move || {
-        // OpenCode run reads its prompt from stdin to EOF before starting.
-        // Close the pipe after the prompt instead of sending ACP initialize.
+        // Some adapters consume a complete text request before producing output.
         if let Some(prompt) = text_input {
             if let Err(error) = pipes.stdin.write_all(prompt.as_bytes()) {
                 let _ = writer_error.send(error);
@@ -503,14 +521,13 @@ fn execute(
     // Keep the Child outside the unwind boundary so even a protocol-loop panic
     // reaches the same verified cleanup barrier as cancellation and errors.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<()> {
-        if !text_run {
-            send(&writer, protocol.initialize())?;
+        if let Some(message) = initial_message {
+            send(&writer, message)?;
         }
         let mut lines = Lines::new();
         let mut stderr = Vec::new();
         let mut approvals = ApprovalBroker::default();
         let mut last_message = Instant::now();
-        let mut initialized = false;
         let mut exited_at = None;
         let mut cancel_started: Option<Instant> = None;
         let mut question_poll = Instant::now();
@@ -536,19 +553,12 @@ fn execute(
             let mut messages = lines.poll(&mut pipes.stdout)?;
             if !cancel.load(Ordering::Acquire)
                 && question_poll.elapsed() >= Duration::from_millis(300)
-                && let Some(session) = protocol.opencode_question_session()
-                && let Some(bridge) = question_bridge.as_mut()
             {
-                messages.extend(bridge.poll(session)?);
+                messages.extend(protocol.poll()?);
                 question_poll = Instant::now();
             }
             for message in messages {
                 last_message = Instant::now();
-                if message.get("result").is_some()
-                    || message.get("type").and_then(Value::as_str) == Some("control_response")
-                {
-                    initialized = true;
-                }
                 let step = protocol.accept(message);
                 for write in step.writes {
                     // A queued configuration reply must not start a new prompt
@@ -561,11 +571,11 @@ fn execute(
                     let event = match event {
                         Event::Approval(approval) => {
                             if cancel.load(Ordering::Acquire) {
-                                opencode_questions::respond(
+                                respond(
                                     &writer,
-                                    question_bridge.as_ref(),
                                     &approval,
                                     protocol.approval_response(&approval, false),
+                                    protocol,
                                 )?;
                                 continue;
                             }
@@ -573,11 +583,11 @@ fn execute(
                             let approval = approvals.issue(approval)?;
                             if let Some(allow) = decision {
                                 let pending = approvals.take(&approval.id).unwrap();
-                                opencode_questions::respond(
+                                respond(
                                     &writer,
-                                    question_bridge.as_ref(),
                                     &pending,
                                     protocol.approval_response(&pending, allow),
+                                    protocol,
                                 )?;
                                 continue;
                             }
@@ -615,11 +625,11 @@ fn execute(
                         }
                         if let Some(approval) = approvals.take(&id) {
                             let allow = allow && approval.allow_once;
-                            opencode_questions::respond(
+                            respond(
                                 &writer,
-                                question_bridge.as_ref(),
                                 &approval,
                                 protocol.approval_response(&approval, allow),
+                                protocol,
                             )?;
                             let _ = events.send(Event::ApprovalResolved { id, allow });
                         }
@@ -630,12 +640,7 @@ fn execute(
                             .and_then(|approval| protocol.user_input_response(approval, &answers))
                         {
                             let approval = approvals.take(&id).unwrap();
-                            opencode_questions::respond(
-                                &writer,
-                                question_bridge.as_ref(),
-                                &approval,
-                                response,
-                            )?;
+                            respond(&writer, &approval, response, protocol)?;
                             let _ = events.send(Event::ApprovalResolved { id, allow: true });
                         }
                     }
@@ -652,11 +657,11 @@ fn execute(
                             if let Some(allow) = protocol.automatic_approval(&approval) {
                                 let id = approval.id.clone();
                                 if let Some(approval) = approvals.take(&id) {
-                                    opencode_questions::respond(
+                                    respond(
                                         &writer,
-                                        question_bridge.as_ref(),
                                         &approval,
                                         protocol.approval_response(&approval, allow),
+                                        protocol,
                                     )?;
                                     let _ = events.send(Event::ApprovalResolved { id, allow });
                                 }
@@ -677,16 +682,14 @@ fn execute(
             if let Some(code) = child.exit_code()? {
                 let exited = *exited_at.get_or_insert_with(Instant::now);
                 if lines.eof || exited.elapsed() > Duration::from_secs(2) {
-                    if text_run && code == 0 {
+                    if completion == Completion::SuccessfulExit && code == 0 {
                         return Ok(());
                     }
                     let diagnostic = String::from_utf8_lossy(&stderr);
                     bail!("CLI 在返回任务完成事件前退出（{code}）。{diagnostic}");
                 }
             }
-            if (!initialized || protocol.startup_pending())
-                && last_message.elapsed() > Duration::from_secs(60)
-            {
+            if protocol.startup_pending() && last_message.elapsed() > Duration::from_secs(60) {
                 bail!("CLI 初始化超过 60 秒；请检查登录状态、CLI 配置和 MCP 启动项");
             }
             thread::sleep(Duration::from_millis(10));
