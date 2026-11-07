@@ -266,7 +266,7 @@ pub(super) fn session_menu_button(
                 .child(Icon::new(icon).small().text_color(rgb(palette().faint)))
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().muted))
                         .child(label),
                 ),

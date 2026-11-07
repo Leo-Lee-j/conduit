@@ -16,7 +16,7 @@ impl ConduitApp {
     }
 
     pub(super) fn ensure_opencode_models(&mut self, refresh: bool, cx: &mut Context<Self>) {
-        if self.closing {
+        if self.closing || self.cli_installing() {
             return;
         }
         let cwd = self.opencode_model_workspace();

@@ -134,7 +134,7 @@ impl ConduitApp {
             .child(
                 h_flex().items_center().gap_2().child(app_icon(20.)).child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .font_semibold()
                         .text_color(rgb(palette().text))
                         .child("Conduit"),
@@ -156,7 +156,12 @@ impl ConduitApp {
                     .justify_center()
                     .gap_3()
                     .child(app_icon(64.))
-                    .child(div().text_size(px(20.)).font_semibold().child("Conduit"))
+                    .child(
+                        div()
+                            .text_size(ui_text_size(20.))
+                            .font_semibold()
+                            .child("Conduit"),
+                    )
                     .child(
                         h_flex()
                             .items_center()
@@ -164,7 +169,7 @@ impl ConduitApp {
                             .child(Spinner::new().small().color(rgb(palette().loading).into()))
                             .child(
                                 div()
-                                    .text_size(px(13.))
+                                    .text_size(ui_text_size(13.))
                                     .text_color(rgb(palette().muted))
                                     .child(format!("正在加载 {workspaces} 个工作区的 CLI 历史…")),
                             ),
@@ -239,6 +244,35 @@ impl Render for ConduitApp {
             sidebar,
             ["sidebar_layout", "sidebar_prepaint", "sidebar_paint"],
         );
+        let viewport_width = f32::from(window.viewport_size().width);
+        let sidebar_state =
+            window.use_keyed_state("body-resizable", cx, |_, _| ResizableState::default());
+        let measured_sidebar = sidebar_state
+            .read(cx)
+            .sizes()
+            .first()
+            .map(|width| f32::from(*width))
+            .filter(|width| *width > 0.)
+            .unwrap_or(NAVIGATION_DEFAULT_WIDTH);
+        let measured_sidebar = if self.plugins.collapsed() {
+            38.
+        } else {
+            measured_sidebar
+        };
+        self.sidebar_width = measured_sidebar;
+        let content_width = (viewport_width - measured_sidebar - 6.).max(320.);
+        let max_detail_width = (content_width * 0.5).max(260.);
+        self.plugins.dock.width = self.plugins.dock.width.clamp(260., max_detail_width);
+        let detail_width = self.plugins.dock.width;
+        let settings_width = (viewport_width
+            - measured_sidebar
+            - 6.
+            - if self.plugins.right_visible(self.branch_navigation_open()) {
+                detail_width + 6.
+            } else {
+                0.
+            })
+        .max(0.);
         let mut conversation = if self.settings_ui.open {
             v_flex()
                 .flex_1()
@@ -246,7 +280,7 @@ impl Render for ConduitApp {
                 .min_h_0()
                 .h_full()
                 .child(self.session_tab_bar(cx))
-                .child(self.render_settings_workspace(window, cx))
+                .child(self.render_settings_workspace(window, settings_width, cx))
         } else if self.branch_navigation_open() {
             v_flex()
                 .flex_1()
@@ -304,16 +338,20 @@ impl Render for ConduitApp {
                         .justify_center()
                         .gap_3()
                         .px_4()
-                        .child(div().text_size(px(14.)).child(if error.is_some() {
-                            "会话正文加载失败"
-                        } else {
-                            "正在加载会话…"
-                        }));
+                        .child(
+                            div()
+                                .text_size(ui_text_size(14.))
+                                .child(if error.is_some() {
+                                    "会话正文加载失败"
+                                } else {
+                                    "正在加载会话…"
+                                }),
+                        );
                     if let Some(error) = error {
                         loading = loading
                             .child(
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(ui_text_size(12.))
                                     .text_color(rgb(palette().muted))
                                     .child(error),
                             )
@@ -345,7 +383,7 @@ impl Render for ConduitApp {
                                     .child(provider_icon(session.provider))
                                     .child(
                                         div()
-                                            .text_size(px(12.))
+                                            .text_size(ui_text_size(12.))
                                             .text_color(rgb(palette().faint))
                                             .child(format!(
                                                 "{} · 可以开始输入",
@@ -355,14 +393,14 @@ impl Render for ConduitApp {
                             )
                             .child(
                                 div()
-                                    .text_size(px(30.))
+                                    .text_size(ui_text_size(30.))
                                     .font_bold()
                                     .text_color(rgb(palette().text))
                                     .child("今天想完成什么？"),
                             )
                             .child(
                                 div()
-                                    .text_size(px(14.))
+                                    .text_size(ui_text_size(14.))
                                     .text_color(rgb(palette().muted))
                                     .child(format!(
                                         "在 {} 中开始你的任务；CLI 登录与模型权限将在执行时确认。",
@@ -423,14 +461,14 @@ impl Render for ConduitApp {
                     )
                     .child(
                         div()
-                            .text_size(px(30.))
+                            .text_size(ui_text_size(30.))
                             .font_semibold()
                             .text_color(rgb(palette().text))
                             .child("今天想完成什么？"),
                     )
                     .child(
                         div()
-                            .text_size(px(14.))
+                            .text_size(ui_text_size(14.))
                             .text_color(rgb(palette().muted))
                             .child(format!(
                                 "会话将在 {directory} 中运行，输入任务后会按上次使用的引擎新建会话。"
@@ -549,7 +587,7 @@ impl Render for ConduitApp {
                                                     .gap_2()
                                                     .child(
                                                         div()
-                                                            .text_size(px(13.))
+                                                            .text_size(ui_text_size(13.))
                                                             .font_semibold()
                                                             .text_color(rgb(
                                                                 palette().highlight_text
@@ -564,7 +602,7 @@ impl Render for ConduitApp {
                                                                 .items_center()
                                                                 .rounded_full()
                                                                 .bg(rgb(palette().warning_chip_bg))
-                                                                .text_size(px(10.))
+                                                                .text_size(ui_text_size(10.))
                                                                 .text_color(rgb(
                                                                     palette().warning_chip_text
                                                                 ))
@@ -574,7 +612,7 @@ impl Render for ConduitApp {
                                             )
                                             .child(
                                                 div()
-                                                    .text_size(px(11.))
+                                                    .text_size(ui_text_size(11.))
                                                     .line_height(relative(1.4))
                                                     .text_color(rgb(palette().warning_muted))
                                                     .child("CLI 请求授权，仅对本次操作生效。"),
@@ -647,7 +685,7 @@ impl Render for ConduitApp {
                                         row.child(
                                             div()
                                                 .flex_1()
-                                                .text_size(px(11.))
+                                                .text_size(ui_text_size(11.))
                                                 .text_color(rgb(palette().warning_accent))
                                                 .child(
                                                     "CLI 未提供「允许本次」选项，此请求只能拒绝。",
@@ -752,14 +790,14 @@ impl Render for ConduitApp {
                     .child(app_icon(20.))
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(ui_text_size(13.))
                             .font_semibold()
                             .text_color(rgb(palette().text))
                             .child("Conduit"),
                     )
                     .child(
                         div()
-                            .text_size(px(10.))
+                            .text_size(ui_text_size(10.))
                             .text_color(rgb(palette().faint))
                             .child("Chat M0 · Preview"),
                     ),
@@ -822,26 +860,6 @@ impl Render for ConduitApp {
         // The left workspace rail stays a resizable group. The right sidebar is
         // laid out by hand so dragging its edge follows the pointer 1:1 and its
         // width can be capped at half of the remaining content area.
-        let viewport_width = f32::from(window.viewport_size().width);
-        let sidebar_state =
-            window.use_keyed_state("body-resizable", cx, |_, _| ResizableState::default());
-        let measured_sidebar = sidebar_state
-            .read(cx)
-            .sizes()
-            .first()
-            .map(|width| f32::from(*width))
-            .filter(|width| *width > 0.)
-            .unwrap_or(NAVIGATION_DEFAULT_WIDTH);
-        let measured_sidebar = if self.plugins.collapsed() {
-            38.
-        } else {
-            measured_sidebar
-        };
-        self.sidebar_width = measured_sidebar;
-        let content_width = (viewport_width - measured_sidebar - 6.).max(320.);
-        let max_detail_width = (content_width * 0.5).max(260.);
-        self.plugins.dock.width = self.plugins.dock.width.clamp(260., max_detail_width);
-        let detail_width = self.plugins.dock.width;
         let (detail_panel, overlay) = self.render_detail_dock(window, cx);
         #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
         let detail_panel = detail_panel.map(|panel| {

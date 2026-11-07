@@ -248,7 +248,7 @@ impl ConduitApp {
                     )
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().text))
                             .child("引用工作区文件"),
                     ),
@@ -306,14 +306,14 @@ impl ConduitApp {
                             .child(
                                 div()
                                     .truncate()
-                                    .text_size(px(12.))
+                                    .text_size(ui_text_size(12.))
                                     .text_color(rgb(palette().text))
                                     .child(name),
                             )
                             .child(
                                 div()
                                     .truncate()
-                                    .text_size(px(11.))
+                                    .text_size(ui_text_size(11.))
                                     .text_color(rgb(palette().muted))
                                     .child(parent),
                             ),
@@ -331,7 +331,7 @@ impl ConduitApp {
             div()
                 .px_2()
                 .py_1()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(rgb(palette().muted))
                 .child(status),
         );
@@ -340,7 +340,7 @@ impl ConduitApp {
                 div()
                     .px_2()
                     .pb_1()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(rgb(palette().muted))
                     .child("扫描范围受限，仅展示已找到的文件；可用附件按钮选择其他文件"),
             );

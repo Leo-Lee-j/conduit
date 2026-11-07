@@ -507,7 +507,7 @@ impl ConduitApp {
                         .rounded_full()
                         .bg(rgb(palette().text))
                         .text_color(rgb(palette().on_text))
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .line_height(relative(1.))
                         .child(if pending > 99 {
                             "99+".to_owned()
@@ -659,7 +659,7 @@ impl ConduitApp {
                             .rounded_full()
                             .bg(rgb(palette().text))
                             .text_color(rgb(palette().on_text))
-                            .text_size(px(10.))
+                            .text_size(ui_text_size(10.))
                             .line_height(relative(1.))
                             .child(if count > 99 {
                                 "99+".to_owned()

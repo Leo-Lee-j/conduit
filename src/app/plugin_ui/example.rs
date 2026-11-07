@@ -257,11 +257,16 @@ impl Render for OverviewView {
             .flex_shrink_0()
             .p_3()
             .gap_3()
-            .child(div().text_size(px(14.)).font_semibold().child(if summary {
-                "工作区摘要"
-            } else {
-                "工作区概览"
-            }))
+            .child(
+                div()
+                    .text_size(ui_text_size(14.))
+                    .font_semibold()
+                    .child(if summary {
+                        "工作区摘要"
+                    } else {
+                        "工作区概览"
+                    }),
+            )
             .child(
                 div()
                     .min_w_0()
@@ -272,14 +277,14 @@ impl Render for OverviewView {
             .child(
                 div()
                     .min_w_0()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(rgb(palette().muted))
                     .child(gpui_kit::base::SelectableText::new(
                         SharedString::from(format!("overview-{location}-path")),
                         path.clone(),
                     )),
             )
-            .child(div().text_size(px(12.)).child(format!(
+            .child(div().text_size(ui_text_size(12.)).child(format!(
                 "{total} 个会话 · {archived} 个已归档 · {running} 个运行中"
             )));
         if !summary {
@@ -325,12 +330,12 @@ impl Render for OverviewView {
                         div()
                             .min_w_0()
                             .truncate()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .child(title.clone()),
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(rgb(palette().muted))
                             .child(format!(
                                 "{provider} · #{id}{}",
@@ -342,7 +347,7 @@ impl Render for OverviewView {
         if *total > super::summary::SESSION_LIMIT {
             content = content.child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(rgb(palette().muted))
                     .child("展示前 100 个会话"),
             );

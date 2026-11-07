@@ -45,20 +45,27 @@ const ENTRIES: &[(usize, usize, &str, &str, &str)] = &[
     (
         1,
         1,
+        "应用界面字体与字号",
+        "调整侧栏、标签页、菜单、按钮与设置的字体和文字大小",
+        "应用 软件 界面 UI 字体 字号 大小 界面字号 字体大小 文字大小 font size 侧栏 标签页 菜单 按钮",
+    ),
+    (
+        1,
+        2,
         "聊天字体与字号",
         "调整正文字体、字号和行高",
         "文字 字体 字号 行高 font size",
     ),
     (
         1,
-        2,
+        3,
         "代码块显示",
         "调整代码字体、字号、行号、语法高亮与复制按钮",
         "代码 字体 行号 高亮 复制 code",
     ),
     (
         1,
-        3,
+        4,
         "文字预览与恢复默认",
         "预览聊天效果，恢复文字与代码的默认显示",
         "重置 reset 预览",
@@ -72,21 +79,21 @@ const ENTRIES: &[(usize, usize, &str, &str, &str)] = &[
     ),
     (
         3,
-        1,
-        "CLI 路径与版本",
-        "启用或停用引擎，检测版本并管理启动路径",
-        "cli 安装 登录 版本 path Claude Codex OpenCode 启用 停用 能力",
+        0,
+        "CLI 路径、版本与更新",
+        "启用或停用引擎，检测版本、检查官方更新并管理启动路径",
+        "cli 安装 登录 版本 更新 检查 一键更新 升级 进度 upgrade latest update path Claude Codex OpenCode 启用 停用 能力",
     ),
     (
         8,
-        1,
+        0,
         "模型服务与 API Key",
         "添加或编辑服务地址、凭据与模型",
         "服务 Base URL 端点 密钥 api key provider",
     ),
     (
         8,
-        2,
+        1,
         "管理 CLI 模型",
         "添加或编辑模型，隐藏目录项，设置新会话默认",
         "列表 模型 catalog 添加 编辑 隐藏 恢复 默认",
@@ -216,7 +223,7 @@ impl ConduitApp {
             ) {
                 results.push(SettingsResult {
                     page: 8,
-                    group: Some(1),
+                    group: Some(0),
                     title: provider.name.clone(),
                     description: format!("{} · 模型服务", provider.engine.label()),
                     engine: Some(provider.engine),
@@ -238,9 +245,9 @@ impl ConduitApp {
                 results.push(SettingsResult {
                     page: 8,
                     group: Some(if engine.descriptor().capabilities.model_services {
-                        2
-                    } else {
                         1
+                    } else {
+                        0
                     }),
                     title: model.label,
                     description: format!("{} · CLI 模型 · {}", engine.label(), model.id),
@@ -266,7 +273,7 @@ impl ConduitApp {
             && result.group.is_some()
             && self.connection_settings.engine == Provider::OpenCode
         {
-            Some(1)
+            Some(0)
         } else {
             result.group
         };
@@ -290,10 +297,15 @@ impl ConduitApp {
                 .child(
                     v_flex()
                         .gap_2()
-                        .child(div().text_size(px(22.)).font_semibold().child("搜索设置"))
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(ui_text_size(22.))
+                                .font_semibold()
+                                .child("搜索设置"),
+                        )
+                        .child(
+                            div()
+                                .text_size(ui_text_size(13.))
                                 .text_color(rgb(palette().muted))
                                 .child(format!(
                                     "找到 {count} 项结果 · 打开对应分组，或按 Enter 打开第一项"
@@ -337,19 +349,19 @@ impl ConduitApp {
                             .gap_2()
                             .child(
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(ui_text_size(12.))
                                     .text_color(rgb(palette().muted))
                                     .child(format!("{section} / {page}")),
                             )
                             .child(
                                 div()
-                                    .text_size(px(14.))
+                                    .text_size(ui_text_size(14.))
                                     .font_semibold()
                                     .child(result.title.clone()),
                             )
                             .child(
                                 div()
-                                    .text_size(px(13.))
+                                    .text_size(ui_text_size(13.))
                                     .text_color(rgb(palette().muted))
                                     .child(result.description.clone()),
                             ),
@@ -369,7 +381,7 @@ impl ConduitApp {
                     .child("没有找到匹配的设置")
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(ui_text_size(13.))
                             .text_color(rgb(palette().muted))
                             .child("试试更短的关键词，或从左侧分类浏览。"),
                     )

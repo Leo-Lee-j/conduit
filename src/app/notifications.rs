@@ -508,7 +508,7 @@ impl ConduitApp {
                         row.child(
                             div()
                                 .flex_shrink_0()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(rgb(palette().text))
                                 .child("未读"),
                         )
@@ -542,7 +542,7 @@ impl ConduitApp {
                     .aria_value(record.message.clone())
                     .min_w_0()
                     .overflow_x_hidden()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(rgb(palette().text))
                     .child(record.message.clone()),
             )
@@ -554,7 +554,7 @@ impl ConduitApp {
                         "{}{location}{lifecycle}{count}",
                         record.source.label()
                     ))
-                    .text_size(px(10.))
+                    .text_size(ui_text_size(10.))
                     .text_color(rgb(palette().muted))
                     .child(format!(
                         "{}{location}{lifecycle}{count}",
@@ -572,7 +572,7 @@ impl ConduitApp {
                             .id(("notification-target-error", id))
                             .role(Role::Label)
                             .aria_value(self.notifications.target_error.as_ref().unwrap().1.clone())
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(rgb(palette().muted))
                             .child(self.notifications.target_error.as_ref().unwrap().1.clone()),
                     )
@@ -596,7 +596,7 @@ impl ConduitApp {
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .text_size(px(10.))
+                            .text_size(ui_text_size(10.))
                             .text_color(rgb(palette().muted))
                             .opacity(0.)
                             .group_hover(group, |style| style.opacity(1.))

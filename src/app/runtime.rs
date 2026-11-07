@@ -113,6 +113,9 @@ impl ConduitApp {
 
     /// Shared by keyboard sends and the composer button.
     pub(super) fn send_blocked(&self, append_user: bool) -> Option<&'static str> {
+        if self.cli_installing() {
+            return Some("CLI 正在更新，请等待更新完成后发送。");
+        }
         if self.composer_save_pending() {
             return Some("正在保存消息，请稍候；草稿会保留到保存成功。");
         }
@@ -334,6 +337,9 @@ impl ConduitApp {
         } else {
             provider
         };
+        if self.cli_installing() {
+            return Err("CLI 正在更新，请等待更新完成后发送。".into());
+        }
         let executable = cli::resolve_for_launch(provider, &self.store.cli)
             .map_err(|error| {
                 format!(
@@ -671,59 +677,7 @@ impl ConduitApp {
             self.persist();
             cx.notify();
         }
-        let mut completed = vec![];
-        for (provider, probe) in &self.probes {
-            match probe.events.try_recv() {
-                Ok(result) => completed.push((*provider, probe.path.clone(), result)),
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => completed.push((
-                    *provider,
-                    probe.path.clone(),
-                    Err("检测线程已退出，请重新检测".into()),
-                )),
-                Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            }
-        }
-        for (provider, path, result) in completed {
-            self.probes.remove(&provider);
-            let diagnostic_level = if result.is_err() {
-                NoticeLevel::Error
-            } else {
-                NoticeLevel::Success
-            };
-            let text = if cli::resolve(provider, &self.store.cli)
-                .ok()
-                .is_none_or(|cli| cli.path != path)
-            {
-                "配置已变更，请重新检测。".into()
-            } else {
-                match result {
-                    Ok(info) => format!(
-                        "版本 {} · {}",
-                        info.version,
-                        if info.verified_version {
-                            "与本项目已验证版本一致"
-                        } else {
-                            "尚未经过完整回归"
-                        }
-                    ),
-                    Err(error) if error == "检测已取消" => error,
-                    Err(error) => format!("检测失败：{error}"),
-                }
-            };
-            self.notify_user(
-                Notice::new(
-                    NoticeSource::Settings,
-                    diagnostic_level,
-                    format!("{} CLI 检测", provider.label()),
-                    text.clone(),
-                )
-                .target(NoticeTarget::Settings)
-                .presentation(NoticePresentation::History),
-                cx,
-            );
-            self.diagnostics.insert(provider, text);
-            cx.notify();
-        }
+        self.poll_cli_probes(cx);
         self.poll_branches(cx);
         self.poll_git(window, cx);
         self.poll_git_actions(window, cx);

@@ -74,7 +74,7 @@ impl Render for ModelEditor {
             .overflow_y_scroll()
             .child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(rgb(palette().muted))
                     .child(format!(
                         "{} · 仅保存应用侧模型信息，实际可用性由 CLI 和服务决定。",
@@ -262,7 +262,7 @@ impl ConduitApp {
                     .gap_2()
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().muted))
                             .child("隐藏仅影响候选列表；当前会话和默认值仍可识别。"),
                     )
@@ -284,7 +284,7 @@ impl ConduitApp {
                 .child(Input::new(&search).small().aria_label("搜索 CLI 模型"))
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(rgb(palette().muted))
                         .child(format!(
                             "显示 {} / {} 个匹配模型 · 共 {} 个定义",
@@ -339,31 +339,33 @@ impl ConduitApp {
                                         .min_w_0()
                                         .child(
                                             div()
-                                                .text_size(px(13.))
+                                                .text_size(ui_text_size(13.))
                                                 .font_semibold()
                                                 .child(model.label.clone()),
                                         )
                                         .child(
                                             div()
-                                                .text_size(px(12.))
+                                                .text_size(ui_text_size(12.))
                                                 .text_color(rgb(palette().muted))
                                                 .child(model.id.clone()),
                                         )
                                         .child(
                                             div()
-                                                .text_size(px(11.))
+                                                .text_size(ui_text_size(11.))
                                                 .text_color(rgb(palette().muted))
                                                 .child(badges.join(" · ")),
                                         )
                                         .when(!model.note.is_empty(), |row| {
                                             row.child(
-                                                div().text_size(px(12.)).child(model.note.clone()),
+                                                div()
+                                                    .text_size(ui_text_size(12.))
+                                                    .child(model.note.clone()),
                                             )
                                         })
                                         .when_some(model.context_window, |row, tokens| {
                                             row.child(
                                                 div()
-                                                    .text_size(px(11.))
+                                                    .text_size(ui_text_size(11.))
                                                     .child(format!("上下文：{tokens} tokens")),
                                             )
                                         }),

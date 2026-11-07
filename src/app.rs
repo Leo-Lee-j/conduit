@@ -17,9 +17,9 @@ use crate::{
     protocol::Event,
     providers::{ModelChannel, ModelProvider, ProviderSource, ReasoningEffort, RuntimeRoute},
     store::{
-        AppearanceMode, MAX_CHAT_FONT_SIZE, MAX_CHAT_LINE_HEIGHT, MAX_CODE_FONT_SIZE,
-        MAX_TAB_LIMIT, MIN_CHAT_FONT_SIZE, MIN_CHAT_LINE_HEIGHT, MIN_CODE_FONT_SIZE, NamingMode,
-        Store,
+        AppearanceMode, DEFAULT_UI_FONT_SIZE, MAX_CHAT_FONT_SIZE, MAX_CHAT_LINE_HEIGHT,
+        MAX_CODE_FONT_SIZE, MAX_TAB_LIMIT, MAX_UI_FONT_SIZE, MIN_CHAT_FONT_SIZE,
+        MIN_CHAT_LINE_HEIGHT, MIN_CODE_FONT_SIZE, MIN_UI_FONT_SIZE, NamingMode, Store,
     },
 };
 use chrono::{DateTime, Local};
@@ -202,10 +202,12 @@ pub struct ConduitApp {
     ccs: CcsCatalog,
     message: Option<String>,
     git_prompt_input: Entity<TextareaState>,
-    /// Font pickers for chat body text and code; rebuilt from the installed
-    /// families when the app starts.
+    /// Font pickers rebuilt from installed families when the app starts.
+    ui_font_select: Entity<SelectState<SearchableVec<FontChoice>>>,
     chat_font_select: Entity<SelectState<SearchableVec<FontChoice>>>,
     code_font_select: Entity<SelectState<SearchableVec<FontChoice>>>,
+    /// The theme's original UI family, also the independent chat default.
+    default_ui_font: SharedString,
     /// The theme's platform monospace family, restored when no code font is set.
     default_mono_font: SharedString,
     next_id: u64,
@@ -361,6 +363,7 @@ impl ConduitApp {
         installed_fonts.sort_by_key(|name| name.to_lowercase());
         installed_fonts.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
         for family in [
+            &mut store.ui.ui_font_family,
             &mut store.ui.chat_font_family,
             &mut store.ui.code_font_family,
         ] {
@@ -371,6 +374,17 @@ impl ConduitApp {
                 *family = None;
             }
         }
+        let default_ui_font = gpui_kit::component::Theme::global(cx).font_family.clone();
+        store.ui.ui_font_size = store
+            .ui
+            .ui_font_size
+            .clamp(MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE);
+        install_ui_font(
+            cx,
+            store.ui.ui_font_family.as_deref(),
+            &default_ui_font,
+            store.ui.ui_font_size,
+        );
         let default_mono_font = gpui_kit::component::Theme::global(cx)
             .mono_font_family
             .clone();
@@ -394,11 +408,21 @@ impl ConduitApp {
                 .and_then(|family| installed_fonts.iter().position(|name| name == family))
                 .map_or(0, |index| index + 1)
         };
+        let ui_font_index = font_index(&store.ui.ui_font_family);
         let chat_font_index = font_index(&store.ui.chat_font_family);
         let code_font_index = font_index(&store.ui.code_font_family);
+        let ui_font_select = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(font_choices("默认（系统界面）")),
+                Some(IndexPath::new(ui_font_index)),
+                window,
+                cx,
+            )
+            .searchable(true)
+        });
         let chat_font_select = cx.new(|cx| {
             SelectState::new(
-                SearchableVec::new(font_choices("默认（跟随主题）")),
+                SearchableVec::new(font_choices("默认（系统正文）")),
                 Some(IndexPath::new(chat_font_index)),
                 window,
                 cx,
@@ -414,6 +438,20 @@ impl ConduitApp {
             )
             .searchable(true)
         });
+        let ui_font_subscription =
+            cx.subscribe(&ui_font_select, |this, _, event: &SelectEvent<_>, cx| {
+                if !this.writable || this.closing {
+                    return;
+                }
+                let SelectEvent::Confirm(value) = event;
+                this.store.ui.ui_font_family = value
+                    .as_ref()
+                    .and_then(|family| family.as_ref())
+                    .map(|family| family.to_string());
+                this.apply_ui_font(cx);
+                this.persist();
+                cx.notify();
+            });
         let chat_font_subscription =
             cx.subscribe(&chat_font_select, |this, _, event: &SelectEvent<_>, cx| {
                 if !this.writable || this.closing {
@@ -645,8 +683,10 @@ impl ConduitApp {
             ccs,
             message,
             git_prompt_input,
+            ui_font_select,
             chat_font_select,
             code_font_select,
+            default_ui_font,
             default_mono_font,
             next_id,
             closing: false,
@@ -679,6 +719,7 @@ impl ConduitApp {
                 shift_subscription,
                 git_prompt_subscription,
                 appearance_subscription,
+                ui_font_subscription,
                 chat_font_subscription,
                 code_font_subscription,
             ],

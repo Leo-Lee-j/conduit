@@ -76,11 +76,16 @@ impl Render for PerformanceMonitor {
                     .items_center()
                     .gap_2()
                     .child(Icon::new(gpui_kit::assets::IconName::Activity).small())
-                    .child(div().text_size(px(13.)).font_semibold().child("性能检测"))
+                    .child(
+                        div()
+                            .text_size(ui_text_size(13.))
+                            .font_semibold()
+                            .child("性能检测"),
+                    )
                     .child(div().flex_1())
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(rgb(palette().muted))
                             .child(if cfg!(debug_assertions) {
                                 "开发构建"
@@ -91,7 +96,7 @@ impl Render for PerformanceMonitor {
             )
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(rgb(palette().muted))
                     .child(format!(
                         "Conduit · PID {} · {} 逻辑处理器",
@@ -111,7 +116,7 @@ impl Render for PerformanceMonitor {
                             .items_center()
                             .justify_between()
                             .gap_3()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .child(div().text_color(rgb(palette().muted)).child(label))
                             .child(div().flex_shrink_0().child(value))
                     })),
@@ -119,7 +124,7 @@ impl Render for PerformanceMonitor {
             .child(
                 v_flex()
                     .gap_1()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(rgb(palette().muted))
                     .child("仅统计 Conduit 主进程，CLI / Git 子进程不计入")
                     .child("工作集含共享页；私有提交不等于实际驻留内存")

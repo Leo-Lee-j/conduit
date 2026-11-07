@@ -69,7 +69,7 @@ impl ConduitApp {
             cx.notify();
         }
     }
-    fn extension_actions(&self, view: Entity<Self>) -> AnyElement {
+    fn extension_actions(&self, narrow: bool, view: Entity<Self>) -> AnyElement {
         let kind = if self.extensions_ui.mcp {
             Kind::Mcp
         } else {
@@ -91,10 +91,23 @@ impl ConduitApp {
                     .debug_selector(|| "extensions-add".into())
                     .primary()
                     .small()
-                    .label(if kind == Kind::Mcp {
+                    .icon(FullIconName::Plus)
+                    .accessibility_label(if kind == Kind::Mcp {
                         "添加 MCP 服务"
                     } else {
                         "创建 Skill"
+                    })
+                    .tooltip(if kind == Kind::Mcp {
+                        "添加 MCP 服务"
+                    } else {
+                        "创建 Skill"
+                    })
+                    .when(!narrow, |button| {
+                        button.label(if kind == Kind::Mcp {
+                            "添加 MCP 服务"
+                        } else {
+                            "创建 Skill"
+                        })
                     })
                     .disabled(disabled)
                     .on_click(move |_, window, cx| {
@@ -112,10 +125,19 @@ impl ConduitApp {
                     Button::new("extensions-import")
                         .outline()
                         .small()
-                        .label(if self.extensions_ui.importing {
+                        .icon(FullIconName::FolderOpen)
+                        .accessibility_label("从文件夹导入")
+                        .tooltip(if self.extensions_ui.importing {
                             "导入中…"
                         } else {
                             "从文件夹导入"
+                        })
+                        .when(!narrow, |button| {
+                            button.label(if self.extensions_ui.importing {
+                                "导入中…"
+                            } else {
+                                "从文件夹导入"
+                            })
                         })
                         .disabled(disabled)
                         .on_click(move |_, window, cx| {
@@ -225,9 +247,8 @@ impl ConduitApp {
         cx.notify();
     }
 
-    pub(in crate::app) fn poll_extensions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.closing || !window.has_active_dialog(cx) || !matches!(self.settings_ui.page, 4 | 9)
-        {
+    pub(in crate::app) fn poll_extensions(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing || !self.settings_ui.open || !matches!(self.settings_ui.page, 4 | 9) {
             self.extensions_ui.probe = None;
             self.extensions_ui.connection_probe = None;
             return;
@@ -297,31 +318,14 @@ impl ConduitApp {
     pub(super) fn extensions_content(
         &self,
         window: &Window,
+        available_width: f32,
         view: Entity<Self>,
         cx: &App,
     ) -> AnyElement {
-        let compact = f32::from(window.viewport_size().height) < 650.;
+        let narrow = available_width < 540.;
+        let compact = narrow || f32::from(window.viewport_size().height) < 650.;
         let engine = self.extensions_ui.engine;
-        let mut controls = h_flex().gap_2().flex_wrap();
-        for (index, candidate) in Provider::ALL.into_iter().enumerate() {
-            let view = view.clone();
-            controls = controls.child(
-                Button::new(("extensions-engine", index))
-                    .debug_selector(move || format!("extensions-engine-{index}"))
-                    .small()
-                    .outline()
-                    .label(candidate.label())
-                    .selected(engine == candidate)
-                    .on_click(move |_, window, cx| {
-                        view.update(cx, |app, cx| {
-                            app.extensions_ui.engine = candidate;
-                            app.extensions_ui.feedback = None;
-                            app.ensure_extensions(window, cx, false);
-                            cx.notify();
-                        });
-                    }),
-            );
-        }
+        let mut controls = h_flex().w_full().min_w_0().gap_2().flex_wrap();
         let mut choices = vec![(None, "全局".to_owned())];
         choices.extend(
             self.store
@@ -343,7 +347,7 @@ impl ConduitApp {
                 .small()
                 .ghost()
                 .accessibility_label(format!("范围：{current}"))
-                .max_w(px(230.))
+                .max_w(px(if narrow { 110. } else { 150. }))
                 .child(div().truncate().child(format!("范围：{current}")))
                 .icon(FullIconName::ChevronDown)
                 .dropdown_menu(move |mut menu, _, _| {
@@ -415,7 +419,8 @@ impl ConduitApp {
             }
         }
         if count == 0 {
-            rows.push(ExtensionRow::Message(
+            rows.push(ExtensionRow::Empty(
+                kind,
                 if probing {
                     "正在读取本机定义…"
                 } else if !query.is_empty() || filter != Filter::All {
@@ -426,7 +431,6 @@ impl ConduitApp {
                     "已扫描的来源中没有发现条目。"
                 }
                 .into(),
-                false,
             ));
         }
         let list_state = self.extensions_ui.lists[selected].clone();
@@ -436,7 +440,14 @@ impl ConduitApp {
         let expanded = self.extensions_ui.expanded.clone();
         let list_view = view.clone();
         let rows = list(list_state.clone(), move |index, _, cx| {
-            render_extension_row(&rows[index], index, &expanded, list_view.clone(), cx)
+            render_extension_row(
+                &rows[index],
+                index,
+                narrow,
+                &expanded,
+                list_view.clone(),
+                cx,
+            )
         })
         .size_full();
         let sources_view = view.clone();
@@ -450,150 +461,230 @@ impl ConduitApp {
                 )
             })
             .unwrap_or_else(|| format!("{count} / {total} 项"));
+        let sources_button = || {
+            let sources_view = sources_view.clone();
+            Button::new("extensions-sources")
+                .small()
+                .ghost()
+                .icon(if sources_expanded {
+                    FullIconName::ChevronUp
+                } else {
+                    FullIconName::ChevronDown
+                })
+                .accessibility_label("扫描范围")
+                .tooltip("扫描范围")
+                .when(!narrow, |button| {
+                    button.label(if sources_expanded {
+                        "收起扫描范围"
+                    } else {
+                        "扫描范围"
+                    })
+                })
+                .on_click(move |_, _, cx| {
+                    sources_view.update(cx, |app, cx| {
+                        app.extensions_ui.sources_expanded = !sources_expanded;
+                        app.extensions_ui.lists = new_lists();
+                        cx.notify();
+                    })
+                })
+        };
         let filter_view = view.clone();
+        let actions = self.extension_actions(narrow, view.clone());
+        let search = || {
+            div().flex_1().min_w_0().w_full().child(
+                Input::new(&self.extensions_ui.searches[selected])
+                    .small()
+                    .prefix(FullIconName::Search)
+                    .cleanable(true)
+                    .aria_label("搜索扩展名称、说明或来源"),
+            )
+        };
+        let toolbar = controls
+            .when(!narrow, |row| row.child(search()))
+            .child(
+                Button::new("extensions-filter-trigger")
+                    .debug_selector(|| "extensions-filter-trigger".into())
+                    .small()
+                    .outline()
+                    .label(filter.label())
+                    .icon(FullIconName::ChevronDown)
+                    .dropdown_menu(move |mut menu, _, _| {
+                        for option in Filter::ALL {
+                            let view = filter_view.clone();
+                            menu = menu.item(PopupMenuItem::new(option.label()).on_click(
+                                move |_, _, cx| {
+                                    view.update(cx, |app, cx| {
+                                        app.extensions_ui.filters[selected] = option;
+                                        app.extensions_ui.lists = new_lists();
+                                        cx.notify();
+                                    });
+                                },
+                            ));
+                        }
+                        menu
+                    }),
+            )
+            .child(
+                Button::new("extensions-refresh")
+                    .debug_selector(|| "extensions-refresh".into())
+                    .small()
+                    .outline()
+                    .icon(FullIconName::RefreshCw)
+                    .accessibility_label(if probing { "读取中…" } else { "刷新" })
+                    .tooltip(if probing { "读取中…" } else { "刷新" })
+                    .when(!narrow, |button| {
+                        button.label(if probing { "读取中…" } else { "刷新" })
+                    })
+                    .disabled(probing || self.closing)
+                    .on_click(move |_, window, cx| {
+                        refresh.update(cx, |app, cx| app.ensure_extensions(window, cx, true))
+                    }),
+            )
+            .when(narrow, |row| row.child(sources_button()))
+            .when(probing, |row| {
+                row.child(
+                    Button::new("extensions-cancel")
+                        .small()
+                        .ghost()
+                        .label("取消")
+                        .on_click(move |_, _, cx| {
+                            cancel.update(cx, |app, cx| {
+                                app.extensions_ui.probe = None;
+                                cx.notify();
+                            })
+                        }),
+                )
+            });
+        let toolbar = if narrow {
+            v_flex()
+                .w_full()
+                .gap_2()
+                .child(toolbar)
+                .child(search())
+                .into_any_element()
+        } else {
+            toolbar.into_any_element()
+        };
         v_flex()
             .size_full()
+            .min_w_0()
             .text_color(rgb(palette().text))
+            .child(management_header(
+                if mcp {
+                    "MCP · 工具服务"
+                } else {
+                    "Skills · 技能管理"
+                },
+                if mcp {
+                    "为 AI 连接外部工具，管理配置与连接状态。"
+                } else {
+                    "管理本机技能，为不同引擎配置可复用的工作能力。"
+                },
+                if mcp {
+                    FullIconName::Server
+                } else {
+                    FullIconName::Sparkles
+                },
+                actions,
+                compact,
+                narrow,
+            ))
+            .child(
+                div()
+                    .px(px(if narrow { 12. } else { 24. }))
+                    .pb(px(if narrow { 8. } else { 12. }))
+                    .child(engine_tabs(engine, true, narrow, view)),
+            )
             .child(
                 v_flex()
+                    .w_full()
                     .flex_shrink_0()
-                    .px_6()
-                    .py(px(if compact { 12. } else { 16. }))
+                    .px(px(if narrow { 12. } else { 24. }))
+                    .pb_3()
                     .gap_2()
-                    .border_b_1()
-                    .border_color(rgb(palette().border))
-                    .child(div().text_size(px(22.)).font_semibold().child(if mcp {
-                        "MCP 服务"
-                    } else {
-                        "Skills"
-                    }))
-                    .when(!compact, |header| {
-                        header.child(
+                    .child(toolbar)
+                    .when(!compact, |body| {
+                        body.child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(rgb(palette().muted))
-                                .child(if mcp {
-                                    "管理 AI 可连接的工具服务。先选择引擎与配置范围。"
+                                .child(if self.extensions_ui.workspace.is_some() {
+                                    "当前工作区及继承的全局定义 · 加载状态以会话为准"
                                 } else {
-                                    "浏览与管理本机技能。先选择引擎与配置范围。"
+                                    "全局定义 · 加载状态以会话为准"
                                 }),
                         )
                     })
-                    .child(controls)
-                    .child(self.extension_actions(view.clone()))
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(
-                                div().flex_1().min_w_0().child(
-                                    Input::new(&self.extensions_ui.searches[selected])
-                                        .small()
-                                        .aria_label("搜索扩展名称、说明或来源"),
-                                ),
-                            )
-                            .child(
-                                Button::new("extensions-filter-trigger")
-                                    .debug_selector(|| "extensions-filter-trigger".into())
-                                    .small()
-                                    .outline()
-                                    .label(filter.label())
-                                    .icon(FullIconName::ChevronDown)
-                                    .dropdown_menu(move |mut menu, _, _| {
-                                        for option in Filter::ALL {
-                                            let view = filter_view.clone();
-                                            menu = menu.item(
-                                                PopupMenuItem::new(option.label()).on_click(
-                                                    move |_, _, cx| {
-                                                        view.update(cx, |app, cx| {
-                                                            app.extensions_ui.filters[selected] =
-                                                                option;
-                                                            app.extensions_ui.lists = new_lists();
-                                                            cx.notify();
-                                                        });
-                                                    },
-                                                ),
-                                            );
-                                        }
-                                        menu
-                                    }),
-                            )
-                            .child(
-                                Button::new("extensions-refresh")
-                                    .debug_selector(|| "extensions-refresh".into())
-                                    .small()
-                                    .outline()
-                                    .label(if probing { "读取中…" } else { "刷新" })
-                                    .disabled(probing || self.closing)
-                                    .on_click(move |_, window, cx| {
-                                        refresh.update(cx, |app, cx| {
-                                            app.ensure_extensions(window, cx, true)
-                                        });
-                                    }),
-                            )
-                            .when(probing, |row| {
-                                row.child(
-                                    Button::new("extensions-cancel")
-                                        .small()
-                                        .ghost()
-                                        .label("取消")
-                                        .on_click(move |_, _, cx| {
-                                            cancel.update(cx, |app, cx| {
-                                                app.extensions_ui.probe = None;
-                                                cx.notify();
-                                            });
-                                        }),
-                                )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(rgb(palette().muted))
-                            .child(if self.extensions_ui.workspace.is_some() {
-                                "显示此工作区及继承的全局定义。加载状态以会话为准。"
-                            } else {
-                                "显示全局定义。加载状态以会话为准。"
-                            }),
-                    )
                     .when_some(self.extensions_ui.feedback.clone(), |body, message| {
-                        body.child(div().text_size(px(12.)).child(message))
+                        body.child(div().text_size(ui_text_size(12.)).child(message))
                     })
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .justify_between()
-                            .items_center()
-                            .text_size(px(11.))
-                            .text_color(rgb(palette().muted))
-                            .child(info)
-                            .child(
-                                Button::new("extensions-sources")
-                                    .small()
-                                    .ghost()
-                                    .label(if sources_expanded {
-                                        "收起扫描范围"
-                                    } else {
-                                        "扫描范围"
-                                    })
-                                    .on_click(move |_, _, cx| {
-                                        sources_view.update(cx, |app, cx| {
-                                            app.extensions_ui.sources_expanded = !sources_expanded;
-                                            app.extensions_ui.lists = new_lists();
-                                            cx.notify();
-                                        });
-                                    }),
-                            ),
-                    ),
+                    .when(!narrow, |body| {
+                        body.child(
+                            h_flex()
+                                .w_full()
+                                .justify_between()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_size(ui_text_size(12.))
+                                        .text_color(rgb(palette().muted))
+                                        .child(info),
+                                )
+                                .child(sources_button()),
+                        )
+                    }),
             )
             .child(
                 div()
-                    .id("extensions-list")
-                    .debug_selector(|| "extensions-list".into())
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    .child(rows)
-                    .vertical_scrollbar(&list_state),
+                    .px(px(if narrow { 12. } else { 24. }))
+                    .pb_4()
+                    .child(
+                        v_flex()
+                            .size_full()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(rgb(palette().border))
+                            .overflow_hidden()
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .flex_shrink_0()
+                                    .px_4()
+                                    .py(px(if narrow { 4. } else { 8. }))
+                                    .justify_between()
+                                    .bg(rgb(palette().surface_strong))
+                                    .text_size(ui_text_size(11.))
+                                    .text_color(rgb(palette().muted))
+                                    .child(if narrow {
+                                        format!(
+                                            "{} · {count} / {total}",
+                                            if mcp {
+                                                "服务 / 连接地址"
+                                            } else {
+                                                "技能 / 说明"
+                                            }
+                                        )
+                                    } else if mcp {
+                                        "服务 / 连接地址".to_owned()
+                                    } else {
+                                        "技能 / 说明".to_owned()
+                                    })
+                                    .child("状态与操作"),
+                            )
+                            .child(
+                                div()
+                                    .id("extensions-list")
+                                    .debug_selector(|| "extensions-list".into())
+                                    .flex_1()
+                                    .min_h_0()
+                                    .w_full()
+                                    .child(rows)
+                                    .vertical_scrollbar(&list_state),
+                            ),
+                    ),
             )
             .into_any_element()
     }
@@ -605,12 +696,14 @@ fn new_lists() -> [gpui_kit::ListState; 2] {
 
 enum ExtensionRow {
     Entry(extensions::Entry, bool),
+    Empty(Kind, String),
     Message(String, bool),
     Source(PathBuf),
 }
 fn render_extension_row(
     row: &ExtensionRow,
     index: usize,
+    narrow: bool,
     expanded: &HashSet<String>,
     view: Entity<ConduitApp>,
     cx: &App,
@@ -664,9 +757,9 @@ fn render_extension_row(
             };
             (v_flex()
                 .w_full()
-                .px_3()
-                .py_2()
-                .gap_1()
+                .px_4()
+                .py(px(if narrow { 8. } else { 12. }))
+                .gap_2()
                 .border_b_1()
                 .border_color(rgb(palette().border))
                 .child(
@@ -674,6 +767,9 @@ fn render_extension_row(
                         .w_full()
                         .gap_2()
                         .items_start()
+                        .child(div().size(px(32.)).flex_shrink_0().rounded_md().bg(rgb(palette().surface_strong))
+                            .flex().items_center().justify_center()
+                            .child(Icon::new(if mcp { FullIconName::Server } else { FullIconName::Sparkles }).small().text_color(rgb(palette().muted))))
                         .child(
                             v_flex()
                                 .flex_1()
@@ -688,32 +784,32 @@ fn render_extension_row(
                                                 .flex_1()
                                                 .min_w_0()
                                                 .truncate()
-                                                .text_size(px(13.))
+                                                .text_size(ui_text_size(13.))
                                                 .font_semibold()
+                                                .debug_selector(move || format!("extension-name-{index}"))
                                                 .child(entry.name.clone()),
                                         )
-                                        .child(
-                                            div()
-                                                .text_size(px(11.))
-                                                .text_color(rgb(palette().muted))
-                                                .child(format!(
-                                                    "{} · {}{}",
-                                                    entry.scope,
-                                                    entry.status(),
-                                                    if *duplicate { " · 同名定义" } else { "" }
-                                                )),
-                                        ),
+                                        .when(!narrow, |row| row
+                                            .child(management_badge(entry.status(), !entry.disabled))
+                                            .child(management_badge(entry.scope.clone(), false))
+                                            .when(*duplicate, |row| row.child(management_badge("同名定义", false)))),
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(12.))
+                                        .text_size(ui_text_size(12.))
                                         .text_color(rgb(palette().muted))
                                         .truncate()
                                         .child(summary),
-                                ),
+                                )
+                                .when(narrow, |body| body.child(
+                                    h_flex().gap_1().flex_wrap()
+                                        .child(management_badge(entry.status(), !entry.disabled))
+                                        .child(management_badge(entry.scope.clone(), false))
+                                        .when(*duplicate, |row| row.child(management_badge("同名定义", false)))
+                                )),
                         )
                 .child(h_flex().gap_2().flex_wrap()
-                    .child(Button::new(("extension-quick-edit", index)).small().ghost().label(if managed { "插件托管" } else { "编辑" }).disabled(disabled || managed).tooltip(if managed { "由插件安装包管理，请在对应 CLI 中调整" } else { "编辑此条目的来源文件" })
+                    .child(Button::new(("extension-quick-edit", index)).small().ghost().icon(FullIconName::Pencil).accessibility_label(if managed { "插件托管" } else { "编辑" }).when(!narrow, |button| button.label(if managed { "插件托管" } else { "编辑" })).disabled(disabled || managed).tooltip(if managed { "由插件安装包管理，请在对应 CLI 中调整" } else { "编辑此条目的来源文件" })
                         .on_click(move |_, window, cx| quick_edit.update(cx, |app, cx| app.open_native_config(quick_path.clone(), kind, false, window, cx))))
                     .when(!managed && toggle_supported, |row| row.child(Button::new(("extension-toggle", index)).small().ghost()
                         .label(if entry.disabled { "恢复" } else { "停用" }).disabled(disabled || view.read(cx).extensions_ui.changing)
@@ -745,7 +841,7 @@ fn render_extension_row(
                             .w_full()
                             .gap_2()
                             .py_2()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .when(!entry.description.is_empty(), |details| {
                                 details.child(entry.description.clone())
                             })
@@ -774,7 +870,7 @@ fn render_extension_row(
                                         if let Some(probe) = app.extensions_ui.connection_probe.take() { app.extensions_ui.connection_results.insert(probe.id.clone(), "测试已取消".into()); }
                                         app.extensions_ui.lists = new_lists(); cx.notify();
                                     }))))))
-                            .when_some(connection_result, |details, message| details.child(div().text_size(px(12.)).child(message)))
+                            .when_some(connection_result, |details, message| details.child(div().text_size(ui_text_size(12.)).child(message)))
                             .child(h_flex().gap_2().flex_wrap()
                                 .child(Button::new(("extension-edit", index)).small().outline().label("编辑来源文件").disabled(disabled || managed)
                                     .tooltip(if managed { "插件文件由安装包管理，请在对应 CLI 中管理插件" } else { "校验格式并备份后保存" })
@@ -795,10 +891,39 @@ fn render_extension_row(
                 }))
             .into_any_element()
         }
+        ExtensionRow::Empty(kind, message) => v_flex()
+            .w_full()
+            .items_center()
+            .gap_3()
+            .p_6()
+            .child(
+                div()
+                    .size(px(40.))
+                    .rounded_lg()
+                    .bg(rgb(palette().surface_strong))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        Icon::new(if *kind == Kind::Mcp {
+                            FullIconName::Server
+                        } else {
+                            FullIconName::Sparkles
+                        })
+                        .text_color(rgb(palette().muted)),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(ui_text_size(13.))
+                    .text_color(rgb(palette().muted))
+                    .child(message.clone()),
+            )
+            .into_any_element(),
         ExtensionRow::Message(message, error) => div()
             .px_3()
             .py_2()
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .text_color(rgb(if *error {
                 palette().danger_text
             } else {
@@ -823,7 +948,7 @@ fn render_extension_row(
                             gpui_kit::component::tooltip::Tooltip::new(tooltip.clone())
                                 .build(window, cx)
                         })
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .child(text.clone()),
                 )
                 .child(

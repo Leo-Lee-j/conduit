@@ -312,13 +312,13 @@ impl ConduitApp {
                     .gap_2()
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(ui_text_size(13.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("删除会话？"),
                     )
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().muted))
                             .child(format!("将永久删除「{title}」及其消息记录，无法恢复。")),
                     )
@@ -555,7 +555,7 @@ impl ConduitApp {
                 )
                 .child(
                     div()
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .text_color(rgb(palette().muted))
                         .child(speed_label),
                 )
@@ -573,7 +573,7 @@ impl ConduitApp {
                 )
                 .child(
                     div()
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .text_color(rgb(palette().muted))
                         .child(format!(
                             "↑{} ↓{}",
@@ -611,7 +611,7 @@ impl ConduitApp {
                     )
                     .child(
                         div()
-                            .text_size(px(10.))
+                            .text_size(ui_text_size(10.))
                             .text_color(rgb(palette().muted))
                             .child(format!(
                                 "{}{} / {}",
@@ -660,7 +660,7 @@ impl ConduitApp {
                             .gap_3()
                             .child(
                                 div()
-                                    .text_size(px(13.))
+                                    .text_size(ui_text_size(13.))
                                     .line_height(relative(1.5))
                                     .text_color(rgb(palette().muted))
                                     .child(format!(
@@ -1546,7 +1546,7 @@ impl ConduitApp {
             weekday_labels = weekday_labels.child(
                 div()
                     .h(px(12.))
-                    .text_size(px(9.))
+                    .text_size(ui_text_size(9.))
                     .text_color(rgb(palette().faint))
                     .child(weekday),
             );
@@ -1560,7 +1560,7 @@ impl ConduitApp {
             .py_20()
             .child(
                 div()
-                    .text_size(px(30.))
+                    .text_size(ui_text_size(30.))
                     .font_semibold()
                     .text_color(rgb(palette().text))
                     .child("连接一个本地工作区"),
@@ -1591,7 +1591,7 @@ impl ConduitApp {
                     .items_center()
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().muted))
                             .child(format!("近 {weeks} 周共 {total} 次会话")),
                     )
@@ -1599,7 +1599,7 @@ impl ConduitApp {
             )
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(rgb(palette().faint))
                     .child("所选目录作为任务的工作目录；文件访问范围取决于权限设置。"),
             )

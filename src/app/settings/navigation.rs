@@ -19,8 +19,8 @@ pub(super) const PAGES: [(&str, &str, &str); 11] = [
     ("工作台", "快捷键", "键盘 shortcut"),
     (
         "AI 连接",
-        "AI 引擎",
-        "CLI Claude Codex OpenCode 路径 安装 登录 版本 PATH 环境变量 启用 停用 能力",
+        "CLI 引擎",
+        "CLI Claude Codex OpenCode 路径 安装 登录 版本 检查更新 一键更新 升级 进度 upgrade latest update PATH 环境变量 启用 停用 能力",
     ),
     (
         "扩展能力",
@@ -57,24 +57,34 @@ impl ConduitApp {
     pub(super) fn settings_body(
         &self,
         window: &Window,
+        available_width: f32,
         view: Entity<Self>,
         cx: &App,
     ) -> AnyElement {
         let disabled = !self.writable || self.closing;
+        let narrow = available_width < 720.;
+        let navigation_width = if narrow {
+            52.
+        } else if available_width < 1000. {
+            184.
+        } else {
+            216.
+        };
+        let content_width = (available_width - navigation_width).max(0.);
         let query = self.settings_ui.search.read(cx).value();
         let searching = !query.trim().is_empty();
         let mut navigation = v_flex().gap_1().w_full();
         let mut group = "";
         for index in PAGE_ORDER {
             let (section, title, _) = PAGES[index];
-            if group != section {
+            if !narrow && group != section {
                 group = section;
                 navigation = navigation.child(
                     div()
                         .pt_3()
                         .pb_1()
                         .px_3()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .font_semibold()
                         .text_color(rgb(palette().muted))
                         .child(section),
@@ -98,18 +108,19 @@ impl ConduitApp {
                 Button::new(("settings-navigation", index))
                     .debug_selector(move || format!("settings-nav-{index}"))
                     .accessibility_label(title)
+                    .tooltip(title)
                     .child(
                         h_flex()
                             .w_full()
                             .gap_3()
                             .child(Icon::new(icon).small())
-                            .child(title),
+                            .when(!narrow, |row| row.child(title)),
                     )
                     .ghost()
                     .h(px(34.))
                     .w_full()
-                    .justify_start()
-                    .text_size(px(13.))
+                    .when(!narrow, |button| button.justify_start())
+                    .text_size(ui_text_size(13.))
                     .selected(selected)
                     .when(selected, |button| {
                         button
@@ -126,13 +137,14 @@ impl ConduitApp {
         }
         let content = if searching {
             self.settings_search_results(&query, view.clone())
+        } else if matches!(self.settings_ui.page, 3 | 8) {
+            self.settings_connections_content(window, content_width, view.clone())
         } else if matches!(self.settings_ui.page, 4 | 9) {
-            self.extensions_content(window, view.clone(), cx)
+            self.extensions_content(window, content_width, view.clone(), cx)
         } else {
             let page = match self.settings_ui.page {
                 1 => self.settings_appearance_page(disabled, view.clone()),
                 2 => self.settings_shortcuts_page(),
-                3 | 8 => self.settings_connections_page(disabled, view.clone()),
                 5 => self.settings_session_page(disabled, view.clone()),
                 6 => self.settings_git_page(disabled, view.clone()),
                 7 => self.settings_maintenance_page(disabled, view.clone()),
@@ -161,11 +173,7 @@ impl ConduitApp {
             .items_start()
             .child(
                 v_flex()
-                    .w(px(if f32::from(window.viewport_size().width) < 1000. {
-                        184.
-                    } else {
-                        216.
-                    }))
+                    .w(px(navigation_width))
                     .h_full()
                     .flex_shrink_0()
                     .bg(rgb(palette().sidebar_bg))
@@ -178,19 +186,22 @@ impl ConduitApp {
                             .flex_1()
                             .min_h_0()
                             .w_full()
-                            .px_3()
+                            .px(px(if narrow { 6. } else { 12. }))
+                            .pt(px(if narrow { 8. } else { 0. }))
                             .pb_3()
                             .overflow_y_scroll()
                             .child(navigation),
                     )
-                    .child(
-                        div()
-                            .px_4()
-                            .py_3()
-                            .text_size(px(12.))
-                            .text_color(rgb(palette().muted))
-                            .child(format!("Conduit {}", env!("CARGO_PKG_VERSION"))),
-                    ),
+                    .when(!narrow, |sidebar| {
+                        sidebar.child(
+                            div()
+                                .px_4()
+                                .py_3()
+                                .text_size(ui_text_size(12.))
+                                .text_color(rgb(palette().muted))
+                                .child(format!("Conduit {}", env!("CARGO_PKG_VERSION"))),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -286,7 +297,7 @@ impl ConduitApp {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .child(summary.clone()),
                 )
                 .child(

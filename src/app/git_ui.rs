@@ -1075,7 +1075,7 @@ impl ConduitApp {
                 div().flex_1().min_w_0().child(
                     Input::new(&tag_input)
                         .h(px(28.))
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .aria_label("Git Tag")
                         .disabled(busy || self.closing || !self.writable),
                 ),
@@ -1185,7 +1185,7 @@ impl ConduitApp {
                     .child(
                         div()
                             .flex_1()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .font_semibold()
                             .child("提交说明"),
                     )
@@ -1195,7 +1195,7 @@ impl ConduitApp {
                                 .h(px(18.))
                                 .px_2()
                                 .items_center()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(rgb(palette().muted))
                                 .child(format!("已勾选 {checked_count} / 已暂存 {staged_count}")),
                         )
@@ -1254,7 +1254,7 @@ impl ConduitApp {
                                 .appearance(false)
                                 .bordered(false)
                                 .h(relative(1.))
-                                .text_size(px(13.))
+                                .text_size(ui_text_size(13.))
                                 .aria_label("Git 提交说明")
                                 .disabled(
                                     self.closing
@@ -1291,7 +1291,7 @@ impl ConduitApp {
                         .min_w_0()
                         .h(px(24.))
                         .overflow_y_scroll()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .line_height(relative(1.4))
                         .text_color(rgb(palette().error_text))
                         .child(feedback.text.clone()),
@@ -1573,7 +1573,7 @@ impl ConduitApp {
                         .child(Spinner::new().small().color(rgb(palette().muted).into()))
                         .child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(rgb(palette().muted))
                                 .child("正在读取工作区 Git 状态…"),
                         ),
@@ -1594,14 +1594,14 @@ impl ConduitApp {
                         .bg(rgb(palette().danger_bg))
                         .child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .font_semibold()
                                 .text_color(rgb(palette().danger_text))
                                 .child("无法读取 Git 状态"),
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .line_height(relative(1.5))
                                 .text_color(rgb(palette().danger_text))
                                 .child(error.clone()),
@@ -1614,7 +1614,7 @@ impl ConduitApp {
             return body
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().faint))
                         .child("打开面板时读取工作区 Git 状态"),
                 )
@@ -1639,13 +1639,13 @@ impl ConduitApp {
                     )
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().muted))
                             .child("工作区没有未提交变更"),
                     )
                     .child(
                         div()
-                            .text_size(px(10.))
+                            .text_size(ui_text_size(10.))
                             .text_color(rgb(palette().faint))
                             .child("在终端修改文件后点击右上角刷新"),
                     ),
@@ -1787,7 +1787,7 @@ impl ConduitApp {
                                         .items_center()
                                         .child(
                                             div()
-                                                .text_size(px(12.))
+                                                .text_size(ui_text_size(12.))
                                                 .font_semibold()
                                                 .child(kind.label()),
                                         )
@@ -1796,7 +1796,7 @@ impl ConduitApp {
                                                 .flex_1()
                                                 .min_w_0()
                                                 .truncate()
-                                                .text_size(px(11.))
+                                                .text_size(ui_text_size(11.))
                                                 .text_color(rgb(palette().muted))
                                                 .child(if selected_count > 0 {
                                                     format!(
@@ -2063,7 +2063,7 @@ impl ConduitApp {
                                         .min_w_0()
                                         .flex_shrink_1()
                                         .truncate()
-                                        .text_size(px(12.))
+                                        .text_size(ui_text_size(12.))
                                         .text_color(rgb(git_change_color(file.kind())))
                                         .child(filename),
                                 )
@@ -2072,14 +2072,14 @@ impl ConduitApp {
                                         .flex_1()
                                         .min_w_0()
                                         .truncate()
-                                        .text_size(px(11.))
+                                        .text_size(ui_text_size(11.))
                                         .text_color(rgb(palette().muted))
                                         .child(parent),
                                 )
                                 .child(
                                     div()
                                         .flex_shrink_0()
-                                        .text_size(px(11.))
+                                        .text_size(ui_text_size(11.))
                                         .text_color(rgb(git_change_color(file.kind())))
                                         .child(if file.untracked() {
                                             "?".to_string()
@@ -2093,7 +2093,7 @@ impl ConduitApp {
                                     row.child(
                                         div()
                                             .flex_shrink_0()
-                                            .text_size(px(10.))
+                                            .text_size(ui_text_size(10.))
                                             .text_color(rgb(palette().highlight_text))
                                             .child(if file.unstaged() {
                                                 "部分暂存"
@@ -2108,7 +2108,7 @@ impl ConduitApp {
                                             .flex_shrink_0()
                                             .max_w(px(132.))
                                             .truncate()
-                                            .text_size(px(10.))
+                                            .text_size(ui_text_size(10.))
                                             .text_color(rgb(palette().faint))
                                             .child(format!("← {original}")),
                                     )
@@ -2124,7 +2124,7 @@ impl ConduitApp {
                 body = body.child(v_flex().w_full().flex_shrink_0().gap_1().pt_1().children(
                     snapshot.notes.iter().map(|note| {
                         div()
-                            .text_size(px(10.))
+                            .text_size(ui_text_size(10.))
                             .line_height(relative(1.4))
                             .text_color(rgb(palette().faint))
                             .child(note.clone())
@@ -2228,7 +2228,7 @@ impl ConduitApp {
                     .px_2()
                     .gap_1()
                     .items_center()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(rgb(palette().muted))
                     .child(Icon::new(gpui_kit::assets::IconName::GitBranch).size(px(13.)))
                     .child(

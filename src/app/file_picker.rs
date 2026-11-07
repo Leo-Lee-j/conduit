@@ -235,7 +235,7 @@ impl Render for FilePicker {
             )
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(rgb(palette().faint))
                     .truncate()
                     .child(display_path(&self.workspace)),
@@ -277,10 +277,10 @@ impl Render for FilePicker {
                         .on_click(
                             cx.listener(move |this, _, window, cx| this.open(position, window, cx)),
                         )
-                        .child(div().text_size(px(13.)).truncate().child(name))
+                        .child(div().text_size(ui_text_size(13.)).truncate().child(name))
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(rgb(palette().muted))
                                 .truncate()
                                 .child(path.clone()),
@@ -292,14 +292,14 @@ impl Render for FilePicker {
         if self.index.as_ref().is_some_and(|index| index.incomplete) {
             body = body.child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .text_color(rgb(palette().faint))
                     .child("工作区较大或部分目录无法读取，仅显示已扫描的文件"),
             );
         }
         body.child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(rgb(palette().faint))
                 .child("↑ / ↓ 选择 · Enter 打开 · Esc 关闭"),
         )

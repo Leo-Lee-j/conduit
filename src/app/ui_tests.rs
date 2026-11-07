@@ -5420,10 +5420,24 @@ fn settings_extensions_lists_search_details_and_context_are_isolated(cx: &mut Te
         let body = cx.debug_bounds("settings-workspace-body").unwrap();
         let list = cx.debug_bounds("extensions-list").unwrap();
         assert!(list.size.height > px(50.));
-        let first = cx.debug_bounds("extension-detail-0").unwrap();
-        let second = cx.debug_bounds("extension-detail-1").unwrap();
-        assert!(first.bottom() > list.top() && second.top() < list.bottom());
+        let first = cx.debug_bounds("extension-detail-0").unwrap_or_else(|| {
+            panic!(
+                "first extension must be visible at {width}x{height}, list={list:?}, rows={}",
+                app.read_with(cx, |app, _| app.extensions_ui.lists[0].item_count())
+            )
+        });
+        let second = cx.debug_bounds("extension-detail-1").unwrap_or_else(|| {
+            panic!("second extension must be visible at {width}x{height}, list={list:?}, first={first:?}")
+        });
+        assert!(
+            first.bottom() > list.top() && second.top() < list.bottom(),
+            "extension actions must remain visible: {list:?}, {first:?}, {second:?}"
+        );
         assert!(first.right() <= body.right());
+        assert!(
+            cx.debug_bounds("extension-name-0").unwrap().size.width >= px(110.),
+            "extension names must keep readable space beside actions"
+        );
         assert!(
             cx.debug_bounds("extension-detail-79").is_none(),
             "offscreen rows are virtualized"

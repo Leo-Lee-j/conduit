@@ -233,7 +233,7 @@ impl ConduitApp {
                     if this.search_ui.errors > 0 {
                         body = body.child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(rgb(palette().warning_text))
                                 .child(format!(
                                     "{} 个会话的正文无法读取，搜索结果可能不完整；打开会话可重试。",
@@ -245,7 +245,7 @@ impl ConduitApp {
                         body = body.child(
                             div()
                                 .py_2()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(rgb(palette().faint))
                                 .child(if query.is_empty() {
                                     "输入会话标题或消息内容开始搜索"
@@ -307,14 +307,14 @@ impl ConduitApp {
                                             .when(archived, |row| {
                                                 row.child(
                                                     div()
-                                                        .text_size(px(9.))
+                                                        .text_size(ui_text_size(9.))
                                                         .text_color(rgb(palette().faint))
                                                         .child("已归档"),
                                                 )
                                             })
                                             .child(
                                                 div()
-                                                    .text_size(px(10.))
+                                                    .text_size(ui_text_size(10.))
                                                     .text_color(rgb(palette().faint))
                                                     .child(workspace_name),
                                             ),

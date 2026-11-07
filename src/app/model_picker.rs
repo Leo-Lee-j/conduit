@@ -190,7 +190,7 @@ impl Render for SessionModelPicker {
                             .items_center()
                             .child(
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(ui_text_size(12.))
                                     .text_color(rgb(palette().faint))
                                     .child("Provider"),
                             )
@@ -198,7 +198,7 @@ impl Render for SessionModelPicker {
                                 div()
                                     .flex_1()
                                     .truncate()
-                                    .text_size(px(12.))
+                                    .text_size(ui_text_size(12.))
                                     .text_color(rgb(palette().text))
                                     .child(channel_label),
                             )
@@ -328,7 +328,7 @@ impl Render for SessionModelPicker {
                                     .flex_1()
                                     .min_w_0()
                                     .truncate()
-                                    .text_size(px(12.))
+                                    .text_size(ui_text_size(12.))
                                     .text_color(rgb(palette().text))
                                     .child(label),
                             )
@@ -361,14 +361,14 @@ impl Render for SessionModelPicker {
                     .child(
                         div()
                             .flex_1()
-                            .text_size(px(13.))
+                            .text_size(ui_text_size(13.))
                             .font_semibold()
                             .text_color(rgb(palette().text))
                             .child("模型配置"),
                     )
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().faint))
                             .child(if pending { "新会话" } else { "当前会话" }),
                     ),
@@ -378,7 +378,7 @@ impl Render for SessionModelPicker {
             .child(
                 div()
                     .px_2()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(rgb(palette().faint))
                     .child("模型"),
             )
@@ -393,7 +393,7 @@ impl Render for SessionModelPicker {
                     div()
                         .px_2()
                         .py_2()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().faint))
                         .child("没有匹配的模型"),
                 )
@@ -411,7 +411,7 @@ impl Render for SessionModelPicker {
                             }
                         })
                         .px_2()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().faint))
                         .child(note),
                 )
@@ -422,7 +422,7 @@ impl Render for SessionModelPicker {
                     v_flex()
                         .px_2()
                         .gap_2()
-                        .child(div().text_size(px(12.)).child("思考强度"))
+                        .child(div().text_size(ui_text_size(12.)).child("思考强度"))
                         .child(
                             h_flex()
                                 .id("opencode-effort-options")
@@ -477,7 +477,7 @@ impl Render for SessionModelPicker {
                         )
                         .child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(rgb(palette().faint))
                                 .child("可用档位在连接模型后更新"),
                         ),
@@ -498,13 +498,13 @@ impl Render for SessionModelPicker {
                                 .child(
                                     div()
                                         .flex_1()
-                                        .text_size(px(12.))
+                                        .text_size(ui_text_size(12.))
                                         .text_color(rgb(palette().muted))
                                         .child("思考强度"),
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(12.))
+                                        .text_size(ui_text_size(12.))
                                         .font_semibold()
                                         .text_color(rgb(palette().text))
                                         .child(effort.label()),
@@ -524,14 +524,14 @@ impl Render for SessionModelPicker {
                         .child(h_flex().w_full().justify_between().children(
                             ReasoningEffort::ALL.map(|level| {
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(ui_text_size(12.))
                                     .text_color(rgb(palette().faint))
                                     .child(level.label())
                             }),
                         ))
                         .child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .line_height(relative(1.4))
                                 .text_color(rgb(palette().faint))
                                 .child("更高强度可能增加耗时；支持的档位由模型决定"),
@@ -556,7 +556,7 @@ impl Render for SessionModelPicker {
                     .child(
                         div()
                             .flex_1()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().faint))
                             .child(if pending {
                                 "首次发送时使用以上配置新建会话"
@@ -604,7 +604,7 @@ impl SessionModelPicker {
                     .items_center()
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().faint))
                             .child("引擎"),
                     )
@@ -612,7 +612,7 @@ impl SessionModelPicker {
                     .child(
                         div()
                             .flex_1()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().text))
                             .child(provider.label()),
                     )
@@ -656,7 +656,7 @@ impl SessionModelPicker {
                                 .child(
                                     div()
                                         .flex_1()
-                                        .text_size(px(12.))
+                                        .text_size(ui_text_size(12.))
                                         .text_color(rgb(palette().muted))
                                         .child(if enabled {
                                             option.label().to_owned()
@@ -779,7 +779,7 @@ impl ConduitApp {
                     )
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(if warning {
                                 palette().warning_text
                             } else {
@@ -850,7 +850,7 @@ impl ConduitApp {
                                         )
                                         .child(
                                             div()
-                                                .text_size(px(12.))
+                                                .text_size(ui_text_size(12.))
                                                 .text_color(rgb(if is_danger {
                                                     palette().warning_text
                                                 } else {
@@ -862,7 +862,7 @@ impl ConduitApp {
                                 .child(
                                     div()
                                         .pl_6()
-                                        .text_size(px(12.))
+                                        .text_size(ui_text_size(12.))
                                         .text_color(rgb(palette().faint))
                                         .child(match (opencode, option) {
                                             (true, PermissionLevel::ReadOnly) => {
@@ -900,7 +900,7 @@ impl ConduitApp {
                         .pt_2()
                         .border_t_1()
                         .border_color(rgb(palette().border))
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().faint))
                         .child(
                             "完全权限会立即自动处理当前审批；沙箱及其他权限改动从下一条消息生效",
@@ -1013,7 +1013,7 @@ impl ConduitApp {
                     .child(model_mark(provider, selected_model.as_deref()))
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().faint))
                             .child(provider.label()),
                     )
@@ -1023,14 +1023,14 @@ impl ConduitApp {
                             .flex_shrink_1()
                             .max_w(px(170.))
                             .truncate()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().muted))
                             .child(label),
                     )
                     .when(effort != "默认", |row| {
                         row.child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(rgb(palette().faint))
                                 .child(effort.clone()),
                         )
@@ -1212,7 +1212,7 @@ impl ConduitApp {
                     .when_some(current, |row, provider| row.child(provider_icon(provider)))
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(if disabled {
                                 palette().faint
                             } else {
@@ -1278,7 +1278,7 @@ impl ConduitApp {
                                     .child(
                                         div()
                                             .flex_1()
-                                            .text_size(px(12.))
+                                            .text_size(ui_text_size(12.))
                                             .text_color(rgb(if active {
                                                 palette().text
                                             } else {
@@ -1320,7 +1320,7 @@ impl ConduitApp {
                     .items_center()
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(if disabled {
                                 palette().faint
                             } else {
@@ -1392,7 +1392,7 @@ impl ConduitApp {
                                             .min_w_0()
                                             .child(
                                                 div()
-                                                    .text_size(px(12.))
+                                                    .text_size(ui_text_size(12.))
                                                     .text_color(rgb(if active {
                                                         palette().text
                                                     } else {
@@ -1402,7 +1402,7 @@ impl ConduitApp {
                                             )
                                             .child(
                                                 div()
-                                                    .text_size(px(12.))
+                                                    .text_size(ui_text_size(12.))
                                                     .text_color(rgb(palette().faint))
                                                     .child(detail),
                                             ),
@@ -1461,7 +1461,7 @@ impl ConduitApp {
                         div()
                             .max_w(px(180.))
                             .truncate()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(if disabled {
                                 palette().faint
                             } else {
@@ -1541,7 +1541,7 @@ impl ConduitApp {
                                             .child(
                                                 div()
                                                     .truncate()
-                                                    .text_size(px(12.))
+                                                    .text_size(ui_text_size(12.))
                                                     .text_color(rgb(if selected {
                                                         palette().text
                                                     } else {
@@ -1553,7 +1553,7 @@ impl ConduitApp {
                                                 column.child(
                                                     div()
                                                         .truncate()
-                                                        .text_size(px(12.))
+                                                        .text_size(ui_text_size(12.))
                                                         .text_color(rgb(palette().faint))
                                                         .child(note),
                                                 )
@@ -1573,7 +1573,7 @@ impl ConduitApp {
                     div()
                         .px_2()
                         .pt_1()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().faint))
                         .child(format!("{provider_label} · {} 个模型", models.len())),
                 );
@@ -1604,7 +1604,7 @@ impl ConduitApp {
                     .when_some(current, |row, provider| row.child(provider_icon(provider)))
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(if disabled {
                                 palette().faint
                             } else {
@@ -1670,7 +1670,7 @@ impl ConduitApp {
                                     .child(
                                         div()
                                             .flex_1()
-                                            .text_size(px(12.))
+                                            .text_size(ui_text_size(12.))
                                             .text_color(rgb(if active {
                                                 palette().text
                                             } else {
@@ -1732,7 +1732,7 @@ impl ConduitApp {
                         div()
                             .max_w(px(180.))
                             .truncate()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(if disabled {
                                 palette().faint
                             } else {
@@ -1812,7 +1812,7 @@ impl ConduitApp {
                                             .child(
                                                 div()
                                                     .truncate()
-                                                    .text_size(px(12.))
+                                                    .text_size(ui_text_size(12.))
                                                     .text_color(rgb(if selected {
                                                         palette().text
                                                     } else {
@@ -1824,7 +1824,7 @@ impl ConduitApp {
                                                 column.child(
                                                     div()
                                                         .truncate()
-                                                        .text_size(px(12.))
+                                                        .text_size(ui_text_size(12.))
                                                         .text_color(rgb(palette().faint))
                                                         .child(note),
                                                 )
@@ -1844,7 +1844,7 @@ impl ConduitApp {
                     div()
                         .px_2()
                         .pt_1()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().faint))
                         .child(format!("{provider_label} · {} 个模型", models.len())),
                 );

@@ -73,7 +73,7 @@ impl GitLogView {
             .gap_1()
             .px_2()
             .cursor_pointer()
-            .text_size(px(11.))
+            .text_size(ui_text_size(11.))
             .text_color(rgb(palette().muted))
             .hover(|row| row.bg(rgb(palette().surface_hover)))
             .child(
@@ -212,7 +212,7 @@ impl GitLogView {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .when(current, |row| row.font_semibold())
                     .tooltip(move |window, cx| {
                         gpui_kit::component::tooltip::Tooltip::new(hint.clone()).build(window, cx)
@@ -307,7 +307,7 @@ impl GitLogView {
                 .items_center()
                 .gap_2()
                 .cursor_pointer()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .when(all_selected, |row| row.bg(rgb(palette().surface_hover)))
                 .hover(|row| row.bg(rgb(palette().surface_hover)))
                 .child(Icon::new(FullIconName::GitFork).size(px(13.)))
@@ -327,7 +327,7 @@ impl GitLogView {
                     .gap_2()
                     .items_center()
                     .cursor_pointer()
-                    .text_size(px(11.))
+                    .text_size(ui_text_size(11.))
                     .when(self.query.reference.as_deref() == Some("HEAD"), |row| {
                         row.bg(rgb(palette().surface_hover))
                     })
@@ -415,13 +415,18 @@ impl GitLogView {
                 }
             }
             if repository.truncated {
-                list = list.child(div().p_2().text_size(px(11.)).child("分支列表已达显示上限"));
+                list = list.child(
+                    div()
+                        .p_2()
+                        .text_size(ui_text_size(11.))
+                        .child("分支列表已达显示上限"),
+                );
             }
         } else {
             list = list.child(
                 div()
                     .p_3()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(rgb(palette().muted))
                     .child(if self.workspace.is_none() {
                         "添加或选择工作区后查看分支"
@@ -466,7 +471,7 @@ impl GitLogView {
                             div()
                                 .min_w_0()
                                 .truncate()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .child(reference.trim_start_matches("refs/tags/").to_string()),
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -479,7 +484,7 @@ impl GitLogView {
                     div()
                         .flex_shrink_0()
                         .p_2()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .child("仅显示前 1000 个标签"),
                 );
             }
@@ -500,7 +505,7 @@ impl GitLogView {
                     div()
                         .id("git-branch-feedback")
                         .p_2()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(rgb(if feedback.error {
                             palette().danger_text
                         } else {
@@ -513,7 +518,7 @@ impl GitLogView {
                 feedback_panel = feedback_panel.child(
                     div()
                         .p_2()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(rgb(palette().danger_text))
                         .child(message.clone()),
                 );
@@ -538,7 +543,12 @@ impl GitLogView {
                     .gap_2()
                     .border_b_1()
                     .border_color(rgb(palette().border))
-                    .child(div().text_size(px(12.)).font_semibold().child("分支"))
+                    .child(
+                        div()
+                            .text_size(ui_text_size(12.))
+                            .font_semibold()
+                            .child("分支"),
+                    )
                     .child(div().flex_1())
                     .children(picker),
             )

@@ -69,7 +69,13 @@ pub struct UiSettings {
     /// Maximum number of session tabs kept open; opening more closes the oldest.
     #[serde(default = "default_max_tabs")]
     pub max_tabs: usize,
-    /// Chat body font family; `None` follows the theme's UI font.
+    /// Application chrome font; `None` uses the bundled theme's default.
+    #[serde(default)]
+    pub ui_font_family: Option<String>,
+    /// Base interface font size; chat and code keep their own pixel sizes.
+    #[serde(default = "default_ui_font_size")]
+    pub ui_font_size: f32,
+    /// Chat body font; `None` uses the default independently of the UI font.
     #[serde(default)]
     pub chat_font_family: Option<String>,
     /// Chat body font size in pixels.
@@ -100,6 +106,10 @@ fn default_terminal_height() -> f32 {
     280.
 }
 
+pub const DEFAULT_UI_FONT_SIZE: f32 = 16.0;
+pub const MIN_UI_FONT_SIZE: f32 = 12.0;
+pub const MAX_UI_FONT_SIZE: f32 = 20.0;
+
 pub const MIN_CHAT_FONT_SIZE: f32 = 12.0;
 pub const MAX_CHAT_FONT_SIZE: f32 = 20.0;
 pub const MIN_CHAT_LINE_HEIGHT: f32 = 1.2;
@@ -113,6 +123,10 @@ fn default_sessions_per_workspace() -> usize {
 
 fn default_full_width_content() -> bool {
     true
+}
+
+fn default_ui_font_size() -> f32 {
+    DEFAULT_UI_FONT_SIZE
 }
 
 fn default_chat_font_size() -> f32 {
@@ -167,6 +181,8 @@ impl Default for UiSettings {
             naming_provider: None,
             naming_model: None,
             naming_channel: None,
+            ui_font_family: None,
+            ui_font_size: default_ui_font_size(),
             chat_font_family: None,
             chat_font_size: default_chat_font_size(),
             chat_line_height: default_chat_line_height(),
@@ -947,6 +963,8 @@ mod tests {
         assert_eq!(store.ui.max_tabs, 8);
         assert!(store.ui.full_width_content);
         assert_eq!(store.ui.naming_mode, NamingMode::FirstMessage);
+        assert_eq!(store.ui.ui_font_family, None);
+        assert_eq!(store.ui.ui_font_size, DEFAULT_UI_FONT_SIZE);
         assert_eq!(store.ui.chat_font_family, None);
         assert_eq!(store.ui.chat_font_size, 15.0);
         assert_eq!(store.ui.chat_line_height, 1.5);
@@ -963,6 +981,8 @@ mod tests {
         store.ui.max_tabs = 12;
         store.ui.full_width_content = false;
         store.ui.naming_mode = NamingMode::Latest;
+        store.ui.ui_font_family = Some("Microsoft YaHei".into());
+        store.ui.ui_font_size = 18.0;
         store.ui.chat_font_family = Some("Segoe UI".into());
         store.ui.chat_font_size = 17.0;
         store.ui.chat_line_height = 1.7;
@@ -989,6 +1009,11 @@ mod tests {
         assert_eq!(reloaded.ui.max_tabs, 12);
         assert!(!reloaded.ui.full_width_content);
         assert_eq!(reloaded.ui.naming_mode, NamingMode::Latest);
+        assert_eq!(
+            reloaded.ui.ui_font_family.as_deref(),
+            Some("Microsoft YaHei")
+        );
+        assert_eq!(reloaded.ui.ui_font_size, 18.0);
         assert_eq!(reloaded.ui.chat_font_family.as_deref(), Some("Segoe UI"));
         assert_eq!(reloaded.ui.chat_font_size, 17.0);
         assert_eq!(reloaded.ui.chat_line_height, 1.7);

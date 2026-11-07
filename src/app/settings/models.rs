@@ -296,7 +296,7 @@ impl Render for ProviderEditor {
             .gap_3()
             .child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(rgb(palette().muted))
                     .child("配置端点与凭据，再读取模型目录。保存后可在“新会话默认”中选择此服务。"),
             );
@@ -377,7 +377,7 @@ impl Render for ProviderEditor {
                 })
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(rgb(palette().muted))
                         .child(if env_auth {
                             "只保存变量名。修改系统环境变量后需要重启应用。"
@@ -434,12 +434,12 @@ impl Render for ProviderEditor {
         );
         form = form
             .when_some(self.feedback.clone(), |body, message| {
-                body.child(div().text_size(px(12.)).child(message))
+                body.child(div().text_size(ui_text_size(12.)).child(message))
             })
             .when_some(self.error.clone(), |body, error| {
                 body.child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().danger_text))
                         .child(error),
                 )
@@ -491,7 +491,7 @@ impl Render for ProviderEditor {
 }
 
 impl ConduitApp {
-    fn open_provider_editor(
+    pub(super) fn open_provider_editor(
         &mut self,
         provider: Option<ModelProvider>,
         window: &mut Window,
@@ -599,67 +599,35 @@ impl ConduitApp {
             .iter()
             .map(|provider| provider.name.clone().into())
             .collect();
-        let add_view = view.clone();
-        let closing = self.closing;
-        let syncing = self.connection_settings.syncing;
         let add = SettingItem::render(move |_, _, _| {
-            let add_view = add_view.clone();
             h_flex()
                 .w_full()
                 .justify_between()
-                .items_center()
-                .gap_3()
                 .child(
                     div()
-                        .flex_1()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(14.))
                         .font_semibold()
-                        .line_height(relative(1.5))
-                        .text_color(rgb(palette().text))
-                        .child(format!("{service_count} 个模型服务")),
+                        .child("模型服务"),
                 )
-                .child(
-                    Button::new("settings-models-refresh")
-                        .small()
-                        .ghost()
-                        .label(if syncing {
-                            "正在读取…"
-                        } else {
-                            "重新读取配置"
-                        })
-                        .disabled(closing || syncing)
-                        .when(!closing && !syncing, |button| button.cursor_pointer())
-                        .on_click({
-                            let refresh_view = add_view.clone();
-                            move |_, window, cx| {
-                                refresh_view.update(cx, |app, cx| {
-                                    app.reload_all_models_async(true, window, cx)
-                                })
-                            }
-                        }),
-                )
-                .child(
-                    Button::new("add-custom-provider")
-                        .debug_selector(|| "settings-add-service".into())
-                        .small()
-                        .primary()
-                        .label("添加服务")
-                        .disabled(disabled)
-                        .when(!disabled, |button| button.cursor_pointer())
-                        .on_click(move |_, window, cx| {
-                            add_view
-                                .update(cx, |app, cx| app.open_provider_editor(None, window, cx))
-                        }),
-                )
+                .child(management_badge(format!("{service_count} 个服务"), false))
         })
         .keywords(["模型服务", "Provider", "添加", "自定义"]);
+        let default_service = self
+            .store
+            .session_defaults
+            .get(&engine)
+            .and_then(|defaults| match &defaults.channel {
+                ModelChannel::Provider(id) => Some(id.clone()),
+                _ => None,
+            });
         let list_view = view;
         let list = SettingItem::render(move |_, _, _| {
-            let mut list = v_flex().w_full();
+            let mut list = v_flex().w_full().gap_3();
             if empty {
                 list = list.child(
-                    div()
-                        .text_size(px(12.))
+                    v_flex().w_full().items_center().p_6().gap_2().rounded_lg().border_1().border_color(rgb(palette().border))
+                        .child(Icon::new(FullIconName::Boxes).text_color(rgb(palette().muted)))
+                        .text_size(ui_text_size(12.))
                         .line_height(relative(1.6))
                         .text_color(rgb(palette().muted))
                         .child("还没有模型服务。添加端点和模型，或从 cc-switch 同步；也可以直接使用下方的 CLI 默认配置。"),
@@ -668,6 +636,7 @@ impl ConduitApp {
             for (index, (provider, imported, in_use, references)) in rows.iter().enumerate() {
                 let imported = *imported;
                 let in_use = *in_use;
+                let is_default = default_service.as_ref() == Some(&provider.id);
                 let edit_view = list_view.clone();
                 let delete_view = list_view.clone();
                 let edit_provider = provider.clone();
@@ -677,15 +646,19 @@ impl ConduitApp {
                 let references = references.clone();
                 let all_references = references.clone();
                 list = list.child(
-                    v_flex()
+                    h_flex()
                         .w_full()
-                        .px_2()
-                        .py_2()
-                        .border_b_1()
+                        .flex_wrap()
+                        .px_4()
+                        .py_3()
+                        .rounded_lg()
+                        .border_1()
                         .border_color(rgb(palette().border))
+                        .bg(rgb(palette().surface))
+                        .when(is_default, |card| card.border_color(rgb(palette().activity_running)).bg(gpui_kit::rgba((palette().activity_running << 8) | 0x0d)))
                         .gap_3()
                         .items_start()
-                        .child(h_flex().w_full().gap_2().items_start().child(provider_icon(provider.engine))
+                        .child(h_flex().flex_1().min_w_0().flex_basis(px(220.)).gap_2().items_start().child(provider_icon(provider.engine))
                         .child(
                             v_flex()
                                 .flex_1()
@@ -693,9 +666,10 @@ impl ConduitApp {
                                 .debug_selector(move || format!("service-description-{index}"))
                                 .child(
                                     h_flex().gap_2().flex_wrap()
-                                        .child(div().text_size(px(13.)).font_semibold().text_color(rgb(palette().text)).child(provider.name.clone()))
-                                        .child(div().text_size(px(11.)).text_color(rgb(palette().muted)).child(if imported { "来自 CCS" } else { "自定义" }))
-                                        .when(in_use, |row| row.child(div().text_size(px(11.)).text_color(rgb(palette().muted)).child(format!("{} 处引用", references.len())))),
+                                        .child(div().text_size(ui_text_size(13.)).font_semibold().text_color(rgb(palette().text)).child(provider.name.clone()))
+                                        .child(management_badge(if imported { "CCS" } else { "自定义" }, false))
+                                        .when(is_default, |row| row.child(management_badge("新会话默认", true)))
+                                        .when(in_use, |row| row.child(div().text_size(ui_text_size(11.)).text_color(rgb(palette().muted)).child(format!("{} 处引用", references.len())))),
                                 )
                                 .child(
                                     div()
@@ -705,15 +679,15 @@ impl ConduitApp {
                                             let endpoint = provider.base_url.clone();
                                             move |window, cx| gpui_kit::component::tooltip::Tooltip::new(endpoint.clone()).build(window, cx)
                                         })
-                                        .text_size(px(12.))
+                                        .text_size(ui_text_size(12.))
                                         .text_color(rgb(palette().muted))
                                         .child(provider.base_url.clone()),
                                 )
-                                .child(div().text_size(px(11.)).text_color(rgb(palette().muted)).child(format!("{} 个模型{}", provider.models.len(), if imported { " · 在 cc-switch 中编辑" } else { "" })))
-                                .when(in_use, |body| body.child(div().text_size(px(11.)).text_color(rgb(palette().muted)).child(format!("引用：{}", references.iter().take(3).cloned().collect::<Vec<_>>().join("、"))))),
+                                .child(div().text_size(ui_text_size(11.)).text_color(rgb(palette().muted)).child(format!("{} 个模型{}", provider.models.len(), if imported { " · 在 cc-switch 中编辑" } else { "" })))
+                                .when(in_use, |body| body.child(div().text_size(ui_text_size(11.)).text_color(rgb(palette().muted)).child(format!("引用：{}", references.iter().take(3).cloned().collect::<Vec<_>>().join("、"))))),
                         )
                         )
-                        .child(h_flex().w_full().gap_2().flex_wrap().debug_selector(move || format!("service-actions-{index}"))
+                        .child(h_flex().flex_shrink_0().justify_end().gap_2().flex_wrap().debug_selector(move || format!("service-actions-{index}"))
                         .child(Button::new(("provider-use-default", index)).small().outline().label("用于新会话")
                             .disabled(disabled).tooltip("为此引擎的新会话设置服务和模型")
                             .dropdown_menu(move |mut menu, _, _| {
@@ -737,7 +711,7 @@ impl ConduitApp {
                                     let references = references.clone();
                                     dialog.title("服务引用位置").content(move |body, _, _| body.child(
                                         div().id("provider-references-list").max_h(px(320.)).overflow_y_scroll()
-                                            .child(v_flex().gap_2().children(references.iter().map(|r| div().text_size(px(12.)).child(r.clone()))))))
+                                            .child(v_flex().gap_2().children(references.iter().map(|r| div().text_size(ui_text_size(12.)).child(r.clone()))))))
                                 });
                             })))
                         .when(!imported, |row| row.child(
@@ -799,7 +773,9 @@ impl ConduitApp {
             list
         })
         .keywords(keywords);
-        SettingGroup::new().items(vec![add, list])
+        SettingGroup::new()
+            .variant(GroupBoxVariant::Normal)
+            .items(vec![add, list])
     }
 
     pub(super) fn models_source_group(&self, engine: Provider, view: Entity<Self>) -> SettingGroup {
@@ -894,7 +870,7 @@ impl ConduitApp {
                 .flex_wrap()
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().muted))
                         .child(format!("{model_count} 个模型定义 · 未验证生成能力")),
                 )
@@ -968,6 +944,7 @@ impl ConduitApp {
         } else {
             "CLI 默认配置"
         })
+        .variant(GroupBoxVariant::Outline)
         .items(items);
         if let Some(note) = note {
             group.footer(move |_, _| note.clone())

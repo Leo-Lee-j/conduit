@@ -114,10 +114,15 @@ impl ConduitApp {
                     .gap_3()
                     .items_center()
                     .justify_center()
-                    .child(div().text_size(px(13.)).font_semibold().child(title))
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(13.))
+                            .font_semibold()
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .text_size(ui_text_size(12.))
                             .line_height(relative(1.6))
                             .text_color(rgb(palette().muted))
                             .child(description),

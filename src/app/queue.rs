@@ -306,6 +306,9 @@ impl ConduitApp {
                                 .truncate()
                                 .text_size(px(12.))
                                 .text_color(rgb(palette().text))
+                                .when_some(self.chat_typography().body_font, |text, family| {
+                                    text.font_family(family)
+                                })
                                 .child(summary),
                         )
                         .when(!message.references.is_empty(), |row| {

@@ -85,6 +85,18 @@ pub struct Probe {
 }
 
 impl Probe {
+    /// A completed discovery event for deterministic workspace lifecycle tests.
+    #[cfg(all(test, feature = "ui-tests"))]
+    pub(crate) fn ready(context: Context, catalog: Catalog) -> Self {
+        let (sender, events) = mpsc::channel();
+        sender.send(catalog).unwrap();
+        Self {
+            context,
+            events,
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
     pub fn start(context: Context) -> Self {
         let (sender, events) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));

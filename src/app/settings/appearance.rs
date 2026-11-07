@@ -127,7 +127,7 @@ fn theme_options(selected: AppearanceMode, view: Entity<ConduitApp>, disabled: b
                                     .child(
                                         div()
                                             .flex_1()
-                                            .text_size(px(13.))
+                                            .text_size(ui_text_size(13.))
                                             .font_medium()
                                             .text_color(rgb(label_color))
                                             .child(label),
@@ -142,7 +142,7 @@ fn theme_options(selected: AppearanceMode, view: Entity<ConduitApp>, disabled: b
                             )
                             .child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(ui_text_size(11.))
                                     .text_color(rgb(palette().muted))
                                     .child(detail),
                             ),
@@ -177,19 +177,31 @@ fn theme_options(selected: AppearanceMode, view: Entity<ConduitApp>, disabled: b
         .into_any_element()
 }
 
+#[derive(Clone, Copy)]
+enum FontTarget {
+    Interface,
+    Chat,
+    Code,
+}
+
 fn font_select_field(
     view: Entity<ConduitApp>,
-    code: bool,
+    target: FontTarget,
     disabled: bool,
 ) -> SettingField<SharedString> {
     SettingField::render(move |_, _, cx| {
         let app = view.read(cx);
-        let select = if code {
-            &app.code_font_select
-        } else {
-            &app.chat_font_select
+        let (select, selector, label) = match target {
+            FontTarget::Interface => (&app.ui_font_select, "appearance-ui-font", "应用界面字体"),
+            FontTarget::Chat => (
+                &app.chat_font_select,
+                "appearance-chat-font",
+                "聊天正文字体",
+            ),
+            FontTarget::Code => (&app.code_font_select, "appearance-code-font", "代码字体"),
         };
         div()
+            .debug_selector(move || selector.into())
             .w(px(188.))
             .flex_shrink_0()
             .child(
@@ -199,11 +211,7 @@ fn font_select_field(
                     .menu_width(px(260.))
                     .menu_max_h(px(320.))
                     .search_placeholder("搜索字体")
-                    .accessibility_label(if code {
-                        "代码字体"
-                    } else {
-                        "聊天正文字体"
-                    })
+                    .accessibility_label(label)
                     .disabled(disabled),
             )
             .into_any_element()
@@ -221,10 +229,19 @@ impl ConduitApp {
         if gpui_kit::component::Theme::global(cx).mode != mode {
             gpui_kit::component::Theme::change(mode, Some(window), cx);
         }
-        // Loading a theme can reset the monospace pair; reinstall the chat's
-        // chosen code font after every mode change.
+        // Theme changes reload font tokens. Restore both user choices afterward.
+        self.apply_ui_font(cx);
         self.apply_code_font(cx);
         cx.notify();
+    }
+
+    pub(in crate::app) fn apply_ui_font(&mut self, cx: &mut Context<Self>) {
+        install_ui_font(
+            cx,
+            self.store.ui.ui_font_family.as_deref(),
+            &self.default_ui_font,
+            self.store.ui.ui_font_size,
+        );
     }
 
     pub(in crate::app) fn apply_code_font(&mut self, cx: &mut Context<Self>) {
@@ -238,12 +255,14 @@ impl ConduitApp {
 
     pub(in crate::app) fn chat_typography(&self) -> ChatTypography {
         ChatTypography {
-            body_font: self
-                .store
-                .ui
-                .chat_font_family
-                .as_deref()
-                .map(SharedString::from),
+            body_font: Some(
+                self.store
+                    .ui
+                    .chat_font_family
+                    .as_deref()
+                    .map(SharedString::from)
+                    .unwrap_or_else(|| self.default_ui_font.clone()),
+            ),
             body_size: self
                 .store
                 .ui
@@ -282,6 +301,16 @@ impl ConduitApp {
             return;
         }
         match field {
+            TypographyField::UiSize => {
+                let value = self
+                    .store
+                    .ui
+                    .ui_font_size
+                    .clamp(MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE);
+                self.store.ui.ui_font_size =
+                    (value + delta).clamp(MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE);
+                self.apply_ui_font(cx);
+            }
             TypographyField::ChatSize => {
                 let value = self
                     .store
@@ -316,6 +345,24 @@ impl ConduitApp {
         cx.notify();
     }
 
+    pub(in crate::app) fn reset_ui_typography(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.writable || self.closing {
+            return;
+        }
+        self.store.ui.ui_font_family = None;
+        self.store.ui.ui_font_size = DEFAULT_UI_FONT_SIZE;
+        self.ui_font_select.update(cx, |select, cx| {
+            select.set_selected_index(Some(IndexPath::new(0)), window, cx);
+        });
+        self.apply_ui_font(cx);
+        self.persist();
+        cx.notify();
+    }
+
     pub(in crate::app) fn reset_typography(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.writable || self.closing {
             return;
@@ -346,7 +393,32 @@ impl ConduitApp {
         let selected = self.store.ui.appearance;
         let theme_view = view.clone();
         let chat = self.chat_typography();
-        let chat_font = font_select_field(view.clone(), false, disabled);
+        let ui_font = font_select_field(view.clone(), FontTarget::Interface, disabled);
+        let ui_size = typography_field(
+            "ui-font-size",
+            self.store
+                .ui
+                .ui_font_size
+                .clamp(MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE),
+            disabled,
+            TypographyField::UiSize,
+            view.clone(),
+        );
+        let ui_reset_view = view.clone();
+        let ui_reset = SettingField::render(move |_, _, _| {
+            let view = ui_reset_view.clone();
+            Button::new("appearance-ui-reset")
+                .debug_selector(|| "appearance-ui-reset".into())
+                .label("恢复默认")
+                .small()
+                .ghost()
+                .disabled(disabled)
+                .when(!disabled, |button| button.cursor_pointer())
+                .on_click(move |_, window, cx| {
+                    view.update(cx, |app, cx| app.reset_ui_typography(window, cx));
+                })
+        });
+        let chat_font = font_select_field(view.clone(), FontTarget::Chat, disabled);
         let chat_size = typography_field(
             "chat-font-size",
             chat.body_size,
@@ -362,7 +434,7 @@ impl ConduitApp {
             view.clone(),
         );
         let code = self.chat_typography();
-        let code_font = font_select_field(view.clone(), true, disabled);
+        let code_font = font_select_field(view.clone(), FontTarget::Code, disabled);
         let code_size = typography_field(
             "code-font-size",
             code.code_size,
@@ -410,6 +482,25 @@ impl ConduitApp {
                     .keywords(["主题", "浅色", "深色", "跟随系统"]),
                 )
                 .footer(|_, _| "选择后立即应用；跟随系统时自动同步 Windows 外观。"),
+            settings_section("应用界面")
+                .item(
+                    SettingItem::new("界面字体", ui_font)
+                        .description("用于侧栏、标签页、菜单、按钮与设置，默认使用系统字体")
+                        .keywords(["应用", "界面", "UI", "字体", "font"])
+                        .disabled(disabled),
+                )
+                .item(
+                    SettingItem::new("界面字号", ui_size)
+                        .description("12–20 px；默认 16，按比例调整界面文字大小")
+                        .keywords(["应用", "界面", "字号", "大小", "font", "size"])
+                        .disabled(disabled),
+                )
+                .item(
+                    SettingItem::new("恢复默认", ui_reset)
+                        .description("仅恢复界面字体与字号，保留聊天和代码设置")
+                        .disabled(disabled),
+                )
+                .footer(|_, _| "选择后立即生效并自动保存；聊天正文、输入框与代码字体单独设置。"),
             settings_section("聊天文字").items(vec![
                 SettingItem::new("正文字体", chat_font)
                     .description("用于消息与输入框，默认使用系统字体")
@@ -451,7 +542,7 @@ impl ConduitApp {
                 })
                 .keywords(["预览", "聊天预览"]),
                 SettingItem::new("恢复默认", reset)
-                    .description("字体、字号、行高与代码块选项一起恢复默认。")
+                    .description("聊天字体、字号、行高与代码块选项一起恢复默认。")
                     .disabled(disabled),
             ]),
         ])

@@ -300,7 +300,7 @@ impl GitDiffDialog {
                 .py(px(1.))
                 .rounded(px(4.))
                 .bg(rgb(palette().surface_strong))
-                .text_size(px(9.))
+                .text_size(ui_text_size(9.))
                 .text_color(rgb(if emphasized {
                     palette().text
                 } else {
@@ -315,7 +315,7 @@ impl GitDiffDialog {
         let stats = h_flex()
             .flex_shrink_0()
             .gap(px(5.))
-            .text_size(px(10.))
+            .text_size(ui_text_size(10.))
             .child(
                 div()
                     .text_color(rgb(palette().git_added_text))
@@ -336,7 +336,7 @@ impl GitDiffDialog {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_size(px(13.))
+                    .text_size(ui_text_size(13.))
                     .font_semibold()
                     .text_color(rgb(palette().text))
                     .child(self.file.path.clone()),
@@ -348,7 +348,7 @@ impl GitDiffDialog {
                     .py(px(1.))
                     .rounded(px(4.))
                     .bg(rgb(palette().surface_strong))
-                    .text_size(px(9.))
+                    .text_size(ui_text_size(9.))
                     .font_semibold()
                     .text_color(rgb(color))
                     .child(kind.label()),
@@ -362,7 +362,7 @@ impl GitDiffDialog {
                     .rounded(px(4.))
                     .border_1()
                     .border_color(rgb(palette().border))
-                    .text_size(px(9.))
+                    .text_size(ui_text_size(9.))
                     .text_color(rgb(palette().faint))
                     .child("只读"),
             );
@@ -370,7 +370,7 @@ impl GitDiffDialog {
             details = details.child(
                 div()
                     .flex_shrink_0()
-                    .text_size(px(9.))
+                    .text_size(ui_text_size(9.))
                     .text_color(rgb(palette().faint))
                     .child(format!("← {original}")),
             );
@@ -415,7 +415,7 @@ impl GitDiffDialog {
                                     .when(binary, |row| {
                                         row.child(
                                             div()
-                                                .text_size(px(9.))
+                                                .text_size(ui_text_size(9.))
                                                 .text_color(rgb(palette().warning_text))
                                                 .child("二进制"),
                                         )
@@ -597,7 +597,7 @@ impl GitDiffDialog {
                 .min_w_0()
                 .px(px(16.))
                 .truncate()
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(rgb(palette().faint))
                 .child(text)
         };
@@ -625,7 +625,7 @@ impl GitDiffDialog {
                 .child(Spinner::new().small().color(rgb(palette().muted).into()))
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(rgb(palette().muted))
                         .child("正在读取差异…"),
                 )
@@ -645,7 +645,7 @@ impl GitDiffDialog {
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .line_height(relative(1.5))
                         .text_align(gpui::TextAlign::Center)
                         .text_color(rgb(palette().danger_text))
@@ -670,13 +670,13 @@ impl GitDiffDialog {
                 .gap(px(6.))
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(rgb(palette().muted))
                         .child("没有可显示的文本差异"),
                 )
                 .child(
                     div()
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .text_color(rgb(palette().faint))
                         .child("文件可能已被还原，或只有属性变更"),
                 )
@@ -696,13 +696,13 @@ impl GitDiffDialog {
                 )
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().text))
                         .child("二进制文件已更改"),
                 )
                 .child(
                     div()
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .line_height(relative(1.5))
                         .text_align(gpui::TextAlign::Center)
                         .text_color(rgb(palette().muted))
@@ -736,7 +736,7 @@ impl GitDiffDialog {
             .bg(rgb(palette().warning_bg))
             .children(self.notes.iter().map(|note| {
                 div()
-                    .text_size(px(10.))
+                    .text_size(ui_text_size(10.))
                     .line_height(relative(1.4))
                     .text_color(rgb(palette().warning_text))
                     .child(note.clone())
@@ -758,7 +758,7 @@ impl GitDiffDialog {
             .border_color(rgb(palette().border))
             .child(
                 div()
-                    .text_size(px(9.))
+                    .text_size(ui_text_size(9.))
                     .text_color(rgb(palette().faint))
                     .child(if binary {
                         "二进制文件无法显示逐行差异"
@@ -771,7 +771,7 @@ impl GitDiffDialog {
             .child(div().flex_1())
             .child(
                 div()
-                    .text_size(px(9.))
+                    .text_size(ui_text_size(9.))
                     .text_color(rgb(palette().faint))
                     .child(if self.embedded {
                         "F7 下一处差异 · Shift+F7 上一处 · Esc / Ctrl+W 关闭标签"

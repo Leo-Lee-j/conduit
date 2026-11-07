@@ -576,7 +576,7 @@ impl ConduitApp {
             .flex_shrink_0()
             .border_t_1()
             .border_color(rgb(palette().border))
-            .child(div().text_size(px(12.)).child("终端"))
+            .child(div().text_size(ui_text_size(12.)).child("终端"))
             .child(tabs)
             .child(
                 Button::new("terminal-new")
@@ -655,7 +655,7 @@ impl ConduitApp {
             panel = panel.child(
                 div()
                     .px_2()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(rgb(palette().danger_text))
                     .child(error.clone()),
             );
@@ -690,7 +690,7 @@ impl ConduitApp {
                                 .min_w_0()
                                 .flex_1()
                                 .truncate()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(rgb(palette().muted))
                                 .child(status.label()),
                         )

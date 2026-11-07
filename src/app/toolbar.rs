@@ -51,7 +51,7 @@ impl ConduitApp {
                     div()
                         .min_w_0()
                         .truncate()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().faint))
                         .child(hint),
                 )
@@ -85,7 +85,7 @@ impl ConduitApp {
                             div()
                                 .min_w_0()
                                 .truncate()
-                                .text_size(px(12.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(rgb(if failed {
                                     palette().danger_text
                                 } else {

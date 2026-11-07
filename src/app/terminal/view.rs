@@ -673,7 +673,7 @@ impl Render for TerminalView {
                 pane.child(
                     div()
                         .px_2()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().danger_text))
                         .child(error),
                 )
@@ -723,7 +723,7 @@ impl Render for TerminalView {
                             .max_h(px(64.))
                             .overflow_hidden()
                             .px_2()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .font_family(self.family.clone())
                             .child(preview),
                     )

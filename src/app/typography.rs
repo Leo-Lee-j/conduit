@@ -1,4 +1,4 @@
-//! Chat Markdown, code block controls, and font configuration.
+//! Independent interface/chat typography, Markdown, and code block controls.
 
 use super::*;
 
@@ -130,6 +130,27 @@ pub(super) fn styled_markdown_view(
         view = view.code_block_actions(code_block_actions(copy_scope.into()));
     }
     view
+}
+
+/// Scales an interface text size with the base font, preserving its original
+/// size at the default setting. Content text keeps using explicit pixel sizes.
+pub(super) fn ui_text_size(design_size: f32) -> Rems {
+    rems(design_size / DEFAULT_UI_FONT_SIZE)
+}
+
+/// Applies the interface font to every component and window through the theme.
+/// Chat text explicitly resolves its own font before inheriting this theme.
+pub(super) fn install_ui_font(
+    cx: &mut App,
+    family: Option<&str>,
+    default_family: &SharedString,
+    size: f32,
+) {
+    let family = family.map_or_else(|| default_family.clone(), SharedString::from);
+    gpui_kit::component::Theme::update(cx, move |theme| {
+        theme.font_family = family;
+        theme.font_size = px(size.clamp(MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE));
+    });
 }
 
 /// Writes the code font into the global theme, which code blocks, inline code

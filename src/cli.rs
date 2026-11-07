@@ -18,6 +18,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub mod updates;
+
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CliSettings {
     #[serde(default)]
@@ -246,6 +248,29 @@ pub fn resolve_for_launch(provider: Provider, settings: &CliSettings) -> Result<
 pub struct VersionInfo {
     pub version: String,
     pub verified_version: bool,
+    pub update: Option<Result<updates::UpdateInfo, String>>,
+}
+
+impl VersionInfo {
+    pub fn diagnostic(&self) -> String {
+        let compatibility = if self.verified_version {
+            "与本项目已验证版本一致"
+        } else {
+            "尚未经过完整回归"
+        };
+        match &self.update {
+            None => format!("版本 {} · {compatibility}", self.version),
+            Some(Ok(update)) => format!(
+                "当前版本 {} · {}\n{compatibility}",
+                self.version,
+                update.summary()
+            ),
+            Some(Err(error)) => format!(
+                "当前版本 {} · 更新检查失败：{error}\n{compatibility}",
+                self.version
+            ),
+        }
+    }
 }
 fn parse_version(provider: Provider, output: &str) -> Result<VersionInfo> {
     let signature = provider.descriptor().version_signature;
@@ -277,17 +302,49 @@ fn parse_version(provider: Provider, output: &str) -> Result<VersionInfo> {
         .to_string();
     Ok(VersionInfo {
         verified_version: version == tested_version(provider),
+        update: None,
         version,
     })
 }
 
 pub struct VersionProbe {
     pub path: PathBuf,
+    pub checking_updates: bool,
+    pub installing_update: bool,
+    pub progress: Option<Receiver<String>>,
     pub events: Receiver<Result<VersionInfo, String>>,
     cancelled: Arc<AtomicBool>,
 }
 impl VersionProbe {
     pub fn start(provider: Provider, path: PathBuf) -> Self {
+        Self::spawn(provider, path, false)
+    }
+    pub fn start_update_check(provider: Provider, path: PathBuf) -> Self {
+        Self::spawn(provider, path, true)
+    }
+    pub fn start_install(provider: Provider, path: PathBuf) -> Self {
+        let (sender, events) = mpsc::channel();
+        let (progress_sender, progress) = mpsc::sync_channel(8);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancel = cancelled.clone();
+        let executable = path.clone();
+        thread::spawn(move || {
+            let result = updates::install(provider, &executable, &cancel, |text| {
+                let _ = progress_sender.try_send(text);
+            })
+            .map_err(|error| format!("{error:#}"));
+            let _ = sender.send(result);
+        });
+        Self {
+            path,
+            checking_updates: false,
+            installing_update: true,
+            progress: Some(progress),
+            events,
+            cancelled,
+        }
+    }
+    fn spawn(provider: Provider, path: PathBuf, checking_updates: bool) -> Self {
         let (sender, events) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let cancel = cancelled.clone();
@@ -300,14 +357,47 @@ impl VersionProbe {
                 Duration::from_secs(10),
             )
             .and_then(|output| parse_version(provider, &output))
+            .and_then(|mut info| {
+                if checking_updates {
+                    let update = updates::check(provider, &info.version, &cancel)
+                        .map_err(|error| format!("{error:#}"));
+                    anyhow::ensure!(!cancel.load(Ordering::Acquire), "检测已取消");
+                    info.update = Some(update);
+                }
+                Ok(info)
+            })
             .map_err(|e| format!("{e:#}"));
             let _ = sender.send(result);
         });
         Self {
             path,
+            checking_updates,
+            installing_update: false,
+            progress: None,
             events,
             cancelled,
         }
+    }
+    #[cfg(all(test, feature = "ui-tests"))]
+    pub(crate) fn test_pending(
+        path: PathBuf,
+        checking_updates: bool,
+    ) -> (Self, mpsc::Sender<Result<VersionInfo, String>>) {
+        let (sender, events) = mpsc::channel();
+        (
+            Self {
+                path,
+                checking_updates,
+                installing_update: false,
+                progress: None,
+                events,
+                cancelled: Arc::new(AtomicBool::new(false)),
+            },
+            sender,
+        )
+    }
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
     }
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);

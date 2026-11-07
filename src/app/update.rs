@@ -695,7 +695,11 @@ impl ConduitApp {
             .justify_between()
             .border_b_1()
             .border_color(rgb(palette().border))
-            .child(div().text_size(px(12.)).child(self.updater.status.clone()))
+            .child(
+                div()
+                    .text_size(ui_text_size(12.))
+                    .child(self.updater.status.clone()),
+            )
             .child(
                 Button::new("show-update")
                     .label("查看更新")

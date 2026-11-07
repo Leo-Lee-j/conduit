@@ -1224,6 +1224,9 @@ impl ConduitApp {
                             .bg(rgb(palette().surface))
                             .text_size(px(typography.body_size))
                             .line_height(relative(typography.line_height))
+                            .when_some(typography.body_font.clone(), |body, family| {
+                                body.font_family(family)
+                            })
                             .text_color(rgb(palette().muted))
                             .child(item.text.clone()),
                     );

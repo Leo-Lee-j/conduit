@@ -58,6 +58,7 @@ impl ConduitApp {
         kind: GenerationKind,
         session_id: Option<u64>,
     ) -> anyhow::Result<(Provider, Option<String>, RuntimeRoute)> {
+        anyhow::ensure!(!self.cli_installing(), "CLI 正在更新，请等待更新完成后重试");
         let (engine, channel, model) = self.generation_selection(kind, session_id);
         Ok((engine, model, self.channel_route(engine, &channel)?))
     }
@@ -256,7 +257,7 @@ impl ConduitApp {
                         div()
                             .max_w(px(220.))
                             .truncate()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(rgb(palette().muted))
                             .child(label),
                     )
@@ -329,7 +330,7 @@ impl ConduitApp {
                                         div()
                                             .flex_1()
                                             .truncate()
-                                            .text_size(px(12.))
+                                            .text_size(ui_text_size(12.))
                                             .child(label.clone()),
                                     )
                                     .when(selected, |r| {

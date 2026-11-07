@@ -5,8 +5,10 @@ impl ConduitApp {
     pub(in crate::app) fn render_settings_workspace(
         &self,
         window: &Window,
+        available_width: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let narrow = available_width < 720.;
         v_flex()
             .id("settings-workspace")
             .test_support()
@@ -31,7 +33,8 @@ impl ConduitApp {
                         Button::new("settings-back")
                             .debug_selector(|| "settings-close".into())
                             .icon(FullIconName::ArrowLeft)
-                            .label("返回工作台")
+                            .accessibility_label("返回工作台")
+                            .when(!narrow, |button| button.label("返回工作台"))
                             .ghost()
                             .tooltip("返回工作台（Esc）")
                             .on_click(
@@ -46,12 +49,14 @@ impl ConduitApp {
                                 .cleanable(true),
                         ),
                     )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(rgb(palette().muted))
-                            .child("Ctrl + F"),
-                    ),
+                    .when(!narrow, |header| {
+                        header.child(
+                            div()
+                                .text_size(ui_text_size(12.))
+                                .text_color(rgb(palette().muted))
+                                .child("Ctrl + F"),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -60,9 +65,9 @@ impl ConduitApp {
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    .child(self.settings_body(window, cx.entity(), cx)),
+                    .child(self.settings_body(window, available_width, cx.entity(), cx)),
             )
-            .child(self.settings_save_status())
+            .child(self.settings_save_status(narrow))
             .on_action(cx.listener(|this, _: &OpenSettingsShortcut, window, cx| {
                 this.settings_ui
                     .search
@@ -120,7 +125,7 @@ impl ConduitApp {
         }
     }
 
-    fn settings_save_status(&self) -> AnyElement {
+    fn settings_save_status(&self, narrow: bool) -> AnyElement {
         let disabled = !self.writable || self.closing;
         let (icon, color, message) = if let Some(error) = &self.persistence.error {
             (
@@ -162,11 +167,14 @@ impl ConduitApp {
             .border_t_1()
             .border_color(rgb(palette().border))
             .bg(rgb(palette().surface_strong))
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .child(Icon::new(icon).small().text_color(rgb(color)))
             .child(div().text_color(rgb(color)).child(message))
-            .child(div().flex_1())
-            .child(div().text_color(rgb(palette().muted)).child(hint))
+            .when(!narrow, |footer| {
+                footer
+                    .child(div().flex_1())
+                    .child(div().text_color(rgb(palette().muted)).child(hint))
+            })
             .into_any_element()
     }
 }

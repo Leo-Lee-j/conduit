@@ -228,7 +228,7 @@ impl ConduitApp {
             Textarea::new(&prompt_input)
                 .h(px(180.))
                 .w_full()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .aria_label("Commit Message 生成提示词")
                 .disabled(disabled)
         });
@@ -330,7 +330,7 @@ impl ConduitApp {
                 .when(!expanded, |row| {
                     row.child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().muted))
                             .child(preview.clone()),
                     )

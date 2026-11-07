@@ -520,7 +520,7 @@ impl FilePreview {
                     div()
                         .debug_selector(|| "file-find-count".into())
                         .flex_shrink_0()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(rgb(palette().muted))
                         .child(label),
                 )

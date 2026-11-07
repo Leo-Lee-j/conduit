@@ -51,7 +51,7 @@ impl Render for WorkspaceDragPreview {
             .border_1()
             .border_color(rgb(palette().border))
             .shadow_sm()
-            .text_size(px(13.))
+            .text_size(ui_text_size(13.))
             .text_color(rgb(palette().text))
             .child(
                 Icon::new(IconName::Folder)
@@ -61,7 +61,7 @@ impl Render for WorkspaceDragPreview {
             .child(div().flex_1().min_w_0().truncate().child(self.name.clone()))
             .child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(rgb(palette().faint))
                     .child("移动"),
             )
@@ -343,14 +343,14 @@ impl ConduitApp {
                         )
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(ui_text_size(13.))
                                 .text_color(rgb(palette().muted))
                                 .child("还没有工作区"),
                         ),
                 )
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().faint))
                         .child("点击上方 + 添加一个本地目录"),
                 )
@@ -375,7 +375,7 @@ impl ConduitApp {
                             .pr(px(8.))
                             .gap_2()
                             .items_center()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().faint))
                             .child(Spinner::new().small().color(rgb(palette().faint).into()))
                             .child(
@@ -415,7 +415,7 @@ impl ConduitApp {
                             .gap_2()
                             .items_center()
                             .rounded(px(8.))
-                            .text_size(px(13.))
+                            .text_size(ui_text_size(13.))
                             .text_color(rgb(if archived {
                                 palette().faint
                             } else if active {
@@ -465,7 +465,7 @@ impl ConduitApp {
                             .when(archived, |row| {
                                 row.child(
                                     div()
-                                        .text_size(px(12.))
+                                        .text_size(ui_text_size(12.))
                                         .text_color(rgb(palette().faint))
                                         .child("已归档"),
                                 )
@@ -490,7 +490,7 @@ impl ConduitApp {
                                         .py(px(1.))
                                         .rounded(px(4.))
                                         .bg(rgb(palette().surface_strong))
-                                        .text_size(px(12.))
+                                        .text_size(ui_text_size(12.))
                                         .text_color(rgb(palette().faint))
                                         .child(age),
                                 )
@@ -580,7 +580,7 @@ impl ConduitApp {
             .justify_between()
             .child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(rgb(palette().faint))
                     .child("工作区"),
             )
@@ -653,7 +653,7 @@ impl ConduitApp {
             .gap_2()
             .items_center()
             .rounded(px(8.))
-            .text_size(px(13.))
+            .text_size(ui_text_size(13.))
             .text_color(rgb(if workspace_selected {
                 palette().text
             } else {
@@ -766,7 +766,7 @@ impl ConduitApp {
                                     .justify_center()
                                     .rounded(px(4.))
                                     .bg(rgb(palette().surface_strong))
-                                    .text_size(px(12.))
+                                    .text_size(ui_text_size(12.))
                                     .text_color(rgb(palette().faint))
                                     .child(count.to_string())
                                     .into_any_element()

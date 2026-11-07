@@ -418,7 +418,7 @@ impl GitLogView {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .child(commit.subject.clone()),
             )
             .when(!refs.is_empty(), |row| {
@@ -429,7 +429,7 @@ impl GitLogView {
                         .rounded(px(3.))
                         .bg(rgb(palette().surface_strong))
                         .text_color(rgb(palette().git_added_text))
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .truncate()
                         .child(refs),
                 )
@@ -438,7 +438,7 @@ impl GitLogView {
                 row.child(
                     div()
                         .w(px(90.))
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(rgb(palette().muted))
                         .truncate()
                         .child(commit.author.clone()),
@@ -446,7 +446,7 @@ impl GitLogView {
                 .child(
                     div()
                         .w(px(124.))
-                        .text_size(px(10.))
+                        .text_size(ui_text_size(10.))
                         .text_color(rgb(palette().muted))
                         .child(timestamp),
                 )
@@ -476,7 +476,7 @@ impl GitLogView {
                 .child(
                     div()
                         .p_3()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().danger_text))
                         .child(error.clone()),
                 )
@@ -487,7 +487,7 @@ impl GitLogView {
                 .child(
                     div()
                         .p_3()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().faint))
                         .child("选择提交查看详情与文件变更"),
                 )
@@ -504,7 +504,7 @@ impl GitLogView {
                     .flex_shrink_0()
                     .border_b_1()
                     .border_color(rgb(palette().border))
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .child(format!("变更文件 · {}", files.len())),
             )
             .child(
@@ -532,7 +532,7 @@ impl GitLogView {
                                         div()
                                             .w(px(12.))
                                             .flex_shrink_0()
-                                            .text_size(px(10.))
+                                            .text_size(ui_text_size(10.))
                                             .text_color(rgb(git_change_color(file.kind())))
                                             .child(file.index.to_string()),
                                     )
@@ -541,7 +541,7 @@ impl GitLogView {
                                             .flex_1()
                                             .min_w_0()
                                             .truncate()
-                                            .text_size(px(12.))
+                                            .text_size(ui_text_size(12.))
                                             .text_color(rgb(git_change_color(file.kind())))
                                             .child(file.path.clone()),
                                     )
@@ -586,7 +586,7 @@ impl GitLogView {
                             .map(|commit| {
                                 div()
                                     .flex_shrink_0()
-                                    .text_size(px(11.))
+                                    .text_size(ui_text_size(11.))
                                     .text_color(rgb(palette().muted))
                                     .child(format!(
                                         "{} <{}>\n{}",
@@ -605,7 +605,7 @@ impl GitLogView {
                         pane.child(
                             div()
                                 .flex_shrink_0()
-                                .text_size(px(11.))
+                                .text_size(ui_text_size(11.))
                                 .text_color(rgb(palette().faint))
                                 .child("合并提交 · 文件变化相对于第一个父提交"),
                         )
@@ -613,7 +613,7 @@ impl GitLogView {
                     .child(
                         div()
                             .flex_shrink_0()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .child(details.message.clone()),
                     ),
             );
@@ -635,7 +635,7 @@ impl GitLogView {
                     .flex_shrink_0()
                     .items_center()
                     .gap_2()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(rgb(palette().muted))
                     .child(Spinner::new().small())
                     .child(label),
@@ -693,7 +693,7 @@ impl Render for GitLogView {
             history = history.child(
                 div()
                     .p_3()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(rgb(palette().danger_text))
                     .child(error.clone()),
             );
@@ -715,7 +715,7 @@ impl Render for GitLogView {
                 history = history.child(
                     div()
                         .p_3()
-                        .text_size(px(12.))
+                        .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().muted))
                         .child("没有匹配的提交"),
                 );
@@ -754,7 +754,7 @@ impl Render for GitLogView {
                     div()
                         .flex_shrink_0()
                         .p_2()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .text_color(rgb(palette().faint))
                         .child("已显示 5000 条提交，请使用筛选缩小范围"),
                 );
@@ -814,13 +814,18 @@ impl Render for GitLogView {
                     .flex_shrink_0()
                     .border_b_1()
                     .border_color(rgb(palette().border))
-                    .child(div().text_size(px(12.)).font_semibold().child("Git 日志"))
+                    .child(
+                        div()
+                            .text_size(ui_text_size(12.))
+                            .font_semibold()
+                            .child("Git 日志"),
+                    )
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .text_color(rgb(palette().muted))
                             .child(reference.to_string()),
                     )

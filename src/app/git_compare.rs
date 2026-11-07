@@ -147,7 +147,7 @@ impl Render for ComparisonBrowser {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_size(px(13.))
+                    .text_size(ui_text_size(13.))
                     .font_semibold()
                     .child(format!("{} → {other}", self.request.selected.name)),
             )
@@ -189,7 +189,7 @@ impl Render for ComparisonBrowser {
                 .child(
                     div()
                         .p_4()
-                        .text_size(px(13.))
+                        .text_size(ui_text_size(13.))
                         .text_color(rgb(palette().danger_text))
                         .child(error.clone()),
                 )
@@ -202,7 +202,7 @@ impl Render for ComparisonBrowser {
         let mut left = v_flex().h_full().min_h_0().gap_1().child(
             div()
                 .p_2()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .font_semibold()
                 .child(format!("文件差异 · {}", result.files.len())),
         );
@@ -241,7 +241,12 @@ impl Render for ComparisonBrowser {
             );
         }
         if result.files.is_empty() {
-            files = files.child(div().p_3().text_size(px(12.)).child("两个版本没有文件差异"));
+            files = files.child(
+                div()
+                    .p_3()
+                    .text_size(ui_text_size(12.))
+                    .child("两个版本没有文件差异"),
+            );
         }
         left = left.child(files);
         if self.request.kind == git::ComparisonKind::Branches && narrow {
@@ -265,7 +270,7 @@ impl Render for ComparisonBrowser {
                             .max_h(px(240.))
                             .overflow_y_scroll()
                             .p_2()
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .child(commits.clone())
                     }),
             );
@@ -291,7 +296,7 @@ impl Render for ComparisonBrowser {
                         .max_h(px(160.))
                         .overflow_y_scroll()
                         .p_2()
-                        .text_size(px(11.))
+                        .text_size(ui_text_size(11.))
                         .child(if result.commits.is_empty() {
                             "没有独有提交".into()
                         } else {
@@ -341,7 +346,7 @@ impl Render for ComparisonBrowser {
                 .debug_selector(|| "comparison-notes".into())
                 .p_2()
                 .gap_1()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(rgb(palette().muted))
                 .children(result.notes.iter().map(|note| div().child(note.clone()))),
         )

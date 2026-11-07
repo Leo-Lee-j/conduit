@@ -232,7 +232,7 @@ impl ConduitApp {
                 .w(px(entry.width))
                 .flex_shrink_0()
                 .px_2()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(rgb(palette().muted))
                 .accessibility_label(entry.value.text.clone())
                 .tooltip(entry.tooltip.clone())
@@ -252,7 +252,7 @@ impl ConduitApp {
                 .w(px(entry.width))
                 .flex_shrink_0()
                 .px_2()
-                .text_size(px(11.))
+                .text_size(ui_text_size(11.))
                 .text_color(rgb(palette().muted))
                 .tooltip(move |window, cx| {
                     gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)

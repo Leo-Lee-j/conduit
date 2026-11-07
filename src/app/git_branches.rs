@@ -208,7 +208,7 @@ fn branch_tag_element(name: String, max_width: Pixels, current: bool) -> AnyElem
             ))
             .border_color(rgb(0xb9d8f4))
         })
-        .text_size(px(11.))
+        .text_size(ui_text_size(11.))
         .text_color(rgb(if current { 0x234764 } else { palette().text }))
         .tooltip(move |window, cx| {
             gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
@@ -613,14 +613,14 @@ impl ConduitApp {
             .gap_2()
             .rounded(px(8.))
             .bg(rgb(palette().warning_bg))
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .text_color(rgb(palette().warning_text))
             .child(format!(
                 "{} 进行中 · {} 个冲突文件",
                 state.label(),
                 repository.conflicts.len()
             ))
-            .child(div().text_size(px(11.)).child(if supported {
+            .child(div().text_size(ui_text_size(11.)).child(if supported {
                 "在外部编辑器解决冲突并 git add 后，点击继续；也可以中止。"
             } else {
                 "请先在终端完成或中止此操作，然后刷新。"
@@ -985,7 +985,7 @@ impl Render for BranchForm {
             .debug_selector(|| "branch-form".into())
             .w_full()
             .gap_3()
-            .text_size(px(13.))
+            .text_size(ui_text_size(13.))
             .when_some(self.popup_host.clone(), |body, (interaction, _)| {
                 let bounds_state = interaction.clone();
                 body.key_context("GitBranchForm")

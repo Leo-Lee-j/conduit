@@ -122,7 +122,7 @@ impl Render for FileDrag {
             .border_1()
             .border_color(rgb(palette().border))
             .text_color(rgb(palette().text))
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .child(Icon::new(file_ref::icon_for(&self.path)).small())
             .child(
                 self.path
@@ -856,7 +856,7 @@ impl ConduitApp {
                                     )))
                                     .h(px(28.))
                                     .pl(px(8. + *depth as f32 * 12.))
-                                    .text_size(px(11.))
+                                    .text_size(ui_text_size(11.))
                                     .text_color(rgb(palette().muted))
                                     .truncate()
                                     .child(message.clone())
@@ -938,7 +938,7 @@ impl ConduitApp {
                                             .flex_1()
                                             .min_w_0()
                                             .truncate()
-                                            .text_size(px(12.))
+                                            .text_size(ui_text_size(12.))
                                             .child(format!(
                                                 "{}{}",
                                                 entry.name,
@@ -949,7 +949,7 @@ impl ConduitApp {
                                         row.child(
                                             div()
                                                 .flex_shrink_0()
-                                                .text_size(px(10.))
+                                                .text_size(ui_text_size(10.))
                                                 .child(status.label()),
                                         )
                                     })
@@ -1144,7 +1144,7 @@ impl ConduitApp {
                             .items_center()
                             .gap_1()
                             .px_1()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .tooltip({
                                 let label = path_label.clone();
                                 move |window, cx| {
@@ -1301,7 +1301,7 @@ impl ConduitApp {
                 .items_center()
                 .border_t_1()
                 .border_color(rgb(palette().border))
-                .text_size(px(10.))
+                .text_size(ui_text_size(10.))
                 .text_color(rgb(palette().muted))
                 .child(div().min_w_0().truncate().child(status)),
         );
@@ -1457,7 +1457,7 @@ impl ConduitApp {
                 }))
                 .prefix(icon)
                 .label(title)
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .when(preview, |style| style.italic());
             if let DocumentTab::Chat(id) = tab
                 && (running || unread)
@@ -1497,7 +1497,12 @@ impl ConduitApp {
             );
         }
         if self.open_tabs.is_empty() {
-            bar = bar.prefix(div().pl_3().text_size(px(12.)).child("选择会话或文件"));
+            bar = bar.prefix(
+                div()
+                    .pl_3()
+                    .text_size(ui_text_size(12.))
+                    .child("选择会话或文件"),
+            );
         }
         let app = cx.entity();
         let resize_app = app.downgrade();
@@ -1787,7 +1792,7 @@ impl ConduitApp {
                             .rounded(px(4.))
                             .bg(rgb(palette().surface_strong))
                             .text_color(rgb(palette().activity_running))
-                            .text_size(px(12.))
+                            .text_size(ui_text_size(12.))
                             .font_semibold()
                             .child("提交"),
                     )
@@ -1802,7 +1807,7 @@ impl ConduitApp {
         } else {
             pane = pane.child(
                 sidebar::navigation_header()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .child("Git 变更 · 未选择工作区"),
             );
         }
@@ -1946,7 +1951,7 @@ impl ConduitApp {
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .text_size(px(11.))
+                            .text_size(ui_text_size(11.))
                             .child(document.workspace.display().to_string()),
                     )
                     .child(

@@ -51,7 +51,7 @@ impl SettingPage {
 fn settings_page(title: &'static str, icon: FullIconName) -> SettingPage {
     let description = match title {
         "通用" => "调整聊天布局、侧栏与标签页，让工作台适合你的使用习惯。",
-        "外观" => "选择主题，调整聊天文字与代码的阅读体验。",
+        "外观" => "选择主题与界面字体，调整聊天文字和代码的阅读体验。",
         "自动命名" => "设置会话标题的生成方式与使用的模型。",
         "Git 提交" => "自定义提交说明的生成模型与提示词。",
         "AI 引擎" => "管理引擎启用状态，检查接入能力、启动路径与版本。",
@@ -78,7 +78,7 @@ fn page_header_style() -> StyleRefinement {
         .py(px(20.))
         .gap(px(8.))
         .flex_shrink_0()
-        .text_size(px(22.))
+        .text_size(ui_text_size(22.))
         .font_semibold()
         .text_color(rgb(palette().text))
         .bg(rgb(palette().surface))
@@ -97,7 +97,7 @@ fn settings_section(title: impl Into<SharedString>) -> SettingGroup {
                 .pb(px(12.))
                 .border_b_1()
                 .border_color(rgb(palette().border))
-                .text_size(px(14.))
+                .text_size(ui_text_size(14.))
                 .font_semibold()
                 .text_color(rgb(palette().text))
                 .child(title.clone())
@@ -113,7 +113,7 @@ pub(super) fn value_field(value: String) -> SettingField<SharedString> {
         div()
             .max_w(px(320.))
             .truncate()
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .text_color(rgb(palette().muted))
             .id("settings-value")
             .tooltip(move |window, cx| {
@@ -132,7 +132,7 @@ pub(super) fn paragraph_field(value: String) -> SettingField<SharedString> {
     SettingField::render(move |_, _, _| {
         div()
             .w_full()
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .line_height(relative(1.5))
             .text_color(rgb(palette().muted))
             .child(value.clone())
@@ -144,7 +144,7 @@ pub(super) fn error_field(value: String) -> SettingField<SharedString> {
     SettingField::render(move |_, _, _| {
         div()
             .w_full()
-            .text_size(px(12.))
+            .text_size(ui_text_size(12.))
             .line_height(relative(1.5))
             .text_color(rgb(palette().danger_text))
             .child(value.clone())
@@ -226,7 +226,7 @@ pub(super) fn count_stepper_field(
                 h_flex()
                     .w(px(36.))
                     .justify_center()
-                    .text_size(px(12.))
+                    .text_size(ui_text_size(12.))
                     .text_color(rgb(if disabled {
                         palette().faint
                     } else {
@@ -287,6 +287,7 @@ impl SearchableListItem for FontChoice {
 
 #[derive(Clone, Copy)]
 pub(super) enum TypographyField {
+    UiSize,
     ChatSize,
     ChatLineHeight,
     CodeSize,
@@ -295,6 +296,7 @@ pub(super) enum TypographyField {
 impl TypographyField {
     pub(super) fn range(self) -> (f32, f32) {
         match self {
+            Self::UiSize => (MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE),
             Self::ChatSize => (MIN_CHAT_FONT_SIZE, MAX_CHAT_FONT_SIZE),
             Self::ChatLineHeight => (MIN_CHAT_LINE_HEIGHT, MAX_CHAT_LINE_HEIGHT),
             Self::CodeSize => (MIN_CODE_FONT_SIZE, MAX_CODE_FONT_SIZE),
@@ -302,6 +304,7 @@ impl TypographyField {
     }
     pub(super) fn stepper_labels(self) -> (&'static str, &'static str) {
         match self {
+            Self::UiSize => ("减小界面字号", "增大界面字号"),
             Self::ChatSize => ("减小聊天字号", "增大聊天字号"),
             Self::ChatLineHeight => ("减小聊天行高", "增大聊天行高"),
             Self::CodeSize => ("减小代码字号", "增大代码字号"),
@@ -343,6 +346,7 @@ fn typography_stepper(
     let increase = view;
     let enabled = !disabled;
     h_flex()
+        .debug_selector(move || id.into())
         .gap(px(2.))
         .p(px(2.))
         .rounded(px(8.))
@@ -352,6 +356,7 @@ fn typography_stepper(
         .items_center()
         .child(
             Button::new(format!("{id}-minus"))
+                .debug_selector(move || format!("{id}-minus"))
                 .label("−")
                 .accessibility_label(decrease_label)
                 .small()
@@ -368,7 +373,7 @@ fn typography_stepper(
             h_flex()
                 .w(px(36.))
                 .justify_center()
-                .text_size(px(12.))
+                .text_size(ui_text_size(12.))
                 .text_color(rgb(if disabled {
                     palette().faint
                 } else {
@@ -378,6 +383,7 @@ fn typography_stepper(
         )
         .child(
             Button::new(format!("{id}-plus"))
+                .debug_selector(move || format!("{id}-plus"))
                 .label("+")
                 .accessibility_label(increase_label)
                 .small()
@@ -394,6 +400,8 @@ fn typography_stepper(
 }
 
 mod appearance;
+#[cfg(all(test, feature = "ui-tests"))]
+mod appearance_tests;
 #[path = "settings/cli.rs"]
 mod cli_settings;
 mod config_editor;
@@ -402,7 +410,9 @@ mod connections;
 mod defaults;
 mod extension_management;
 mod general;
+mod management;
 mod model_management;
+use management::{engine_tabs, management_badge, management_header};
 #[path = "settings/models.rs"]
 mod model_sync;
 pub(super) use connections::ConnectionsUi;
@@ -506,14 +516,14 @@ impl ConduitApp {
                                             .min_w_0()
                                             .child(
                                                 div()
-                                                    .text_size(px(18.))
+                                                    .text_size(ui_text_size(18.))
                                                     .font_semibold()
                                                     .text_color(rgb(palette().text))
                                                     .child("Conduit"),
                                             )
                                             .child(
                                                 div()
-                                                    .text_size(px(11.))
+                                                    .text_size(ui_text_size(11.))
                                                     .text_color(rgb(palette().faint))
                                                     .child(format!(
                                                         "版本 {} · Windows",
@@ -524,7 +534,7 @@ impl ConduitApp {
                             )
                             .child(
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(ui_text_size(12.))
                                     .line_height(relative(1.6))
                                     .text_color(rgb(palette().muted))
                                     .child(
