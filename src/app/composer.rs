@@ -726,9 +726,12 @@ impl ConduitApp {
                                 "停止当前会话回复"
                             })
                             .tooltip(if stopping {
-                                "正在停止当前会话回复…"
+                                "正在停止当前会话回复…".to_string()
                             } else {
-                                "停止当前会话回复（Ctrl+Shift+X）"
+                                format!(
+                                    "停止当前会话回复（{}）",
+                                    shortcuts::display("stop_reply", &self.store.ui.shortcuts)
+                                )
                             })
                             .small()
                             .compact()

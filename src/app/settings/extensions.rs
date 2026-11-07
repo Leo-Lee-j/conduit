@@ -11,6 +11,9 @@ pub(in crate::app) struct ExtensionsUi {
     pub filters: [Filter; 2],
     pub connection_probe: Option<extensions::connection::ConnectionProbe>,
     pub connection_results: HashMap<String, String>,
+    pub tool_reports: HashMap<String, extensions::connection::ToolReport>,
+    auto_detection_started: bool,
+    detection_queue: std::collections::VecDeque<extensions::Entry>,
     pub workspace: Option<PathBuf>,
     pub initialized: bool,
     pub mcp: bool,
@@ -32,6 +35,9 @@ impl ExtensionsUi {
             filters: [Filter::All; 2],
             connection_probe: None,
             connection_results: HashMap::new(),
+            tool_reports: HashMap::new(),
+            auto_detection_started: false,
+            detection_queue: Default::default(),
             workspace: None,
             initialized: false,
             mcp: false,
@@ -44,10 +50,16 @@ impl ExtensionsUi {
             context: None,
         }
     }
+    pub fn cancel_mcp_detection(&mut self) {
+        self.connection_probe = None;
+        self.detection_queue.clear();
+        self.auto_detection_started = false;
+    }
     pub fn invalidate(&mut self) {
         self.probe = None;
-        self.connection_probe = None;
+        self.cancel_mcp_detection();
         self.connection_results.clear();
+        self.tool_reports.clear();
         self.catalogs.clear();
         self.context = None;
     }
@@ -59,6 +71,10 @@ impl ConduitApp {
             return;
         }
         if let Some(context) = self.extensions_ui.context.clone() {
+            self.extensions_ui
+                .detection_queue
+                .retain(|queued| queued.id() != entry.id());
+            self.extensions_ui.tool_reports.remove(&entry.id());
             self.extensions_ui
                 .connection_results
                 .insert(entry.id(), "正在初始化并读取工具列表…".into());
@@ -216,9 +232,10 @@ impl ConduitApp {
                 .ok()
                 .map(|c| c.path),
         };
-        if self.extensions_ui.context.as_ref() != Some(&context) {
-            self.extensions_ui.connection_probe = None;
+        if refresh || self.extensions_ui.context.as_ref() != Some(&context) {
+            self.extensions_ui.cancel_mcp_detection();
             self.extensions_ui.connection_results.clear();
+            self.extensions_ui.tool_reports.clear();
             self.extensions_ui.expanded.clear();
             self.extensions_ui.lists = new_lists();
         }
@@ -250,8 +267,11 @@ impl ConduitApp {
     pub(in crate::app) fn poll_extensions(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.closing || !self.settings_ui.open || !matches!(self.settings_ui.page, 4 | 9) {
             self.extensions_ui.probe = None;
-            self.extensions_ui.connection_probe = None;
+            self.extensions_ui.cancel_mcp_detection();
             return;
+        }
+        if self.settings_ui.page != 9 {
+            self.extensions_ui.cancel_mcp_detection();
         }
         let connection = self
             .extensions_ui
@@ -272,8 +292,15 @@ impl ConduitApp {
                 NoticeLevel::Error
             };
             let message = match result {
-                Ok(message) => message,
-                Err(error) => format!("连接未完成：{error}"),
+                Ok(report) => {
+                    let message = report.summary();
+                    self.extensions_ui.tool_reports.insert(id.clone(), report);
+                    message
+                }
+                Err(error) => {
+                    self.extensions_ui.tool_reports.remove(&id);
+                    format!("连接未完成：{error}")
+                }
             };
             self.notify_user(
                 Notice::new(
@@ -312,6 +339,48 @@ impl ConduitApp {
                 self.extensions_ui.lists = new_lists();
             }
             cx.notify();
+        }
+        self.detect_mcp_tools(cx);
+    }
+
+    fn detect_mcp_tools(&mut self, cx: &mut Context<Self>) {
+        if self.closing
+            || !self.settings_ui.open
+            || self.settings_ui.page != 9
+            || self.extensions_ui.probe.is_some()
+        {
+            return;
+        }
+        if !self.extensions_ui.auto_detection_started {
+            let Some(catalog) = self
+                .extensions_ui
+                .context
+                .as_ref()
+                .and_then(|context| self.extensions_ui.catalogs.get(context))
+            else {
+                return;
+            };
+            self.extensions_ui.detection_queue = catalog
+                .entries
+                .iter()
+                .filter(|entry| entry.kind == Kind::Mcp && !entry.disabled)
+                .cloned()
+                .collect();
+            self.extensions_ui.auto_detection_started = true;
+            self.extensions_ui.tool_reports.clear();
+            self.extensions_ui.connection_results.clear();
+            for entry in &self.extensions_ui.detection_queue {
+                self.extensions_ui
+                    .connection_results
+                    .insert(entry.id(), "等待检测工具…".into());
+            }
+            self.extensions_ui.lists = new_lists();
+            cx.notify();
+        }
+        if self.extensions_ui.connection_probe.is_none()
+            && let Some(entry) = self.extensions_ui.detection_queue.pop_front()
+        {
+            self.test_mcp_connection(entry, cx);
         }
     }
 
@@ -569,26 +638,7 @@ impl ConduitApp {
             .size_full()
             .min_w_0()
             .text_color(rgb(palette().text))
-            .child(management_header(
-                if mcp {
-                    "MCP · 工具服务"
-                } else {
-                    "Skills · 技能管理"
-                },
-                if mcp {
-                    "为 AI 连接外部工具，管理配置与连接状态。"
-                } else {
-                    "管理本机技能，为不同引擎配置可复用的工作能力。"
-                },
-                if mcp {
-                    FullIconName::Server
-                } else {
-                    FullIconName::Sparkles
-                },
-                actions,
-                compact,
-                narrow,
-            ))
+            .child(management_actions(actions, narrow))
             .child(
                 div()
                     .px(px(if narrow { 12. } else { 24. }))
@@ -734,22 +784,77 @@ fn render_extension_row(
             let state_entry = entry.clone();
             let quick_edit = view.clone();
             let quick_path = entry.path.clone();
+            let count_entry = entry.clone();
+            let count_view = view.clone();
+            let ui = &view.read(cx).extensions_ui;
+            let report = ui.tool_reports.get(&id).cloned();
+            let probing = ui.connection_probe.is_some();
+            let this_probe = ui
+                .connection_probe
+                .as_ref()
+                .is_some_and(|probe| probe.id == id);
+            let queued = ui.detection_queue.iter().any(|entry| entry.id() == id);
+            let connection_result = ui.connection_results.get(&id).cloned();
+            let entry_status = if !mcp || entry.disabled {
+                entry.status()
+            } else if report.is_some() {
+                "连接正常"
+            } else if this_probe {
+                "检测中"
+            } else if queued {
+                "等待检测"
+            } else if connection_result.is_some() {
+                "检测未完成"
+            } else {
+                entry.status()
+            };
+            let tool_label = if entry.disabled {
+                "0 个可用工具".to_string()
+            } else if let Some(report) = &report {
+                format!("{} 个可用工具", report.count())
+            } else if this_probe {
+                "正在检测工具…".to_string()
+            } else if queued {
+                "等待检测工具…".to_string()
+            } else if connection_result.is_some() {
+                "重新检测工具".to_string()
+            } else {
+                "检测工具数量".to_string()
+            };
+            let tool_hint = report
+                .as_ref()
+                .map(|report| report.summary())
+                .or_else(|| connection_result.clone())
+                .unwrap_or_else(|| "初始化连接并读取完整工具列表；不会调用工具。".into());
+            let tool_count = mcp.then(|| {
+                Button::new(("mcp-tool-count", index))
+                    .debug_selector(move || format!("mcp-tool-count-{index}"))
+                    .small()
+                    .text()
+                    .self_start()
+                    .accessibility_label(format!("{} · {tool_label}", entry.name))
+                    .child(management_badge(tool_label, false).when(
+                        report.is_some() || entry.disabled,
+                        |tag| {
+                            tag.bg(gpui_kit::rgba((palette().activity_completed << 8) | 0x18))
+                                .text_color(rgb(palette().activity_completed))
+                        },
+                    ))
+                    .tooltip(tool_hint)
+                    .disabled(
+                        entry.disabled
+                            || view.read(cx).closing
+                            || view.read(cx).extensions_ui.connection_probe.is_some(),
+                    )
+                    .on_click(move |_, _, cx| {
+                        count_view.update(cx, |app, cx| {
+                            app.test_mcp_connection(count_entry.clone(), cx)
+                        })
+                    })
+            });
             let test_entry = entry.clone();
             let test_view = view.clone();
             let cancel_view = view.clone();
-            let probing = view.read(cx).extensions_ui.connection_probe.is_some();
-            let this_probe = view
-                .read(cx)
-                .extensions_ui
-                .connection_probe
-                .as_ref()
-                .is_some_and(|p| p.id == id);
-            let connection_result = view
-                .read(cx)
-                .extensions_ui
-                .connection_results
-                .get(&id)
-                .cloned();
             let summary = if mcp {
                 format!("{} · {}", entry.transport, entry.target)
             } else {
@@ -790,7 +895,7 @@ fn render_extension_row(
                                                 .child(entry.name.clone()),
                                         )
                                         .when(!narrow, |row| row
-                                            .child(management_badge(entry.status(), !entry.disabled))
+                                            .child(management_badge(entry_status, !entry.disabled))
                                             .child(management_badge(entry.scope.clone(), false))
                                             .when(*duplicate, |row| row.child(management_badge("同名定义", false)))),
                                 )
@@ -801,9 +906,10 @@ fn render_extension_row(
                                         .truncate()
                                         .child(summary),
                                 )
+                                .when_some(tool_count, |body, count| body.child(count))
                                 .when(narrow, |body| body.child(
                                     h_flex().gap_1().flex_wrap()
-                                        .child(management_badge(entry.status(), !entry.disabled))
+                                        .child(management_badge(entry_status, !entry.disabled))
                                         .child(management_badge(entry.scope.clone(), false))
                                         .when(*duplicate, |row| row.child(management_badge("同名定义", false)))
                                 )),
@@ -962,5 +1068,146 @@ fn render_extension_row(
                 )
                 .into_any_element()
         }
+    }
+}
+
+#[cfg(all(test, feature = "ui-tests"))]
+mod tests {
+    use crate::app::ConduitApp;
+    use crate::extensions::{
+        Catalog, Entry, Kind, Probe,
+        connection::{ConnectionProbe, ToolReport},
+    };
+    use gpui_kit::{AppContext as _, TestAppContext};
+
+    #[gpui_kit::test]
+    fn settings_mcp_automatically_checks_once_per_visit_and_continues_after_failure(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let mut app =
+                    ConduitApp::with_store(window, cx, Ok(Default::default()), false, false);
+                app.startup = None;
+                app.writable = false;
+                app.connection_settings.syncing = true;
+                app
+            });
+            *output.borrow_mut() = Some(app.clone());
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        let app = slot.borrow().as_ref().unwrap().clone();
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.open_settings(window, cx);
+                app.select_settings_page(9, window, cx);
+                let context = app.extensions_ui.context.clone().unwrap();
+                // Missing source files ensure the real workers cannot launch any server.
+                let entry = |name: &str, kind, disabled| Entry {
+                    name: name.into(),
+                    description: String::new(),
+                    path: std::env::temp_dir().join("conduit-missing-auto-probe-source.json"),
+                    scope: "测试".into(),
+                    kind,
+                    disabled,
+                    transport: "stdio".into(),
+                    target: "unused".into(),
+                };
+                let first = entry("first", Kind::Mcp, false);
+                let second = entry("second", Kind::Mcp, false);
+                let catalog = Catalog {
+                    entries: vec![
+                        first.clone(),
+                        entry("disabled", Kind::Mcp, true),
+                        entry("skill", Kind::Skill, false),
+                        second.clone(),
+                    ],
+                    updated: Some(std::time::SystemTime::now()),
+                    ..Default::default()
+                };
+                app.extensions_ui.probe = Some(Probe::ready(context.clone(), catalog.clone()));
+                app.poll_extensions(window, cx);
+                assert_eq!(
+                    app.extensions_ui.connection_probe.as_ref().unwrap().id,
+                    first.id()
+                );
+                assert_eq!(app.extensions_ui.detection_queue.len(), 1);
+                assert_eq!(
+                    app.extensions_ui.connection_results[&second.id()],
+                    "等待检测工具…"
+                );
+
+                let (probe, sender) = ConnectionProbe::test_pending(first.id());
+                app.extensions_ui.connection_probe = Some(probe);
+                app.poll_extensions(window, cx);
+                assert_eq!(
+                    app.extensions_ui.detection_queue.len(),
+                    1,
+                    "pending probe must not start a second worker"
+                );
+                sender.send(Err("fixture failure".into())).unwrap();
+                app.poll_extensions(window, cx);
+                assert!(
+                    app.extensions_ui.connection_results[&first.id()].contains("fixture failure")
+                );
+                assert_eq!(
+                    app.extensions_ui.connection_probe.as_ref().unwrap().id,
+                    second.id()
+                );
+                assert!(app.extensions_ui.detection_queue.is_empty());
+
+                let (probe, sender) = ConnectionProbe::test_pending(second.id());
+                app.extensions_ui.connection_probe = Some(probe);
+                sender
+                    .send(Ok(ToolReport {
+                        names: vec!["one".into(), "two".into()],
+                    }))
+                    .unwrap();
+                app.poll_extensions(window, cx);
+                assert_eq!(app.extensions_ui.tool_reports[&second.id()].count(), 2);
+                for _ in 0..3 {
+                    app.poll_extensions(window, cx);
+                }
+                assert!(
+                    app.extensions_ui.connection_probe.is_none(),
+                    "completed checks and failures must not restart on polling"
+                );
+                app.select_settings_page(9, window, cx);
+                app.poll_extensions(window, cx);
+                assert!(
+                    app.extensions_ui.connection_probe.is_none(),
+                    "selecting the active page must not repeat the batch"
+                );
+
+                app.select_settings_page(2, window, cx);
+                app.select_settings_page(9, window, cx);
+                app.poll_extensions(window, cx);
+                assert_eq!(
+                    app.extensions_ui.connection_probe.as_ref().unwrap().id,
+                    first.id(),
+                    "reentering the cached page starts a fresh batch"
+                );
+                app.select_settings_page(2, window, cx);
+                assert!(app.extensions_ui.connection_probe.is_none());
+                assert!(app.extensions_ui.detection_queue.is_empty());
+                app.select_settings_page(9, window, cx);
+                app.poll_extensions(window, cx);
+                app.ensure_extensions(window, cx, true);
+                assert!(app.extensions_ui.connection_probe.is_none());
+                assert!(app.extensions_ui.tool_reports.is_empty());
+                app.extensions_ui.probe = Some(Probe::ready(context, catalog));
+                app.poll_extensions(window, cx);
+                assert_eq!(
+                    app.extensions_ui.connection_probe.as_ref().unwrap().id,
+                    first.id()
+                );
+                app.close_settings(window, cx);
+                assert!(app.extensions_ui.connection_probe.is_none());
+                assert!(app.extensions_ui.detection_queue.is_empty());
+            })
+        });
     }
 }

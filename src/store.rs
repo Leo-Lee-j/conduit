@@ -35,6 +35,9 @@ pub struct UiSettings {
     /// Session ids ordered by most recently opened.
     #[serde(default)]
     pub recent_sessions: Vec<u64>,
+    /// User bindings by stable action ID; an empty list explicitly unbinds an action.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub shortcuts: std::collections::BTreeMap<String, Vec<String>>,
     /// How many recent sessions a workspace shows before "show more".
     #[serde(default = "default_sessions_per_workspace")]
     pub sessions_per_workspace: usize,
@@ -170,6 +173,7 @@ impl Default for UiSettings {
             terminal_profile: Default::default(),
             terminal_height: default_terminal_height(),
             recent_sessions: Vec::new(),
+            shortcuts: Default::default(),
             sessions_per_workspace: default_sessions_per_workspace(),
             last_provider: None,
             performance_monitor: default_performance_monitor(),

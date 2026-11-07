@@ -66,9 +66,9 @@ impl ConduitApp {
         let navigation_width = if narrow {
             52.
         } else if available_width < 1000. {
-            184.
+            176.
         } else {
-            216.
+            192.
         };
         let content_width = (available_width - navigation_width).max(0.);
         let query = self.settings_ui.search.read(cx).value();
@@ -138,13 +138,13 @@ impl ConduitApp {
         let content = if searching {
             self.settings_search_results(&query, view.clone())
         } else if matches!(self.settings_ui.page, 3 | 8) {
-            self.settings_connections_content(window, content_width, view.clone())
+            self.settings_connections_content(content_width, view.clone())
         } else if matches!(self.settings_ui.page, 4 | 9) {
             self.extensions_content(window, content_width, view.clone(), cx)
         } else {
             let page = match self.settings_ui.page {
                 1 => self.settings_appearance_page(disabled, view.clone()),
-                2 => self.settings_shortcuts_page(),
+                2 => self.settings_shortcuts_page(disabled, view.clone()),
                 5 => self.settings_session_page(disabled, view.clone()),
                 6 => self.settings_git_page(disabled, view.clone()),
                 7 => self.settings_maintenance_page(disabled, view.clone()),
@@ -170,13 +170,14 @@ impl ConduitApp {
         };
         h_flex()
             .size_full()
+            .min_w_0()
             .items_start()
             .child(
                 v_flex()
                     .w(px(navigation_width))
                     .h_full()
                     .flex_shrink_0()
-                    .bg(rgb(palette().sidebar_bg))
+                    .bg(rgb(palette().canvas))
                     .border_r_1()
                     .border_color(rgb(palette().border))
                     .child(
@@ -205,10 +206,12 @@ impl ConduitApp {
             )
             .child(
                 div()
+                    .id("settings-content")
+                    .debug_selector(|| "settings-content".into())
                     .flex_1()
                     .min_w_0()
                     .h_full()
-                    .child(div().w_full().max_w(px(1040.)).h_full().child(content)),
+                    .child(content),
             )
             .into_any_element()
     }
@@ -221,6 +224,9 @@ impl ConduitApp {
     ) {
         if index >= PAGES.len() {
             return;
+        }
+        if self.settings_ui.page != index {
+            self.extensions_ui.cancel_mcp_detection();
         }
         self.settings_ui.page = index;
         self.settings_ui.group = None;

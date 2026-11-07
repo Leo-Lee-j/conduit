@@ -31,14 +31,12 @@ impl ConnectionsUi {
 impl ConduitApp {
     pub(in crate::app) fn settings_connections_content(
         &self,
-        window: &Window,
         available_width: f32,
         view: Entity<Self>,
     ) -> AnyElement {
         let engine = self.connection_settings.engine;
         let services = self.settings_ui.page == 8;
         let disabled = !self.writable || self.closing;
-        let compact = f32::from(window.viewport_size().height) < 650.;
         let narrow = available_width < 540.;
         let mut actions = h_flex().gap_2().flex_wrap();
         if self.settings_ui.group.is_some() {
@@ -148,16 +146,6 @@ impl ConduitApp {
                 }),
             ));
         }
-        let title = if services {
-            "Model · 模型与服务"
-        } else {
-            "CLI · 引擎管理"
-        };
-        let description = if services {
-            "管理服务端点与模型，设置新会话使用的服务。"
-        } else {
-            "连接本机 AI 编程工具，管理启动路径、版本与启用状态。"
-        };
         let page = SettingPage {
             page: gpui_kit::component::setting::SettingPage::new("")
                 .resettable(false)
@@ -167,22 +155,16 @@ impl ConduitApp {
         v_flex()
             .size_full()
             .min_w_0()
-            .child(management_header(
-                title,
-                description,
-                if services {
-                    FullIconName::Boxes
-                } else {
-                    FullIconName::SquareTerminal
-                },
-                actions.into_any_element(),
-                compact || narrow,
-                narrow,
-            ))
+            .when(services || self.settings_ui.group.is_some(), |body| {
+                body.child(management_actions(actions.into_any_element(), narrow))
+            })
             .child(
                 div()
                     .px(px(if narrow { 12. } else { 24. }))
                     .pb_3()
+                    .when(!services && self.settings_ui.group.is_none(), |row| {
+                        row.pt_3()
+                    })
                     .child(engine_tabs(engine, false, narrow, view.clone())),
             )
             .child(
@@ -195,7 +177,10 @@ impl ConduitApp {
                     .sidebar_size_range(px(0.)..px(0.))
                     .sidebar_style(&StyleRefinement::default().hidden())
                     .with_group_variant(GroupBoxVariant::Normal)
-                    .page(page.into_page(self.settings_ui.group, view)),
+                    .page(
+                        page.into_page(self.settings_ui.group, view)
+                            .header_style(&StyleRefinement::default().hidden()),
+                    ),
                 ),
             )
             .into_any_element()

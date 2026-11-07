@@ -61,17 +61,6 @@ impl TerminalUi {
 }
 
 pub(super) fn init(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("ctrl-`", ToggleTerminal, None),
-        KeyBinding::new("ctrl-shift-`", NewTerminal, None),
-        KeyBinding::new("ctrl-shift-f6", LeaveTerminal, Some("ConduitTerminal")),
-        KeyBinding::new(
-            "ctrl-shift-pageup",
-            PreviousTerminal,
-            Some("ConduitTerminal"),
-        ),
-        KeyBinding::new("ctrl-shift-pagedown", NextTerminal, Some("ConduitTerminal")),
-    ]);
     // Suppress global/composer actions while still delivering raw terminal keys.
     for key in [
         "ctrl-c",

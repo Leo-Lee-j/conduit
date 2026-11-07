@@ -11,22 +11,23 @@ impl ConduitApp {
         let narrow = available_width < 720.;
         v_flex()
             .id("settings-workspace")
+            .key_context("ConduitSettings")
             .test_support()
             .debug_selector(|| "settings-workspace".into())
             .track_focus(&self.settings_ui.focus)
             .flex_1()
             .min_h_0()
             .w_full()
-            .bg(rgb(palette().surface))
+            .bg(rgb(palette().canvas))
             .text_color(rgb(palette().text))
             .child(
                 h_flex()
                     .id("settings-workspace-header")
                     .debug_selector(|| "settings-workspace-header".into())
-                    .h(px(64.))
+                    .h(px(52.))
                     .flex_shrink_0()
                     .px_4()
-                    .gap_4()
+                    .gap_3()
                     .border_b_1()
                     .border_color(rgb(palette().border))
                     .child(
@@ -36,27 +37,22 @@ impl ConduitApp {
                             .accessibility_label("返回工作台")
                             .when(!narrow, |button| button.label("返回工作台"))
                             .ghost()
-                            .tooltip("返回工作台（Esc）")
+                            .tooltip(format!(
+                                "返回工作台（{}）",
+                                shortcuts::display("settings_back", &self.store.ui.shortcuts)
+                            ))
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.close_settings(window, cx)),
                             ),
                     )
                     .child(
-                        div().flex_1().min_w_0().max_w(px(520.)).child(
+                        div().flex_1().min_w_0().child(
                             Input::new(&self.settings_ui.search)
                                 .prefix(FullIconName::Search)
                                 .aria_label("搜索全部设置")
                                 .cleanable(true),
                         ),
-                    )
-                    .when(!narrow, |header| {
-                        header.child(
-                            div()
-                                .text_size(ui_text_size(12.))
-                                .text_color(rgb(palette().muted))
-                                .child("Ctrl + F"),
-                        )
-                    }),
+                    ),
             )
             .child(
                 div()
@@ -75,21 +71,25 @@ impl ConduitApp {
                     .focus_handle(cx)
                     .focus(window, cx);
             }))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if window.has_active_dialog(cx) {
-                    return;
-                }
-                if event.keystroke.modifiers.control && event.keystroke.key == "f" {
+            .on_action(cx.listener(|this, _: &FocusSettingsSearch, window, cx| {
+                if !window.has_active_dialog(cx) {
                     this.settings_ui
                         .search
                         .read(cx)
                         .focus_handle(cx)
                         .focus(window, cx);
-                    cx.stop_propagation();
-                } else if event.keystroke.key == "escape" {
+                }
+            }))
+            .on_action(cx.listener(|this, _: &LeaveSettings, window, cx| {
+                if !window.has_active_dialog(cx) {
                     this.settings_escape(window, cx);
-                    cx.stop_propagation();
-                } else if event.keystroke.key == "enter"
+                }
+            }))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if window.has_active_dialog(cx) {
+                    return;
+                }
+                if event.keystroke.key == "enter"
                     && this
                         .settings_ui
                         .search
@@ -104,13 +104,6 @@ impl ConduitApp {
                     }
                 }
             }))
-            .on_action(
-                cx.listener(|this, _: &gpui_kit::component::input::Escape, window, cx| {
-                    if !window.has_active_dialog(cx) {
-                        this.settings_escape(window, cx);
-                    }
-                }),
-            )
             .into_any_element()
     }
 
@@ -159,14 +152,14 @@ impl ConduitApp {
             .id("settings-workspace-footer")
             .debug_selector(|| "settings-workspace-footer".into())
             .flex_shrink_0()
-            .min_h(px(40.))
-            .px_5()
-            .py_2()
+            .min_h(px(32.))
+            .px_4()
+            .py_1()
             .gap_2()
             .flex_wrap()
             .border_t_1()
             .border_color(rgb(palette().border))
-            .bg(rgb(palette().surface_strong))
+            .bg(rgb(palette().canvas))
             .text_size(ui_text_size(12.))
             .child(Icon::new(icon).small().text_color(rgb(color)))
             .child(div().text_color(rgb(color)).child(message))

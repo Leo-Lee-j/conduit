@@ -28,61 +28,48 @@ impl SettingPage {
         view: Entity<ConduitApp>,
     ) -> gpui_kit::component::setting::SettingPage {
         if let Some(group) = group.and_then(|index| self.groups.get(index)).cloned() {
-            self.page.group(group).title_suffix(move |_, _| {
-                let view = view.clone();
-                Button::new("settings-show-full-page")
-                    .debug_selector(|| "settings-show-full-page".into())
-                    .small()
-                    .ghost()
-                    .label("查看完整页面")
-                    .on_click(move |_, window, cx| {
-                        view.update(cx, |app, cx| {
-                            app.select_settings_page(app.settings_ui.page, window, cx);
+            self.page
+                .group(group)
+                .title("")
+                .header_style(&settings_actions_style())
+                .title_suffix(move |_, _| {
+                    let view = view.clone();
+                    Button::new("settings-show-full-page")
+                        .debug_selector(|| "settings-show-full-page".into())
+                        .small()
+                        .ghost()
+                        .label("查看完整页面")
+                        .on_click(move |_, window, cx| {
+                            view.update(cx, |app, cx| {
+                                app.select_settings_page(app.settings_ui.page, window, cx);
+                            })
                         })
-                    })
-            })
+                })
         } else {
             self.page.groups(self.groups)
         }
     }
 }
 
-/// Each page keeps its title visible while the settings below it scroll.
+/// Navigation identifies each page; its body only shows settings and actions.
 fn settings_page(title: &'static str, icon: FullIconName) -> SettingPage {
-    let description = match title {
-        "通用" => "调整聊天布局、侧栏与标签页，让工作台适合你的使用习惯。",
-        "外观" => "选择主题与界面字体，调整聊天文字和代码的阅读体验。",
-        "自动命名" => "设置会话标题的生成方式与使用的模型。",
-        "Git 提交" => "自定义提交说明的生成模型与提示词。",
-        "AI 引擎" => "管理引擎启用状态，检查接入能力、启动路径与版本。",
-        "模型与服务" => "管理服务端点与模型目录，设置新会话默认模型。",
-        "新会话默认" => "按引擎设置新会话使用的服务和模型。现有会话保留自己的选择。",
-        "数据与更新" => "管理本机数据、更新偏好与诊断。",
-        "快捷键" => "使用键盘在会话、文件和设置之间快速切换。",
-        _ => "",
-    };
     let page = gpui_kit::component::setting::SettingPage::new(title)
         .icon(icon)
         .resettable(false)
-        .description(description)
-        .header_style(&page_header_style());
+        .header_style(&StyleRefinement::default().hidden());
     SettingPage {
         page,
         groups: vec![],
     }
 }
 
-fn page_header_style() -> StyleRefinement {
+fn settings_actions_style() -> StyleRefinement {
     StyleRefinement::default()
         .px(px(24.))
-        .py(px(20.))
-        .gap(px(8.))
+        .py(px(8.))
+        .border_0()
         .flex_shrink_0()
-        .text_size(ui_text_size(22.))
-        .font_semibold()
-        .text_color(rgb(palette().text))
-        .bg(rgb(palette().surface))
-        .border_color(rgb(palette().border))
+        .bg(rgb(palette().canvas))
 }
 
 /// Section headings live in the card. Leaving the library's group title unset
@@ -94,7 +81,7 @@ fn settings_section(title: impl Into<SharedString>) -> SettingGroup {
         SettingItem::render(move |_, _, _| {
             div()
                 .w_full()
-                .pb(px(12.))
+                .pb(px(8.))
                 .border_b_1()
                 .border_color(rgb(palette().border))
                 .text_size(ui_text_size(14.))
@@ -412,7 +399,7 @@ mod extension_management;
 mod general;
 mod management;
 mod model_management;
-use management::{engine_tabs, management_badge, management_header};
+use management::{engine_tabs, management_actions, management_badge};
 #[path = "settings/models.rs"]
 mod model_sync;
 pub(super) use connections::ConnectionsUi;
@@ -421,6 +408,8 @@ mod extensions_view;
 #[path = "settings/navigation.rs"]
 mod navigation;
 mod search;
+#[path = "settings/shortcuts.rs"]
+mod shortcut_settings;
 mod workspace;
 #[cfg(all(test, feature = "ui-tests"))]
 mod workspace_tests;
@@ -470,7 +459,7 @@ impl ConduitApp {
         self.open_tabs
             .retain(|tab| *tab != files::DocumentTab::Settings);
         self.extensions_ui.probe = None;
-        self.extensions_ui.connection_probe = None;
+        self.extensions_ui.cancel_mcp_detection();
         self.settings_ui
             .search
             .update(cx, |input, cx| input.set_value("", window, cx));
@@ -546,37 +535,5 @@ impl ConduitApp {
                 })
         });
         cx.notify();
-    }
-
-    fn settings_shortcuts_page(&self) -> SettingPage {
-        let rows = [
-            ("最近会话", "ctrl-e"),
-            ("搜索会话", "ctrl-p"),
-            ("打开设置（也可使用 Ctrl+M）", "ctrl-,"),
-            ("在设置中搜索", "ctrl-f"),
-            ("清除搜索 / 返回工作台", "escape"),
-            ("文件名搜索 Shift ×2", "shift"),
-            ("切换 Git 侧栏", "ctrl-k"),
-            ("输入区：发送；运行中自动排队", "enter"),
-            ("输入区：换行（也可使用 Ctrl+Enter）", "shift-enter"),
-            ("输入区：停止当前会话回复", "ctrl-shift-x"),
-            ("文件内查找", "ctrl-f"),
-            ("Diff：下一处修改", "f7"),
-            ("Diff：上一处修改", "shift-f7"),
-        ];
-        let items: Vec<_> = rows
-            .into_iter()
-            .map(|(label, keys)| {
-                let field = SettingField::render(move |_, _, _| {
-                    gpui_kit::component::kbd::Kbd::new(
-                        Keystroke::parse(keys).expect("static shortcut is valid"),
-                    )
-                    .outline()
-                });
-                SettingItem::new(label, field)
-            })
-            .collect();
-        settings_page("快捷键", FullIconName::Keyboard)
-            .group(settings_section("全局与当前区域快捷键").items(items))
     }
 }

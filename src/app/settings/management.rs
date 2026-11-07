@@ -21,67 +21,15 @@ pub(super) fn management_badge(label: impl Into<SharedString>, active: bool) -> 
         .child(label.into())
 }
 
-pub(super) fn management_header(
-    title: &'static str,
-    description: &'static str,
-    icon: FullIconName,
-    actions: AnyElement,
-    compact: bool,
-    narrow: bool,
-) -> Div {
-    v_flex()
-        .debug_selector(|| "management-header".into())
+pub(super) fn management_actions(actions: AnyElement, narrow: bool) -> Div {
+    h_flex()
+        .debug_selector(|| "settings-page-actions".into())
         .w_full()
         .flex_shrink_0()
+        .justify_end()
         .px(px(if narrow { 12. } else { 24. }))
-        .py(px(if narrow {
-            8.
-        } else if compact {
-            12.
-        } else {
-            20.
-        }))
-        .gap_2()
-        .child(
-            h_flex()
-                .w_full()
-                .gap_3()
-                .flex_wrap()
-                .child(
-                    h_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .gap_2()
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .size(px(if narrow { 28. } else { 36. }))
-                                .rounded_lg()
-                                .bg(rgb(palette().surface_strong))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(Icon::new(icon).text_color(rgb(palette().muted))),
-                        )
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(ui_text_size(if narrow { 18. } else { 22. }))
-                                .font_semibold()
-                                .child(title),
-                        ),
-                )
-                .child(actions),
-        )
-        .when(!compact && !narrow, |header| {
-            header.child(
-                div()
-                    .text_size(ui_text_size(13.))
-                    .text_color(rgb(palette().muted))
-                    .child(description),
-            )
-        })
+        .py(px(8.))
+        .child(actions)
 }
 
 pub(super) fn engine_tabs(

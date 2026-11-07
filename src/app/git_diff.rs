@@ -525,7 +525,10 @@ impl GitDiffDialog {
                     .small()
                     .compact()
                     .icon(IconName::ChevronUp)
-                    .tooltip("上一个差异 (Shift+F7)")
+                    .tooltip(format!(
+                        "上一个差异（{}）",
+                        shortcuts::hint("previous_diff", cx)
+                    ))
                     .accessibility_label("上一个差异")
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -538,7 +541,10 @@ impl GitDiffDialog {
                     .small()
                     .compact()
                     .icon(IconName::ChevronDown)
-                    .tooltip("下一个差异 (F7)")
+                    .tooltip(format!(
+                        "下一个差异（{}）",
+                        shortcuts::hint("next_diff", cx)
+                    ))
                     .accessibility_label("下一个差异")
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -774,9 +780,18 @@ impl GitDiffDialog {
                     .text_size(ui_text_size(9.))
                     .text_color(rgb(palette().faint))
                     .child(if self.embedded {
-                        "F7 下一处差异 · Shift+F7 上一处 · Esc / Ctrl+W 关闭标签"
+                        format!(
+                            "{} 下一处差异 · {} 上一处 · {} 关闭标签",
+                            shortcuts::hint("next_diff", cx),
+                            shortcuts::hint("previous_diff", cx),
+                            shortcuts::hint("close_diff", cx)
+                        )
                     } else {
-                        "F7 下一处差异 · Shift+F7 上一处 · Esc 关闭"
+                        format!(
+                            "{} 下一处差异 · {} 上一处 · Esc 关闭",
+                            shortcuts::hint("next_diff", cx),
+                            shortcuts::hint("previous_diff", cx)
+                        )
                     }),
             )
             .into_any_element()

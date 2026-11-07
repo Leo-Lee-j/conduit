@@ -95,6 +95,7 @@ mod session_controller;
 mod sessions;
 mod settings;
 mod shell;
+mod shortcuts;
 mod sidebar;
 mod state;
 mod stream_events;
@@ -148,6 +149,9 @@ actions!(
         RecentSessions,
         OpenSessionSearch,
         OpenSettingsShortcut,
+        FocusSettingsSearch,
+        LeaveSettings,
+        OpenFileSearchShortcut,
         ToggleGitNavigation,
         ToggleTerminal,
         NewTerminal,
@@ -308,17 +312,6 @@ impl ConduitApp {
             KeyBinding::new("enter", SubmitBranchForm, Some("GitBranchForm")),
             KeyBinding::new("escape", CancelBranchForm, Some("GitBranchForm > Input")),
             KeyBinding::new("escape", CancelBranchForm, Some("GitBranchForm")),
-            // Enter sends from the composer; Ctrl/Shift+Enter insert a newline.
-            // Bind at the input depth (wins over the textarea's own Enter
-            // handling) and at composer depth for when focus is nearby.
-            KeyBinding::new("enter", SendPrompt, Some("ConduitComposer > Input")),
-            KeyBinding::new("enter", SendPrompt, Some("ConduitComposer")),
-            KeyBinding::new("ctrl-shift-x", StopReply, Some("ConduitComposer > Input")),
-            KeyBinding::new("ctrl-shift-x", StopReply, Some("ConduitComposer")),
-            KeyBinding::new("ctrl-enter", Newline, Some("ConduitComposer > Input")),
-            KeyBinding::new("ctrl-enter", Newline, Some("ConduitComposer")),
-            KeyBinding::new("shift-enter", Newline, Some("ConduitComposer > Input")),
-            KeyBinding::new("shift-enter", Newline, Some("ConduitComposer")),
             // Up/Down recall sent prompts when the composer is empty, like a
             // shell. The composer-depth binding wins over the textarea's own
             // "Input" keys and forwards the caret movement whenever there is
@@ -331,24 +324,14 @@ impl ConduitApp {
             KeyBinding::new("down", NextFileMention, Some("FileMention > Input")),
             KeyBinding::new("tab", AcceptFileMention, Some("FileMention > Input")),
             KeyBinding::new("escape", DismissFileMention, Some("FileMention > Input")),
-            KeyBinding::new("escape", CloseDocument, Some("GitDiffDocument")),
-            KeyBinding::new("ctrl-w", CloseDocument, Some("GitDiffDocument")),
-            // JetBrains' diff navigation shortcuts, scoped to the diff window.
-            KeyBinding::new("f7", NextDiff, Some("GitDiffDialog")),
-            KeyBinding::new("shift-f7", PreviousDiff, Some("GitDiffDialog")),
-            KeyBinding::new("f7", NextDiff, Some("Diff")),
-            KeyBinding::new("shift-f7", PreviousDiff, Some("Diff")),
-            KeyBinding::new("ctrl-e", RecentSessions, None),
-            KeyBinding::new("ctrl-p", OpenSessionSearch, None),
-            KeyBinding::new("ctrl-m", OpenSettingsShortcut, None),
-            KeyBinding::new("ctrl-,", OpenSettingsShortcut, None),
-            KeyBinding::new("ctrl-k", ToggleGitNavigation, None),
         ]);
         terminal::init(cx);
         let (mut store, message, writable) = match loaded {
             Ok(store) => (store, None, true),
             Err(error) => (Store::default(), Some(error), false),
         };
+        shortcuts::sanitize(&mut store.ui.shortcuts);
+        shortcuts::install(&store.ui.shortcuts, cx);
         install_theme_packs(cx);
         let initial_mode = match store.ui.appearance {
             AppearanceMode::System => gpui_kit::component::ThemeMode::from(window.appearance()),

@@ -822,7 +822,10 @@ impl Render for ConduitApp {
                         .h(px(28.))
                         .flex_shrink_0()
                         .icon(IconName::Settings)
-                        .tooltip("设置（Ctrl+,）")
+                        .tooltip(format!(
+                            "设置（{}）",
+                            shortcuts::display("open_settings", &self.store.ui.shortcuts)
+                        ))
                         .cursor_pointer()
                         .on_click(
                             cx.listener(|this, _, window, cx| this.open_settings(window, cx)),
@@ -980,7 +983,12 @@ impl Render for ConduitApp {
             }))
             .on_modifiers_changed(
                 cx.listener(|this, event: &ModifiersChangedEvent, window, cx| {
-                    if !this.terminal_focused(window, cx)
+                    if shortcuts::get("search_files")
+                        .keys(&this.store.ui.shortcuts)
+                        .iter()
+                        .any(|key| key == shortcuts::DOUBLE_SHIFT)
+                        && !this.terminal_focused(window, cx)
+                        && !window.has_active_dialog(cx)
                         && this.double_shift.update(event.modifiers, Instant::now())
                     {
                         this.open_file_search(window, cx);
@@ -1001,6 +1009,9 @@ impl Render for ConduitApp {
             }))
             .on_action(cx.listener(|this, _: &PreviousTerminal, window, cx| {
                 this.cycle_terminal(true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &OpenFileSearchShortcut, window, cx| {
+                this.open_file_search(window, cx);
             }))
             .on_action(cx.listener(|this, _: &RecentSessions, window, cx| {
                 this.open_recent_sessions(window, cx);

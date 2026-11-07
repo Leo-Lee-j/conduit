@@ -74,8 +74,8 @@ const ENTRIES: &[(usize, usize, &str, &str, &str)] = &[
         2,
         0,
         "键盘快捷键",
-        "查看会话、文件与设置的快捷键",
-        "keyboard shortcut 快捷键",
+        "查看并修改快捷键绑定，检查冲突或恢复默认",
+        "keyboard shortcut 快捷键 按键 绑定 冲突 修改 自定义",
     ),
     (
         3,

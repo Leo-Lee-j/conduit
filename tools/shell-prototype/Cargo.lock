@@ -1281,7 +1281,7 @@ dependencies = [
 
 [[package]]
 name = "conduit"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -1311,7 +1311,7 @@ dependencies = [
 
 [[package]]
 name = "conduit-shell-desktop"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "alacritty_terminal",
  "anyhow",

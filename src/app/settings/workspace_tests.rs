@@ -221,7 +221,7 @@ fn settings_child_dialog_escape_preserves_workspace_and_navigation(cx: &mut Test
 }
 
 #[gpui_kit::test]
-fn settings_management_headers_fit_and_model_search_can_return_to_full_page(
+fn settings_management_actions_fit_and_model_search_can_return_to_full_page(
     cx: &mut TestAppContext,
 ) {
     use crate::domain::Provider;
@@ -230,6 +230,8 @@ fn settings_management_headers_fit_and_model_search_can_return_to_full_page(
     for (width, height, mode) in [
         (850., 500., ThemeMode::Light),
         (1280., 900., ThemeMode::Dark),
+        (1920., 1080., ThemeMode::Light),
+        (1920., 1080., ThemeMode::Dark),
     ] {
         cx.simulate_resize(size(px(width), px(height)));
         cx.update(|window, cx| Theme::change(mode, Some(window), cx));
@@ -244,13 +246,34 @@ fn settings_management_headers_fit_and_model_search_can_return_to_full_page(
             });
             draw(cx);
             let body = cx.debug_bounds("settings-workspace-body").unwrap();
-            let header = cx.debug_bounds("management-header").unwrap();
+            let content = cx.debug_bounds("settings-content").unwrap();
+            let actions = cx.debug_bounds("settings-page-actions");
             let engines = cx.debug_bounds("management-engines").unwrap();
-            assert!(header.left() >= body.left() && header.right() <= body.right());
-            assert!(engines.top() >= header.bottom() && engines.right() <= body.right());
-            if page == 8 {
-                let add = cx.debug_bounds("settings-add-service").unwrap();
-                assert!(add.top() >= header.top() && add.bottom() <= header.bottom());
+            assert_eq!(content.right(), body.right());
+            assert!(content.right() - engines.right() <= px(24.));
+            if page == 3 {
+                assert!(
+                    actions.is_none(),
+                    "CLI page must not reserve an empty title or actions row"
+                );
+                assert!(engines.top() - content.top() <= px(12.));
+            } else {
+                let actions = actions.unwrap();
+                assert_eq!(actions.right(), content.right());
+                assert!(actions.left() >= body.left() && actions.right() <= body.right());
+                assert!(
+                    actions.size.height <= px(48.),
+                    "actions must not reserve a title row"
+                );
+                assert!(engines.top() >= actions.bottom() && engines.right() <= body.right());
+                let action = cx
+                    .debug_bounds(if page == 8 {
+                        "settings-add-service"
+                    } else {
+                        "extensions-add"
+                    })
+                    .unwrap();
+                assert!(action.top() >= actions.top() && action.bottom() <= actions.bottom());
             }
             if page == 4 || page == 9 {
                 let list = cx.debug_bounds("extensions-list").unwrap();
@@ -787,4 +810,67 @@ fn settings_cli_single_update_action_tracks_results_and_resets_latest_feedback(
             assert!(!app.connection_settings.cli_updates.contains_key(&provider), "stale-path results cannot offer installation");
         }));
     }
+}
+
+#[gpui_kit::test]
+fn settings_mcp_tool_counts_are_visible_without_expanding_and_clear_on_refresh(
+    cx: &mut TestAppContext,
+) {
+    use crate::{
+        domain::Provider,
+        extensions::{Catalog, Context, Entry, Kind, connection::ToolReport},
+    };
+    let (app, cx) = fixture(cx);
+    let entry = Entry {
+        name: "tool-count-fixture".into(),
+        description: String::new(),
+        path: "fixture-mcp.json".into(),
+        scope: "全局".into(),
+        kind: Kind::Mcp,
+        disabled: false,
+        transport: "stdio".into(),
+        target: "fixture-server".into(),
+    };
+    let id = entry.id();
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.settings_ui.page = 9;
+            app.extensions_ui.mcp = true;
+            app.extensions_ui.initialized = true;
+            let context = Context {
+                engine: Provider::Codex,
+                workspace: None,
+                cli_path: None,
+            };
+            app.extensions_ui.context = Some(context.clone());
+            app.extensions_ui.catalogs.insert(
+                context,
+                Catalog {
+                    entries: vec![entry],
+                    ..Default::default()
+                },
+            );
+            app.extensions_ui.tool_reports.insert(
+                id.clone(),
+                ToolReport {
+                    names: vec!["one".into(), "two".into(), "three".into()],
+                },
+            );
+            cx.notify();
+        })
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("mcp-tool-count-0").is_some());
+    assert!(cx.debug_bounds("extension-source-0").is_none());
+    assert_eq!(
+        app.read_with(cx, |app, _| app.extensions_ui.tool_reports[&id].count()),
+        3
+    );
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.extensions_ui.invalidate();
+            cx.notify();
+        })
+    });
+    assert!(app.read_with(cx, |app, _| app.extensions_ui.tool_reports.is_empty()));
 }

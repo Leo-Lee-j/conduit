@@ -260,7 +260,7 @@ impl ConduitApp {
             self.settings_ui.open = false;
             self.settings_ui.focus_before_open = None;
             self.extensions_ui.probe = None;
-            self.extensions_ui.connection_probe = None;
+            self.extensions_ui.cancel_mcp_detection();
             self.settings_ui
                 .search
                 .update(cx, |input, cx| input.set_value("", window, cx));
@@ -396,7 +396,7 @@ impl ConduitApp {
             self.settings_ui.open = false;
             self.settings_ui.focus_before_open = None;
             self.extensions_ui.probe = None;
-            self.extensions_ui.connection_probe = None;
+            self.extensions_ui.cancel_mcp_detection();
             self.settings_ui
                 .search
                 .update(cx, |input, cx| input.set_value("", window, cx));

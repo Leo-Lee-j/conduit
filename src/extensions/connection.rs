@@ -2,17 +2,55 @@
 use super::*;
 use anyhow::{Result, bail, ensure};
 use serde_json::json;
+use std::collections::HashSet;
 use std::{
     collections::BTreeMap,
     io::{BufRead, BufReader, Write},
 };
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ToolReport {
+    pub names: Vec<String>,
+}
+impl ToolReport {
+    pub fn count(&self) -> usize {
+        self.names.len()
+    }
+    pub fn summary(&self) -> String {
+        let names = self
+            .names
+            .iter()
+            .take(12)
+            .map(|name| clipped(name, 80))
+            .collect::<Vec<_>>();
+        format!(
+            "连接成功 · {} 个可用工具{}{}。未调用工具。",
+            self.count(),
+            if names.is_empty() { "" } else { "：" },
+            names.join("、")
+        )
+    }
+}
+
 pub struct ConnectionProbe {
     pub id: String,
-    pub events: Receiver<Result<String, String>>,
+    pub events: Receiver<Result<ToolReport, String>>,
     cancelled: Arc<AtomicBool>,
 }
 impl ConnectionProbe {
+    #[cfg(all(test, feature = "ui-tests"))]
+    pub(crate) fn test_pending(id: String) -> (Self, mpsc::Sender<Result<ToolReport, String>>) {
+        let (sender, events) = mpsc::channel();
+        (
+            Self {
+                id,
+                events,
+                cancelled: Arc::new(AtomicBool::new(false)),
+            },
+            sender,
+        )
+    }
+
     pub fn start(entry: Entry, context: Context) -> Self {
         let id = entry.id();
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -72,8 +110,12 @@ fn initialize() -> Value {
 fn initialized() -> Value {
     json!({"jsonrpc":"2.0","method":"notifications/initialized"})
 }
-fn tools_request() -> Value {
-    json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})
+fn tools_request(id: i64, cursor: Option<&str>) -> Value {
+    let mut params = json!({});
+    if let Some(cursor) = cursor {
+        params["cursor"] = json!(cursor);
+    }
+    json!({"jsonrpc":"2.0","id":id,"method":"tools/list","params":params})
 }
 
 fn result(value: Value, id: i64) -> Result<Value> {
@@ -97,24 +139,44 @@ fn negotiated(value: &Value) -> Result<&str> {
     );
     Ok(version)
 }
-fn summary(value: &Value) -> Result<String> {
-    let tools = value["tools"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("工具列表格式无效"))?;
-    let names = tools
-        .iter()
-        .take(12)
-        .filter_map(|tool| tool["name"].as_str())
-        .map(|s| clipped(s, 80))
-        .collect::<Vec<_>>();
-    Ok(format!(
-        "连接成功 · 本页 {} 个工具{}{}。未调用工具。",
-        tools.len(),
-        if names.is_empty() { "" } else { "：" },
-        names.join("、")
-    ))
+fn collect_tools(mut page: impl FnMut(i64, Option<&str>) -> Result<Value>) -> Result<ToolReport> {
+    let mut report = ToolReport::default();
+    let mut names = HashSet::new();
+    let mut cursors = HashSet::new();
+    let mut cursor = None;
+    for id in 2..102 {
+        let result = page(id, cursor.as_deref())?;
+        let tools = result["tools"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("工具列表格式无效"))?;
+        for tool in tools {
+            let name = tool["name"]
+                .as_str()
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("工具名称格式无效"))?;
+            if names.insert(name.to_string()) {
+                report.names.push(name.to_string());
+            }
+            ensure!(report.count() <= 10_000, "工具数量超过检测上限");
+        }
+        match result.get("nextCursor").filter(|value| !value.is_null()) {
+            None => return Ok(report),
+            Some(value) => {
+                let next = value
+                    .as_str()
+                    .filter(|cursor| !cursor.is_empty())
+                    .ok_or_else(|| anyhow::anyhow!("工具列表分页游标无效"))?;
+                ensure!(
+                    cursors.insert(next.to_string()),
+                    "工具列表分页游标重复，无法确定完整工具数量"
+                );
+                cursor = Some(next.to_string());
+            }
+        }
+    }
+    bail!("工具列表分页超过检测上限，无法确定完整工具数量")
 }
-fn check(entry: &Entry, context: &Context, cancel: &AtomicBool) -> Result<String> {
+fn check(entry: &Entry, context: &Context, cancel: &AtomicBool) -> Result<ToolReport> {
     ensure!(!cancel.load(Ordering::Acquire), "测试已取消");
     ensure!(!entry.disabled, "此定义已禁用，请先在来源配置中启用");
     let server = config(entry)?;
@@ -136,7 +198,7 @@ fn check(entry: &Entry, context: &Context, cancel: &AtomicBool) -> Result<String
     }
 }
 
-fn stdio(server: &Value, cwd: &Path, cancel: &AtomicBool) -> Result<String> {
+fn stdio(server: &Value, cwd: &Path, cancel: &AtomicBool) -> Result<ToolReport> {
     let command = server["command"]
         .as_str()
         .or_else(|| server["command"][0].as_str())
@@ -182,13 +244,15 @@ fn stdio(server: &Value, cwd: &Path, cancel: &AtomicBool) -> Result<String> {
     negotiated(&init)?;
     send(&mut pipes.stdin, &initialized())?;
     if init.pointer("/capabilities/tools").is_none() {
-        return Ok("连接成功 · 服务器未声明工具能力。".into());
+        return Ok(ToolReport::default());
     }
-    send(&mut pipes.stdin, &tools_request())?;
-    summary(&result(
-        receive(&mut pipes, &mut buffer, &mut bytes, 2, started, cancel)?,
-        2,
-    )?)
+    collect_tools(|id, cursor| {
+        send(&mut pipes.stdin, &tools_request(id, cursor))?;
+        result(
+            receive(&mut pipes, &mut buffer, &mut bytes, id, started, cancel)?,
+            id,
+        )
+    })
 }
 
 fn resolve_command(command: &str, cwd: &Path) -> Result<PathBuf> {
@@ -262,7 +326,7 @@ fn receive(
     }
 }
 
-fn http(server: &Value, address: &str, cancel: &AtomicBool) -> Result<String> {
+fn http(server: &Value, address: &str, cancel: &AtomicBool) -> Result<ToolReport> {
     let url = url::Url::parse(address).map_err(|_| anyhow::anyhow!("MCP URL 无效"))?;
     ensure!(
         matches!(url.scheme(), "http" | "https")
@@ -366,10 +430,21 @@ fn http(server: &Value, address: &str, cancel: &AtomicBool) -> Result<String> {
     let outcome = (|| {
         post(&initialized(), session.as_deref(), Some(version))?;
         if init.pointer("/capabilities/tools").is_none() {
-            return Ok("连接成功 · 服务器未声明工具能力。".into());
+            return Ok(ToolReport::default());
         }
-        let (tools, _) = post(&tools_request(), session.as_deref(), Some(version))?;
-        summary(&tools)
+        let started = Instant::now();
+        collect_tools(|id, cursor| {
+            ensure!(
+                started.elapsed() < Duration::from_secs(15),
+                "工具列表读取超时，请重试"
+            );
+            post(
+                &tools_request(id, cursor),
+                session.as_deref(),
+                Some(version),
+            )
+            .map(|(tools, _)| tools)
+        })
     })();
     if let Some(session) = session {
         let mut request = agent
@@ -407,6 +482,44 @@ fn sse_response(reader: impl BufRead, id: i64) -> Result<Value> {
 mod tests {
     use super::*;
     #[test]
+    fn tool_counts_follow_all_pages_deduplicate_and_reject_partial_results() {
+        let report = collect_tools(|id, cursor| match id {
+            2 => {
+                assert_eq!(cursor, None);
+                Ok(json!({"tools":[{"name":"first"}],"nextCursor":"page2"}))
+            }
+            3 => {
+                assert_eq!(cursor, Some("page2"));
+                Ok(json!({"tools":[{"name":"first"},{"name":"second"}]}))
+            }
+            _ => panic!("unexpected request"),
+        })
+        .unwrap();
+        assert_eq!(report.count(), 2);
+        assert!(report.summary().contains("2 个可用工具"));
+        assert_eq!(
+            collect_tools(|_, _| Ok(json!({"tools":[]})))
+                .unwrap()
+                .count(),
+            0
+        );
+        assert!(
+            collect_tools(|_, _| Ok(json!({"tools":[],"nextCursor":"repeat"})))
+                .unwrap_err()
+                .to_string()
+                .contains("重复")
+        );
+        assert!(collect_tools(|_, _| Ok(json!({"tools":[{}]}))).is_err());
+        assert!(
+            collect_tools(|id, _| if id == 2 {
+                Ok(json!({"tools":[{"name":"first"}],"nextCursor":"more"}))
+            } else {
+                bail!("second page failed")
+            })
+            .is_err()
+        );
+    }
+    #[test]
     fn event_stream_ignores_notifications_and_never_echoes_server_errors() {
         let stream = b"data: {\"jsonrpc\":\"2.0\",\"method\":\"notification\"}\n\ndata: {\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\"}}\n\n";
         assert_eq!(
@@ -431,7 +544,7 @@ mod tests {
         let worker = thread::spawn(move || {
             let started = Instant::now();
             let mut methods = vec![];
-            while methods.len() < 4 && started.elapsed() < Duration::from_secs(10) {
+            while methods.len() < 5 && started.elapsed() < Duration::from_secs(10) {
                 let Ok((mut stream, _)) = listener.accept() else {
                     thread::sleep(Duration::from_millis(5));
                     continue;
@@ -472,7 +585,16 @@ mod tests {
                     match method {
                         "initialize" => (200, json!({"id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}}}}).to_string(), "Mcp-Session-Id: test-session\r\n"),
                         "notifications/initialized" => (202, String::new(), ""),
-                        "tools/list" => (200, json!({"id":2,"result":{"tools":[{"name":"fixture_tool"}]}}).to_string(), ""),
+                        "tools/list" => {
+                            let response = if value["id"] == 2 {
+                                assert!(value["params"]["cursor"].is_null());
+                                json!({"id":2,"result":{"tools":[{"name":"fixture_tool"}],"nextCursor":"page2"}})
+                            } else {
+                                assert_eq!(value["params"]["cursor"], "page2");
+                                json!({"id":3,"result":{"tools":[{"name":"second_tool"}]}})
+                            };
+                            (200, response.to_string(), "")
+                        },
                         _ => panic!("unexpected method"),
                     }
                 };
@@ -486,12 +608,14 @@ mod tests {
             &AtomicBool::new(false),
         )
         .unwrap();
-        assert!(result.contains("fixture_tool"));
+        assert_eq!(result.count(), 2);
+        assert!(result.summary().contains("fixture_tool"));
         assert_eq!(
             worker.join().unwrap(),
             vec![
                 "initialize",
                 "notifications/initialized",
+                "tools/list",
                 "tools/list",
                 "DELETE"
             ]
@@ -513,12 +637,17 @@ mod tests {
         fs::write(&script, r#"while ($line = [Console]::ReadLine()) {
   $message = $line | ConvertFrom-Json
   if ($message.method -eq 'initialize') { [Console]::WriteLine('{"id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}}}}') }
-  if ($message.method -eq 'tools/list') { [Console]::WriteLine('{"id":2,"result":{"tools":[{"name":"local_fixture"}]}}') }
+  if ($message.method -eq 'tools/list' -and $message.id -eq 2) { [Console]::WriteLine('{"id":2,"result":{"tools":[{"name":"local_fixture"}],"nextCursor":"next"}}') }
+  if ($message.method -eq 'tools/list' -and $message.id -eq 3) {
+    if ($message.params.cursor -ne 'next') { exit 2 }
+    [Console]::WriteLine('{"id":3,"result":{"tools":[{"name":"second_fixture"}]}}')
+  }
 }"#).unwrap();
         let powershell = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
             .join("System32/WindowsPowerShell/v1.0/powershell.exe");
         let result = stdio(&json!({"command":powershell,"args":["-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File",script]}), &directory, &AtomicBool::new(false)).unwrap();
-        assert!(result.contains("local_fixture"));
+        assert_eq!(result.count(), 2);
+        assert!(result.summary().contains("local_fixture"));
         fs::remove_dir_all(directory).unwrap();
     }
 }

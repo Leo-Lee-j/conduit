@@ -22,7 +22,8 @@ pub(super) fn init(cx: &mut App) {
         "ConduitFilePreview > TextView",
     ] {
         cx.bind_keys([
-            KeyBinding::new("ctrl-f", ToggleFind, Some(context)),
+            KeyBinding::new("ctrl-f", ToggleFind, Some(context))
+                .with_meta(shortcuts::OWNED_BINDING),
             KeyBinding::new("f3", NextMatch, Some(context)),
             KeyBinding::new("shift-f3", PreviousMatch, Some(context)),
             KeyBinding::new("escape", CloseFind, Some(context)),
@@ -551,7 +552,10 @@ impl FilePreview {
                     .small()
                     .compact()
                     .icon(FullIconName::X)
-                    .tooltip("关闭查找 · Ctrl+F / Esc")
+                    .tooltip(format!(
+                        "关闭查找 · {} / Esc",
+                        shortcuts::hint("file_find", cx)
+                    ))
                     .on_click(cx.listener(|this, _, window, cx| this.close_find(window, cx))),
             )
             .into_any_element()
