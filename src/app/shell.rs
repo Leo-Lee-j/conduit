@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod cache;
+
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests;
 
@@ -15,11 +17,16 @@ pub(super) const NAVIGATION_DEFAULT_WIDTH: f32 = NAVIGATION_MAX_WIDTH;
 pub(super) struct ChatTimeline {
     app: WeakEntity<ConduitApp>,
     scroll: ListState,
+    render_state: Option<cache::State>,
 }
 
 impl ChatTimeline {
     pub(super) fn new(app: WeakEntity<ConduitApp>, scroll: ListState) -> Self {
-        Self { app, scroll }
+        Self {
+            app,
+            scroll,
+            render_state: None,
+        }
     }
 
     fn handle_scroll(
@@ -57,6 +64,9 @@ impl Render for ChatTimeline {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(app) = self.app.upgrade() {
             let app = app.read(cx);
+            if app.at_bottom && app.pending_message_jump.is_none() {
+                self.scroll.scroll_to_end();
+            }
             let monitor = app
                 .store
                 .ui
@@ -172,8 +182,14 @@ impl Render for ConduitApp {
         if self.startup.is_some() {
             return self.startup_page();
         }
-        self.sync_plugin_context();
-        self.refresh_plugin_views(cx);
+        #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
+        let _host_render = chat::profiling::host_span("host_render");
+        {
+            #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
+            let _span = chat::profiling::host_span("host_context");
+            self.sync_plugin_context();
+            self.refresh_plugin_views(cx);
+        }
         self.ensure_selected_transcript(cx);
         let render_started = Instant::now();
         let app_entity = cx.entity();
@@ -191,18 +207,22 @@ impl Render for ConduitApp {
         });
         self.outline.refresh(outline_session);
         self.sync_chat_rows();
-        if self.at_bottom && self.pending_message_jump.is_none() {
-            self.scroll.scroll_to_end();
-        }
-        // Parent changes include streaming content, settings and row expansion.
-        self.timeline.update(cx, |_, cx| cx.notify());
+        self.sync_timeline(cx);
         if self.store.ui.performance_monitor {
+            let timeline_visible = message_count > 0
+                && !self.settings_ui.open
+                && !self.branch_navigation_open()
+                && self.active_diff.is_none()
+                && self.active_file.is_none();
             self.performance.update(cx, |monitor, _| {
                 monitor.begin_render(
                     message_count,
                     self.session_control.runs.len(),
                     self.store.workspaces.iter().map(|w| w.sessions.len()).sum(),
                 );
+                if !timeline_visible {
+                    monitor.begin_message_frame();
+                }
             });
         }
         let has_workspace = self.selected_workspace.is_some();
@@ -214,6 +234,11 @@ impl Render for ConduitApp {
             .sidebar_view
             .clone()
             .cached(StyleRefinement::default().size_full());
+        #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
+        let sidebar = chat::profiling::host_element(
+            sidebar,
+            ["sidebar_layout", "sidebar_prepaint", "sidebar_paint"],
+        );
         let mut conversation = if self.settings_ui.open {
             v_flex()
                 .flex_1()
@@ -364,7 +389,11 @@ impl Render for ConduitApp {
                                 }
                             }
                         })
-                        .child(self.timeline.clone());
+                        .child(
+                            self.timeline
+                                .clone()
+                                .cached(StyleRefinement::default().size_full()),
+                        );
                 }
             } else if has_workspace {
                 messages = messages.child(
@@ -691,13 +720,28 @@ impl Render for ConduitApp {
                         }),
                 );
             }
-            conversation = conversation.child(self.render_composer(selected.as_ref(), window, cx));
+            let composer = {
+                #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
+                let _span = chat::profiling::host_span("composer_build");
+                self.render_composer(selected.as_ref(), window, cx)
+            };
+            #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
+            let composer = chat::profiling::host_element(
+                composer,
+                ["composer_layout", "composer_prepaint", "composer_paint"],
+            );
+            conversation = conversation.child(composer);
             conversation
         };
         conversation = conversation
             .child(self.notification_banner(cx))
             .child(self.update_notice(cx));
-        let toolbar = self.render_toolbar(cx);
+        let toolbar = self.render_toolbar(window, cx);
+        #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
+        let toolbar = chat::profiling::host_element(
+            toolbar,
+            ["toolbar_layout", "toolbar_prepaint", "toolbar_paint"],
+        );
         let title_bar = TitleBar::new()
             .bg(rgb(palette().canvas))
             .border_color(rgb(palette().border))
@@ -799,6 +843,10 @@ impl Render for ConduitApp {
         self.plugins.dock.width = self.plugins.dock.width.clamp(260., max_detail_width);
         let detail_width = self.plugins.dock.width;
         let (detail_panel, overlay) = self.render_detail_dock(window, cx);
+        #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
+        let detail_panel = detail_panel.map(|panel| {
+            chat::profiling::host_element(panel, ["dock_layout", "dock_prepaint", "dock_paint"])
+        });
 
         let body = h_resizable("body").with_state(&sidebar_state).child(
             resizable_panel()
@@ -903,54 +951,55 @@ impl Render for ConduitApp {
                 monitor.record_render(render_started.elapsed());
             });
         }
-        view.capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, _| {
-            if event.keystroke.key != "shift" {
-                this.double_shift.cancel();
-            }
-        }))
-        .capture_any_mouse_down(cx.listener(|this, _, _, _| {
-            this.double_shift.cancel();
-        }))
-        .on_modifiers_changed(
-            cx.listener(|this, event: &ModifiersChangedEvent, window, cx| {
-                if !this.terminal_focused(window, cx)
-                    && this.double_shift.update(event.modifiers, Instant::now())
-                {
-                    this.open_file_search(window, cx);
+        let view = view
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, _| {
+                if event.keystroke.key != "shift" {
+                    this.double_shift.cancel();
                 }
-            }),
-        )
-        .on_action(cx.listener(|this, _: &ToggleTerminal, window, cx| {
-            this.terminal_command(false, window, cx)
-        }))
-        .on_action(
-            cx.listener(|this, _: &NewTerminal, window, cx| {
+            }))
+            .capture_any_mouse_down(cx.listener(|this, _, _, _| {
+                this.double_shift.cancel();
+            }))
+            .on_modifiers_changed(
+                cx.listener(|this, event: &ModifiersChangedEvent, window, cx| {
+                    if !this.terminal_focused(window, cx)
+                        && this.double_shift.update(event.modifiers, Instant::now())
+                    {
+                        this.open_file_search(window, cx);
+                    }
+                }),
+            )
+            .on_action(cx.listener(|this, _: &ToggleTerminal, window, cx| {
+                this.terminal_command(false, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &NewTerminal, window, cx| {
                 this.terminal_command(true, window, cx)
-            }),
-        )
-        .on_action(
-            cx.listener(|this, _: &LeaveTerminal, window, cx| this.leave_terminal(window, cx)),
-        )
-        .on_action(
-            cx.listener(|this, _: &NextTerminal, window, cx| {
+            }))
+            .on_action(
+                cx.listener(|this, _: &LeaveTerminal, window, cx| this.leave_terminal(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &NextTerminal, window, cx| {
                 this.cycle_terminal(false, window, cx)
-            }),
-        )
-        .on_action(cx.listener(|this, _: &PreviousTerminal, window, cx| {
-            this.cycle_terminal(true, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &RecentSessions, window, cx| {
-            this.open_recent_sessions(window, cx);
-        }))
-        .on_action(cx.listener(|this, _: &OpenSessionSearch, window, cx| {
-            this.open_search_dialog(window, cx);
-        }))
-        .on_action(cx.listener(|this, _: &OpenSettingsShortcut, window, cx| {
-            this.open_settings(window, cx);
-        }))
-        .on_action(cx.listener(|this, _: &ToggleGitNavigation, _, cx| {
-            this.toggle_git_navigation(cx);
-        }))
-        .into_any_element()
+            }))
+            .on_action(cx.listener(|this, _: &PreviousTerminal, window, cx| {
+                this.cycle_terminal(true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &RecentSessions, window, cx| {
+                this.open_recent_sessions(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenSessionSearch, window, cx| {
+                this.open_search_dialog(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenSettingsShortcut, window, cx| {
+                this.open_settings(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ToggleGitNavigation, _, cx| {
+                this.toggle_git_navigation(cx);
+            }))
+            .into_any_element();
+        #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
+        let view =
+            chat::profiling::host_element(view, ["host_layout", "host_prepaint", "host_paint"]);
+        view
     }
 }

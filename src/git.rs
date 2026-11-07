@@ -261,6 +261,11 @@ pub enum Operation {
         files: Vec<String>,
         target: CommitTarget,
     },
+    /// Refresh only paths already in the index; never add untracked files.
+    StageTracked {
+        files: Vec<String>,
+        target: CommitTarget,
+    },
     Unstage {
         files: Vec<String>,
         target: CommitTarget,
@@ -1031,6 +1036,7 @@ fn commit_target(git: &Path, workspace: &Path, cancel: &AtomicBool) -> Result<Co
 #[derive(Clone, Copy)]
 enum IndexAction {
     Stage,
+    StageTracked,
     Unstage,
 }
 
@@ -1085,6 +1091,7 @@ fn update_index(
         let mut args = vec!["--literal-pathspecs"];
         match action {
             IndexAction::Stage => args.push("add"),
+            IndexAction::StageTracked => args.extend(["add", "--update"]),
             IndexAction::Unstage => args.extend(["restore", "--staged"]),
         }
         args.extend([from.as_str(), "--pathspec-file-nul"]);
@@ -1127,6 +1134,26 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
             Operation::Stage { files, target } => {
                 update_index(&git, workspace, &files, &target, IndexAction::Stage, cancel)?;
                 Ok(format!("已暂存 {} 个文件", files.len()))
+            }
+            Operation::StageTracked { files, target } => {
+                let conflicts = run_git(
+                    &git,
+                    workspace,
+                    &["diff", "--name-only", "--diff-filter=U", "-z"],
+                    cancel,
+                )?;
+                if !conflicts.is_empty() {
+                    bail!("存在未解决的冲突，已暂停自动暂存");
+                }
+                update_index(
+                    &git,
+                    workspace,
+                    &files,
+                    &target,
+                    IndexAction::StageTracked,
+                    cancel,
+                )?;
+                Ok(format!("已自动暂存 {} 个已跟踪文件", files.len()))
             }
             Operation::Unstage { files, target } => {
                 update_index(
@@ -2408,6 +2435,114 @@ mod tests {
             load(&repo.path, &cancel).unwrap().tags,
             vec!["v1.0.1", "v1.0.0"]
         );
+    }
+
+    #[test]
+    fn auto_stage_tracked_updates_modifications_deletions_and_manually_added_files() {
+        let repo = TestRepository::new().expect("Git required for automatic staging");
+        repo.stage("initial\n");
+        for name in [
+            "deleted.txt",
+            "literal[1].txt",
+            "literal1.txt",
+            "中文 文件.txt",
+        ] {
+            fs::write(repo.path.join(name), "before\n").unwrap();
+        }
+        repo.run(&["add", "."]);
+        repo.run(&["commit", "-qm", "initial"]);
+        repo.stage("partially staged\n");
+        fs::write(repo.path.join("tracked.txt"), "latest\n").unwrap();
+        fs::remove_file(repo.path.join("deleted.txt")).unwrap();
+        for name in ["literal[1].txt", "literal1.txt", "中文 文件.txt"] {
+            fs::write(repo.path.join(name), "after\n").unwrap();
+        }
+        fs::write(repo.path.join("added.txt"), "added\n").unwrap();
+        repo.run(&["add", "added.txt"]);
+        fs::write(repo.path.join("added.txt"), "edited after adding\n").unwrap();
+        fs::write(repo.path.join("untracked.txt"), "manual only\n").unwrap();
+        fs::create_dir(repo.path.join("nested")).unwrap();
+        let cancel = AtomicBool::new(false);
+        let result = operate(
+            &repo.path.join("nested"),
+            Operation::StageTracked {
+                files: [
+                    "tracked.txt",
+                    "deleted.txt",
+                    "literal[1].txt",
+                    "中文 文件.txt",
+                    "added.txt",
+                ]
+                .map(str::to_string)
+                .to_vec(),
+                target: load(&repo.path, &cancel).unwrap().target,
+            },
+            &cancel,
+        );
+        assert_eq!(result.error, None, "{result:?}");
+        let snapshot = load(&repo.path, &cancel).unwrap();
+        assert_eq!(snapshot.staged_count(), 5);
+        assert_eq!(snapshot.untracked_count(), 1);
+        assert_eq!(snapshot.unstaged_count(), 1);
+        assert!(
+            snapshot
+                .files
+                .iter()
+                .any(|f| f.path == "literal1.txt" && f.unstaged())
+        );
+        assert_eq!(repo.run(&["show", ":tracked.txt"]), "latest\n");
+        assert_eq!(repo.run(&["show", ":added.txt"]), "edited after adding\n");
+        assert!(repo.run(&["ls-files", "--", "untracked.txt"]).is_empty());
+    }
+
+    #[test]
+    fn auto_stage_tracked_rejects_stale_index_and_preserves_unresolved_conflicts() {
+        let repo = TestRepository::new().expect("Git required for automatic staging");
+        repo.stage("initial\n");
+        repo.run(&["commit", "-qm", "initial"]);
+        let cancel = AtomicBool::new(false);
+        let target = load(&repo.path, &cancel).unwrap().target;
+        repo.stage("changed index\n");
+        let result = operate(
+            &repo.path,
+            Operation::StageTracked {
+                files: vec!["tracked.txt".into()],
+                target,
+            },
+            &cancel,
+        );
+        assert!(result.error.unwrap().contains("暂存区已变化"));
+        repo.run(&["commit", "-qm", "main edit"]);
+        repo.run(&["checkout", "-qb", "other", "HEAD~"]);
+        repo.stage("other branch\n");
+        repo.run(&["commit", "-qm", "other edit"]);
+        let merge = std::process::Command::new(&repo.git)
+            .args(["merge", "main", "--no-edit"])
+            .current_dir(&repo.path)
+            .output()
+            .unwrap();
+        assert!(!merge.status.success());
+        let conflicts = repo.run(&["ls-files", "--unmerged"]);
+        assert!(!conflicts.is_empty());
+        let target = load(&repo.path, &cancel).unwrap().target;
+        let operation = Operation::StageTracked {
+            files: vec!["tracked.txt".into()],
+            target,
+        };
+        assert!(
+            operate(&repo.path, operation.clone(), &cancel)
+                .error
+                .is_some()
+        );
+        // Conflicts still require manual resolution without an integration marker.
+        fs::remove_file(repo.path.join(".git/MERGE_HEAD")).unwrap();
+        assert!(
+            operate(&repo.path, operation, &cancel)
+                .error
+                .unwrap()
+                .contains("未解决的冲突")
+        );
+        assert_eq!(repo.run(&["ls-files", "--unmerged"]), conflicts);
     }
 
     #[test]

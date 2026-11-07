@@ -12,6 +12,9 @@
 | `shell-fast-compat.patch` | Shell Kbd、动态按键绑定使用 Fast 的动态解析与加载 API |
 | `shell-targeted-commands.patch` | G3 视图弱句柄、定向 on_command、有界结果及统一停止取消 |
 | `shell-owned-overlays.patch` | G6 运行时浮层身份、停止信号、按 owner 清理、焦点恢复与默认 sheet 参数修复；Base 定向撤销通知及 tooltip 状态观测 |
+| `shell-view-container-layout.patch` | 可选的ScriptView满容器根布局，供宿主缓存挂载；默认脚本/浮层布局保持原行为 |
+| `shell-resource-diagnostics.patch` | G5 运行时资源故障与调用计数诊断 |
+| `shell-host-content-cache.patch` | 原生宿主可选关闭整个内容视图的外层缓存，保留下层独立缓存；默认脚本根行为不变 |
 
 `prepare_upstream.py` 从精确 Git 提交导出源码，在忽略的 `.upstream/` 中展开并应用补丁。
 生成的 Shell / Base / Component / Kit manifest 展开 workspace 继承，兄弟依赖仍声明原
@@ -34,12 +37,14 @@ python tools/shell-prototype/verify.py --phase fast-check
 验证另一份从头生成的源码。已有输出若不匹配 patch SHA / 源码 SHA 会拒绝使用，不覆盖本地编辑。
 Python 需要支持 `tomllib` 与 tar 的 `data` 提取过滤器。
 
-所有补丁应用使用 LF，不依赖机器的 `core.autocrlf` 设置。runner 在结果 JSON 中记录精确
+所有补丁应用使用 LF，不依赖机器的 `core.autocrlf` 设置。Windows CRLF 检出由 runner 在 stdin 输入时规范化，原始补丁文件及哈希保持不变。runner 在结果 JSON 中记录精确
 提交、补丁系列 SHA-256、生成源码 SHA-256 和 lockfile SHA-256；本轮已在全新目录重建并
 比对源码哈希一致。Fast 兼容分支通过 feature 条件编译保留默认 GPUI API；Fast 类型检查
 仍显示上游 ScrollWheelEvent / on_scroll_wheel 的弃用警告，不将其描述为零警告构建。
 
 补丁公开的宿主入口：
+
+- `ShellRoot::with_uncached_content()`：Conduit Shell 入口与桌面夹具启用，避免整个宿主缓存重建时强制刷新聊天等后代缓存；默认脚本窗口仍缓存整个内容。实际收益、失效条件和回归见 [聊天缓存报告](../../../docs/plugins/p2-chat-cache-2026-11-07.md)。
 
 - `PluginManager::load_with_policy`：发现、检查重复 ID 后，由宿主返回批准的 Policy；错误拒绝加载。
   manager 固定 application / dataDir 身份，宿主显式提供能力、存储和模块。
@@ -61,3 +66,5 @@ Python 需要支持 `tomllib` 与 tar 的 `data` 提取过滤器。
 描述树检查与物化分段检查限制可控的展开成本，耗时会计入累计预算，但单个原生操作只能返回后
 确认超时。JS 堆数值不包含 Rust/native/GPU 内存。宿主函数必须返回有界摘要，耗时 IO 放到后台。
 这些限制及真实交互性能仍要在后续生产集成中分别验收。
+
+`ScriptView::set_fill_container` 与宿主 `.cached(size_full)` 配合，确保缓存根的百分比宽度及原生输入区域正常；详见 [缓存与布局记录](../../../docs/plugins/p2-plugin-cache-2026-11-07.md)。

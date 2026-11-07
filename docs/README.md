@@ -41,6 +41,13 @@
 - [P2-A G4 输入、焦点与主题](plugins/p2-input-focus-2026-11-05.md)：组合输入接口、插件编辑、主题切换、浮层 Esc 和窄窗状态回归；真实 Windows IME 仍待验收。
 - [P2-A G5 桌面性能测量入口](plugins/p2-performance-probe-2026-11-06.md)：六种插件状态的独立进程 CPU / 布局与进程内存采样、原始数据及校验；尚不代表生产性能准入。
 - [P2-A G5 stress 测量](plugins/p2-stress-probe-2026-11-06.md)：长会话、20 个注册包、3 个活动 VM、故障隔离与重复启停内存曲线，独立报告及数据校验。
+- [P2-A G5 输入与 Markdown 分项](plugins/p2-chat-profile-2026-11-06.md)：逐字符输入、实际绘制计数、Markdown 元素阶段耗时，以及重建和设置焦点回归修复。
+- [P2-A G5 插件缓存与布局](plugins/p2-plugin-cache-2026-11-07.md)：静态插件重复物化归零、中文输入及布局回归、固定矩阵与release交替A/B；G5仍待准入。
+- [P2-A G5 启停内存归因](plugins/p2-native-memory-2026-11-07.md)：200/1,000轮对照、记录开销与帧回调积压归因，完整帧内存探针及回归。
+- [P2-A G5 宿主分项与标签栏缓存](plugins/p2-host-profile-2026-11-07.md)：独立宿主探针、注册句柄失效回归、42进程校准及交替A/B；通知预算通过，编辑预算仍未通过。
+- [P2-A G5 工具栏状态区缓存](plugins/p2-status-cache-2026-11-07.md)：动态值与注册身份失效、原始 60 进程对照；[复核报告](plugins/p2-status-cache-review-2026-11-07.md)修正执行顺序与中位数口径，新增 56 进程平衡对照和三项边界回归，稳定性能改善尚未确认。
+- [P2-A G5 连续 CPU 环境记录](plugins/p2-load-trace-2026-11-07.md)：新增可复用采样器、37 项 Python 回归及 40 进程固定矩阵；当前负载较高、采样开销尚无可靠上界，生产准入未评估。
+- [P2-A G5 聊天缓存与 Shell 宿主边界](plugins/p2-chat-cache-2026-11-07.md)：输入复用未变化聊天、缓存失效与真实 Shell 回归；release 单字符 p95 降低 76–82%，剩余 G5 增量仍超预算。
 - [P2-A release 界面回归适配](plugins/p2-release-ui-regression-2026-11-06.md)：组件 ID / 原生语义定位，解决 18 项 release 失败；dev / release 各 45 项回归通过及独立归档。
 - [GPUI Shell 复用评估](plugins/gpui-shell-reuse-assessment.md)：官网与锁定版本对照、三处扩展分工及接入验证条件。
 - [发布与更新评估](github-release-and-updater-evaluation.md)

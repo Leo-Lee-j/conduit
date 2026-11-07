@@ -87,7 +87,48 @@ pub(super) fn core_renderers() -> BTreeMap<String, RightAdapter> {
     .collect()
 }
 
+/// Selection and eligibility used by the independently cached dock tab strip.
+pub(in crate::app) struct RightHeaderRevision {
+    registration: Option<conduit::plugins::registry::Registration>,
+    registry: u64,
+    context: conduit::plugins::context::ContextInput,
+    context_version: u64,
+    selected: ViewId,
+}
+
 impl PluginUi {
+    pub(in crate::app) fn right_header_revision(&self) -> RightHeaderRevision {
+        RightHeaderRevision {
+            registration: self
+                .registry
+                .owner_for(self.right().as_str())
+                .and_then(|owner| self.registry.registration(owner))
+                .cloned(),
+            registry: self.registry.revision(),
+            context: self.snapshot.input().clone(),
+            context_version: self.snapshot.version(),
+            selected: self.right().clone(),
+        }
+    }
+
+    pub(in crate::app) fn right_header_matches(
+        &self,
+        previous: Option<&RightHeaderRevision>,
+    ) -> bool {
+        previous.is_some_and(|previous| {
+            // A replacement registry can have the same numeric generation.
+            // Its old requests must never survive under a retained tab strip.
+            previous
+                .registration
+                .as_ref()
+                .is_some_and(|handle| self.registry.is_registered(handle))
+                && previous.registry == self.registry.revision()
+                && &previous.context == self.snapshot.input()
+                && previous.context_version == self.snapshot.version()
+                && &previous.selected == self.right()
+        })
+    }
+
     pub(in crate::app) fn right(&self) -> &ViewId {
         self.state.right()
     }

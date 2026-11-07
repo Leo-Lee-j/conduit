@@ -1,5 +1,19 @@
 # Conduit GPUI Shell 验证原型
 
+2026-11-07 G5 连续 CPU 环境记录：新增 `windows_cpu_trace.py`，记录系统、探针和观察进程的 CPU 时间及实际采样间隔。40 进程校准/对照和使用边界见[本轮报告](../../docs/plugins/p2-load-trace-2026-11-07.md)；当前只用于诊断，不用于判定性能预算。
+
+2026-11-07 G5 状态区缓存：逐帧读取原生状态，独立复用状态区元素；原始 60 进程对照见[原报告](../../docs/plugins/p2-status-cache-2026-11-07.md)。[复核报告](../../docs/plugins/p2-status-cache-review-2026-11-07.md)已修正执行顺序与中位数口径，并补充 56 进程平衡对照和三项边界回归；结果仍有明显波动，生产准入保持未评估。
+
+2026-11-07 G5 宿主归因：独立缓存右侧标签栏，保留脚本内容刷新边界；活动/混合场景编辑p95三轮配对均下降，通知预算通过，编辑预算仍未通过。分项校准、注册句柄回归与42进程矩阵见 [本轮报告](../../docs/plugins/p2-host-profile-2026-11-07.md)。
+
+2026-11-07 G5 内存归因：新增显式 `allocation-probe` 测试特性，固定记录并投递完整测试帧；原探针JSON记录和下一帧回调积压分别得到验证，1,000轮复测见 [本轮报告](../../docs/plugins/p2-native-memory-2026-11-07.md)。生产准入仍未通过。
+
+2026-11-07 G5 插件缓存：缓存静态ScriptView并补齐独立根尺寸，宿主重绘及命令后额外draw的重复物化归零；中文输入、主题、窄窗与生命周期验证通过。完整矩阵与release交替A/B见 [本轮报告](../../docs/plugins/p2-plugin-cache-2026-11-07.md)，G5生产准入仍未通过。
+
+2026-11-07 G5 聊天缓存：增加 `ChatTimeline` 状态失效与 `ShellRoot::with_uncached_content()` 宿主入口，避免输入时重复布局/绘制长聊天。release 单字符 p95 从 15.81/16.89/19.01ms 降到 2.84/3.12/4.48ms；54 个正式测量进程通过，active/mixed 增量仍超参考预算，G5 未通过。探针 schema 2 使用绘制校准和 dev/release 均可用的可见性观测，见 [本轮报告](../../docs/plugins/p2-chat-cache-2026-11-07.md)。
+
+2026-11-06 G5 输入分项：新增 `--phase chat-profile`，拆开 Ctrl+A、14 字符输入和实际绘制，记录聊天行与 Markdown 元素阶段成本；同时修复 Windows CRLF 补丁重建、原型锁文件版本及关闭设置后插件输入焦点恢复。dev/release 共 66 个测量进程、3 项资源探针通过，release 长会话整段编辑仍超参考预算。实测与边界见 [本轮记录](../../docs/plugins/p2-chat-profile-2026-11-06.md)。
+
 2026-11-06 G5 重跑：固定源码与工具链下，dev / release 共 36 个 stress、12 个 diagnostics、18 个 breakdown 进程及 3 项资源探针通过；常规桌面回归各 48 项、Python 23 项通过。本轮证据独立保存在 `artifacts/g5-rerun-20261106T194814/`，原 3,216 个非二进制证据哈希未变。普通路径超时未复现，但长会话仍超参考预算，见 [重跑记录](../../docs/plugins/p2-g5-rerun-2026-11-06.md)。
 
 2026-11-06 G5 diagnostics：`verify-desktop.py --phase diagnostics --profile dev|release --samples 60 --warmup 10 --repeats 3` 对照 `explicit-draw` / `effects-only`，记录命令阶段、实际测试根绘制与运行时计数。失败保留 JSONL 和首次故障详情，整轮不发布成功汇总；唯一目录 `artifacts/desktop-diagnostics/<run>/run-results.json` 留存每轮结果。生产代码已修复成功结果收尾的冗余通知；普通路径截止时间故障仍待定位，见 [本轮记录](../../docs/plugins/p2-command-diagnostics-2026-11-06.md)。

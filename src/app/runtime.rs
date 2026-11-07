@@ -649,10 +649,10 @@ impl ConduitApp {
         }
         self.poll_opencode_models(cx);
         self.poll_extensions(window, cx);
-        // Refresh session ages every minute while idle, and running elapsed
-        // labels once a second; avoid repainting every 33 ms poll otherwise.
+        // Refresh recent session ages and running elapsed labels once a second;
+        // older session ages only need a repaint every minute.
         let label_interval = if self.session_control.runs.is_empty() {
-            60
+            self.sidebar.age_refresh_interval()
         } else {
             1
         };

@@ -85,14 +85,14 @@ fn increment(app: &Entity<ConduitApp>, index: usize, expected: usize, cx: &mut V
     assert!(text(app, true, cx).contains(&format!("Command count: {expected}")));
 }
 
-fn activate(app: &Entity<ConduitApp>, cx: &mut VisualTestContext) {
+pub(super) fn activate(app: &Entity<ConduitApp>, cx: &mut VisualTestContext) {
     for index in 0..ACTIVE {
         increment(app, index, 1, cx);
     }
     assert_eq!(counts(app, cx), (ACTIVE, ACTIVE));
 }
 
-fn weak_runtimes(
+pub(super) fn weak_runtimes(
     app: &Entity<ConduitApp>,
     cx: &mut VisualTestContext,
 ) -> Vec<std::rc::Weak<gpui_shell::ShellRuntime>> {
@@ -104,7 +104,7 @@ fn weak_runtimes(
     })
 }
 
-fn stop(app: &Entity<ConduitApp>, cx: &mut VisualTestContext) {
+pub(super) fn stop(app: &Entity<ConduitApp>, cx: &mut VisualTestContext) {
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
             app.close_right_view(window, cx);

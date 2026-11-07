@@ -368,6 +368,9 @@ pub(super) struct GitOperation {
     pub(super) probe: git::OperationProbe,
     pub(super) worktree: PathBuf,
     pub(super) draft: String,
+    /// Whether the active commit also pushes; None for other Git operations.
+    pub(super) commit_push: Option<bool>,
+    pub(super) automatic_stage: bool,
 }
 
 /// One-shot background request that proposes a short session title.

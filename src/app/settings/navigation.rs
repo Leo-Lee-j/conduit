@@ -4,6 +4,7 @@ use super::*;
 pub(in crate::app) struct SettingsUi {
     pub open: bool,
     pub focus: FocusHandle,
+    pub focus_before_open: Option<gpui_kit::WeakFocusHandle>,
     pub page: usize,
     pub group: Option<usize>,
     pub search: Entity<InputState>,

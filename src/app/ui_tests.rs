@@ -2560,6 +2560,8 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
                 probe: crate::git::OperationProbe::test_pending(root.clone()),
                 worktree: root.clone(),
                 draft: String::new(),
+                commit_push: None,
+                automatic_stage: false,
             });
             assert!(this.send_blocked(true).unwrap().contains("Git 操作"));
             this.selected_workspace = Some(1);

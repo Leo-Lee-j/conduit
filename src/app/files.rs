@@ -258,6 +258,7 @@ impl ConduitApp {
         self.leave_branch_navigation();
         if !matches!(tab, DocumentTab::Settings) && self.settings_ui.open {
             self.settings_ui.open = false;
+            self.settings_ui.focus_before_open = None;
             self.extensions_ui.probe = None;
             self.extensions_ui.connection_probe = None;
             self.settings_ui
@@ -393,6 +394,7 @@ impl ConduitApp {
         let closing_settings = tabs.contains(&DocumentTab::Settings);
         if closing_settings {
             self.settings_ui.open = false;
+            self.settings_ui.focus_before_open = None;
             self.extensions_ui.probe = None;
             self.extensions_ui.connection_probe = None;
             self.settings_ui
@@ -1879,26 +1881,6 @@ impl ConduitApp {
         self.select_document(DocumentTab::Diff(id), window, cx);
     }
 
-    pub(super) fn open_staged_diff_document(
-        &mut self,
-        file: git::ChangedFile,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(workspace) = self.selected_workspace_path() else {
-            return;
-        };
-        self.open_diff_document(workspace, file, window, cx);
-        if let Some(document) = self.active_diff.and_then(|id| self.files.diffs.get(&id)) {
-            document.view.update(cx, |view, cx| {
-                if view.scope != git::FileDiffScope::Staged {
-                    view.scope = git::FileDiffScope::Staged;
-                    view.reload(window, cx);
-                }
-            });
-        }
-    }
-
     /// Refresh only matching HEAD/worktree diffs; branch comparison dialogs keep their own lifecycle.
     pub(super) fn refresh_diff_documents(
         &mut self,
@@ -2944,7 +2926,7 @@ mod tests {
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod git_navigation_tests {
-    use super::{ConduitApp, DiffMode, DocumentTab, Store, Workspace};
+    use super::{ActiveRun, ChatRuntime, ConduitApp, DiffMode, DocumentTab, Store, Workspace};
     use crate::git;
     use gpui_kit::{
         AppContext, Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext,
@@ -3274,6 +3256,114 @@ mod git_navigation_tests {
     }
 
     #[gpui_kit::test]
+    fn git_refresh_auto_stages_tracked_changes_when_writable_and_idle(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let repo = Repo::new();
+        let store = repo.store();
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (runtime, _sender) = ChatRuntime::test_channel();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
+                app.writable = false;
+                app.startup = None;
+                app.selected_workspace = Some(0);
+                app.selected_session = Some(1);
+                app.open_tabs = vec![DocumentTab::Chat(1)];
+                app.session_control.runs.insert(
+                    1,
+                    ActiveRun::new(
+                        runtime,
+                        repo.0.clone(),
+                        "auto-stage".into(),
+                        Default::default(),
+                        None,
+                        Default::default(),
+                    ),
+                );
+                app
+            });
+            *output.borrow_mut() = Some(app.clone());
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        let app = slot.borrow().as_ref().unwrap().clone();
+        draw(cx);
+        click(cx, "nav-git");
+        wait_git(cx, &app);
+        cx.update(|_, cx| {
+            app.update(cx, |a, cx| {
+                assert_eq!(a.git.snapshot.as_ref().unwrap().staged_count(), 0);
+                a.writable = true;
+                a.refresh_git(cx);
+            })
+        });
+        wait_git(cx, &app);
+        cx.update(|_, cx| {
+            app.update(cx, |a, cx| {
+                assert_eq!(a.git.snapshot.as_ref().unwrap().staged_count(), 0);
+                a.session_control.runs.clear();
+                a.refresh_git(cx);
+            })
+        });
+        wait_git(cx, &app);
+        cx.update(|_, cx| {
+            let a = app.read(cx);
+            let snapshot = a.git.snapshot.as_ref().unwrap();
+            assert_eq!(snapshot.staged_count(), 1);
+            assert_eq!(snapshot.unstaged_count(), 0);
+            assert_eq!(snapshot.untracked_count(), 1);
+            assert!(
+                a.git
+                    .selected_files
+                    .get(&repo.0)
+                    .is_none_or(|s| s.is_empty())
+            );
+            assert!(!a.git.feedback[&repo.0].error);
+        });
+        // A new file is manual the first time, automatic after it joins the index.
+        cx.update(|_, cx| {
+            app.update(cx, |a, cx| {
+                a.stage_git_files(vec!["new file.txt".into()], cx);
+            })
+        });
+        wait_git(cx, &app);
+        std::fs::write(repo.0.join("new file.txt"), "changed after manual add\n").unwrap();
+        std::fs::remove_file(repo.0.join("src/main.rs")).unwrap();
+        cx.update(|_, cx| app.update(cx, |a, cx| a.refresh_git(cx)));
+        wait_git(cx, &app);
+        cx.update(|_, cx| {
+            let a = app.read(cx);
+            let snapshot = a.git.snapshot.as_ref().unwrap();
+            assert_eq!(snapshot.staged_count(), 2);
+            assert_eq!(snapshot.unstaged_count(), 0);
+            assert_eq!(snapshot.untracked_count(), 0);
+            assert!(
+                snapshot
+                    .files
+                    .iter()
+                    .any(|f| f.path == "src/main.rs" && f.index == 'D')
+            );
+        });
+        // A failed add must finish, report an error, and leave a refresh usable.
+        std::fs::write(repo.0.join("new file.txt"), "retry after lock\n").unwrap();
+        std::fs::write(repo.0.join(".git/index.lock"), "fixture lock").unwrap();
+        cx.update(|_, cx| app.update(cx, |a, cx| a.refresh_git(cx)));
+        wait_git(cx, &app);
+        cx.update(|_, cx| assert!(app.read(cx).git.feedback[&repo.0].error));
+        std::fs::remove_file(repo.0.join(".git/index.lock")).unwrap();
+        cx.update(|_, cx| app.update(cx, |a, cx| a.refresh_git(cx)));
+        wait_git(cx, &app);
+        cx.update(|_, cx| {
+            assert_eq!(
+                app.read(cx).git.snapshot.as_ref().unwrap().unstaged_count(),
+                0
+            );
+            assert!(!app.read(cx).git.feedback[&repo.0].error);
+        });
+    }
+
+    #[gpui_kit::test]
     fn git_navigation_staging_diff_tabs_and_unique_settings(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         let repo = Repo::new();
@@ -3446,11 +3536,11 @@ mod git_navigation_tests {
         cx.update(|_, cx| {
             let a = app.read(cx);
             let s = a.git.snapshot.as_ref().unwrap();
-            assert_eq!(s.staged_count(), 1);
+            assert_eq!(s.staged_count(), 2);
             assert!(
                 s.files
                     .iter()
-                    .any(|f| f.path == "src/main.rs" && f.unstaged())
+                    .any(|f| f.path == "src/main.rs" && f.staged() && !f.unstaged())
             );
         });
         click(cx, "git-unstage-selected");
@@ -3458,7 +3548,7 @@ mod git_navigation_tests {
         cx.update(|_, cx| {
             assert_eq!(
                 app.read(cx).git.snapshot.as_ref().unwrap().staged_count(),
-                0
+                1
             )
         });
         click(cx, "git-stage-selected");
@@ -3615,7 +3705,7 @@ mod git_navigation_tests {
         cx.update(|window, cx| app.update(cx, |a, cx| a.open_git_diff(new, window, cx)));
         let new_id = cx.update(|_, cx| app.read(cx).active_diff.unwrap());
         wait_diff(cx, &app, new_id);
-        repo.git(&["commit", "-qm", "add new file"]);
+        repo.git(&["commit", "-qm", "add new file", "--", "new file.txt"]);
         cx.update(|_, cx| app.update(cx, |a, cx| a.refresh_git(cx)));
         wait_git(cx, &app);
         wait_diff(cx, &app, new_id);

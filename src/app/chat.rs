@@ -3,6 +3,8 @@
 use super::*;
 use std::rc::Rc;
 
+#[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
+pub(in crate::app) mod profiling;
 pub(super) mod rows;
 mod turn_diff;
 
@@ -782,6 +784,8 @@ impl ConduitApp {
         let started = Instant::now();
         let index = self.chat_rows.message(row);
         let element = self.render_message_content(index, cx);
+        #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
+        profiling::record("row_build", started.elapsed());
         if self.store.ui.performance_monitor {
             self.performance.update(cx, |monitor, _| {
                 monitor.record_message_render(index, started.elapsed());
@@ -932,8 +936,9 @@ impl ConduitApp {
                     .debug_selector(|| format!("user-body-{index}"))
                     // SelectableText does not subscribe this view to its selection
                     // state, so request a repaint as the pointer moves during drag.
-                    .on_mouse_move(cx.listener(|_, event: &MouseMoveEvent, _, cx| {
+                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                         if event.pressed_button == Some(MouseButton::Left) {
+                            this.timeline.update(cx, |_, cx| cx.notify());
                             cx.notify();
                         }
                     }))
@@ -1181,6 +1186,19 @@ impl ConduitApp {
                             let _ = link_app.update(cx, |this, cx| {
                                 this.open_chat_link(session_id, url, window, cx);
                             });
+                        })
+                        .map(|view| {
+                            #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
+                            {
+                                if profiling::enabled() {
+                                    return profiling::MeasuredMarkdown(view).into_any_element();
+                                }
+                                view.into_any_element()
+                            }
+                            #[cfg(not(all(test, feature = "ui-tests", conduit_shell_desktop)))]
+                            {
+                                view
+                            }
                         }),
                     )
                     .when(show_actions, |message| message.child(actions))
@@ -1638,7 +1656,20 @@ impl ConduitApp {
                         transparent_black()
                     })
                     .when(highlighted, |row| row.bg(rgb(palette().surface_hover)))
-                    .child(element),
+                    .child(element)
+                    .map(|card| {
+                        // Observe actual paint in both dev and release probes. This
+                        // transparent wrapper has no production layout/state cost.
+                        #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
+                        {
+                            use gpui_kit::TestSupportExt;
+                            card.test_support()
+                        }
+                        #[cfg(not(all(test, feature = "ui-tests", conduit_shell_desktop)))]
+                        {
+                            card
+                        }
+                    }),
             );
         row.into_any_element()
     }

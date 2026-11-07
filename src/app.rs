@@ -262,7 +262,7 @@ pub struct ConduitApp {
     expanded_tool_groups: HashSet<(u64, String)>,
     expanded_reasoning: HashSet<(u64, String)>,
     expanded_errors: HashSet<(u64, String)>,
-    /// Last elapsed-label repaint: every second during turns, every minute idle.
+    /// Last elapsed-label repaint: every second for turns/recent ages, otherwise every minute.
     last_live_tick: Instant,
     tool_scrolls: HashMap<(u64, String), ScrollHandle>,
     /// Parsed diff viewers for expanded edit cards, keyed like `tool_scrolls`.
@@ -601,6 +601,7 @@ impl ConduitApp {
             connection_settings: settings::ConnectionsUi::new(new_session_provider, model_search),
             settings_ui: settings::SettingsUi {
                 open: false,
+                focus_before_open: None,
                 focus: cx.focus_handle(),
                 page: 0,
                 group: None,

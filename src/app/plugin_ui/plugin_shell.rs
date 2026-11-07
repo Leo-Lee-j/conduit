@@ -401,6 +401,9 @@ impl ConduitApp {
         self.refresh_shell_context(cx);
         let shell = self.plugins.shell.as_ref().unwrap();
         let content = shell.host.view(key);
+        if let Some(view) = &content {
+            view.update(cx, |view, cx| view.set_fill_container(true, cx));
+        }
         let id = key.view.clone();
         let selector = format!("shell-view-{}", key.view);
         let stop_selector = format!("shell-stop-{}", key.view);
@@ -432,7 +435,10 @@ impl ConduitApp {
                     .min_h_0()
                     .min_w_0()
                     .overflow_hidden()
-                    .child(view)
+                    // Host input only changes its composer. ScriptView already
+                    // notifies on script/retained-control changes; GPUI also
+                    // invalidates this cache for bounds, style and refreshes.
+                    .child(view.cached(StyleRefinement::default().size_full()))
                     .into_any_element(),
                 None => div()
                     .p_3()

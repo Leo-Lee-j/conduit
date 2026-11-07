@@ -591,6 +591,8 @@ impl ConduitApp {
                 git::Operation::Branch(Box::new(request)),
             ),
             draft: String::new(),
+            commit_push: None,
+            automatic_stage: false,
         });
         self.git_feedback(path, "正在执行 Git 分支操作…", false, cx);
         true

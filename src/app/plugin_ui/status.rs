@@ -21,6 +21,7 @@ pub(super) struct StatusProvider {
     element_id: Option<&'static str>,
 }
 
+#[derive(Clone)]
 struct StatusEntry {
     item: StatusItem,
     value: StatusValue,
@@ -28,6 +29,45 @@ struct StatusEntry {
     request: Option<CommandInvocation>,
     element_id: String,
     width: f32,
+}
+
+// Providers can change with any host notification, without a registry revision.
+// Re-read their bounded values on every host render; retain only the element tree.
+#[derive(PartialEq)]
+struct StatusRevision {
+    registry: u64,
+    context: conduit::plugins::context::ContextInput,
+    context_version: u64,
+    width: f32,
+    appearance: (u32, u32, u32, u32),
+}
+
+struct StatusRow {
+    app: WeakEntity<ConduitApp>,
+    revision: Option<StatusRevision>,
+    registrations: Vec<Registration>,
+    entries: Vec<StatusEntry>,
+}
+
+impl Render for StatusRow {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.app
+            .update(cx, |app, cx| app.render_status_row(&self.entries, cx))
+            .unwrap_or_else(|_| div().into_any_element())
+    }
+}
+
+impl StatusEntry {
+    // Declarations are immutable within a registered revision. The other data
+    // below comes from native providers and current command bindings.
+    fn same_value(&self, other: &Self) -> bool {
+        self.item.id == other.item.id
+            && self.value.text == other.value.text
+            && self.tooltip == other.tooltip
+            && self.element_id == other.element_id
+            && self.width == other.width
+            && self.request.is_some() == other.request.is_some()
+    }
 }
 
 pub(super) fn bind_core(ui: &mut PluginUi) {
@@ -106,6 +146,8 @@ fn visible_count(widths: impl Iterator<Item = f32> + Clone, available: f32) -> u
 
 impl ConduitApp {
     fn status_entries(&self) -> Vec<StatusEntry> {
+        #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
+        let _span = crate::app::chat::profiling::host_span("status_data");
         let mut items = [Alignment::Left, Alignment::Right]
             .into_iter()
             .flat_map(|alignment| {
@@ -220,8 +262,60 @@ impl ConduitApp {
         }
     }
 
-    pub(in crate::app) fn render_status_contributions(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(in crate::app) fn render_status_contributions(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let entries = self.status_entries();
+        let app = cx.weak_entity();
+        let row = window.use_keyed_state("toolbar-status-cache", cx, move |_, _| StatusRow {
+            app,
+            revision: None,
+            registrations: Vec::new(),
+            entries: Vec::new(),
+        });
+        let revision = StatusRevision {
+            registry: self.plugins.registry.revision(),
+            context: self.plugins.snapshot.input().clone(),
+            context_version: self.plugins.snapshot.version(),
+            width: self.plugins.status_width,
+            appearance: (
+                palette().canvas,
+                palette().border,
+                palette().text,
+                palette().muted,
+            ),
+        };
+        row.update(cx, |row, cx| {
+            if row.revision.as_ref() != Some(&revision)
+                // Numeric revisions can repeat after replacing the entire registry.
+                // Retained commands must be backed by registrations in this registry.
+                || !row.registrations.iter().all(|handle| self.plugins.registry.is_registered(handle))
+                || row.entries.len() != entries.len()
+                || !row.entries.iter().zip(&entries).all(|(old, new)| old.same_value(new))
+            {
+                row.registrations = entries.iter().map(|entry| {
+                    let owner = self.plugins.registry.owner_for(entry.item.id.as_str()).unwrap();
+                    self.plugins.registry.registration(owner).unwrap().clone()
+                }).collect();
+                row.entries = entries;
+                row.revision = Some(revision);
+                cx.notify();
+            }
+        });
+        row.cached(
+            StyleRefinement::default()
+                .flex_1()
+                .min_w(px(MORE_WIDTH + GAP))
+                .h(px(28.)),
+        )
+        .into_any_element()
+    }
+
+    fn render_status_row(&self, entries: &[StatusEntry], cx: &mut Context<Self>) -> AnyElement {
+        #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
+        let _span = crate::app::chat::profiling::host_span("status_build");
         let count = visible_count(
             entries.iter().map(|entry| entry.width),
             self.plugins.status_width,
@@ -231,6 +325,7 @@ impl ConduitApp {
             .id("toolbar-contributions")
             .test_support()
             .debug_selector(|| "toolbar-contributions".into())
+            .w_full()
             .flex_1()
             .min_w(px(MORE_WIDTH + GAP))
             .h(px(28.))
@@ -272,7 +367,7 @@ impl ConduitApp {
             );
         }
         if count < entries.len() {
-            let hidden: Vec<_> = entries.into_iter().skip(count).collect();
+            let hidden: Vec<_> = entries.iter().skip(count).cloned().collect();
             let app = cx.entity();
             row = row.child(
                 Button::new("toolbar-more")

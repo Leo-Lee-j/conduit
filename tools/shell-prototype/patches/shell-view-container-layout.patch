@@ -1,0 +1,68 @@
+--- a/crates/shell/src/view.rs
++++ b/crates/shell/src/view.rs
+@@ -35,6 +35,8 @@
+ };
+ 
+ pub struct ScriptView {
++    /// Native hosts can give a cached view a definite root size.
++    fill_container: bool,
+     /// Declared before `runtime` because fields drop in declaration order, and
+     /// a script value released after its engine aborts the process. A view that
+     /// happens to hold the last reference to the runtime would otherwise free
+@@ -125,6 +127,7 @@
+         ownership: ViewOwnership,
+     ) -> Self {
+         Self {
++            fill_container: false,
+             object,
+             current: None,
+             previous: None,
+@@ -136,6 +139,19 @@
+             reload_error: None,
+             ownership,
+             runtime,
++        }
++    }
++
++    /// Fill the region allocated by a native host's cached-view boundary.
++    ///
++    /// GPUI lays a cached subtree out as an independent root. Available space
++    /// alone does not stretch an intrinsically sized script root, so percentage
++    /// widths in retained controls otherwise resolve against that small root.
++    /// Script applications and overlays keep their original intrinsic layout.
++    pub fn set_fill_container(&mut self, fill: bool, cx: &mut Context<Self>) {
++        if self.fill_container != fill {
++            self.fill_container = fill;
++            cx.notify();
+         }
+     }
+ 
+@@ -324,7 +340,7 @@
+             (None, Some(message)) => Some((ViewFailure::Render, message)),
+             (None, None) => None,
+         };
+-        match (failure, self.current.as_ref()) {
++        let content = match (failure, self.current.as_ref()) {
+             (None, Some(snapshot)) => materialize(&self.runtime, snapshot, window, cx),
+             // A build that failed left the last good snapshot in place, so the
+             // interface is still there to show. Reporting over it beats
+@@ -342,6 +358,16 @@
+             // records an error. An empty element is the honest answer if it ever
+             // is reached, rather than a panic in a render.
+             (None, None) => div().into_any_element(),
+-        }
+-    }
+-}
++        };
++        if self.fill_container {
++            div()
++                .flex()
++                .flex_col()
++                .size_full()
++                .child(content)
++                .into_any_element()
++        } else {
++            content
++        }
++    }
++}

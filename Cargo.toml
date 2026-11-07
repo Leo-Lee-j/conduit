@@ -1,6 +1,6 @@
 [package]
 name = "conduit"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 publish = false
 default-run = "conduit"
@@ -35,6 +35,8 @@ default = []
 gpui-fast = ["gpui-kit/gpui-fast"]
 ui-tests = ["gpui-kit/test-support"]
 plugin-example = []
+# Opt-in test allocator; never installed in a production binary.
+allocation-probe = ["ui-tests"]
 
 [build-dependencies]
 embed-resource = "=3.0.12"

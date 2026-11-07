@@ -429,3 +429,388 @@ fn dynamic_status_uses_metadata_without_mutating_registry_and_empty_scope_hides_
     assert!(cx.element_bounds("toolbar-workspace").is_none());
     assert!(cx.element_bounds("notification-bell").is_some());
 }
+
+#[cfg(conduit_shell_desktop)]
+mod cache_tests {
+    use super::*;
+    use crate::app::chat::profiling;
+    use gpui_kit::{Focusable as _, Role, VisualTestContext};
+
+    fn frame(cx: &mut VisualTestContext) {
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.simulate_next_frame(cx);
+            window.draw(cx).clear(cx);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn status_cache_reuses_drafts_but_refreshes_native_values_and_theme(cx: &mut TestAppContext) {
+        let mut ui = plugins(0);
+        ui.bind_status("test.status-external.read-status", None, |app, _| {
+            StatusValue {
+                text: app.message.clone().unwrap_or_else(|| "dynamic-one".into()),
+                tooltip: Some("provider tooltip".into()),
+            }
+        });
+        let (app, cx) = fixture(cx, store(), ui);
+        cx.simulate_resize(size(px(2400.), px(800.)));
+        cx.update(|window, cx| {
+            app.read(cx)
+                .input
+                .read(cx)
+                .focus_handle(cx)
+                .focus(window, cx)
+        });
+        cx.simulate_input("warmup");
+        frame(cx);
+        frame(cx);
+        let before = cx.element_bounds("toolbar-contributions").unwrap();
+        assert!(cx.labeled_bounds(Role::Button, "dynamic-one").is_some());
+        profiling::begin_host();
+        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_input("G5 中文😀 input A");
+        cx.update(|_, cx| app.update(cx, |_, cx| cx.notify()));
+        frame(cx);
+        let measured = profiling::finish_host();
+        assert!(
+            measured["status_data"]["count"].as_u64().unwrap() >= 14,
+            "{measured}"
+        );
+        assert_eq!(
+            measured["status_build"]["count"].as_u64().unwrap_or(0),
+            0,
+            "{measured}"
+        );
+        assert_eq!(cx.element_bounds("toolbar-contributions").unwrap(), before);
+        let revision = cx.update(|_, cx| app.read(cx).plugins.registry.revision());
+        profiling::begin_host();
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.message = Some("dynamic-two 中文😀".into());
+                cx.notify();
+            })
+        });
+        frame(cx);
+        let measured = profiling::finish_host();
+        assert!(
+            measured["status_build"]["count"].as_u64().unwrap_or(0) > 0,
+            "{measured}"
+        );
+        assert!(
+            cx.labeled_bounds(Role::Button, "dynamic-two 中文😀")
+                .is_some()
+        );
+        assert!(cx.labeled_bounds(Role::Button, "dynamic-one").is_none());
+        assert_eq!(
+            cx.update(|_, cx| app.read(cx).plugins.registry.revision()),
+            revision
+        );
+        // A provider rebind that changes only the tooltip also invalidates the row.
+        profiling::begin_host();
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.plugins
+                    .bind_status("test.status-external.read-status", None, |app, _| {
+                        StatusValue {
+                            text: app.message.clone().unwrap(),
+                            tooltip: Some("replacement tooltip".into()),
+                        }
+                    });
+                cx.notify();
+            })
+        });
+        frame(cx);
+        let measured = profiling::finish_host();
+        assert!(
+            measured["status_build"]["count"].as_u64().unwrap_or(0) > 0,
+            "{measured}"
+        );
+        for mode in [
+            crate::store::AppearanceMode::Light,
+            crate::store::AppearanceMode::Dark,
+        ] {
+            profiling::begin_host();
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    app.store.ui.appearance = mode;
+                    app.apply_appearance(window, cx);
+                })
+            });
+            frame(cx);
+            let measured = profiling::finish_host();
+            assert!(
+                measured["status_build"]["count"].as_u64().unwrap_or(0) > 0,
+                "{measured}"
+            );
+        }
+    }
+
+    #[gpui_kit::test]
+    fn status_cache_rebinds_same_generation_registry_and_context(cx: &mut TestAppContext) {
+        let (app, cx) = fixture(cx, store(), plugins(0));
+        cx.simulate_resize(size(px(2400.), px(800.)));
+        frame(cx);
+        frame(cx);
+        profiling::begin_host();
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                let revision = app.plugins.registry.revision();
+                let context = app.plugins.snapshot.version();
+                let width = app.plugins.status_width;
+                app.plugins = plugins(0);
+                app.plugins.status_width = width;
+                app.sync_plugin_context();
+                assert_eq!(app.plugins.registry.revision(), revision);
+                assert_eq!(app.plugins.snapshot.version(), context);
+                cx.notify();
+            })
+        });
+        frame(cx);
+        let measured = profiling::finish_host();
+        assert!(
+            measured["status_build"]["count"].as_u64().unwrap_or(0) > 0,
+            "{measured}"
+        );
+        click(cx, "test.status-external.read-status");
+        cx.update(|_, cx| {
+            assert_eq!(
+                app.read(cx).message.as_deref(),
+                Some("Status:test.status-external.read")
+            )
+        });
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.message = None;
+                app.switch(1, Some(2), window, cx);
+            })
+        });
+        frame(cx);
+        click(cx, "test.status-external.read-status");
+        cx.update(|_, cx| {
+            assert_eq!(
+                app.read(cx).message.as_deref(),
+                Some("Status:test.status-external.read")
+            )
+        });
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                let owner = PluginId::new(EXTERNAL).unwrap();
+                let handle = app.plugins.registry.registration(&owner).unwrap().clone();
+                app.plugins.registry.unregister(&handle).unwrap();
+                cx.notify();
+            })
+        });
+        frame(cx);
+        assert!(
+            cx.labeled_bounds(Role::Button, "read test.status-external")
+                .is_none()
+        );
+    }
+
+    #[gpui_kit::test]
+    fn status_cache_tracks_command_binding_without_registry_changes(cx: &mut TestAppContext) {
+        let (app, cx) = fixture(cx, store(), plugins(0));
+        cx.simulate_resize(size(px(2400.), px(800.)));
+        frame(cx);
+        frame(cx);
+        let id = "test.status-external.read-status";
+        let command = CommandId::new("test.status-external.read").unwrap();
+        let revision = cx.update(|_, cx| app.read(cx).plugins.registry.revision());
+        let context = cx.update(|_, cx| app.read(cx).plugins.snapshot.version());
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.plugins.commands.remove(&command).unwrap();
+                cx.notify();
+            })
+        });
+        frame(cx);
+        cx.update(|window, _| {
+            assert_eq!(
+                test_support::find(window, &[], &gpui_kit::SharedString::from(id).into())
+                    .unwrap()
+                    .disabled(),
+                Some(true)
+            )
+        });
+        click(cx, id);
+        cx.update(|_, cx| assert!(app.read(cx).message.is_none()));
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.plugins.bind_command(command.as_str(), record);
+                cx.notify();
+            })
+        });
+        frame(cx);
+        cx.update(|window, _| {
+            assert_ne!(
+                test_support::find(window, &[], &gpui_kit::SharedString::from(id).into())
+                    .unwrap()
+                    .disabled(),
+                Some(true)
+            )
+        });
+        click(cx, id);
+        cx.update(|_, cx| {
+            assert_eq!(
+                app.read(cx).message.as_deref(),
+                Some("Status:test.status-external.read")
+            )
+        });
+        // Existing cached requests must call the current handler, including an
+        // enabled-to-enabled rebind with identical declarations and context.
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.message = None;
+                app.plugins.bind_command(command.as_str(), |app, _, _, cx| {
+                    app.message = Some("replacement-handler".into());
+                    cx.notify();
+                    true
+                });
+                cx.notify();
+            })
+        });
+        frame(cx);
+        click(cx, id);
+        cx.update(|_, cx| {
+            let app = app.read(cx);
+            assert_eq!(app.message.as_deref(), Some("replacement-handler"));
+            assert_eq!(app.plugins.registry.revision(), revision);
+            assert_eq!(app.plugins.snapshot.version(), context);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn status_cache_reflows_after_hints_change_without_resize(cx: &mut TestAppContext) {
+        let (app, cx) = fixture(cx, store(), plugins(8));
+        cx.simulate_resize(size(px(1600.), px(800.)));
+        frame(cx);
+        frame(cx);
+        let initial = cx.element_bounds("toolbar-contributions").unwrap();
+        for show in [true, false, true, false] {
+            cx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    if show {
+                        app.session_control
+                            .naming_errors
+                            .insert(1, "缓存后的长提示 中文😀".repeat(30));
+                    } else {
+                        app.session_control.naming_errors.remove(&1);
+                    }
+                    cx.notify();
+                })
+            });
+            frame(cx);
+            frame(cx);
+            let region = cx.element_bounds("toolbar-contributions").unwrap();
+            let controls = cx.element_bounds("toolbar-controls").unwrap();
+            let more = cx.element_bounds("toolbar-more").unwrap();
+            assert!(region.right() <= controls.left());
+            assert!(more.left() >= region.left() && more.right() <= region.right());
+            if show {
+                assert!(
+                    region.size.width < initial.size.width,
+                    "hints must take real space"
+                );
+            } else {
+                assert_eq!(
+                    region, initial,
+                    "removing hints must restore the status region"
+                );
+            }
+            cx.update(|_, cx| {
+                assert_eq!(
+                    app.read(cx).plugins.status_width,
+                    f32::from(region.size.width).floor()
+                )
+            });
+            // A settled resize must not force permanent status rebuilds.
+            profiling::begin_host();
+            for _ in 0..4 {
+                cx.update(|_, cx| app.update(cx, |_, cx| cx.notify()));
+                frame(cx);
+            }
+            let measured = profiling::finish_host();
+            assert_eq!(
+                measured["status_build"]["count"].as_u64().unwrap_or(0),
+                0,
+                "{measured}"
+            );
+        }
+    }
+
+    #[gpui_kit::test]
+    fn status_cache_open_menu_rejects_revoked_requests_and_reopens(cx: &mut TestAppContext) {
+        let (app, cx) = fixture(cx, store(), plugins(24));
+        cx.simulate_resize(size(px(900.), px(500.)));
+        frame(cx);
+        frame(cx);
+        for replace_registry in [false, true] {
+            for _ in 0..4 {
+                cx.update(|_, cx| app.update(cx, |_, cx| cx.notify()));
+                frame(cx);
+            }
+            click(cx, "toolbar-more");
+            cx.simulate_mouse_move(point(px(2.), px(2.)), None, Modifiers::default());
+            cx.simulate_keystrokes("up");
+            frame(cx);
+            cx.update(|window, _| {
+                assert!(
+                    test_support::snapshots(window)
+                        .iter()
+                        .any(|e| e.visible() && e.role() == Some(Role::Menu))
+                )
+            });
+            cx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    app.message = None;
+                    if replace_registry {
+                        let width = app.plugins.status_width;
+                        app.plugins = plugins(24);
+                        app.plugins.status_width = width;
+                    } else {
+                        app.writable = false;
+                    }
+                    cx.notify();
+                })
+            });
+            frame(cx);
+            cx.simulate_keystrokes("enter");
+            frame(cx);
+            cx.update(|_, cx| {
+                assert!(
+                    app.read(cx).message.is_none(),
+                    "open menu must not dispatch a stale request"
+                )
+            });
+            cx.update(|window, _| {
+                assert!(
+                    !test_support::snapshots(window)
+                        .iter()
+                        .any(|e| e.visible() && e.role() == Some(Role::Menu)),
+                    "selection must close the cached menu"
+                )
+            });
+            cx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    app.writable = true;
+                    cx.notify();
+                })
+            });
+            frame(cx);
+            click(cx, "toolbar-more");
+            cx.simulate_mouse_move(point(px(2.), px(2.)), None, Modifiers::default());
+            cx.simulate_keystrokes("up");
+            frame(cx);
+            cx.simulate_keystrokes("enter");
+            frame(cx);
+            cx.update(|_, cx| {
+                assert_eq!(
+                    app.read(cx).message.as_deref(),
+                    Some("Status:test.status-external.overflow-23"),
+                    "reopened menu must use fresh requests"
+                )
+            });
+        }
+    }
+}

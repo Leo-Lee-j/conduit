@@ -3,7 +3,11 @@
 use super::*;
 
 impl ConduitApp {
-    pub(super) fn render_toolbar(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_toolbar(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         self.sync_plugin_context();
         let active = self
             .selected_session
@@ -135,6 +139,12 @@ impl ConduitApp {
             })
             .child(self.terminal_button(cx))
             .child(self.notification_bell(cx));
+        let statuses = self.render_status_contributions(window, cx);
+        #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
+        let statuses = chat::profiling::host_element(
+            statuses,
+            ["status_layout", "status_prepaint", "status_paint"],
+        );
         let toolbar = h_flex()
             .id("conversation-toolbar")
             .test_support()
@@ -148,7 +158,7 @@ impl ConduitApp {
             .bg(rgb(palette().canvas))
             .border_t_1()
             .border_color(rgb(palette().border))
-            .child(self.render_status_contributions(cx))
+            .child(statuses)
             .when(has_hints, |bar| bar.child(hints))
             .child(controls);
         toolbar.into_any_element()

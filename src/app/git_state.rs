@@ -9,6 +9,7 @@ use std::{
 
 pub(super) struct GitUi {
     pub(super) probe: Option<GitProbe>,
+    pub(super) auto_stage_after_refresh: bool,
     pub(super) snapshot: Option<git::Snapshot>,
     pub(super) error: Option<String>,
     pub(super) workspace: Option<PathBuf>,
@@ -32,6 +33,7 @@ impl Default for GitUi {
     fn default() -> Self {
         Self {
             probe: None,
+            auto_stage_after_refresh: false,
             snapshot: None,
             error: None,
             workspace: None,

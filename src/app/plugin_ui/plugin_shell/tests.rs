@@ -7,10 +7,19 @@ use std::{cell::RefCell, rc::Rc, time::Duration};
 
 #[path = "tests/breakdown.rs"]
 mod breakdown;
+#[path = "tests/cache.rs"]
+mod cache;
+#[path = "tests/chat_profile.rs"]
+mod chat_profile;
 #[path = "tests/diagnostics.rs"]
 mod diagnostics;
+#[path = "tests/host_profile.rs"]
+mod host_profile;
 #[path = "tests/interaction.rs"]
 mod interaction;
+#[cfg(feature = "allocation-probe")]
+#[path = "tests/native_memory.rs"]
+mod native_memory;
 #[path = "tests/performance.rs"]
 mod performance;
 #[path = "tests/stress.rs"]
@@ -71,7 +80,8 @@ fn fixture_with_frame_counter(
             app
         });
         *slot.borrow_mut() = Some(app.clone());
-        let shell = cx.new(|cx| gpui_shell::ShellRoot::new(app.into(), window, cx));
+        let shell =
+            cx.new(|cx| gpui_shell::ShellRoot::new(app.into(), window, cx).with_uncached_content());
         let content: gpui_kit::AnyView = match frames {
             Some(frames) => cx
                 .new(|_| diagnostics::FrameProbe {

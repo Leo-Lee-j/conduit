@@ -20,12 +20,14 @@ PATCHES = (PATCH, ROOT / "patches" / "base-fast-compat.patch",
            ROOT / "patches" / "shell-fast-compat.patch",
            ROOT / "patches" / "shell-targeted-commands.patch",
            ROOT / "patches" / "shell-owned-overlays.patch",
-           ROOT / "patches" / "shell-resource-diagnostics.patch")
+           ROOT / "patches" / "shell-resource-diagnostics.patch",
+           ROOT / "patches" / "shell-host-content-cache.patch",
+           ROOT / "patches" / "shell-view-container-layout.patch")
 DEST = ROOT / ".upstream"
 
 
-def git(*args, cwd=None):
-    return subprocess.check_output(["git", "-c", "core.autocrlf=false", *map(str, args)], cwd=cwd,
+def git(*args, cwd=None, input=None):
+    return subprocess.check_output(["git", "-c", "core.autocrlf=false", *map(str, args)], cwd=cwd, input=input,
                                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
 
 
@@ -119,8 +121,11 @@ def prepare(source=None, destination=DEST):
         crate_manifest.write_text(standalone_manifest(crate_manifest.read_text(encoding="utf-8"), workspace), encoding="utf-8", newline="\n")
     for patch in PATCHES:
         if patch.stat().st_size:
-            git("apply", "--check", patch, cwd=destination)
-            git("apply", patch, cwd=destination)
+            # Git may check out patch files as CRLF on Windows. Feed LF bytes
+            # without changing the tracked patches or their recorded identity.
+            data = patch.read_bytes().replace(b"\r\n", b"\n")
+            git("apply", "--check", "-", cwd=destination, input=data)
+            git("apply", "-", cwd=destination, input=data)
     return record(destination)
 
 

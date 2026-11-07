@@ -39,10 +39,14 @@ pub(in crate::app) struct Rows {
     entries: Vec<Entry>,
     expanded: HashSet<String>,
     pub rows: Vec<Row>,
+    pub revision: std::cell::Cell<u64>,
     #[cfg(test)]
     pub classifications: usize,
 }
 impl Rows {
+    pub fn invalidate(&self) {
+        self.revision.set(self.revision.get().wrapping_add(1));
+    }
     pub fn message(&self, row: usize) -> usize {
         self.rows
             .get(row)
@@ -69,6 +73,7 @@ impl Rows {
             previous = Some(std::mem::take(&mut self.rows));
             *self = Self {
                 session: id,
+                revision: std::cell::Cell::new(self.revision.get().wrapping_add(1)),
                 ..Default::default()
             };
         }
@@ -81,6 +86,9 @@ impl Rows {
             .map(|(_, key)| key.clone())
             .collect();
         let mut rebuild = self.entries.len() != session.messages.len() || self.expanded != expanded;
+        if rebuild {
+            self.invalidate();
+        }
         self.entries.truncate(session.messages.len());
         for (index, item) in session.messages.iter().enumerate() {
             let identity = item.identity();
@@ -91,6 +99,7 @@ impl Rows {
             {
                 continue;
             }
+            self.invalidate();
             #[cfg(test)]
             {
                 self.classifications += 1;
@@ -281,6 +290,8 @@ impl ConduitApp {
         }
     }
     pub(in crate::app) fn remeasure_message(&self, index: usize) {
+        // Async tool analysis and expansion can change layout without replacing a message.
+        self.chat_rows.invalidate();
         if let Some(row) = self.chat_rows.row(index)
             && row < self.scroll.item_count()
         {

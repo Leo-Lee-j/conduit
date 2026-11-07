@@ -28,7 +28,7 @@ def source_digest():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--phase", choices=["check", "test", "fast-check", "release-check", "build", "performance", "stress", "breakdown", "diagnostics"], default="test")
+    parser.add_argument("--phase", choices=["check", "test", "fast-check", "release-check", "build", "performance", "stress", "breakdown", "diagnostics", "chat-profile"], default="test")
     parser.add_argument("--samples", type=int, default=200, help="performance samples per metric (20..2000)")
     parser.add_argument("--warmup", type=int, default=20, help="performance warmup actions per metric (1..200)")
     parser.add_argument("--repeats", type=int, default=3, help="fresh processes per performance scenario (1..20)")
@@ -50,7 +50,7 @@ def main():
     profile = "release" if options.phase == "release-check" else options.profile
     os.environ["CONDUIT_DATA_DIR"] = str(REPO / "target" / f"shell-desktop-{options.phase}-{profile}-data")
     common = ["--locked", "--manifest-path", ROOT / "Cargo.toml", "-p", "conduit-shell-desktop", "--target-dir", options.target_dir.resolve(), "--jobs", "4"]
-    if profile == "release" and options.phase not in ("performance", "stress", "breakdown", "diagnostics"):
+    if profile == "release" and options.phase not in ("performance", "stress", "breakdown", "diagnostics", "chat-profile"):
         common.append("--release")
     if options.phase == "check":
         format_files = [REPO / name for name in [
@@ -61,12 +61,21 @@ def main():
             "src/app/plugin_ui/plugin_shell/tests/stress.rs",
             "src/app/plugin_ui/plugin_shell/tests/breakdown.rs",
             "src/app/plugin_ui/plugin_shell/tests/diagnostics.rs",
+            "src/app/plugin_ui/plugin_shell/tests/chat_profile.rs",
+            "src/app/plugin_ui/plugin_shell/tests/host_profile.rs",
+            "src/app/sidebar.rs",
+            "src/app/plugin_ui/plugin_shell/tests/cache.rs",
+            "src/app/plugin_ui/plugin_shell/tests/native_memory.rs", "src/allocation_probe.rs",
+            "src/app/chat.rs", "src/app/chat/profiling.rs",
             "src/app/plugin_ui/tests.rs", "src/app/plugin_ui/right/tests.rs",
             "src/app/plugin_ui/example.rs", "src/app/plugin_ui/example/tests.rs",
             "src/app/plugin_ui/status.rs", "src/app/plugin_ui/status/integration_tests.rs",
             "src/app/dock.rs", "src/app/files.rs", "src/app/shell.rs",
+            "src/app/shell/cache.rs", "src/app/shell/tests.rs", "src/app/chat/rows.rs",
+            "src/app/theme.rs", "src/performance.rs",
             "src/app/notifications.rs", "src/app/tool_details.rs", "src/app/toolbar.rs",
-            "src/app/settings/workspace.rs",
+            "src/app/settings/workspace.rs", "src/app/settings.rs",
+            "src/app/settings/navigation.rs", "src/app.rs",
             "tools/shell-prototype/desktop/build.rs", "tools/shell-prototype/desktop/args.rs",
             "tools/shell-prototype/src/lib.rs", "tools/shell-prototype/src/adapter.rs",
         ]]
@@ -85,7 +94,10 @@ def main():
     results = []
     measurement = None
     before = source_digest()
-    if options.phase == "diagnostics":
+    if options.phase == "chat-profile":
+        from desktop_chat_profile import measure
+        results, measurement = measure(common, options.samples, options.warmup, options.repeats, profile)
+    elif options.phase == "diagnostics":
         from desktop_diagnostics import measure
         results, measurement = measure(common, options.samples, options.warmup, options.repeats, profile)
     elif options.phase in ("performance", "stress", "breakdown"):
@@ -121,7 +133,7 @@ def main():
         measurement["valid_for_source_snapshot"] = all(result["exit"] == 0 for result in results)
     (OUT / f"desktop-{options.phase}-results.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     (OUT / f"desktop-{options.phase}-{profile}-results.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    if options.phase == "diagnostics":
+    if options.phase in ("diagnostics", "chat-profile"):
         (ROOT / measurement["artifact_directory"] / "run-results.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return 0 if results and all(result["exit"] == 0 for result in results) else 1
 

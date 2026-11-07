@@ -149,7 +149,7 @@ impl PerformanceMonitor {
     }
 
     pub fn begin_render(&mut self, messages: usize, active_runs: usize, sessions: usize) {
-        self.begin_message_frame();
+        // Cached transcripts keep their mounted rows across parent-only renders.
         self.message_count = messages;
         self.active_runs = active_runs;
         self.session_count = sessions;
@@ -268,6 +268,10 @@ mod tests {
         assert_eq!(monitor.render.average(), Some(Duration::from_millis(3)));
         assert_eq!(monitor.render.maximum, Duration::from_millis(4));
         assert_eq!(monitor.mounted_messages(), 1);
+        monitor.begin_render(1000, 2, 4);
+        assert_eq!(monitor.mounted_messages(), 1);
+        monitor.begin_message_frame();
+        assert_eq!(monitor.mounted_messages(), 0);
         assert_eq!(monitor.event_count, 120);
         monitor.sample();
         assert_eq!(monitor.render.average(), None);

@@ -50,20 +50,21 @@ pub(super) fn message_timestamp(timestamp: u64) -> String {
         .unwrap_or_default()
 }
 
-/// Elapsed minutes, hours, or days since creation, shown on each sidebar row.
-pub(super) fn session_age_label(created_at: u64) -> Option<String> {
-    if created_at == 0 {
+/// Elapsed time since the last activity, shown on each sidebar row as S/M/H/D.
+pub(super) fn session_age_label(activity_at: u64) -> Option<String> {
+    if activity_at == 0 {
         return None;
     }
-    let created = DateTime::from_timestamp(created_at as i64, 0)?;
-    let minutes = Local::now()
-        .signed_duration_since(created)
-        .num_minutes()
+    let activity = DateTime::from_timestamp(activity_at as i64, 0)?;
+    let seconds = Local::now()
+        .signed_duration_since(activity)
+        .num_seconds()
         .max(0);
-    Some(match minutes {
-        minutes if minutes < 60 => format!("{minutes} 分"),
-        minutes if minutes < 24 * 60 => format!("{} 时", minutes / 60),
-        minutes => format!("{} 日", minutes / (24 * 60)),
+    Some(match seconds {
+        seconds if seconds < 60 => format!("{seconds} S"),
+        seconds if seconds < 60 * 60 => format!("{} M", seconds / 60),
+        seconds if seconds < 24 * 60 * 60 => format!("{} H", seconds / (60 * 60)),
+        seconds => format!("{} D", seconds / (24 * 60 * 60)),
     })
 }
 

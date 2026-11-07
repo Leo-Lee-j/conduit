@@ -2,7 +2,7 @@
 # Keep dependencies in sync with the root manifest; verify-desktop.py checks this.
 [package]
 name = "conduit-shell-desktop"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 publish = false
 
@@ -44,3 +44,5 @@ default = []
 gpui-fast = ["gpui-kit/gpui-fast", "conduit/gpui-fast", "conduit-shell-prototype/gpui-fast"]
 ui-tests = ["gpui-kit/test-support", "conduit/ui-tests"]
 plugin-example = []
+# Opt-in test allocator; never installed in a production binary.
+allocation-probe = ["ui-tests"]

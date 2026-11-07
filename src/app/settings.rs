@@ -439,6 +439,7 @@ impl ConduitApp {
         if !self.open_tabs.contains(&files::DocumentTab::Settings) {
             self.open_tabs.push(files::DocumentTab::Settings);
         }
+        self.settings_ui.focus_before_open = window.focused(cx).map(|focus| focus.downgrade());
         self.settings_ui.open = true;
         self.double_shift.cancel();
         self.settings_ui
@@ -454,6 +455,7 @@ impl ConduitApp {
     }
 
     pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let return_focus = self.settings_ui.focus_before_open.take();
         self.settings_ui.open = false;
         self.open_tabs
             .retain(|tab| *tab != files::DocumentTab::Settings);
@@ -466,6 +468,11 @@ impl ConduitApp {
             self.select_document(active, window, cx);
         } else {
             self.input.read(cx).focus_handle(cx).focus(window, cx);
+        }
+        // Selecting the document focuses its primary input; returning from settings
+        // must restore the actual previous control, including a retained plugin.
+        if let Some(focus) = return_focus.and_then(|focus| focus.upgrade()) {
+            focus.focus(window, cx);
         }
         cx.notify();
     }

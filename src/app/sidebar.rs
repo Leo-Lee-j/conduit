@@ -88,6 +88,8 @@ impl SidebarView {
         cx: &mut Context<Self>,
     ) -> Self {
         let subscription = cx.observe(&app.upgrade().expect("app is alive"), |view, app, cx| {
+            #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
+            let _span = chat::profiling::host_span("sidebar_observe");
             let (workspaces, changed, revision, pending_push, pending_tasks, refresh) =
                 app.update(cx, |app, cx| {
                     app.sync_plugin_context();

@@ -125,10 +125,17 @@ pub(super) struct Inputs {
     sidebar_collapsed: bool,
     provider: Provider,
     appearance: (u32, u32, u32),
-    minute: u64,
+    age_interval: u64,
+    age_tick: u64,
 }
 impl Inputs {
     pub(super) fn new(app: &ConduitApp) -> Self {
+        let now = unix_now();
+        let age_interval = if app.sidebar.has_recent_activity(now) {
+            1
+        } else {
+            60
+        };
         Self {
             keyboard_row: app.sidebar.keyboard_row.clone(),
             workspaces: app
@@ -156,7 +163,8 @@ impl Inputs {
             sidebar_collapsed: app.plugins.collapsed(),
             provider: app.new_session_provider,
             appearance: (palette().canvas, palette().sidebar_bg, palette().text),
-            minute: unix_now() / 60,
+            age_interval,
+            age_tick: now / age_interval,
         }
     }
     fn same_rows(&self, other: &Self) -> bool {
@@ -185,6 +193,7 @@ pub(in crate::app) struct SidebarState {
     groups: HashMap<PathBuf, WorkspaceRows>,
     indices: HashMap<PathBuf, usize>,
     inputs: Option<Inputs>,
+    latest_activity: u64,
     origins: Vec<f32>,
     #[cfg(test)]
     pub(super) rendered_rows: std::cell::Cell<usize>,
@@ -208,6 +217,7 @@ impl Default for SidebarState {
             groups: HashMap::new(),
             indices: HashMap::new(),
             inputs: None,
+            latest_activity: 0,
             origins: Vec::new(),
             #[cfg(test)]
             rendered_rows: std::cell::Cell::new(0),
@@ -219,6 +229,21 @@ impl Default for SidebarState {
     }
 }
 impl SidebarState {
+    fn has_recent_activity(&self, now: u64) -> bool {
+        self.latest_activity != 0 && now.saturating_sub(self.latest_activity) < 60
+    }
+    pub(in crate::app) fn age_refresh_interval(&self) -> u64 {
+        if self.has_recent_activity(unix_now())
+            || self
+                .inputs
+                .as_ref()
+                .is_some_and(|inputs| inputs.age_interval == 1)
+        {
+            1
+        } else {
+            60
+        }
+    }
     pub(in crate::app) fn invalidate_workspace(&mut self, path: &Path) {
         self.dirty_workspaces.insert(path.to_owned());
     }
@@ -377,6 +402,23 @@ impl SidebarState {
             {
                 self.rebuild_count += 1;
             }
+        }
+        if changed {
+            self.latest_activity = self
+                .rows
+                .iter()
+                .filter_map(|row| {
+                    let Row::Session { path, id } = row else {
+                        return None;
+                    };
+                    self.groups
+                        .get(path)?
+                        .summaries
+                        .get(id)
+                        .map(|summary| summary.activity)
+                })
+                .max()
+                .unwrap_or(0);
         }
         self.inputs = Some(inputs);
         changed

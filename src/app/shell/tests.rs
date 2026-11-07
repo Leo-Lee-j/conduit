@@ -375,3 +375,130 @@ fn chat_wheel_during_stream_preserves_history_and_resumes_follow_at_bottom(
         assert_eq!(app.session(1).unwrap().messages.len(), 83);
     });
 }
+
+#[cfg(conduit_shell_desktop)]
+fn measured(
+    cx: &mut VisualTestContext,
+    action: impl FnOnce(&mut VisualTestContext),
+) -> serde_json::Value {
+    crate::app::chat::profiling::begin();
+    action(cx);
+    draw(cx);
+    crate::app::chat::profiling::finish()
+}
+
+#[cfg(conduit_shell_desktop)]
+#[gpui_kit::test]
+fn chat_cache_reuses_visible_rows_while_typing_and_notifying(cx: &mut TestAppContext) {
+    let (app, cx) = fixture(cx);
+    cx.update(|window, cx| {
+        use gpui_kit::Focusable;
+        app.update(cx, |app, cx| {
+            app.writable = true;
+            app.input.read(cx).focus_handle(cx).focus(window, cx);
+            cx.notify();
+        });
+    });
+    settle(cx);
+    // The first character changes the empty composer layout; warm that geometry.
+    cx.simulate_input("warmup");
+    settle(cx);
+    cx.update(|_, cx| assert_eq!(app.read(cx).input.read(cx).value().as_str(), "warmup"));
+    cx.simulate_keystrokes("ctrl-a");
+    let before = cx.debug_bounds("assistant-message-79").unwrap();
+    let result = measured(cx, |cx| cx.simulate_input("G5 中文😀 input A"));
+    assert_eq!(result["row_build"]["count"], 0, "{result}");
+    assert_eq!(cx.debug_bounds("assistant-message-79").unwrap(), before);
+    cx.update(|_, cx| {
+        assert_eq!(
+            app.read(cx).input.read(cx).value().as_str(),
+            "G5 中文😀 input A"
+        )
+    });
+    let result = measured(cx, |cx| {
+        cx.update(|_, cx| app.update(cx, |_, cx| cx.notify()));
+    });
+    assert_eq!(result["row_build"]["count"], 0, "{result}");
+    assert_eq!(cx.debug_bounds("assistant-message-79").unwrap(), before);
+    assert!(cx.update(|window, _| window.painted_quads().len()) > 0);
+}
+
+#[cfg(conduit_shell_desktop)]
+#[gpui_kit::test]
+fn chat_cache_reflows_replaced_message_typography_and_width(cx: &mut TestAppContext) {
+    let (app, cx) = fixture(cx);
+    let before = cx.debug_bounds("assistant-message-79").unwrap();
+    let result = measured(cx, |cx| {
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                // Same row key, kind and count: content identity must invalidate.
+                app.session_mut(1).unwrap().messages[79].text = "新内容，正文。".into();
+                cx.notify();
+            })
+        });
+    });
+    assert!(
+        result["row_build"]["count"].as_u64().unwrap() > 0,
+        "{result}"
+    );
+    let replaced = cx.debug_bounds("assistant-message-79").unwrap();
+    assert!(replaced.size.height < before.size.height);
+    let result = measured(cx, |cx| {
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.store.ui.chat_font_size = 22.;
+                cx.notify();
+            })
+        });
+    });
+    assert!(
+        result["markdown_request_layout"]["count"].as_u64().unwrap() > 0,
+        "{result}"
+    );
+    assert!(cx.debug_bounds("assistant-message-79").unwrap().size.height > replaced.size.height);
+    let before = cx.debug_bounds("assistant-message-79").unwrap();
+    let result = measured(cx, |cx| cx.simulate_resize(size(px(1000.), px(800.))));
+    assert!(
+        result["row_build"]["count"].as_u64().unwrap() > 0,
+        "{result}"
+    );
+    assert!(cx.debug_bounds("assistant-message-79").unwrap().size.width < before.size.width);
+}
+
+#[cfg(conduit_shell_desktop)]
+#[gpui_kit::test]
+fn chat_cache_refreshes_actions_and_async_remeasurement(cx: &mut TestAppContext) {
+    let (app, cx) = fixture(cx);
+    for change in 0..4 {
+        let result = measured(cx, |cx| {
+            cx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    match change {
+                        0 => app.copied_action = Some("reply-copy-1-scroll-79".into()),
+                        1 => {
+                            app.message_focus =
+                                Some((1, "scroll-79".into(), std::time::Instant::now()))
+                        }
+                        2 => {
+                            let provider = app.session(1).unwrap().provider;
+                            app.catalogs.entry(provider).or_default().current =
+                                Some("changed-model".into());
+                        }
+                        // Tool analysis can finish without replacing any message.
+                        _ => app.remeasure_message(79),
+                    }
+                    cx.notify();
+                })
+            });
+        });
+        assert!(
+            result["row_build"]["count"].as_u64().unwrap() > 0,
+            "change {change}: {result}"
+        );
+        settle(cx);
+        let result = measured(cx, |cx| {
+            cx.update(|_, cx| app.update(cx, |_, cx| cx.notify()))
+        });
+        assert_eq!(result["row_build"]["count"], 0, "change {change}: {result}");
+    }
+}

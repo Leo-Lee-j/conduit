@@ -5,25 +5,6 @@ use super::*;
 pub(super) use super::git_state::{GitChangeGroup, GitUi};
 use gpui_kit::component::checkbox::Checkbox;
 
-#[derive(Clone, Copy)]
-enum CommitRecovery {
-    Session(usize, u64),
-    Branches,
-    Stage,
-    Refresh,
-}
-
-impl CommitRecovery {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Session(..) => "查看运行会话",
-            Self::Branches => "打开分支视图",
-            Self::Stage => "暂存勾选文件",
-            Self::Refresh => "刷新状态",
-        }
-    }
-}
-
 impl ConduitApp {
     pub(super) fn selected_workspace_path(&self) -> Option<PathBuf> {
         self.selected_workspace
@@ -124,6 +105,53 @@ impl ConduitApp {
                 .is_some_and(|path| !self.worktree_has_runs(&path))
     }
 
+    fn auto_stage_tracked_files(&mut self, cx: &mut Context<Self>) {
+        if !self.can_stage_files()
+            || self.git.repository.as_ref().is_some_and(|repository| {
+                repository.integration.is_some() || !repository.conflicts.is_empty()
+            })
+        {
+            return;
+        }
+        let Some(path) = self.selected_workspace_path() else {
+            return;
+        };
+        let Some(snapshot) = &self.git.snapshot else {
+            return;
+        };
+        // AA/DD are conflicts too, even though neither status column contains U.
+        if snapshot.files.iter().any(|file| {
+            file.index == 'U'
+                || file.worktree == 'U'
+                || matches!((file.index, file.worktree), ('A', 'A') | ('D', 'D'))
+        }) {
+            return;
+        }
+        let files: Vec<_> = snapshot
+            .files
+            .iter()
+            .filter(|file| !file.untracked() && file.unstaged())
+            .map(|file| file.path.clone())
+            .collect();
+        if files.is_empty() {
+            return;
+        }
+        self.git.operation = Some(GitOperation {
+            worktree: git::worktree_root(&path),
+            probe: git::OperationProbe::start(
+                path.clone(),
+                git::Operation::StageTracked {
+                    files,
+                    target: snapshot.target.clone(),
+                },
+            ),
+            draft: String::new(),
+            commit_push: None,
+            automatic_stage: true,
+        });
+        self.git_feedback(path, "正在自动暂存已跟踪文件的修改…", false, cx);
+    }
+
     pub(super) fn stage_git_files(&mut self, selected: Vec<String>, cx: &mut Context<Self>) {
         if !self.can_stage_files() {
             return;
@@ -159,6 +187,8 @@ impl ConduitApp {
             worktree: git::worktree_root(&path),
             probe: git::OperationProbe::start(path.clone(), operation),
             draft: String::new(),
+            commit_push: None,
+            automatic_stage: false,
         });
         self.git_feedback(path, "正在暂存所选文件…", false, cx);
     }
@@ -196,6 +226,8 @@ impl ConduitApp {
             worktree: git::worktree_root(&path),
             probe: git::OperationProbe::start(path.clone(), operation),
             draft: String::new(),
+            commit_push: None,
+            automatic_stage: false,
         });
         self.git_feedback(path, "正在将所选文件移出暂存区…", false, cx);
     }
@@ -241,6 +273,8 @@ impl ConduitApp {
                                 target: target.clone(),
                             }),
                             draft: String::new(),
+                            commit_push: None,
+                            automatic_stage: false,
                         });
                         this.git_feedback(workspace.clone(), "正在回滚文件修改…", false, cx);
                         true
@@ -454,6 +488,8 @@ impl ConduitApp {
             worktree: git::worktree_root(&path),
             probe: git::OperationProbe::start(path.clone(), operation),
             draft: message,
+            commit_push: Some(push),
+            automatic_stage: false,
         });
         self.git_feedback(
             path,
@@ -515,6 +551,8 @@ impl ConduitApp {
             worktree: git::worktree_root(&path),
             probe: git::OperationProbe::start(path.clone(), git::Operation::RetryTag(retry)),
             draft: String::new(),
+            commit_push: None,
+            automatic_stage: false,
         });
         self.git_feedback(path, "正在重试推送标签…", false, cx);
     }
@@ -737,14 +775,28 @@ impl ConduitApp {
                         Some(error) => format!("{}：{}", result.message, error),
                         None => result.message,
                     };
-                    self.git_result_feedback(path.clone(), text, result.error.is_some(), cx);
+                    if operation.automatic_stage {
+                        self.git_feedback(path.clone(), text, result.error.is_some(), cx);
+                    } else {
+                        self.git_result_feedback(path.clone(), text, result.error.is_some(), cx);
+                    }
                 }
-                Err(error) => self.git_result_feedback(path.clone(), error, true, cx),
+                Err(error) => {
+                    if operation.automatic_stage {
+                        self.git_feedback(path.clone(), error, true, cx);
+                    } else {
+                        self.git_result_feedback(path.clone(), error, true, cx);
+                    }
+                }
             }
             if self.selected_workspace_path().as_ref() == Some(&path) {
                 self.git.branch_probe = None;
                 self.refresh_branches();
                 self.refresh_git(cx);
+                // Read back the operation result without immediately undoing an
+                // explicit unstage or looping on an add failure/dirty submodule.
+                // The next regular or manual refresh can auto-stage again.
+                self.git.auto_stage_after_refresh = false;
             }
         }
         let mut generation_result = None;
@@ -902,6 +954,12 @@ impl ConduitApp {
             .as_ref()
             .is_some_and(|generation| generation.path == path);
         let busy = self.git.operation.is_some() || self.git.generation.is_some();
+        let commit_push = self
+            .git
+            .operation
+            .as_ref()
+            .filter(|operation| operation.probe.path == path)
+            .and_then(|operation| operation.commit_push);
         let checked_count = self.git.snapshot.as_ref().map_or(0, |snapshot| {
             self.checked_staged_files(&path, snapshot).len()
         });
@@ -938,7 +996,7 @@ impl ConduitApp {
             Some("当前为分离 HEAD；请先在分支视图切换或创建分支")
         } else if checked_count == 0 {
             Some(if staged_count == 0 {
-                "请勾选文件并暂存修改，再填写提交说明"
+                "请勾选文件并填写提交说明；未跟踪文件需先手动暂存"
             } else {
                 "请勾选需要提交的已暂存文件"
             })
@@ -960,62 +1018,6 @@ impl ConduitApp {
         let generate_tip = blocked.unwrap_or("使用设置中的引擎、Provider 和模型生成提交说明");
         let generate_app = view.clone();
         let commit_app = view.clone();
-        let review_app = view.clone();
-        let review_files: Vec<_> = self
-            .git
-            .snapshot
-            .as_ref()
-            .map(|snapshot| {
-                snapshot
-                    .files
-                    .iter()
-                    .filter(|file| {
-                        file.staged()
-                            && self
-                                .git
-                                .selected_files
-                                .get(&path)
-                                .is_some_and(|selected| selected.contains(&file.path))
-                    })
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
-        let recovery_app = view.clone();
-        let running_session =
-            self.store
-                .workspaces
-                .iter()
-                .enumerate()
-                .find_map(|(index, workspace)| {
-                    workspace
-                        .sessions
-                        .iter()
-                        .find(|session| {
-                            self.session_control
-                                .runs
-                                .get(&session.id)
-                                .is_some_and(|run| {
-                                    git::repository_scope(&run.worktree)
-                                        == git::repository_scope(&path)
-                                })
-                        })
-                        .map(|session| (index, session.id))
-                });
-        let recovery_action = if let Some((workspace, session)) = running_session {
-            CommitRecovery::Session(workspace, session)
-        } else if self
-            .git
-            .repository
-            .as_ref()
-            .is_some_and(|repo| repo.integration.is_some() || repo.detached)
-        {
-            CommitRecovery::Branches
-        } else if staged_count == 0 {
-            CommitRecovery::Stage
-        } else {
-            CommitRecovery::Refresh
-        };
         let alternate_commit_app = view.clone();
         let cancel_app = view.clone();
         let tag_input = draft.tag.clone();
@@ -1267,7 +1269,12 @@ impl ConduitApp {
                         ),
                     ),
             );
-        if self.git.feedback.contains_key(&path) || self.git.pending_tag_retry.contains_key(&path) {
+        let feedback = self
+            .git
+            .feedback
+            .get(&path)
+            .filter(|feedback| feedback.error);
+        if feedback.is_some() || self.git.pending_tag_retry.contains_key(&path) {
             let mut row = h_flex()
                 .w_full()
                 .min_w_0()
@@ -1275,7 +1282,7 @@ impl ConduitApp {
                 .flex_shrink_0()
                 .gap_1()
                 .items_center();
-            if let Some(feedback) = self.git.feedback.get(&path) {
+            if let Some(feedback) = feedback {
                 row = row.child(
                     div()
                         .id("git-action-feedback")
@@ -1286,11 +1293,7 @@ impl ConduitApp {
                         .overflow_y_scroll()
                         .text_size(px(11.))
                         .line_height(relative(1.4))
-                        .text_color(rgb(if feedback.error {
-                            palette().error_text
-                        } else {
-                            palette().muted
-                        }))
+                        .text_color(rgb(palette().error_text))
                         .child(feedback.text.clone()),
                 );
             }
@@ -1326,35 +1329,6 @@ impl ConduitApp {
             editor = editor.child(row);
         }
         editor
-            .when_some(commit_blocked, |editor, reason| editor.child(
-                h_flex().h(px(36.)).flex_shrink_0().gap_1().items_center()
-                    .child(div().id("git-commit-blocked").debug_selector(|| "git-commit-blocked".into()).flex_1().min_w_0().h_full().overflow_y_scroll().text_xs()
-                        .text_color(rgb(palette().muted)).child(reason))
-                    .when(blocked.is_some() && !busy && !self.closing && self.writable && self.git.probe.is_none(), |column| column.child(
-                        Button::new("git-commit-recover").label(recovery_action.label()).small().ghost().h(px(24.)).flex_shrink_0()
-                            .on_click(move |_, window, cx| recovery_app.update(cx, |app, cx| {
-                                match recovery_action {
-                                    CommitRecovery::Session(workspace, session) => app.switch(workspace, Some(session), window, cx),
-                                    CommitRecovery::Branches => app.show_branch_navigation(window, cx),
-                                    CommitRecovery::Stage => if let Some(path) = app.selected_workspace_path() {
-                                        let selected = app.git.selected_files.get(&path).map(|set| set.iter().cloned().collect()).unwrap_or_default();
-                                        app.stage_git_files(selected, cx);
-                                    },
-                                    CommitRecovery::Refresh => app.refresh_git(cx),
-                                }
-                            }))))))
-            .child(Button::new("git-review-staged").label(format!("核对待提交文件（{checked_count}）")).small().ghost().h(px(28.)).flex_shrink_0()
-                .disabled(review_files.is_empty()).dropdown_menu(move |mut menu, _, _| {
-                    menu = menu.scrollable(true);
-                    for file in &review_files {
-                        let app = review_app.clone();
-                        let file = file.clone();
-                        menu = menu.item(PopupMenuItem::new(file.path.clone()).on_click(move |_, window, cx| {
-                            app.update(cx, |app, cx| app.open_staged_diff_document(file.clone(), window, cx));
-                        }));
-                    }
-                    menu
-                }))
             .child(
                 h_flex()
                     .debug_selector(|| "git-commit-actions".into())
@@ -1372,12 +1346,10 @@ impl ConduitApp {
                             .small()
                             .h(px(30.))
                             .disabled(!can_commit)
-                            .loading(
-                                self.git
-                                    .operation
-                                    .as_ref()
-                                    .is_some_and(|operation| operation.probe.path == path),
-                            )
+                            .loading(commit_push == Some(false))
+                            .when(commit_push == Some(false), |button| {
+                                button.icon(Spinner::new())
+                            })
                             .when(can_commit, |button| button.cursor_pointer())
                             .on_click(move |_, _, cx| {
                                 commit_app.update(cx, |this, cx| this.start_commit(false, cx))
@@ -1390,6 +1362,10 @@ impl ConduitApp {
                             .small()
                             .h(px(30.))
                             .disabled(!can_commit)
+                            .loading(commit_push == Some(true))
+                            .when(commit_push == Some(true), |button| {
+                                button.icon(Spinner::new())
+                            })
                             .when(can_commit, |button| button.cursor_pointer())
                             .on_click(move |_, _, cx| {
                                 alternate_commit_app
@@ -1478,7 +1454,7 @@ impl ConduitApp {
         self.open_diff_document(workspace, file, window, cx);
     }
 
-    /// Start a background read-only Git snapshot for the selected workspace.
+    /// Read Git status in the background, then auto-stage tracked changes when idle.
     pub(super) fn refresh_git(&mut self, cx: &mut Context<Self>) {
         if self.git.last_branch_check.elapsed() >= Duration::from_secs(1) {
             self.refresh_branches();
@@ -1493,6 +1469,7 @@ impl ConduitApp {
         self.git.error = None;
         let cached_tags = self.git.local_tags.get(&path).cloned();
         self.git.probe = Some(GitProbe::start(path, cached_tags));
+        self.git.auto_stage_after_refresh = true;
         cx.notify();
     }
 
@@ -1515,6 +1492,7 @@ impl ConduitApp {
             return;
         };
         self.git.probe = None;
+        let auto_stage = std::mem::take(&mut self.git.auto_stage_after_refresh);
         if self.selected_workspace_path().as_deref() != Some(path.as_path()) {
             return;
         }
@@ -1535,6 +1513,9 @@ impl ConduitApp {
                     .insert(path.clone(), snapshot.tags.clone());
                 self.git.snapshot = Some(snapshot);
                 self.git.error = None;
+                if auto_stage {
+                    self.auto_stage_tracked_files(cx);
+                }
             }
             Err(error) => {
                 self.git.snapshot = None;
@@ -1750,7 +1731,7 @@ impl ConduitApp {
                                 .checked(group_checked)
                                 .accessibility_label(format!("选择整组 {}", kind.label()))
                                 .tooltip(format!(
-                                    "已选择 {selected_count} / {} 个文件；暂存、移出暂存区和提交仅操作勾选文件",
+                                    "已选择 {selected_count} / {} 个文件；已跟踪修改自动暂存，未跟踪文件需手动暂存；仅提交勾选文件",
                                     files.len()
                                 ))
                                 .on_click(move |checked, _, cx| {

@@ -1,4 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#[cfg(all(test, feature = "allocation-probe"))]
+mod allocation_probe;
 mod app;
 mod approval;
 mod ccs;
@@ -139,7 +141,9 @@ fn main() {
                 #[cfg(conduit_shell_desktop)]
                 {
                     *app_output.borrow_mut() = Some(app.clone());
-                    cx.new(|cx| gpui_shell::ShellRoot::new(app.into(), window, cx))
+                    cx.new(|cx| {
+                        gpui_shell::ShellRoot::new(app.into(), window, cx).with_uncached_content()
+                    })
                 }
                 #[cfg(not(conduit_shell_desktop))]
                 app

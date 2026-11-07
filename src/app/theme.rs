@@ -6,7 +6,7 @@ use std::rc::Rc;
 /// Application colors that are not owned by the component theme. The dark
 /// values preserve the original palette; the light variant is derived from the
 /// same roles so both modes stay consistent.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(super) struct Palette {
     pub(super) canvas: u32,
     pub(super) sidebar_bg: u32,

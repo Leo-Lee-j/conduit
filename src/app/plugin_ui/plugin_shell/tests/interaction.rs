@@ -172,6 +172,9 @@ fn desktop_settings_and_narrow_dock_preserve_plugin_input(cx: &mut TestAppContex
     cx.update(|window, cx| app.update(cx, |app, cx| app.open_settings(window, cx)));
     draw(cx);
     assert!(cx.element_bounds("settings-workspace").is_some());
+    // Reopening an already selected settings tab must not replace its return target.
+    cx.update(|window, cx| app.update(cx, |app, cx| app.open_settings(window, cx)));
+    draw(cx);
     cx.simulate_keystrokes("escape");
     draw(cx);
     assert!(cx.element_bounds("settings-workspace").is_none());
@@ -203,4 +206,34 @@ fn desktop_settings_and_narrow_dock_preserve_plugin_input(cx: &mut TestAppContex
     assert!(toolbar.right() <= px(850.));
     open_summary(&app, cx);
     assert!(text(&app, true, cx).contains("Input: 窄窗草稿"));
+}
+
+#[gpui_kit::test]
+fn desktop_settings_does_not_restore_a_stopped_plugin_input(cx: &mut TestAppContext) {
+    let (app, cx) = fixture(cx);
+    open_summary(&app, cx);
+    click(cx, "plugin-summary-input");
+    let old_focus = focused(cx).downgrade();
+    let weak_runtime = runtime(&app, cx);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_settings(window, cx);
+            app.disable_shell(window, cx);
+        })
+    });
+    draw(cx);
+    draw(cx);
+    assert!(weak_runtime.upgrade().is_none());
+    assert!(old_focus.upgrade().is_none());
+    cx.update(|window, cx| app.update(cx, |app, cx| app.close_settings(window, cx)));
+    draw(cx);
+    cx.update(|window, cx| {
+        assert!(
+            app.read(cx)
+                .input
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        )
+    });
 }

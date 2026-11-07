@@ -1,0 +1,54 @@
+--- a/crates/shell/src/root.rs
++++ b/crates/shell/src/root.rs
+@@ -137,6 +137,7 @@
+ /// of what goes *inside* an overlay belongs to the script.
+ pub struct ShellRoot {
+     content: AnyView,
++    cache_content: bool,
+     ownership: OverlayState,
+     application: Option<MountedApplication>,
+     /// Retains a script application's policy and cancels its work when this
+@@ -229,6 +230,7 @@
+ 
+         Self {
+             content,
++            cache_content: true,
+             ownership: OverlayState::default(),
+             application: None,
+             application_policy: None,
+@@ -242,6 +244,17 @@
+             tooltip_overlay: cx.new(|_| TooltipOverlay::new().render_with(render_tooltip)),
+             fps_hud: None,
+         }
++    }
++
++    /// Let a native host manage caching at its own view boundaries.
++    ///
++    /// GPUI refreshes descendants when rebuilding a cached ancestor. A host
++    /// with frequently changing controls and independently cached subviews can
++    /// opt out of this outer cache so those subviews remain reusable. Script
++    /// roots retain the default whole-content cache.
++    pub fn with_uncached_content(mut self) -> Self {
++        self.cache_content = false;
++        self
+     }
+ 
+     pub(crate) fn with_application(
+@@ -923,11 +936,14 @@
+             .text_color(colors.foreground)
+             // Painted back to front; see the stacking order on `ShellRoot`.
+             .child(TextSelectionLayer)
+-            .child(
++            .child(if self.cache_content {
+                 self.content
+                     .clone()
+-                    .cached(StyleRefinement::default().size_full()),
+-            )
++                    .cached(StyleRefinement::default().size_full())
++                    .into_any_element()
++            } else {
++                self.content.clone().into_any_element()
++            })
+             .children(self.sheet_layer(&colors, &spacing, cx))
+             .children(self.dialog_layer(&colors, &radius, &spacing, cx))
+             .child(self.toast_layer(&colors, &radius, &spacing, cx))
