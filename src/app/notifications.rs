@@ -907,7 +907,12 @@ impl ConduitApp {
             .title(record.title)
             .delivery(NotificationDelivery::InApp)
             .on_click(move |_, window, cx| {
-                let _ = view.update(cx, |app, cx| app.open_notification(id, window, cx));
+                // The toast invokes this while its Notification entity is updating.
+                // Marking it read removes the toast, so wait until that update ends.
+                let view = view.clone();
+                window.defer(cx, move |window, cx| {
+                    let _ = view.update(cx, |app, cx| app.open_notification(id, window, cx));
+                });
             })
             .on_close(move |_, cx| {
                 let _ = close_view.update(cx, |app, _| {
@@ -924,8 +929,11 @@ impl ConduitApp {
                         .label("查看")
                         .on_click(move |_, window, cx| {
                             cx.stop_propagation();
-                            let _ = action_view
-                                .update(cx, |app, cx| app.open_notification(id, window, cx));
+                            let action_view = action_view.clone();
+                            window.defer(cx, move |window, cx| {
+                                let _ = action_view
+                                    .update(cx, |app, cx| app.open_notification(id, window, cx));
+                            });
                         })
                 })
                 .autohide(true)

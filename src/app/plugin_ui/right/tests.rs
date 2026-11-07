@@ -15,11 +15,13 @@ use conduit::plugins::{
     ids::{Owner, PluginId, ViewId},
     registry::{HostCatalog, Registry, RendererSpec},
 };
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::{
     Entity, Focusable as _, InteractiveElement, IntoElement, Modifiers, MouseButton, ParentElement,
     Role, ScrollDelta, ScrollWheelEvent, SharedString, TestAppContext, TestSupportExt,
     VisualTestContext, assets::IconName, div, point, px, size,
 };
+use std::time::Duration;
 
 fn tool_store() -> Store {
     let mut store = store();
@@ -470,6 +472,13 @@ fn background_tool_and_notification_events_preserve_active_view_and_focus(cx: &m
     });
     draw(cx);
     assert!(cx.element_bounds("notification-panel").is_some());
+    // Toasts occlude the tool panel. Let their lifetime and exit animation finish
+    // before testing the copy button underneath them with a real mouse click.
+    for _ in 0..9 {
+        cx.executor().advance_clock(Duration::from_secs(1));
+        draw(cx);
+    }
+    cx.update(|window, cx| assert!(window.notifications(cx).is_empty()));
     click_labeled(cx, Role::Tab, "工具详情");
     assert!(copied(cx).contains("session 1 output"));
 }

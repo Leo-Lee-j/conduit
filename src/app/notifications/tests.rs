@@ -235,6 +235,60 @@ fn notification_bell_and_panel_work_without_a_session_in_both_layouts(cx: &mut T
 }
 
 #[gpui_kit::test]
+fn toast_body_click_marks_read_and_opens_bound_session(cx: &mut TestAppContext) {
+    let (app, cx) = fixture(cx, true);
+    // Slide animations use wall time; the test executor only advances toast timers.
+    // Render at the final position so the body click is independent of CPU speed.
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    cx.simulate_resize(size(px(1280.), px(900.)));
+    let id = cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.switch(0, Some(1), window, cx);
+            let target = app.session_notice_target(2).unwrap();
+            let id = app.notify_user(
+                Notice::new(
+                    Source::Session,
+                    Level::Success,
+                    "Session complete",
+                    "Open session",
+                )
+                .target(target),
+                cx,
+            );
+            app.poll_notifications(window, cx);
+            assert_eq!(window.notifications(cx).len(), 1);
+            id
+        })
+    });
+    draw(cx);
+    // Exercise the toast's own listener, which updates its Notification entity.
+    let at = cx.update(|window, _| {
+        let toasts: Vec<_> = test_support::snapshots(window)
+            .into_iter()
+            .filter(|element| element.visible() && element.role() == Some(gpui_kit::Role::Alert))
+            .collect();
+        assert_eq!(toasts.len(), 1);
+        let bounds = toasts[0].bounds();
+        // Stay in the body, away from the close and action buttons.
+        point(bounds.left() + px(80.), bounds.top() + px(25.))
+    });
+    cx.simulate_mouse_move(at, None, Modifiers::default());
+    cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert_eq!(app.selected_session, Some(2));
+        assert_eq!(app.selected_workspace, Some(1));
+        assert!(app.notifications.center.get(id).unwrap().read_at.is_some());
+        assert!(!app.notifications.visible.contains_key(&id));
+    });
+    cx.executor().advance_clock(Duration::from_secs(1));
+    draw(cx);
+    cx.update(|window, cx| assert!(window.notifications(cx).is_empty()));
+}
+
+#[gpui_kit::test]
 fn toast_expiry_preserves_history_unread_and_input_focus(cx: &mut TestAppContext) {
     let (app, cx) = fixture(cx, true);
     cx.simulate_resize(size(px(1280.), px(900.)));

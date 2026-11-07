@@ -3374,6 +3374,9 @@ mod git_navigation_tests {
             let app = cx.new(|cx| {
                 let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
                 app.writable = true;
+                // Opening settings must not launch the machine's installed CLI or
+                // CCS discovery while this fixture exercises Git navigation.
+                app.connection_settings.syncing = true;
                 app.startup = None;
                 app.selected_workspace = Some(0);
                 app.selected_session = Some(1);
@@ -3803,11 +3806,16 @@ mod git_navigation_tests {
         click(cx, "title-settings");
         assert!(app.read_with(cx, |app, _| app.settings_ui.open));
         cx.update(|window, cx| app.update(cx, |app, cx| app.close_settings(window, cx)));
-        app.update(cx, |a, _| a.writable = false);
+        app.update(cx, |a, _| {
+            a.writable = false;
+            assert!(a.opencode_model_probes.is_empty());
+        });
         cx.update(|window, _| window.remove_window());
         slot.borrow_mut().take();
+        let weak_app = app.downgrade();
         drop(app);
         cx.run_until_parked();
+        assert!(weak_app.upgrade().is_none(), "fixture app must be released");
     }
 
     #[gpui_kit::test]
@@ -4011,6 +4019,10 @@ mod file_search_tests {
                     .contains("请先选择工作区")
             );
         });
+        cx.update(|window, _| window.remove_window());
+        slot.borrow_mut().take();
+        drop(app);
+        cx.run_until_parked();
         let resolved = root.canonicalize().unwrap();
         assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
         std::fs::remove_dir_all(resolved).unwrap();
