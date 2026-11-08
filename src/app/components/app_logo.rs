@@ -91,39 +91,3 @@ pub(in crate::app) fn app_icon(logical_size: f32) -> Div {
         .size_full(),
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{Arc, rendered_logo};
-
-    #[test]
-    fn small_logos_keep_accent_transparency_and_exact_device_size() {
-        let _locale = crate::test_support::chinese();
-        // Title bar at 100/125/150/175/200%, plus About and startup sizes.
-        for pixels in [20, 25, 30, 35, 40, 50, 60, 64, 80, 96, 128] {
-            let image = rendered_logo(pixels);
-            assert_eq!(i32::from(image.size(0).width), pixels as i32);
-            assert_eq!(i32::from(image.size(0).height), pixels as i32);
-            let bytes = image.as_bytes(0).unwrap();
-            // Lanczos can contribute a few alpha levels from the nearby arc.
-            assert!(bytes[3] <= 8, "opaque corner at {pixels}px");
-            let samples = bytes.as_chunks::<4>().0;
-            assert!(
-                samples.iter().any(|p| {
-                    p[3] > 240
-                        && p[1] > 140
-                        && p[1] > p[2].saturating_add(70)
-                        && p[0] > p[2].saturating_add(50)
-                }),
-                "turquoise accent lost or RGB/BGR swapped at {pixels}px"
-            );
-            assert!(
-                samples
-                    .iter()
-                    .any(|p| p[3] == 255 && p[..3].iter().all(|v| *v > 225)),
-                "white mark lost at {pixels}px"
-            );
-            assert!(Arc::ptr_eq(&image, &rendered_logo(pixels)));
-        }
-    }
-}

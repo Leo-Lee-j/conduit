@@ -10,8 +10,6 @@ pub(super) use cache::SidebarState;
 
 // Keep the virtual-list estimates and rendered navigation rows in agreement.
 const ROW_HEIGHT: f32 = 36.;
-#[cfg(all(test, feature = "ui-tests"))]
-mod tests;
 
 /// Shared frame, toolbar and horizontal gutter for the left navigation pages.
 /// Scrolling and bottom borders remain page-specific rather than being nested

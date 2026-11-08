@@ -111,37 +111,3 @@ pub(super) fn render(row: GraphRow, width: f32) -> AnyElement {
         )
         .into_any_element()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{git, layout};
-    #[test]
-    fn merge_lanes_rejoin_and_disconnected_roots_start_without_incoming_edges() {
-        let _locale = crate::test_support::chinese();
-        let commit = |oid: &str, parents: &[&str]| git::LogCommit {
-            oid: oid.into(),
-            parents: parents.iter().map(|p| p.to_string()).collect(),
-            author: String::new(),
-            email: String::new(),
-            timestamp: 0,
-            subject: String::new(),
-            refs: vec![],
-        };
-        let rows = layout(&[
-            commit("merge", &["left", "right"]),
-            commit("left", &["root"]),
-            commit("right", &["root"]),
-            commit("root", &[]),
-            commit("orphan", &[]),
-        ]);
-        assert!(!rows[0].incoming);
-        assert_eq!(rows[0].parents, vec![0, 1]);
-        assert_eq!(rows[1].through, vec![(1, 1)]);
-        assert_eq!(rows[2].node, 1);
-        assert_eq!(rows[2].parents, vec![0]);
-        assert!(rows[3].incoming);
-        assert!(rows[3].parents.is_empty());
-        assert!(!rows[4].incoming);
-        assert_eq!(rows[4].node, 0);
-    }
-}

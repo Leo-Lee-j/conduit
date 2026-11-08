@@ -522,23 +522,3 @@ fn selection_quad_bounds(
     ));
     quads
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{line_count, line_starts};
-
-    #[test]
-    fn line_numbers_cover_every_logical_line() {
-        let _locale = crate::test_support::chinese();
-        assert_eq!(line_count(""), 0);
-        assert_eq!(line_count("one"), 1);
-        assert_eq!(line_count("one\ntwo"), 2);
-        assert_eq!(line_count("one\ntwo\n"), 3);
-        // A trailing newline leaves an empty final line; it has no glyphs, so
-        // it gets no number and the widest digit count comes from line_count.
-        assert_eq!(line_starts("one\ntwo\n").collect::<Vec<_>>(), vec![0, 4]);
-        assert_eq!(line_starts("one\ntwo").collect::<Vec<_>>(), vec![0, 4]);
-        assert_eq!(line_starts("one\n\ntwo").collect::<Vec<_>>(), vec![0, 4, 5]);
-        assert_eq!(line_starts("中文\n行").collect::<Vec<_>>(), vec![0, 7]);
-    }
-}

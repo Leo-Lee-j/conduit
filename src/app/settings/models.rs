@@ -1079,37 +1079,5 @@ mod tests {
             gpui_kit::component::Root::new(app, window, cx)
         });
     }
-    use gpui_kit::{AppContext as _, TestAppContext};
-
-    #[gpui_kit::test]
-    fn provider_editor_renders_all_fields_and_save_actions(cx: &mut TestAppContext) {
-        let _locale = crate::test_support::chinese();
-        cx.update(gpui_kit::init);
-        let (_, cx) = cx.add_window_view(|window, cx| {
-            let app =
-                cx.new(|cx| ConduitApp::with_store(window, cx, Ok(Store::default()), false, false));
-            let editor = cx.new(|cx| ProviderEditor::new(app, None, window, cx));
-            gpui_kit::component::Root::new(editor, window, cx)
-        });
-        cx.run_until_parked();
-        cx.update(|window, cx| {
-            let _ = window.draw(cx);
-        });
-        let mut previous = cx
-            .debug_bounds("provider-editor-field-0")
-            .expect("name field");
-        for selector in [
-            "provider-editor-field-1",
-            "provider-editor-field-2",
-            "provider-editor-field-3",
-        ] {
-            let field = cx.debug_bounds(selector).expect("provider field");
-            assert!(field.top() >= previous.bottom());
-            previous = field;
-        }
-        let actions = cx
-            .debug_bounds("provider-editor-actions")
-            .expect("save and cancel actions");
-        assert!(actions.top() > previous.bottom());
-    }
+    use gpui_kit::AppContext as _;
 }

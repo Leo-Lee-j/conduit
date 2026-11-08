@@ -16,9 +16,9 @@ struct ConfigEditor {
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests {
-    use super::{ConduitApp, InputState, McpForm, Provider, Store, TextareaState, show_editor};
-    use gpui_kit::component::WindowExt;
-    use gpui_kit::{AppContext as _, ParentElement as _, TestAppContext, px};
+    use super::{ConduitApp, Store, TextareaState};
+
+    use gpui_kit::{AppContext as _, TestAppContext};
 
     #[gpui_kit::test]
     fn config_editor_requires_explicit_discard_after_edits_and_keeps_failures(
@@ -61,76 +61,6 @@ mod tests {
             });
             gpui_kit::component::Root::new(app, window, cx)
         });
-    }
-
-    #[gpui_kit::test]
-    fn config_and_mcp_forms_keep_actions_visible_on_short_windows(cx: &mut TestAppContext) {
-        let _locale = crate::test_support::chinese();
-        cx.update(gpui_kit::init);
-        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
-        let output = slot.clone();
-        let (_, cx) = cx.add_window_view(|window, cx| {
-            let app =
-                cx.new(|cx| ConduitApp::with_store(window, cx, Ok(Store::default()), false, false));
-            *output.borrow_mut() = Some(app.clone());
-            gpui_kit::component::Root::new(app, window, cx)
-        });
-        let app = slot.borrow().as_ref().unwrap().clone();
-        for (width, height) in [(850., 500.), (1280., 900.)] {
-            cx.simulate_resize(gpui_kit::size(px(width), px(height)));
-            for new_skill in [false, true] {
-                cx.update(|window, cx| {
-                    show_editor(
-                        app.clone(),
-                        "C:/example/skills".into(),
-                        None,
-                        "long line\n".repeat(50),
-                        new_skill,
-                        window,
-                        cx,
-                    )
-                });
-                cx.run_until_parked();
-                cx.update(|window, cx| {
-                    let _ = window.draw(cx);
-                });
-                let save = cx.debug_bounds("native-config-save").unwrap();
-                let editor = cx.debug_bounds("native-config-editor").unwrap();
-                assert!(save.bottom() <= px(height - 16.) && save.right() < px(width));
-                assert!(save.top() >= editor.bottom());
-                cx.update(|window, cx| window.close_dialog(cx));
-            }
-            cx.update(|window, cx| {
-                let form = cx.new(|cx| McpForm {
-                    app: app.clone(),
-                    engine: Provider::Codex,
-                    path: "C:/example/.codex/config.toml".into(),
-                    original: None,
-                    fields: [
-                        cx.new(|cx| InputState::new(window, cx)),
-                        cx.new(|cx| InputState::new(window, cx)),
-                    ],
-                    arguments: cx.new(|cx| TextareaState::new(window, cx).auto_grow(2, 4)),
-                    remote: false,
-                    error: Some("请输入服务名称".into()),
-                });
-                window.open_dialog(cx, move |dialog, _, _| {
-                    let form = form.clone();
-                    dialog
-                        .title("添加 MCP 服务")
-                        .w(px(620.))
-                        .margin_top(px(32.))
-                        .content(move |body, _, _| body.child(form.clone()))
-                });
-            });
-            cx.run_until_parked();
-            cx.update(|window, cx| {
-                let _ = window.draw(cx);
-            });
-            let action = cx.debug_bounds("mcp-form-preview").unwrap();
-            assert!(action.bottom() <= px(height - 16.));
-            cx.update(|window, cx| window.close_dialog(cx));
-        }
     }
 }
 

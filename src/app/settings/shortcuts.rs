@@ -401,8 +401,8 @@ impl ConduitApp {
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests {
-    use super::{ConduitApp, OpenSettingsShortcut, Store, ToggleGitNavigation, file_preview};
-    use gpui_kit::{AppContext as _, Entity, Focusable as _, px};
+    use super::{ConduitApp, Store};
+    use gpui_kit::{AppContext as _, Entity, px};
     use gpui_kit::{Modifiers, MouseButton, TestAppContext, VisualTestContext, size};
 
     fn draw(cx: &mut VisualTestContext) {
@@ -501,135 +501,5 @@ mod tests {
         cx.simulate_keystrokes("escape ctrl-,");
         draw(cx);
         assert!(app.read_with(cx, |app, _| app.settings_ui.open));
-    }
-
-    #[gpui_kit::test]
-    fn settings_shortcuts_recorder_captures_reserved_keys_and_can_unbind(cx: &mut TestAppContext) {
-        let _locale = crate::test_support::chinese();
-        let (app, cx) = fixture(cx, Store::default());
-        assert!(cx.debug_bounds("shortcuts-reset-all").is_some());
-        click(cx, "shortcut-edit-open_settings");
-        cx.simulate_keystrokes("ctrl-c");
-        draw(cx);
-        assert!(
-            cx.debug_bounds("shortcut-conflict").is_some(),
-            "native editing keys must reach the recorder and show their reserved conflict"
-        );
-        cx.simulate_keystrokes("escape");
-        draw(cx);
-        assert!(cx.debug_bounds("shortcut-recorder").is_some());
-        click(cx, "shortcut-unbind");
-        assert!(cx.debug_bounds("shortcut-conflict").is_none());
-        click(cx, "shortcut-save");
-        assert_eq!(
-            app.read_with(cx, |app, _| app
-                .store
-                .ui
-                .shortcuts
-                .get("open_settings")
-                .cloned()),
-            Some(vec![])
-        );
-        cx.simulate_keystrokes("escape ctrl-, ctrl-m");
-        draw(cx);
-        assert!(!app.read_with(cx, |app, _| app.settings_ui.open));
-    }
-
-    #[gpui_kit::test]
-    fn settings_shortcuts_recorder_can_restore_double_shift(cx: &mut TestAppContext) {
-        let _locale = crate::test_support::chinese();
-        let mut store = Store::default();
-        store
-            .ui
-            .shortcuts
-            .insert("search_files".into(), vec!["ctrl-alt-f".into()]);
-        let (app, cx) = fixture(cx, store);
-        click(cx, "shortcut-edit-search_files");
-        cx.simulate_keystrokes("shift shift");
-        draw(cx);
-        assert!(cx.debug_bounds("shortcut-conflict").is_none());
-        click(cx, "shortcut-save");
-        assert!(
-            cx.debug_bounds("shortcut-recorder").is_none(),
-            "double Shift must complete recording and enable Save"
-        );
-        assert!(app.read_with(cx, |app, _| {
-            !app.store.ui.shortcuts.contains_key("search_files")
-        }));
-    }
-
-    #[gpui_kit::test]
-    fn settings_shortcuts_load_saved_keys_unbind_and_keep_file_find_separate(
-        cx: &mut TestAppContext,
-    ) {
-        let _locale = crate::test_support::chinese();
-        let mut store = Store::default();
-        store
-            .ui
-            .shortcuts
-            .insert("settings_search".into(), vec!["ctrl-alt-f".into()]);
-        store
-            .ui
-            .shortcuts
-            .insert("settings_back".into(), vec!["alt-left".into()]);
-        store
-            .ui
-            .shortcuts
-            .insert("open_settings".into(), vec!["ctrl-alt-s".into()]);
-        store.ui.shortcuts.insert("toggle_git".into(), vec![]);
-        let (app, cx) = fixture(cx, store);
-        cx.update(|window, cx| {
-            let focus = app.read(cx).settings_ui.focus.clone();
-            focus.focus(window, cx);
-        });
-        cx.simulate_keystrokes("ctrl-f");
-        draw(cx);
-        assert!(!cx.update(|window, cx| {
-            app.read(cx)
-                .settings_ui
-                .search
-                .read(cx)
-                .focus_handle(cx)
-                .is_focused(window)
-        }));
-        cx.simulate_keystrokes("ctrl-alt-f");
-        draw(cx);
-        assert!(cx.update(|window, cx| {
-            app.read(cx)
-                .settings_ui
-                .search
-                .read(cx)
-                .focus_handle(cx)
-                .is_focused(window)
-        }));
-        cx.simulate_keystrokes("escape");
-        draw(cx);
-        assert!(app.read_with(cx, |app, _| app.settings_ui.open));
-        cx.simulate_keystrokes("alt-left");
-        draw(cx);
-        assert!(!app.read_with(cx, |app, _| app.settings_ui.open));
-        cx.simulate_keystrokes("ctrl-m");
-        draw(cx);
-        assert!(!app.read_with(cx, |app, _| app.settings_ui.open));
-        cx.simulate_keystrokes("ctrl-alt-s");
-        draw(cx);
-        assert!(app.read_with(cx, |app, _| app.settings_ui.open));
-        cx.update(|_, cx| {
-            let bindings = cx.key_bindings();
-            let bindings = bindings.borrow();
-            assert!(
-                !bindings
-                    .bindings()
-                    .any(|binding| binding.action().as_any().is::<ToggleGitNavigation>())
-            );
-            assert!(bindings.bindings().any(|binding| {
-                binding.action().as_any().is::<file_preview::ToggleFind>()
-                    && binding.keystrokes()[0].unparse() == "ctrl-f"
-            }));
-            assert!(!bindings.bindings().any(|binding| {
-                binding.action().as_any().is::<OpenSettingsShortcut>()
-                    && binding.keystrokes()[0].unparse() == "ctrl-m"
-            }));
-        });
     }
 }

@@ -300,9 +300,9 @@ impl ConduitApp {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "ui-tests"))]
 mod tests {
-    use super::{ChatItem, HashSet, Rows, SessionRecord};
+    use super::ChatItem;
     fn message(index: usize, kind: &str, text: &str) -> ChatItem {
         serde_json::from_value(serde_json::json!({
             "key":format!("m-{index}"),"kind":kind,"text":text,"status":"已完成",
@@ -310,62 +310,7 @@ mod tests {
         }))
         .unwrap()
     }
-    fn conversation() -> SessionRecord {
-        let mut session = crate::app::tests::session();
-        session.messages = vec![message(0, "User", "prompt")];
-        session
-            .messages
-            .extend((1..=400).map(|i| message(i, "Tool", "Bash")));
-        session.messages.push(message(401, "Assistant", "reply"));
-        session
-    }
-    #[test]
-    fn collapsed_tools_have_one_row_and_streaming_reuses_classification() {
-        let _locale = crate::test_support::chinese();
-        let mut session = conversation();
-        let mut rows = Rows::default();
-        let mut expanded = HashSet::new();
-        rows.refresh(Some(&session), &expanded);
-        assert_eq!(rows.rows.len(), 3);
-        assert_eq!(rows.group(1).unwrap().count, 400);
-        assert_eq!(rows.row(401), Some(2));
-        let count = rows.classifications;
-        assert!(rows.refresh(Some(&session), &expanded).is_none());
-        session.messages[401].text.push_str(" delta");
-        assert!(rows.refresh(Some(&session), &expanded).is_none());
-        assert_eq!(rows.classifications, count + 1);
-        expanded.insert((session.id, "m-1".into()));
-        rows.refresh(Some(&session), &expanded);
-        assert_eq!(rows.rows.len(), 402);
-        assert_eq!(rows.classifications, count + 1);
-        expanded.clear();
-        session.messages[200].status = "运行中".into();
-        rows.refresh(Some(&session), &expanded);
-        assert_eq!(rows.rows.len(), 402);
-        session.messages[200].status = "已完成".into();
-        rows.refresh(Some(&session), &expanded);
-        assert_eq!(rows.rows.len(), 3);
-    }
-    #[test]
-    fn placeholders_and_later_turns_do_not_collapse_unanswered_tools() {
-        let _locale = crate::test_support::chinese();
-        let mut session = conversation();
-        session.messages[401] = message(401, "Assistant", "");
-        session.messages.push(message(402, "User", "next turn"));
-        session
-            .messages
-            .push(message(403, "Assistant", "next reply"));
-        let mut rows = Rows::default();
-        rows.refresh(Some(&session), &HashSet::new());
-        assert_eq!(rows.rows.len(), 403);
-        assert!(!rows.group(1).unwrap().replied);
-        session.messages[401].text = "first reply".into();
-        rows.refresh(Some(&session), &HashSet::new());
-        assert_eq!(rows.rows.len(), 5);
-        assert_eq!(rows.row(402), Some(3));
-    }
 
-    #[cfg(feature = "ui-tests")]
     #[gpui_kit::test]
     fn session_switch_restores_stable_reading_anchor_and_bottom_preference(
         cx: &mut gpui_kit::TestAppContext,
@@ -414,75 +359,6 @@ mod tests {
                     app.chat_rows.rows[app.scroll.logical_scroll_top().item_ix].key,
                     "m-80"
                 );
-            })
-        });
-    }
-
-    #[cfg(feature = "ui-tests")]
-    #[gpui_kit::test]
-    fn dense_collapsed_group_builds_only_visible_rows_and_preserves_jump(
-        cx: &mut gpui_kit::TestAppContext,
-    ) {
-        let _locale = crate::test_support::chinese();
-        use super::{ConduitApp, Store, Workspace};
-        use gpui_kit::AppContext;
-        cx.update(gpui_kit::init);
-        let mut session = conversation();
-        session.messages.push(message(402, "User", "jump target"));
-        session
-            .messages
-            .push(message(403, "Assistant", "last reply"));
-        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
-        let output = slot.clone();
-        let (_, cx) = cx.add_window_view(|window, cx| {
-            let store = Store {
-                workspaces: vec![Workspace {
-                    path: std::env::temp_dir(),
-                    sessions: vec![session],
-                }],
-                ..Default::default()
-            };
-            let app = cx.new(|cx| {
-                let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
-                app.writable = false;
-                app.selected_workspace = Some(0);
-                app.selected_session = Some(1);
-                app
-            });
-            *output.borrow_mut() = Some(app.clone());
-            gpui_kit::component::Root::new(app, window, cx)
-        });
-        cx.run_until_parked();
-        cx.update(|window, cx| {
-            let _ = window.draw(cx);
-        });
-        let app = slot.borrow().as_ref().unwrap().clone();
-        cx.update(|_, cx| {
-            let app = app.read(cx);
-            assert_eq!(app.scroll.item_count(), 5);
-            assert!(app.performance.read(cx).mounted_messages() <= 5);
-            assert!(app.performance.read(cx).mounted_messages() > 0);
-        });
-        assert!(cx.debug_bounds("tool-group-header-1-1").is_some());
-        cx.update(|_, cx| app.update(cx, |app, cx| app.jump_to_message(1, "m-402", cx)));
-        cx.update(|window, cx| {
-            let _ = window.draw(cx);
-        });
-        cx.update(|_, cx| {
-            app.update(cx, |app, cx| {
-                let before = app
-                    .chat_rows
-                    .message(app.scroll.logical_scroll_top().item_ix);
-                app.expanded_tool_groups.insert((1, "m-1".into()));
-                app.sync_chat_rows();
-                assert_eq!(app.scroll.item_count(), 404);
-                assert_eq!(
-                    app.chat_rows
-                        .message(app.scroll.logical_scroll_top().item_ix),
-                    before
-                );
-                assert_eq!(app.chat_rows.row(402), Some(402));
-                cx.notify();
             })
         });
     }

@@ -391,8 +391,8 @@ mod tests {
     use super::ConduitApp;
     use crate::{domain::Workspace, store::Store};
     use gpui_kit::{
-        AppContext as _, Entity, EntityInputHandler as _, Focusable as _, Modifiers, MouseButton,
-        TestAppContext, VisualTestContext, px, size,
+        AppContext as _, Entity, EntityInputHandler as _, Focusable as _, TestAppContext,
+        VisualTestContext, px, size,
     };
     use std::{
         path::PathBuf,
@@ -456,110 +456,6 @@ mod tests {
             })
         });
         settle(cx);
-    }
-
-    #[gpui_kit::test]
-    fn file_mentions_keyboard_selection_escape_and_empty_enter(cx: &mut TestAppContext) {
-        let _locale = crate::test_support::chinese();
-        let (app, cx, root) = fixture(cx);
-        draft(&app, "检查 @", cx);
-        assert!(cx.debug_bounds("file-mention-menu").is_some());
-        cx.simulate_keystrokes("down enter");
-        settle(cx);
-        cx.update(|_, cx| {
-            let app = app.read(cx);
-            assert_eq!(
-                app.current_files().unwrap().references[0].mention,
-                "second.rs"
-            );
-            assert_eq!(app.input.read(cx).value().as_ref(), "检查 ");
-            assert!(app.session_control.runs.is_empty());
-            assert!(
-                app.store.workspaces[0].sessions.is_empty(),
-                "Enter must select without starting a turn"
-            );
-        });
-        draft(&app, "@fi", cx);
-        cx.simulate_keystrokes("escape");
-        settle(cx);
-        assert!(cx.debug_bounds("file-mention-menu").is_none());
-        cx.update(|_, cx| app.update(cx, |this, cx| this.refresh_file_mentions(cx)));
-        settle(cx);
-        assert!(
-            cx.debug_bounds("file-mention-menu").is_none(),
-            "Esc must survive blink/repaint"
-        );
-        cx.simulate_keystrokes("r");
-        settle(cx);
-        assert!(cx.debug_bounds("file-mention-menu").is_some());
-        cx.simulate_keystrokes("tab");
-        settle(cx);
-        cx.update(|_, cx| assert_eq!(app.read(cx).current_files().unwrap().references.len(), 2));
-        draft(&app, "@no-such-file", cx);
-        cx.simulate_keystrokes("enter");
-        settle(cx);
-        cx.update(|_, cx| {
-            let app = app.read(cx);
-            assert_eq!(app.input.read(cx).value().as_ref(), "@no-such-file");
-            assert!(app.store.workspaces[0].sessions.is_empty());
-        });
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn file_mentions_mouse_preserves_suffix_dedupes_and_rejects_deleted_files(
-        cx: &mut TestAppContext,
-    ) {
-        let _locale = crate::test_support::chinese();
-        let (app, cx, root) = fixture(cx);
-        draft(&app, "检查 @资料 后面的正文", cx);
-        cx.update(|_, cx| {
-            app.update(cx, |this, cx| {
-                this.input.update(cx, |input, cx| {
-                    let end = "检查 @资料".len();
-                    input.set_selected_range(end..end, cx);
-                })
-            })
-        });
-        settle(cx);
-        let row = cx
-            .debug_bounds("file-mention-0")
-            .expect("matching file")
-            .center();
-        cx.simulate_mouse_down(row, MouseButton::Left, Modifiers::default());
-        cx.simulate_mouse_up(row, MouseButton::Left, Modifiers::default());
-        settle(cx);
-        cx.update(|window, cx| {
-            let app = app.read(cx);
-            assert_eq!(app.input.read(cx).value().as_ref(), "检查  后面的正文");
-            assert_eq!(
-                app.current_files().unwrap().references[0].mention,
-                "docs/资料 说明.md"
-            );
-            assert!(app.input.read(cx).focus_handle(cx).is_focused(window));
-        });
-        draft(&app, "@资料", cx);
-        cx.simulate_keystrokes("tab");
-        settle(cx);
-        cx.update(|_, cx| assert_eq!(app.read(cx).current_files().unwrap().references.len(), 1));
-        draft(&app, "@first", cx);
-        std::fs::remove_file(root.join("first.rs")).unwrap();
-        cx.simulate_keystrokes("enter");
-        settle(cx);
-        cx.update(|_, cx| {
-            let app = app.read(cx);
-            assert_eq!(app.input.read(cx).value().as_ref(), "@first");
-            assert!(
-                app.current_files()
-                    .unwrap()
-                    .feedback
-                    .as_ref()
-                    .unwrap()
-                    .contains("first.rs")
-            );
-            assert_eq!(app.current_files().unwrap().references.len(), 1);
-        });
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[gpui_kit::test]

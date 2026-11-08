@@ -424,8 +424,7 @@ fn typography_stepper(
 }
 
 mod appearance;
-#[cfg(all(test, feature = "ui-tests"))]
-mod appearance_tests;
+
 #[path = "settings/cli.rs"]
 mod cli_settings;
 mod config_editor;

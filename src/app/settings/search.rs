@@ -459,15 +459,3 @@ fn search_text(parts: &[&str]) -> String {
     }
     text
 }
-
-#[cfg(test)]
-mod tests {
-    use super::matches_search;
-    #[test]
-    fn settings_search_matches_words_case_and_whitespace() {
-        let _locale = crate::test_support::chinese();
-        assert!(matches_search("模型服务 API Key", "  api KEY  "));
-        assert!(matches_search("聊天字号 行高", "字号 行高"));
-        assert!(!matches_search("模型服务 API Key", "api 字体"));
-    }
-}

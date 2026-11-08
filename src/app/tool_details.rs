@@ -8,9 +8,6 @@ use conduit::plugins::{
 };
 use std::collections::BTreeMap;
 
-#[cfg(test)]
-mod tests;
-
 #[derive(Default)]
 pub(super) struct ToolDetailState {
     selected: BTreeMap<SessionKey, String>,

@@ -52,7 +52,7 @@ jobs:
             if ($runs.Count -eq 0) {
               # A branch push and tag push can arrive before CI has been registered.
               if (++$missing -lt 4) { Start-Sleep -Seconds 10; continue }
-              Write-Host 'No push CI exists for this commit; running full verification here.'
+              Write-Host 'No push CI exists for this commit; running core verification here.'
               'reused=false' >> $env:GITHUB_OUTPUT
               break
             }
@@ -81,19 +81,10 @@ jobs:
         with:
           shared-key: windows-msvc
           cache-on-failure: true
-      - run: python scripts/check-i18n.py
-      - run: cargo fmt --all --check
+      - name: Core verification
         if: steps.ci.outputs.reused == 'false'
-      - run: cargo clippy --locked --all-targets -- -D warnings
-        if: steps.ci.outputs.reused == 'false'
-      - run: cargo clippy --locked --all-targets --features ui-tests -- -D warnings
-        if: steps.ci.outputs.reused == 'false'
-      - run: cargo test --locked -- --test-threads=1
-        if: steps.ci.outputs.reused == 'false'
-      - run: "cargo test --locked --features ui-tests --bin conduit app:: -- --test-threads=1"
-        if: steps.ci.outputs.reused == 'false'
-      - run: cargo build --locked --bin conduit --bin conduit-updater
-        if: steps.ci.outputs.reused == 'false'
+        shell: pwsh
+        run: ./scripts/check-core.ps1
   build:
     name: Build Windows installer
     runs-on: windows-2025

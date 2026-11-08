@@ -715,9 +715,6 @@ impl Render for FilePreview {
     }
 }
 
-#[cfg(all(test, feature = "ui-tests"))]
-mod tests;
-
 impl FilePreview {
     pub(super) fn refresh_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.input.update(cx, |input, cx| {

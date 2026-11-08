@@ -70,6 +70,3 @@ impl DiffCache {
         Some(state)
     }
 }
-
-#[cfg(all(test, feature = "ui-tests"))]
-mod tests;

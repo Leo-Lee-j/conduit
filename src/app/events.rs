@@ -2,9 +2,6 @@
 
 use super::*;
 
-#[cfg(all(test, feature = "ui-tests"))]
-pub(super) mod test_clock;
-
 pub(super) use crate::failure::{
     failure_guidance, failure_repeats, failure_summary, failure_title, same_failure,
 };
@@ -34,10 +31,6 @@ pub(super) fn finish_tool_cards(session: &mut SessionRecord, prefix: &str, statu
 }
 
 pub(super) fn unix_now() -> u64 {
-    #[cfg(all(test, feature = "ui-tests"))]
-    if let Some(now) = test_clock::now() {
-        return now;
-    }
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

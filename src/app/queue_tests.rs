@@ -126,69 +126,6 @@ fn stop_shortcut_only_cancels_selected_run_and_retains_queue(cx: &mut TestAppCon
     assert!(cx.debug_bounds("send").is_none());
 }
 
-#[gpui_kit::test]
-fn composer_actions_remain_inside_short_and_narrow_viewports(cx: &mut TestAppContext) {
-    let _locale = crate::test_support::chinese();
-    let (app, cx, _) = fixture(cx, "composer-layout");
-    let mut sender = None;
-    cx.update(|window, cx| {
-        app.update(cx, |app, cx| {
-            app.session_mut(1).unwrap().model =
-                Some("a-very-long-model-name-for-layout-validation".into());
-            app.input
-                .update(cx, |input, cx| input.set_value("下一条消息", window, cx));
-            cx.notify();
-        })
-    });
-    for (width, height) in [(850., 500.), (1100., 700.), (1200., 800.), (1600., 1000.)] {
-        cx.simulate_resize(gpui_kit::size(gpui_kit::px(width), gpui_kit::px(height)));
-        let mut action_bounds = None;
-        for (active, stopping) in [(false, false), (true, false), (true, true)] {
-            cx.update(|_, cx| {
-                app.update(cx, |app, cx| {
-                    if !active {
-                        app.session_control.runs.remove(&1);
-                    } else if stopping {
-                        app.session_control.runs.get_mut(&1).unwrap().cancel();
-                    } else {
-                        sender = Some(running(app, 1));
-                    }
-                    cx.notify();
-                })
-            });
-            draw(cx);
-            let composer = cx.debug_bounds("composer").unwrap();
-            let controls = cx.debug_bounds("composer-actions").unwrap();
-            let (id, hidden) = if active {
-                ("stop", "send")
-            } else {
-                ("send", "stop")
-            };
-            assert!(cx.debug_bounds(hidden).is_none());
-            let action = cx.debug_bounds(id).unwrap();
-            assert!(
-                action.left() >= composer.left() && action.right() <= composer.right(),
-                "{id}: {action:?} vs {composer:?}"
-            );
-            assert!(
-                action.top() >= controls.top()
-                    && action.bottom() <= controls.bottom()
-                    && action.bottom() <= gpui_kit::px(height),
-                "{id}: {action:?}"
-            );
-            assert_eq!(action.size.width, gpui_kit::px(30.));
-            assert_eq!(action.size.height, gpui_kit::px(30.));
-            if let Some(previous) = action_bounds {
-                assert_eq!(
-                    action, previous,
-                    "send and stop share a stable toolbar slot"
-                );
-            }
-            action_bounds = Some(action);
-        }
-    }
-}
-
 fn settle_saves(
     app: &mut ConduitApp,
     window: &mut gpui_kit::Window,

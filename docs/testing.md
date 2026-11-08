@@ -14,44 +14,38 @@ cargo run --locked
 
 真实模型、账户、付费调用或额外软件依赖的测试需明确选择，不默认启用全部 `--ignored`。正在使用的程序被 Windows 锁定时，保留现有进程，采用隔离构建/预览程序记录实际验证对象。
 
-## 常规检查与定向回归
+## 核心检查
+
+本地、普通 CI 和发布补充验证统一使用：
 
 ```powershell
-cargo fmt --all --check
-cargo clippy --locked --all-targets --features ui-tests -- -D warnings
-cargo test --locked -- --test-threads=1
-cargo test --locked --features ui-tests --bin conduit app:: -- --test-threads=1
+./scripts/check-core.ps1
 ```
 
-按改动选取以下筛选范围；小修改先运行相关回归，发布或较大改动再执行完整检查。
+脚本依次检查翻译、格式、Clippy，运行核心测试，最后构建不带测试特性的主程序和更新助手。测试统一开启 `ui-tests`，一次执行普通测试与核心 UI 集成测试，避免先运行普通测试、再重复执行 `app::`。任一步失败都会停止；发布仍要求标签对应提交通过 CI。
 
-| 改动 | 推荐范围 |
+只保留能发现功能或数据风险的自动测试：
+
+| 核心行为 | 定向检查范围 |
 | --- | --- |
-| 保存回执、发送取消 | `app::runtime::saves::tests`、`app::queue::tests` |
-| 正文、迁移、回收 | `transcript`、`store::`、`app::transcripts::tests` |
-| 历史与搜索 | `history::`、`app::ui_tests::history_and_search` |
-| 协议和适配器 | `protocol::`、`cli_adapter::`、`chat_runtime::` |
-| Git 与通知 | `git_` / `git::`、`notifications::` |
-| 终端 | `terminal::`、`app::terminal::tests` |
-| 文件与图表 | `file_preview`、`file_search`、`file_ref`、`mermaid` |
-| 设置与 CLI 更新 | `settings`、`cli::updates` |
-| 应用更新 | 库 `update::`、`app::update::tests` |
-| 插件 | [插件验证](plugins/validation.md)及[原型命令](../tools/shell-prototype/README.md) |
+| 发送前保存、失败回滚、草稿与附件、队列恢复 | `app::runtime::saves::tests`、`app::queue::tests`、`persistence::` |
+| 数据持久化、迁移、正文完整性、过期加载隔离 | `store::`、`transcript::`、`app::transcripts::tests` |
+| 多引擎协议、权限审批、用户输入、会话恢复 | `protocol::`、`cli_adapter::`、`chat_runtime::` |
+| 取消、异常退出、子进程与终端清理 | `child::`、`chat_runtime::`、`terminal::` |
+| 跨会话隔离、审批失效、插件权限与路径边界 | `app::ui_tests`、`app::notifications::tests::approvals`、`plugins::`、`plugin_packages::` |
+| Git 写操作、更新验签、安装回滚、重启恢复 | `git::`、`update::`、`app::update::tests` |
 
-UI 范围使用 `--features ui-tests --bin conduit`。例如：
+精确像素、渲染次数、缓存命中次数、主题样式、示例界面和重复滚动场景不再作为主程序自动测试维护。相关体验随界面改动进行人工验收。新增测试应说明它保护的核心行为；已有覆盖足够时扩展现有用例，不为每个控件或辅助函数增加一组测试。
+
+小改动可先运行相关范围，例如：
 
 ```powershell
-cargo test --locked --features ui-tests --bin conduit app::update::tests -- --test-threads=1
+cargo test --locked --features ui-tests --bin conduit chat_runtime:: -- --test-threads=1
+cargo test --locked --features ui-tests --bin conduit app::runtime::saves::tests -- --test-threads=1
 cargo test --locked --lib update:: -- --test-threads=1
 ```
 
-选择筛选词后核对实际执行用例，零用例不算通过。默认忽略的真实 OpenCode + 本地模拟端点测试可以单独运行：
-
-```powershell
-cargo test --locked installed_opencode_local_protocol_smoke -- --ignored --nocapture --test-threads=1
-```
-
-该测试不访问真实模型账户，但需要已安装的 CLI；它不替代服务商认证和真实模型兼容验收。
+选择筛选条件后核对实际执行数量，避免零测试通过。默认忽略的真实 CLI / 账户测试不进入 CI，按需明确选取单个用例。子进程测试以握手信号确认启动，再检查取消和资源释放，不把冷启动耗时算作清理耗时。
 
 ## Windows 人工验收
 

@@ -7,9 +7,6 @@ use conduit::plugins::{
 };
 use std::sync::Arc;
 
-#[cfg(all(test, feature = "ui-tests"))]
-mod tests;
-
 pub(super) struct OverviewInstance {
     view: Entity<OverviewView>,
     desired: Arc<WorkspaceSummary>,

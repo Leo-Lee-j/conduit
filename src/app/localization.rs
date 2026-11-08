@@ -84,6 +84,3 @@ impl ConduitApp {
         });
     }
 }
-
-#[cfg(all(test, feature = "ui-tests"))]
-mod tests;

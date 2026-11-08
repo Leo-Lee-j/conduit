@@ -12,6 +12,7 @@ struct FixtureAdapter {
     released: Sender<bool>,
     resource: PathBuf,
     ready: bool,
+    ready_signal: Option<Sender<()>>,
     panic_on_ready: bool,
     fail_launch: bool,
 }
@@ -58,6 +59,9 @@ impl CliAdapter for FixtureAdapter {
         match value["fixture"].as_str() {
             Some("ready") => {
                 self.ready = true;
+                if let Some(ready) = self.ready_signal.take() {
+                    let _ = ready.send(());
+                }
                 assert!(!self.panic_on_ready, "fixture adapter panic");
                 step.events.push(Event::NativeId("fixture-session".into()));
             }
@@ -122,6 +126,7 @@ fn fixture(script: &str) -> (FixtureAdapter, Receiver<bool>) {
             released,
             resource,
             ready: false,
+            ready_signal: None,
             panic_on_ready: false,
             fail_launch: false,
         },
@@ -220,6 +225,7 @@ fn adapter_resources_are_released_after_child_cleanup_on_cancel_and_panic() {
     for panic_on_ready in [false, true] {
         let (mut adapter, released) = fixture(
             r#"
+            $ErrorActionPreference = 'Stop'
             [Console]::ReadLine() | Out-Null
             $lock = [IO.File]::Open($env:CONDUIT_ADAPTER_RESOURCE, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
             [Console]::WriteLine('{"fixture":"ready"}')
@@ -227,20 +233,34 @@ fn adapter_resources_are_released_after_child_cleanup_on_cancel_and_panic() {
         "#,
         );
         adapter.panic_on_ready = panic_on_ready;
+        let (ready, startup) = mpsc::channel();
+        adapter.ready_signal = Some(ready);
         let runtime = run(adapter, None);
+        // PowerShell cold start is not process cleanup. Allow the runtime's
+        // 60-second initialization deadline plus its cleanup barrier to report
+        // a startup failure, and only then start measuring cancel/panic cleanup.
+        // Both branches must prove the child acquired the exclusive file lock.
+        if let Err(error) = startup.recv_timeout(Duration::from_secs(75)) {
+            runtime.cancel();
+            let terminal = finished(&runtime, false);
+            panic!("fixture startup did not acquire its resource: {error:?}; {terminal:?}");
+        }
         if !panic_on_ready {
             assert!(matches!(
-                runtime
-                    .events
-                    .recv_timeout(Duration::from_secs(10))
-                    .unwrap(),
-                Event::NativeId(_)
+                released.try_recv(),
+                Err(mpsc::TryRecvError::Empty)
             ));
             runtime.cancel();
         }
         let (error, cancelled, _) = finished(&runtime, false);
         assert_eq!(cancelled, !panic_on_ready);
-        assert_eq!(error.is_some(), panic_on_ready);
+        if panic_on_ready {
+            assert!(error.unwrap().contains(&conduit::i18n::text(
+                "chat_runtime.cli_protocol_thread_failed_process_cleanup_started"
+            )));
+        } else {
+            assert_eq!(error, None);
+        }
         assert!(
             released.recv_timeout(Duration::from_secs(2)).unwrap(),
             "adapter released before child closed its resource"
