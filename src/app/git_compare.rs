@@ -10,7 +10,12 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) {
         if self.selected_workspace_path().as_ref() != Some(&workspace) {
-            self.message = Some("工作区已变化，请重新打开分支菜单".into());
+            self.message = Some(
+                conduit::i18n::text_static(
+                    "git_compare.the_workspace_changed_reopen_the_branch_menu",
+                )
+                .into(),
+            );
             cx.notify();
             return;
         }
@@ -125,7 +130,7 @@ impl Drop for ComparisonBrowser {
 impl Render for ComparisonBrowser {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let other = if self.request.kind == git::ComparisonKind::WorkingTree {
-            "工作区"
+            conduit::i18n::text_static("git_compare.workspace")
         } else {
             self.request
                 .expected
@@ -154,8 +159,10 @@ impl Render for ComparisonBrowser {
             .child(
                 Button::new("comparison-refresh")
                     .icon(IconName::RefreshCw)
-                    .tooltip("重新读取比较")
-                    .accessibility_label("重新读取比较")
+                    .tooltip(conduit::i18n::text_static("git_compare.reload_comparison"))
+                    .accessibility_label(conduit::i18n::text_static(
+                        "git_compare.reload_comparison",
+                    ))
                     .small()
                     .ghost()
                     .on_click(cx.listener(|this, _, window, cx| this.reload(window, cx))),
@@ -163,8 +170,8 @@ impl Render for ComparisonBrowser {
             .child(
                 Button::new("comparison-close")
                     .icon(FullIconName::X)
-                    .tooltip("关闭比较")
-                    .accessibility_label("关闭比较")
+                    .tooltip(conduit::i18n::text_static("git_compare.close_comparison"))
+                    .accessibility_label(conduit::i18n::text_static("git_compare.close_comparison"))
                     .small()
                     .ghost()
                     .on_click(|_, window, cx| window.close_dialog(cx)),
@@ -181,7 +188,9 @@ impl Render for ComparisonBrowser {
             .child(header);
         if self.loading {
             return body
-                .child(div().p_4().child("正在读取分支比较…"))
+                .child(div().p_4().child(conduit::i18n::text_static(
+                    "git_compare.loading_branch_comparison",
+                )))
                 .into_any_element();
         }
         if let Some(error) = &self.error {
@@ -204,7 +213,10 @@ impl Render for ComparisonBrowser {
                 .p_2()
                 .text_size(ui_text_size(12.))
                 .font_semibold()
-                .child(format!("文件差异 · {}", result.files.len())),
+                .child(conduit::i18n::format(
+                    "git_compare.file_diff",
+                    &[("arg0", format!("{}", result.files.len()))],
+                )),
         );
         let mut files = v_flex()
             .id("comparison-files")
@@ -219,7 +231,10 @@ impl Render for ComparisonBrowser {
                     .ghost()
                     .small()
                     .w_full()
-                    .accessibility_label(format!("查看差异 {}", file.path))
+                    .accessibility_label(conduit::i18n::format(
+                        "git_compare.view_diff",
+                        &[("arg0", file.path.to_string())],
+                    ))
                     .when(self.selected == Some(index), |button| {
                         button.bg(rgb(palette().surface_hover))
                     })
@@ -241,17 +256,16 @@ impl Render for ComparisonBrowser {
             );
         }
         if result.files.is_empty() {
-            files = files.child(
-                div()
-                    .p_3()
-                    .text_size(ui_text_size(12.))
-                    .child("两个版本没有文件差异"),
-            );
+            files = files.child(div().p_3().text_size(ui_text_size(12.)).child(
+                conduit::i18n::text_static(
+                    "git_compare.no_file_differences_between_these_versions",
+                ),
+            ));
         }
         left = left.child(files);
         if self.request.kind == git::ComparisonKind::Branches && narrow {
             let commits = if result.commits.is_empty() {
-                "没有独有提交".into()
+                conduit::i18n::text_static("git_compare.no_unique_commits").into()
             } else {
                 result.commits.clone()
             };
@@ -259,7 +273,9 @@ impl Render for ComparisonBrowser {
                 Popover::new("comparison-commits-popup")
                     .trigger(
                         Button::new("comparison-commits-open")
-                            .label("查看独有提交")
+                            .label(conduit::i18n::text_static(
+                                "git_compare.view_unique_commits",
+                            ))
                             .small()
                             .ghost(),
                     )
@@ -278,9 +294,9 @@ impl Render for ComparisonBrowser {
             left = left.child(
                 Button::new("comparison-commits-toggle")
                     .label(if self.commits_visible {
-                        "收起独有提交"
+                        conduit::i18n::text_static("git_compare.hide_unique_commits")
                     } else {
-                        "查看独有提交"
+                        conduit::i18n::text_static("git_compare.view_unique_commits")
                     })
                     .small()
                     .ghost()
@@ -298,7 +314,7 @@ impl Render for ComparisonBrowser {
                         .p_2()
                         .text_size(ui_text_size(11.))
                         .child(if result.commits.is_empty() {
-                            "没有独有提交".into()
+                            conduit::i18n::text_static("git_compare.no_unique_commits").into()
                         } else {
                             result.commits.clone()
                         }),
@@ -365,6 +381,7 @@ mod tests {
     fn comparison_browser_keeps_files_diff_and_notes_inside_small_viewport(
         cx: &mut TestAppContext,
     ) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let (_, cx) = cx.add_window_view(|window, cx| {
             let browser = cx.new(|_| {

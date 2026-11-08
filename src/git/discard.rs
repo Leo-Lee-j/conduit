@@ -9,7 +9,9 @@ pub(super) fn discard_file(
     cancel: &AtomicBool,
 ) -> Result<()> {
     if commit_target(git, workspace, cancel)? != *target {
-        bail!("分支、HEAD 或暂存区已变化，请刷新后重新回滚");
+        bail!(conduit::i18n::text(
+            "git.discard.branch_head_or_staging_area_changed_refresh"
+        ));
     }
     let root = run_git(git, workspace, &["rev-parse", "--show-toplevel"], cancel)?;
     let root = Path::new(root.trim());
@@ -29,11 +31,17 @@ pub(super) fn discard_file(
                 .split(['/', '\\'])
                 .any(|c| c == ".." || c == "." || c.is_empty())
         {
-            bail!("回滚路径必须是仓库内的文件：{path}");
+            bail!(conduit::i18n::format(
+                "git.discard.discard_path_must_be_a_file_inside",
+                &[("path", path.to_string())]
+            ));
         }
         // Never recurse into untracked directories or submodule working trees.
         if fs::symlink_metadata(root.join(path)).is_ok_and(|metadata| metadata.is_dir()) {
-            bail!("不能从文件菜单回滚目录或子模块：{path}");
+            bail!(conduit::i18n::format(
+                "git.discard.cannot_discard_directories_or_submodules_from_the",
+                &[("path", path.to_string())]
+            ));
         }
     }
     let status = run_git(
@@ -50,13 +58,17 @@ pub(super) fn discard_file(
     )?;
     let current = parse_status(status.as_bytes());
     if !current.contains(file) {
-        bail!("文件状态已变化，请刷新后重新回滚");
+        bail!(conduit::i18n::text(
+            "git.discard.file_status_changed_refresh_before_discarding_again"
+        ));
     }
     if current
         .iter()
         .any(|other| other != file && paths.contains(&other.path.as_str()))
     {
-        bail!("重命名前的路径存在其他修改，请先处理该文件后再回滚");
+        bail!(conduit::i18n::text(
+            "git.discard.the_original_path_of_the_renamed_file"
+        ));
     }
     if file.untracked() {
         run_git(

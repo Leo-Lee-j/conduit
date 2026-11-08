@@ -43,10 +43,21 @@ impl GitLogView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let branch_search = cx.new(|cx| InputState::new(window, cx).placeholder("分支或标签"));
-        let text = cx.new(|cx| InputState::new(window, cx).placeholder("提交信息或哈希"));
-        let author = cx.new(|cx| InputState::new(window, cx).placeholder("作者"));
-        let path = cx.new(|cx| InputState::new(window, cx).placeholder("文件或目录路径"));
+        let branch_search = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(conduit::i18n::text_static("git_log.branch_or_tag"))
+        });
+        let text = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(conduit::i18n::text_static("git_log.commit_message_or_hash"))
+        });
+        let author = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(conduit::i18n::text_static("git_log.author"))
+        });
+        let path = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(conduit::i18n::text_static("git_log.file_or_directory_path"))
+        });
         let interaction = cx.new(|_| git_branches::BranchMenuInteraction::default());
         let owner = cx.weak_entity();
         let tree = cx.new(|cx| tree::BranchTree::new(owner, cx));
@@ -407,9 +418,10 @@ impl GitLogView {
             .context_menu(move |menu, _, _| {
                 let copy = copy.clone();
                 menu.item(
-                    PopupMenuItem::new("复制提交哈希").on_click(move |_, _, cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
-                    }),
+                    PopupMenuItem::new(conduit::i18n::text_static("git_log.copy_commit_hash"))
+                        .on_click(move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
+                        }),
                 )
             })
             .child(graph::render(self.graph[index].clone(), self.graph_width))
@@ -467,7 +479,7 @@ impl GitLogView {
             return panel
                 .child(Self::loading_placeholder(
                     "git-log-details-loading",
-                    "正在读取提交…",
+                    conduit::i18n::text_static("git_log.loading_commits"),
                 ))
                 .into_any_element();
         }
@@ -489,7 +501,9 @@ impl GitLogView {
                         .p_3()
                         .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().faint))
-                        .child("选择提交查看详情与文件变更"),
+                        .child(conduit::i18n::text_static(
+                            "git_log.select_a_commit_to_view_details_and",
+                        )),
                 )
                 .into_any_element();
         };
@@ -505,7 +519,10 @@ impl GitLogView {
                     .border_b_1()
                     .border_color(rgb(palette().border))
                     .text_size(ui_text_size(12.))
-                    .child(format!("变更文件 · {}", files.len())),
+                    .child(conduit::i18n::format(
+                        "git_log.changed_files",
+                        &[("arg0", format!("{}", files.len()))],
+                    )),
             )
             .child(
                 uniform_list("git-log-files", files.len(), move |range, _, cx| {
@@ -574,7 +591,7 @@ impl GitLogView {
                             .flex_shrink_0()
                             .label(details.oid[..12].to_string())
                             .icon(FullIconName::Copy)
-                            .tooltip("复制完整提交哈希")
+                            .tooltip(conduit::i18n::text_static("git_log.copy_full_commit_hash"))
                             .on_click(move |_, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(oid.clone()))
                             })
@@ -607,7 +624,9 @@ impl GitLogView {
                                 .flex_shrink_0()
                                 .text_size(ui_text_size(11.))
                                 .text_color(rgb(palette().faint))
-                                .child("合并提交 · 文件变化相对于第一个父提交"),
+                                .child(conduit::i18n::text_static(
+                                    "git_log.merge_commit_changes_relative_to_the_first",
+                                )),
                         )
                     })
                     .child(
@@ -671,11 +690,11 @@ impl Render for GitLogView {
         let horizontal = window.viewport_size().width >= px(1100.);
         let view = cx.entity();
         let since = match self.query.since.as_deref() {
-            Some("1 day ago") => "最近一天",
-            Some("1 week ago") => "最近一周",
-            Some("1 month ago") => "最近一月",
-            Some("1 year ago") => "最近一年",
-            _ => "全部时间",
+            Some("1 day ago") => conduit::i18n::text_static("git_log.last_day"),
+            Some("1 week ago") => conduit::i18n::text_static("git_log.last_week"),
+            Some("1 month ago") => conduit::i18n::text_static("git_log.last_month"),
+            Some("1 year ago") => conduit::i18n::text_static("git_log.last_year"),
+            _ => conduit::i18n::text_static("git_log.all_time"),
         };
         let busy = self.app.upgrade().is_none_or(|app| {
             let app = app.read(cx);
@@ -698,7 +717,9 @@ impl Render for GitLogView {
                     .child(error.clone()),
             );
         } else if self.workspace.is_none() {
-            history = history.child(div().p_3().child("请先选择工作区"));
+            history = history.child(div().p_3().child(conduit::i18n::text_static(
+                "git_log.select_a_workspace_first",
+            )));
         } else if self.loading
             && self
                 .history
@@ -707,7 +728,7 @@ impl Render for GitLogView {
         {
             history = history.child(Self::loading_placeholder(
                 "git-log-loading",
-                "正在加载 Git 日志…",
+                conduit::i18n::text_static("git_log.loading_git_log"),
             ));
         } else if let Some(log) = &self.history {
             let length = log.commits.len();
@@ -717,7 +738,7 @@ impl Render for GitLogView {
                         .p_3()
                         .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().muted))
-                        .child("没有匹配的提交"),
+                        .child(conduit::i18n::text_static("git_log.no_matching_commits")),
                 );
             } else {
                 let view = cx.entity();
@@ -742,7 +763,7 @@ impl Render for GitLogView {
                         .ghost()
                         .small()
                         .flex_shrink_0()
-                        .label("加载更多提交")
+                        .label(conduit::i18n::text_static("git_log.load_more_commits"))
                         .disabled(self.loading)
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.query.limit += 200;
@@ -756,7 +777,9 @@ impl Render for GitLogView {
                         .p_2()
                         .text_size(ui_text_size(11.))
                         .text_color(rgb(palette().faint))
-                        .child("已显示 5000 条提交，请使用筛选缩小范围"),
+                        .child(conduit::i18n::text_static(
+                            "git_log.showing_5_000_commits_use_filters_to",
+                        )),
                 );
             }
         }
@@ -769,7 +792,7 @@ impl Render for GitLogView {
                     .trim_start_matches("refs/remotes/")
                     .trim_start_matches("refs/tags/")
             })
-            .unwrap_or("全部分支");
+            .unwrap_or(conduit::i18n::text_static("git_log.tree.all_branches"));
         v_flex()
             .id("git-log-panel")
             .debug_selector(|| "git-log-panel".into())
@@ -818,7 +841,7 @@ impl Render for GitLogView {
                         div()
                             .text_size(ui_text_size(12.))
                             .font_semibold()
-                            .child("Git 日志"),
+                            .child(conduit::i18n::text_static("git_log.git_log")),
                     )
                     .child(
                         div()
@@ -836,8 +859,10 @@ impl Render for GitLogView {
                             .ghost()
                             .small()
                             .icon(IconName::Plus)
-                            .tooltip("从 HEAD 新建分支")
-                            .accessibility_label("新建分支")
+                            .tooltip(conduit::i18n::text_static("git_log.new_branch_from_head"))
+                            .accessibility_label(conduit::i18n::text_static(
+                                "git_branches.new_branch",
+                            ))
                             .disabled(
                                 busy || self
                                     .repository
@@ -854,8 +879,10 @@ impl Render for GitLogView {
                             .ghost()
                             .small()
                             .icon(FullIconName::Download)
-                            .tooltip("获取所有远程分支（Fetch）")
-                            .accessibility_label("获取远程分支")
+                            .tooltip(conduit::i18n::text_static("git_log.fetch_all_remotes"))
+                            .accessibility_label(conduit::i18n::text_static(
+                                "git_log.fetch_remote_branches",
+                            ))
                             .disabled(
                                 busy || self
                                     .repository
@@ -869,8 +896,12 @@ impl Render for GitLogView {
                             .ghost()
                             .small()
                             .icon(IconName::RefreshCw)
-                            .tooltip("刷新分支与日志")
-                            .accessibility_label("刷新分支与日志")
+                            .tooltip(conduit::i18n::text_static(
+                                "git_log.refresh_branches_and_log",
+                            ))
+                            .accessibility_label(conduit::i18n::text_static(
+                                "git_log.refresh_branches_and_log",
+                            ))
                             .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
                     ),
             )
@@ -911,11 +942,23 @@ impl Render for GitLogView {
                             .icon(IconName::ChevronDown)
                             .dropdown_menu(move |mut menu, _, _| {
                                 for (label, value) in [
-                                    ("全部时间", None),
-                                    ("最近一天", Some("1 day ago")),
-                                    ("最近一周", Some("1 week ago")),
-                                    ("最近一月", Some("1 month ago")),
-                                    ("最近一年", Some("1 year ago")),
+                                    (conduit::i18n::text_static("git_log.all_time"), None),
+                                    (
+                                        conduit::i18n::text_static("git_log.last_day"),
+                                        Some("1 day ago"),
+                                    ),
+                                    (
+                                        conduit::i18n::text_static("git_log.last_week"),
+                                        Some("1 week ago"),
+                                    ),
+                                    (
+                                        conduit::i18n::text_static("git_log.last_month"),
+                                        Some("1 month ago"),
+                                    ),
+                                    (
+                                        conduit::i18n::text_static("git_log.last_year"),
+                                        Some("1 year ago"),
+                                    ),
                                 ] {
                                     let view = view.clone();
                                     menu = menu.item(PopupMenuItem::new(label).on_click(
@@ -971,3 +1014,20 @@ impl Render for GitLogView {
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests;
+
+impl GitLogView {
+    pub(super) fn refresh_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for (input, key) in [
+            (&self.branch_search, "git_log.branch_or_tag"),
+            (&self.text, "git_log.commit_message_or_hash"),
+            (&self.author, "git_log.author"),
+            (&self.path, "git_log.file_or_directory_path"),
+        ] {
+            input.update(cx, |input, cx| {
+                input.set_placeholder(conduit::i18n::text_static(key), window, cx)
+            });
+        }
+        self.tree.update(cx, |_, cx| cx.notify());
+        cx.notify();
+    }
+}

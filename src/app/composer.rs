@@ -17,9 +17,18 @@ pub(super) fn rejection_summary(rejected: &[RejectedFile]) -> String {
         })
         .collect::<Vec<_>>();
     if rejected.len() > 3 {
-        details.push(format!("另 {} 项", rejected.len() - 3));
+        details.push(conduit::i18n::format(
+            "composer.more",
+            &[("arg0", format!("{}", rejected.len() - 3))],
+        ));
     }
-    format!(" {} 项（{}）", rejected.len(), details.join("；"))
+    conduit::i18n::format(
+        "composer.items",
+        &[
+            ("arg0", format!("{}", rejected.len())),
+            ("arg1", details.join("；").to_string()),
+        ],
+    )
 }
 
 /// A file selection belongs to a conversation, including a workspace's new-chat draft.
@@ -91,7 +100,10 @@ impl ConduitApp {
             &Store::path().with_file_name("attachments"),
             &referenced,
         ) {
-            self.message = Some(format!("清理图片附件失败：{error:#}"));
+            self.message = Some(conduit::i18n::format(
+                "composer.failed_to_clean_up_image_attachments",
+                &[("error", format!("{:#}", error))],
+            ));
         }
     }
 
@@ -133,7 +145,9 @@ impl ConduitApp {
             return true;
         }
         let Some(target) = self.composer_target() else {
-            self.message = Some("请先在左上角选择工作区。".into());
+            self.message = Some(
+                conduit::i18n::text_static("composer.select_a_workspace_in_the_upper_left").into(),
+            );
             cx.notify();
             return true;
         };
@@ -145,7 +159,10 @@ impl ConduitApp {
             for image in images {
                 match file_ref::save_clipboard_image(image, &directory) {
                     Ok(path) => paths.push(path),
-                    Err(error) => errors.push(format!("粘贴图片失败：{error:#}")),
+                    Err(error) => errors.push(conduit::i18n::format(
+                        "composer.failed_to_paste_image",
+                        &[("error", format!("{:#}", error))],
+                    )),
                 }
             }
         }
@@ -189,7 +206,9 @@ impl ConduitApp {
             return false;
         }
         let Some(target) = self.composer_target() else {
-            self.message = Some("请先在左上角选择工作区。".into());
+            self.message = Some(
+                conduit::i18n::text_static("composer.select_a_workspace_in_the_upper_left").into(),
+            );
             cx.notify();
             return false;
         };
@@ -198,12 +217,15 @@ impl ConduitApp {
         let draft = self.composer_files.entry(target).or_default();
         let added = file_ref::merge_references(&mut draft.references, references);
         draft.feedback = if !rejected.is_empty() {
-            Some(format!(
-                "已添加 {added} 个文件，跳过{}",
-                rejection_summary(&rejected)
+            Some(conduit::i18n::format(
+                "composer.added_files_skipped",
+                &[
+                    ("added", format!("{}", added)),
+                    ("arg0", rejection_summary(&rejected).to_string()),
+                ],
             ))
         } else if added == 0 {
-            Some("这些文件已在待发送列表中，无需重复添加。".into())
+            Some(conduit::i18n::text_static("composer.these_files_are_already_attached").into())
         } else {
             None
         };
@@ -392,8 +414,10 @@ impl ConduitApp {
                                 .h(px(24.))
                                 .flex_shrink_0()
                                 .icon(FullIconName::X)
-                                .tooltip("移除文件")
-                                .accessibility_label("移除文件")
+                                .tooltip(conduit::i18n::text_static("composer.remove_file"))
+                                .accessibility_label(conduit::i18n::text_static(
+                                    "composer.remove_file",
+                                ))
                                 .disabled(!enabled)
                                 .when(enabled, |button| button.cursor_pointer())
                                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -431,8 +455,10 @@ impl ConduitApp {
                             .small()
                             .compact()
                             .icon(FullIconName::X)
-                            .tooltip("关闭提示")
-                            .accessibility_label("关闭文件提示")
+                            .tooltip(conduit::i18n::text_static("composer.dismiss"))
+                            .accessibility_label(conduit::i18n::text_static(
+                                "composer.dismiss_file_hint",
+                            ))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 cx.stop_propagation();
                                 if let Some(target) = this.composer_target()
@@ -464,7 +490,9 @@ impl ConduitApp {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("添加文件到对话".into()),
+            prompt: Some(
+                conduit::i18n::text_static("composer.attach_files_to_conversation").into(),
+            ),
         });
         cx.spawn_in(window, async move |this, cx| match paths.await {
             Ok(Ok(Some(paths))) => {
@@ -481,7 +509,10 @@ impl ConduitApp {
                 let _ = this.update(cx, |this, cx| {
                     if this.composer_target().as_ref() == Some(&target) {
                         this.composer_files.entry(target).or_default().feedback =
-                            Some(format!("打开文件选择器失败：{other:?}"));
+                            Some(conduit::i18n::format(
+                                "composer.failed_to_open_file_picker",
+                                &[("other", format!("{:?}", other))],
+                            ));
                         cx.notify();
                     }
                 });
@@ -499,7 +530,12 @@ impl ConduitApp {
         if let Some(id) = self.selected_session
             && self.session_control.runs.contains_key(&id)
         {
-            self.pause_queued_message(id, "当前回复已停止；待发送消息不会自动发送。");
+            self.pause_queued_message(
+                id,
+                conduit::i18n::text_static(
+                    "composer.the_current_response_has_stopped_queued_messages",
+                ),
+            );
             if let Some(run) = self.session_control.runs.get_mut(&id) {
                 run.cancel();
             }
@@ -679,11 +715,13 @@ impl ConduitApp {
                             .compact()
                             .h(px(28.))
                             .icon(IconName::Plus)
-                            .tooltip(format!(
-                                "在当前工作区新建 {} 会话",
-                                self.new_session_provider.label()
+                            .tooltip(conduit::i18n::format(
+                                "composer.new_session_in_this_workspace",
+                                &[("arg0", self.new_session_provider.label().to_string())],
                             ))
-                            .accessibility_label("在当前工作区新建会话")
+                            .accessibility_label(conduit::i18n::text_static(
+                                "composer.new_session_in_this_workspace_ba056f",
+                            ))
                             .disabled(!composer_enabled)
                             .when(composer_enabled, |button| button.cursor_pointer())
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -711,7 +749,9 @@ impl ConduitApp {
                             message_action_button(
                                 "attach-file".into(),
                                 Icon::new(FullIconName::Paperclip),
-                                "添加文件（也可输入 @、拖入或 Ctrl+V 粘贴文件/图片）",
+                                conduit::i18n::text_static(
+                                    "composer.attach_files_or_type_drag_files_or",
+                                ),
                             )
                             .on_click(cx.listener(Self::pick_files)),
                         )
@@ -721,16 +761,23 @@ impl ConduitApp {
                             .debug_selector(|| "stop".into())
                             .icon(Icon::new(FullIconName::Square).size(px(12.)))
                             .accessibility_label(if stopping {
-                                "正在停止当前会话回复"
+                                conduit::i18n::text_static("composer.stopping_the_current_response")
                             } else {
-                                "停止当前会话回复"
+                                conduit::i18n::text_static("composer.stop_the_current_response")
                             })
                             .tooltip(if stopping {
-                                "正在停止当前会话回复…".to_string()
+                                conduit::i18n::text_static(
+                                    "composer.stopping_the_current_response_303aa5",
+                                )
+                                .to_string()
                             } else {
-                                format!(
-                                    "停止当前会话回复（{}）",
-                                    shortcuts::display("stop_reply", &self.store.ui.shortcuts)
+                                conduit::i18n::format(
+                                    "composer.stop_the_current_response_193a82",
+                                    &[(
+                                        "arg0",
+                                        shortcuts::display("stop_reply", &self.store.ui.shortcuts)
+                                            .to_string(),
+                                    )],
                                 )
                             })
                             .small()
@@ -749,8 +796,12 @@ impl ConduitApp {
                     } else {
                         Button::new("send")
                             .debug_selector(|| "send".into())
-                            .accessibility_label("发送消息")
-                            .tooltip(blocked.unwrap_or("发送消息（Enter）"))
+                            .accessibility_label(conduit::i18n::text_static(
+                                "composer.send_message",
+                            ))
+                            .tooltip(blocked.unwrap_or(conduit::i18n::text_static(
+                                "composer.send_message_enter",
+                            )))
                             .icon(IconName::ArrowUp)
                             .small()
                             .compact()
@@ -802,8 +853,12 @@ impl ConduitApp {
                         Button::new("scroll-to-latest")
                             .debug_selector(|| "scroll-to-latest".into())
                             .ghost()
-                            .tooltip("转到最新消息")
-                            .accessibility_label("转到最新消息")
+                            .tooltip(conduit::i18n::text_static(
+                                "composer.jump_to_latest_message",
+                            ))
+                            .accessibility_label(conduit::i18n::text_static(
+                                "composer.jump_to_latest_message",
+                            ))
                             .size(px(24.))
                             .p_0()
                             .flex_shrink_0()

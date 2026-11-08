@@ -28,7 +28,11 @@ impl SessionModelPicker {
                 .step(1.)
                 .default_value(effort.index() as f32)
         });
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索模型名称或 ID"));
+        let search = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(conduit::i18n::text_static(
+                "model_picker.search_model_names_or_ids",
+            ))
+        });
         let view = cx.entity();
         let subscriptions = vec![
             cx.subscribe(
@@ -134,9 +138,9 @@ impl Render for SessionModelPicker {
             ModelChannel::Cli,
             None,
             if engine == Provider::OpenCode {
-                "OpenCode 原生"
+                conduit::i18n::text_static("model_picker.opencode_native")
             } else {
-                "CLI 默认"
+                conduit::i18n::text_static("generation.cli_default")
             }
             .to_string(),
         )];
@@ -157,7 +161,12 @@ impl Render for SessionModelPicker {
         if let Some(id) = &selected
             && !models.iter().any(|m| m.id == *id)
         {
-            models::push_model(&mut models, id, id, "当前会话模型");
+            models::push_model(
+                &mut models,
+                id,
+                id,
+                conduit::i18n::text_static("model_picker.current_session_model"),
+            );
         }
         if let Some(provider) = &native_provider {
             models.retain(|model| model.id.split_once('/').is_some_and(|(p, _)| p == provider));
@@ -180,7 +189,7 @@ impl Render for SessionModelPicker {
                     .h(px(34.))
                     .px_2()
                     .disabled(disabled)
-                    .accessibility_label("选择 Provider")
+                    .accessibility_label(conduit::i18n::text_static("model_picker.select_provider"))
                     .cursor_pointer()
                     .child(
                         h_flex()
@@ -192,7 +201,7 @@ impl Render for SessionModelPicker {
                                 div()
                                     .text_size(ui_text_size(12.))
                                     .text_color(rgb(palette().faint))
-                                    .child("Provider"),
+                                    .child(conduit::i18n::text_static("common.provider")),
                             )
                             .child(
                                 div()
@@ -295,13 +304,16 @@ impl Render for SessionModelPicker {
             .max_h((window.viewport_size().height - px(469.)).clamp(px(34.), px(250.)))
             .overflow_y_scroll()
             .gap_1();
-        let options = std::iter::once((None, "默认模型".to_string()))
-            .filter(|_| show_default)
-            .chain(
-                models
-                    .into_iter()
-                    .map(|m| (Some(m.id.clone()), m.label.clone())),
-            );
+        let options = std::iter::once((
+            None,
+            conduit::i18n::text_static("model_picker.default_model").to_string(),
+        ))
+        .filter(|_| show_default)
+        .chain(
+            models
+                .into_iter()
+                .map(|m| (Some(m.id.clone()), m.label.clone())),
+        );
         for (index, (model, label)) in options.enumerate() {
             let active = selected == model;
             let mark = model_mark(engine, model.as_deref());
@@ -314,7 +326,10 @@ impl Render for SessionModelPicker {
                     .rounded(px(7.))
                     .disabled(disabled)
                     .cursor_pointer()
-                    .accessibility_label(format!("模型 {label}"))
+                    .accessibility_label(conduit::i18n::format(
+                        "model_picker.model",
+                        &[("label", label.to_string())],
+                    ))
                     .when(active, |b| b.bg(rgb(palette().surface_hover)))
                     .child(
                         h_flex()
@@ -364,13 +379,19 @@ impl Render for SessionModelPicker {
                             .text_size(ui_text_size(13.))
                             .font_semibold()
                             .text_color(rgb(palette().text))
-                            .child("模型配置"),
+                            .child(conduit::i18n::text_static(
+                                "model_picker.model_configuration",
+                            )),
                     )
                     .child(
                         div()
                             .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().faint))
-                            .child(if pending { "新会话" } else { "当前会话" }),
+                            .child(if pending {
+                                conduit::i18n::text_static("files.new_session")
+                            } else {
+                                conduit::i18n::text_static("model_picker.current_session")
+                            }),
                     ),
             )
             .child(self.engine_picker(cx))
@@ -380,7 +401,7 @@ impl Render for SessionModelPicker {
                     .px_2()
                     .text_size(ui_text_size(12.))
                     .text_color(rgb(palette().faint))
-                    .child("模型"),
+                    .child(conduit::i18n::text_static("model_picker.model_98fd0c")),
             )
             .child(
                 div()
@@ -395,7 +416,9 @@ impl Render for SessionModelPicker {
                         .py_2()
                         .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().faint))
-                        .child("没有匹配的模型"),
+                        .child(conduit::i18n::text_static(
+                            "model_picker.no_matching_models",
+                        )),
                 )
             })
             .when_some(note, |c, note| {
@@ -422,7 +445,11 @@ impl Render for SessionModelPicker {
                     v_flex()
                         .px_2()
                         .gap_2()
-                        .child(div().text_size(ui_text_size(12.)).child("思考强度"))
+                        .child(
+                            div()
+                                .text_size(ui_text_size(12.))
+                                .child(conduit::i18n::text_static("model_picker.reasoning_effort")),
+                        )
                         .child(
                             h_flex()
                                 .id("opencode-effort-options")
@@ -431,14 +458,18 @@ impl Render for SessionModelPicker {
                                 .overflow_y_scroll()
                                 .gap_1()
                                 .children(
-                                    std::iter::once(("default".to_string(), "默认".to_string()))
-                                        .chain(
-                                            variants
-                                                .into_iter()
-                                                .filter(|(value, _)| value != "default"),
-                                        )
-                                        .enumerate()
-                                        .map(move |(index, (value, label))| {
+                                    std::iter::once((
+                                        "default".to_string(),
+                                        conduit::i18n::text_static("chat.default").to_string(),
+                                    ))
+                                    .chain(
+                                        variants
+                                            .into_iter()
+                                            .filter(|(value, _)| value != "default"),
+                                    )
+                                    .enumerate()
+                                    .map(
+                                        move |(index, (value, label))| {
                                             let selected =
                                                 variant.as_deref().unwrap_or("default") == value;
                                             let picker = picker.clone();
@@ -472,14 +503,17 @@ impl Render for SessionModelPicker {
                                                         cx.notify();
                                                     });
                                                 })
-                                        }),
+                                        },
+                                    ),
                                 ),
                         )
                         .child(
                             div()
                                 .text_size(ui_text_size(12.))
                                 .text_color(rgb(palette().faint))
-                                .child("可用档位在连接模型后更新"),
+                                .child(conduit::i18n::text_static(
+                                    "model_picker.available_levels_update_after_connecting_to_the",
+                                )),
                         ),
                 )
             })
@@ -500,7 +534,9 @@ impl Render for SessionModelPicker {
                                         .flex_1()
                                         .text_size(ui_text_size(12.))
                                         .text_color(rgb(palette().muted))
-                                        .child("思考强度"),
+                                        .child(conduit::i18n::text_static(
+                                            "model_picker.reasoning_effort",
+                                        )),
                                 )
                                 .child(
                                     div()
@@ -518,7 +554,9 @@ impl Render for SessionModelPicker {
                                     Slider::new(&self.slider)
                                         .w_full()
                                         .disabled(disabled)
-                                        .accessibility_label("模型思考强度"),
+                                        .accessibility_label(conduit::i18n::text_static(
+                                            "model_picker.model_reasoning_effort",
+                                        )),
                                 ),
                         )
                         .child(h_flex().w_full().justify_between().children(
@@ -534,7 +572,9 @@ impl Render for SessionModelPicker {
                                 .text_size(ui_text_size(12.))
                                 .line_height(relative(1.4))
                                 .text_color(rgb(palette().faint))
-                                .child("更高强度可能增加耗时；支持的档位由模型决定"),
+                                .child(conduit::i18n::text_static(
+                                    "model_picker.higher_effort_may_take_longer_supported_levels",
+                                )),
                         ),
                 )
             });
@@ -559,16 +599,20 @@ impl Render for SessionModelPicker {
                             .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().faint))
                             .child(if pending {
-                                "首次发送时使用以上配置新建会话"
+                                conduit::i18n::text_static(
+                                    "model_picker.the_first_message_starts_a_session_with",
+                                )
                             } else {
-                                "下一条消息生效；切换引擎将新建会话"
+                                conduit::i18n::text_static(
+                                    "model_picker.applies_to_the_next_message_switching_engines",
+                                )
                             }),
                     )
                     .child(
                         Button::new("session-model-refresh")
                             .ghost()
                             .small()
-                            .label("刷新")
+                            .label(conduit::i18n::text_static("model_picker.refresh"))
                             .cursor_pointer()
                             .disabled(disabled)
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -595,7 +639,7 @@ impl SessionModelPicker {
             .px_2()
             .disabled(disabled)
             .cursor_pointer()
-            .accessibility_label("选择 CLI 引擎")
+            .accessibility_label(conduit::i18n::text_static("model_picker.select_cli_engine"))
             .child(
                 h_flex()
                     .debug_selector(|| "session-engine-control".into())
@@ -606,7 +650,7 @@ impl SessionModelPicker {
                         div()
                             .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().faint))
-                            .child("引擎"),
+                            .child(conduit::i18n::text_static("model_picker.engine")),
                     )
                     .child(provider_icon(provider))
                     .child(
@@ -661,7 +705,10 @@ impl SessionModelPicker {
                                         .child(if enabled {
                                             option.label().to_owned()
                                         } else {
-                                            format!("{} · 已停用", option.label())
+                                            conduit::i18n::format(
+                                                "model_picker.disabled",
+                                                &[("arg0", option.label().to_string())],
+                                            )
                                         }),
                                 )
                                 .when(active, |row| row.child(Icon::new(IconName::Check).small())),
@@ -756,9 +803,15 @@ impl ConduitApp {
             .px_1()
             .cursor_pointer()
             .tooltip(match permission {
-                PermissionLevel::ReadOnly => "会话权限：仅可查看",
-                PermissionLevel::WorkspaceWrite => "会话权限：工作区内修改",
-                PermissionLevel::FullAccess => "会话权限：完全权限（警告：不受沙箱限制）",
+                PermissionLevel::ReadOnly => {
+                    conduit::i18n::text_static("model_picker.session_permissions_read_only")
+                }
+                PermissionLevel::WorkspaceWrite => {
+                    conduit::i18n::text_static("model_picker.session_permissions_workspace_write")
+                }
+                PermissionLevel::FullAccess => conduit::i18n::text_static(
+                    "model_picker.session_permissions_full_access_warning_no_sandbox",
+                ),
             })
             .child(
                 h_flex()
@@ -866,19 +919,19 @@ impl ConduitApp {
                                         .text_color(rgb(palette().faint))
                                         .child(match (opencode, option) {
                                             (true, PermissionLevel::ReadOnly) => {
-                                                "OpenCode：仅开放读取工具，禁止命令与写入"
+                                                conduit::i18n::text_static("model_picker.opencode_read_tools_only_commands_and_writes")
                                             }
                                             (true, PermissionLevel::WorkspaceWrite) => {
-                                                "OpenCode：写入、命令及目录外访问需要审批"
+                                                conduit::i18n::text_static("model_picker.opencode_writes_commands_and_access_outside_the")
                                             }
                                             (_, PermissionLevel::ReadOnly) => {
-                                                "Codex：只读沙箱；Claude：仅开放读取工具"
+                                                conduit::i18n::text_static("model_picker.codex_read_only_sandbox_claude_read_tools")
                                             }
                                             (_, PermissionLevel::WorkspaceWrite) => {
-                                                "Codex：工作区沙箱；Claude：自动接受文件编辑"
+                                                conduit::i18n::text_static("model_picker.codex_workspace_sandbox_claude_automatically_accept_file")
                                             }
                                             (_, PermissionLevel::FullAccess) => {
-                                                "警告：不受沙箱限制，命令不经审批直接执行"
+                                                conduit::i18n::text_static("model_picker.warning_no_sandbox_restrictions_commands_run_without")
                                             }
                                         }),
                                 ),
@@ -903,7 +956,7 @@ impl ConduitApp {
                         .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().faint))
                         .child(
-                            "完全权限会立即自动处理当前审批；沙箱及其他权限改动从下一条消息生效",
+                            conduit::i18n::text_static("model_picker.full_access_immediately_handles_pending_approvals_automatically"),
                         ),
                 )
             })
@@ -969,7 +1022,7 @@ impl ConduitApp {
                     .map(|m| m.label.clone())
                     .unwrap_or_else(|| id.clone())
             })
-            .unwrap_or_else(|| "默认模型".into());
+            .unwrap_or_else(|| conduit::i18n::text_static("model_picker.default_model").into());
         let channel = if provider == Provider::OpenCode && selection.channel == ModelChannel::Cli {
             selected_model
                 .as_deref()
@@ -984,7 +1037,7 @@ impl ConduitApp {
                 .opencode
                 .effective_variant()
                 .map(str::to_owned)
-                .unwrap_or_else(|| "默认".into())
+                .unwrap_or_else(|| conduit::i18n::text_static("chat.default").into())
         } else {
             selection.effort.label().to_owned()
         };
@@ -998,10 +1051,16 @@ impl ConduitApp {
             .rounded(px(7.))
             .disabled(disabled)
             .when(!disabled, |b| b.cursor_pointer())
-            .accessibility_label("选择引擎、Provider、模型和思考强度")
-            .tooltip(format!(
-                "{} · {channel} · 思考强度：{effort}",
-                provider.label()
+            .accessibility_label(conduit::i18n::text_static(
+                "model_picker.select_engine_provider_model_and_reasoning_effort",
+            ))
+            .tooltip(conduit::i18n::format(
+                "model_picker.reasoning_effort_5315ac",
+                &[
+                    ("arg0", provider.label().to_string()),
+                    ("channel", channel.to_string()),
+                    ("effort", effort.to_string()),
+                ],
             ))
             .on_click(|_, _, cx| cx.stop_propagation())
             .child(
@@ -1027,14 +1086,21 @@ impl ConduitApp {
                             .text_color(rgb(palette().muted))
                             .child(label),
                     )
-                    .when(effort != "默认", |row| {
-                        row.child(
-                            div()
-                                .text_size(ui_text_size(12.))
-                                .text_color(rgb(palette().faint))
-                                .child(effort.clone()),
-                        )
-                    })
+                    .when(
+                        if provider == Provider::OpenCode {
+                            selection.opencode.effective_variant().is_some()
+                        } else {
+                            selection.effort != ReasoningEffort::Default
+                        },
+                        |row| {
+                            row.child(
+                                div()
+                                    .text_size(ui_text_size(12.))
+                                    .text_color(rgb(palette().faint))
+                                    .child(effort.clone()),
+                            )
+                        },
+                    )
                     .child(
                         Icon::new(IconName::ChevronDown)
                             .small()
@@ -1065,9 +1131,9 @@ impl ConduitApp {
     pub(super) fn channel_label(&self, engine: Provider, channel: &ModelChannel) -> String {
         match channel {
             ModelChannel::Cli => if engine == Provider::OpenCode {
-                "OpenCode 原生"
+                conduit::i18n::text_static("model_picker.opencode_native")
             } else {
-                "CLI 默认"
+                conduit::i18n::text_static("generation.cli_default")
             }
             .into(),
             ModelChannel::Ccs(id) => self.channel_label(
@@ -1080,7 +1146,9 @@ impl ConduitApp {
                 .iter()
                 .find(|p| p.id == *id && p.engine == engine)
                 .map(|p| p.name.clone())
-                .unwrap_or_else(|| "Provider 不可用".into()),
+                .unwrap_or_else(|| {
+                    conduit::i18n::text_static("model_picker.provider_unavailable").into()
+                }),
         }
     }
 
@@ -1100,7 +1168,12 @@ impl ConduitApp {
                 })
                 .unwrap_or_else(|| {
                     (
-                        Some("正在从 OpenCode CLI 读取原生模型目录…".into()),
+                        Some(
+                            conduit::i18n::text_static(
+                                "model_picker.loading_the_native_model_catalog_from_opencode",
+                            )
+                            .into(),
+                        ),
                         self.managed_native_models(engine, false),
                     )
                 });
@@ -1130,16 +1203,24 @@ impl ConduitApp {
                 {
                     (None, p.catalog())
                 } else {
-                    (Some("Provider 已移除，请重新选择".into()), models)
+                    (
+                        Some(
+                            conduit::i18n::text_static(
+                                "model_picker.provider_removed_select_another_provider",
+                            )
+                            .into(),
+                        ),
+                        models,
+                    )
                 }
             }
         }
     }
 
     pub(super) fn session_route(&self, id: u64) -> anyhow::Result<RuntimeRoute> {
-        let s = self
-            .session(id)
-            .ok_or_else(|| anyhow::anyhow!("会话不存在"))?;
+        let s = self.session(id).ok_or_else(|| {
+            anyhow::anyhow!(conduit::i18n::text("model_picker.session_does_not_exist"))
+        })?;
         let mut route = self.channel_route(s.provider, &s.channel)?;
         if s.channel == ModelChannel::Cli {
             route.opencode_variant = s.opencode.variant.clone();
@@ -1159,14 +1240,22 @@ impl ConduitApp {
                 .providers
                 .iter()
                 .find(|p| p.id == ModelProvider::ccs_id(engine, id) && p.engine == engine)
-                .ok_or_else(|| anyhow::anyhow!("Provider 未同步，请刷新模型配置"))?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(conduit::i18n::text(
+                        "model_picker.provider_not_synced_refresh_model_configuration"
+                    ))
+                })?
                 .runtime_route(&self.ccs.database_path),
             ModelChannel::Provider(id) => self
                 .store
                 .providers
                 .iter()
                 .find(|p| p.id == *id && p.engine == engine)
-                .ok_or_else(|| anyhow::anyhow!("Provider 已移除，请重新选择"))?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(conduit::i18n::text(
+                        "model_picker.provider_removed_select_another_provider"
+                    ))
+                })?
                 .runtime_route(&self.ccs.database_path),
         }
     }
@@ -1195,7 +1284,9 @@ impl ConduitApp {
         let current = self.store.ui.naming_provider;
         let label = current
             .map(|provider| provider.label())
-            .unwrap_or("跟随当前会话");
+            .unwrap_or(conduit::i18n::text_static(
+                "generation.follow_current_session",
+            ));
         let trigger = Button::new("naming-provider-trigger")
             .ghost()
             .small()
@@ -1204,7 +1295,9 @@ impl ConduitApp {
             .rounded_full()
             .disabled(disabled)
             .when(!disabled, |button| button.cursor_pointer())
-            .accessibility_label("选择命名引擎")
+            .accessibility_label(conduit::i18n::text_static(
+                "model_picker.select_naming_engine",
+            ))
             .child(
                 h_flex()
                     .gap_1()
@@ -1234,7 +1327,10 @@ impl ConduitApp {
                 let popover = cx.entity().downgrade();
                 let mut list = v_flex().w(px(220.)).gap(px(1.));
                 let options: [(Option<Provider>, &str); 4] = [
-                    (None, "跟随当前会话"),
+                    (
+                        None,
+                        conduit::i18n::text_static("generation.follow_current_session"),
+                    ),
                     (Some(Provider::Claude), Provider::Claude.label()),
                     (Some(Provider::Codex), Provider::Codex.label()),
                     (Some(Provider::OpenCode), Provider::OpenCode.label()),
@@ -1313,7 +1409,9 @@ impl ConduitApp {
             .rounded_full()
             .disabled(disabled)
             .when(!disabled, |button| button.cursor_pointer())
-            .accessibility_label("选择自动重命名方式")
+            .accessibility_label(conduit::i18n::text_static(
+                "model_picker.select_automatic_renaming_mode",
+            ))
             .child(
                 h_flex()
                     .gap_1()
@@ -1344,13 +1442,17 @@ impl ConduitApp {
                 for (index, (mode, name, detail)) in [
                     (
                         NamingMode::Latest,
-                        "自动根据最新内容重命名",
-                        "每轮结束后按最新对话更新标题",
+                        conduit::i18n::text_static("model_picker.rename_from_the_latest_content"),
+                        conduit::i18n::text_static(
+                            "model_picker.update_the_title_after_each_turn_using",
+                        ),
                     ),
                     (
                         NamingMode::FirstMessage,
-                        "根据第一条消息内容重命名",
-                        "只在第一条消息后生成一次标题",
+                        conduit::i18n::text_static("model_picker.rename_from_the_first_message"),
+                        conduit::i18n::text_static(
+                            "model_picker.generate_a_title_once_after_the_first",
+                        ),
                     ),
                 ]
                 .into_iter()
@@ -1451,7 +1553,9 @@ impl ConduitApp {
             .rounded_full()
             .disabled(disabled)
             .when(!disabled, |button| button.cursor_pointer())
-            .accessibility_label("选择命名模型")
+            .accessibility_label(conduit::i18n::text_static(
+                "model_picker.select_naming_model",
+            ))
             .child(
                 h_flex()
                     .gap_1()
@@ -1511,7 +1615,10 @@ impl ConduitApp {
                             .px_2()
                             .rounded(px(8.))
                             .cursor_pointer()
-                            .accessibility_label(format!("模型 {label}"))
+                            .accessibility_label(conduit::i18n::format(
+                                "model_picker.model",
+                                &[("label", label.to_string())],
+                            ))
                             .when(selected, |button| button.bg(rgb(palette().surface_hover)))
                             .on_click(move |_, window, cx| {
                                 let id = id.clone();
@@ -1575,7 +1682,13 @@ impl ConduitApp {
                         .pt_1()
                         .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().faint))
-                        .child(format!("{provider_label} · {} 个模型", models.len())),
+                        .child(conduit::i18n::format(
+                            "model_picker.models",
+                            &[
+                                ("provider_label", provider_label.to_string()),
+                                ("arg0", format!("{}", models.len())),
+                            ],
+                        )),
                 );
                 list
             })
@@ -1587,7 +1700,9 @@ impl ConduitApp {
         let current = self.store.git.generation_provider;
         let label = current
             .map(|provider| provider.label())
-            .unwrap_or("跟随当前会话");
+            .unwrap_or(conduit::i18n::text_static(
+                "generation.follow_current_session",
+            ));
         let trigger = Button::new("git-provider-trigger")
             .ghost()
             .small()
@@ -1596,7 +1711,9 @@ impl ConduitApp {
             .rounded_full()
             .disabled(disabled)
             .when(!disabled, |button| button.cursor_pointer())
-            .accessibility_label("选择生成用 CLI")
+            .accessibility_label(conduit::i18n::text_static(
+                "model_picker.select_generation_cli",
+            ))
             .child(
                 h_flex()
                     .gap_1()
@@ -1626,7 +1743,10 @@ impl ConduitApp {
                 let popover = cx.entity().downgrade();
                 let mut list = v_flex().w(px(220.)).gap(px(1.));
                 let options: [(Option<Provider>, &str); 4] = [
-                    (None, "跟随当前会话"),
+                    (
+                        None,
+                        conduit::i18n::text_static("generation.follow_current_session"),
+                    ),
                     (Some(Provider::Claude), Provider::Claude.label()),
                     (Some(Provider::Codex), Provider::Codex.label()),
                     (Some(Provider::OpenCode), Provider::OpenCode.label()),
@@ -1722,7 +1842,9 @@ impl ConduitApp {
             .rounded_full()
             .disabled(disabled)
             .when(!disabled, |button| button.cursor_pointer())
-            .accessibility_label("选择生成用模型")
+            .accessibility_label(conduit::i18n::text_static(
+                "model_picker.select_generation_model",
+            ))
             .child(
                 h_flex()
                     .gap_1()
@@ -1782,7 +1904,10 @@ impl ConduitApp {
                             .px_2()
                             .rounded(px(8.))
                             .cursor_pointer()
-                            .accessibility_label(format!("模型 {label}"))
+                            .accessibility_label(conduit::i18n::format(
+                                "model_picker.model",
+                                &[("label", label.to_string())],
+                            ))
                             .when(selected, |button| button.bg(rgb(palette().surface_hover)))
                             .on_click(move |_, window, cx| {
                                 let id = id.clone();
@@ -1846,7 +1971,13 @@ impl ConduitApp {
                         .pt_1()
                         .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().faint))
-                        .child(format!("{provider_label} · {} 个模型", models.len())),
+                        .child(conduit::i18n::format(
+                            "model_picker.models",
+                            &[
+                                ("provider_label", provider_label.to_string()),
+                                ("arg0", format!("{}", models.len())),
+                            ],
+                        )),
                 );
                 list
             })

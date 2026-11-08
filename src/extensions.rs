@@ -52,11 +52,13 @@ impl Entry {
     }
     pub fn status(&self) -> &'static str {
         if self.disabled {
-            "配置已禁用"
+            conduit::i18n::text_static("extensions.configuration_disabled")
         } else {
             match self.kind {
-                Kind::Skill => "已发现",
-                Kind::Mcp => "已配置 · 连接未检测",
+                Kind::Skill => conduit::i18n::text_static("extensions.discovered"),
+                Kind::Mcp => {
+                    conduit::i18n::text_static("extensions.configured_connection_not_tested")
+                }
             }
         }
     }
@@ -192,9 +194,10 @@ impl<'a> Scan<'a> {
             || self.visited >= WALK_LIMIT
         {
             if !self.limited {
-                self.catalog
-                    .errors
-                    .push("扫描达到时间或数量上限，仅展示已读取的部分结果。".into());
+                self.catalog.errors.push(
+                    conduit::i18n::text_static("extensions.scan_reached_its_time_or_count_limit")
+                        .into(),
+                );
                 self.limited = true;
             }
             return false;
@@ -215,7 +218,7 @@ impl<'a> Scan<'a> {
             Ok(path) => path,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
             Err(_) => {
-                self.error(path, "无法访问");
+                self.error(path, conduit::i18n::text_static("extensions.inaccessible"));
                 return None;
             }
         };
@@ -231,14 +234,25 @@ impl<'a> Scan<'a> {
         });
         match result {
             Ok(bytes) if bytes.len() as u64 > FILE_LIMIT => {
-                self.error(path, "文件超过 2 MiB，已跳过");
+                self.error(
+                    path,
+                    conduit::i18n::text_static("extensions.file_exceeds_2_mib_skipped"),
+                );
                 None
             }
             Ok(bytes) => String::from_utf8(bytes)
-                .map_err(|_| self.error(path, "文件不是 UTF-8"))
+                .map_err(|_| {
+                    self.error(
+                        path,
+                        conduit::i18n::text_static("extensions.edit.file_is_not_utf_8"),
+                    )
+                })
                 .ok(),
             Err(_) => {
-                self.error(path, "读取失败");
+                self.error(
+                    path,
+                    conduit::i18n::text_static("settings.models.read_failed"),
+                );
                 None
             }
         }
@@ -248,7 +262,10 @@ impl<'a> Scan<'a> {
         match jsonc(&text) {
             Some(value) => Some(value),
             None => {
-                self.error(path, "JSON 配置无法解析");
+                self.error(
+                    path,
+                    conduit::i18n::text_static("extensions.unable_to_parse_json_configuration"),
+                );
                 None
             }
         }
@@ -265,7 +282,10 @@ impl<'a> Scan<'a> {
             {
                 Some(v) => v,
                 None => {
-                    self.error(path, "TOML 配置无法解析");
+                    self.error(
+                        path,
+                        conduit::i18n::text_static("extensions.unable_to_parse_toml_configuration"),
+                    );
                     return;
                 }
             }
@@ -309,7 +329,10 @@ impl<'a> Scan<'a> {
     fn servers(&mut self, value: &Value, path: &Path, scope: &str, disabled: &[String]) {
         let Some(servers) = value.as_object() else {
             if !value.is_null() {
-                self.error(path, "MCP 列表格式不受支持");
+                self.error(
+                    path,
+                    conduit::i18n::text_static("extensions.unsupported_mcp_list_format"),
+                );
             }
             return;
         };
@@ -318,7 +341,10 @@ impl<'a> Scan<'a> {
                 break;
             }
             if !server.is_object() {
-                self.error(path, "MCP 条目不是对象");
+                self.error(
+                    path,
+                    conduit::i18n::text_static("extensions.mcp_entry_is_not_an_object"),
+                );
                 continue;
             }
             let url = server["url"].as_str();
@@ -332,7 +358,9 @@ impl<'a> Scan<'a> {
             let target = url
                 .map(origin)
                 .or_else(|| command.map(executable_name))
-                .unwrap_or_else(|| "未提供端点或命令".into());
+                .unwrap_or_else(|| {
+                    conduit::i18n::text_static("extensions.no_endpoint_or_command_provided").into()
+                });
             self.catalog.entries.push(Entry {
                 name: clipped(name, 160),
                 description: String::new(),
@@ -358,7 +386,10 @@ impl<'a> Scan<'a> {
             Ok(path) => path,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
             Err(_) => {
-                self.error(folder, "无法访问 Skill 目录");
+                self.error(
+                    folder,
+                    conduit::i18n::text_static("extensions.unable_to_access_skill_directory"),
+                );
                 return;
             }
         };
@@ -368,7 +399,10 @@ impl<'a> Scan<'a> {
         let entries = match fs::read_dir(folder) {
             Ok(entries) => entries,
             Err(_) => {
-                self.error(folder, "无法读取 Skill 目录");
+                self.error(
+                    folder,
+                    conduit::i18n::text_static("extensions.unable_to_read_skill_directory"),
+                );
                 return;
             }
         };
@@ -397,7 +431,12 @@ impl<'a> Scan<'a> {
                     transport: String::new(),
                     target: String::new(),
                 }),
-                None => self.error(&definition, "Skill 缺少有效的 frontmatter name"),
+                None => self.error(
+                    &definition,
+                    conduit::i18n::text_static(
+                        "extensions.skill_is_missing_a_valid_frontmatter_name",
+                    ),
+                ),
             }
             return;
         }
@@ -409,15 +448,23 @@ impl<'a> Scan<'a> {
             match entry {
                 Ok(entry) if entry.path().is_dir() => self.skills(&entry.path(), scope, depth + 1),
                 Ok(_) => {}
-                Err(_) => self.error(folder, "部分目录条目无法读取"),
+                Err(_) => self.error(
+                    folder,
+                    conduit::i18n::text_static(
+                        "extensions.some_directory_entries_could_not_be_read",
+                    ),
+                ),
             }
         }
     }
     fn discover(&mut self, context: &Context, locations: &Locations) {
         if locations.home.as_os_str().is_empty() {
-            self.catalog
-                .errors
-                .push("无法确定用户目录，请检查 USERPROFILE。".into());
+            self.catalog.errors.push(
+                conduit::i18n::text_static(
+                    "extensions.unable_to_locate_user_directory_check_userprofile",
+                )
+                .into(),
+            );
             return;
         }
         let projects = context
@@ -670,7 +717,7 @@ fn executable_name(value: &str) -> String {
         .next()
         .filter(|v| !v.contains([' ', '=', '?', '&']))
         .map(|v| clipped(v, 160))
-        .unwrap_or_else(|| "命令已隐藏".into())
+        .unwrap_or_else(|| conduit::i18n::text_static("extensions.command_hidden").into())
 }
 fn origin(value: &str) -> String {
     url::Url::parse(value)
@@ -678,7 +725,7 @@ fn origin(value: &str) -> String {
         .filter(|u| matches!(u.scheme(), "http" | "https" | "ws" | "wss"))
         .map(|u| u.origin().ascii_serialization())
         .filter(|s| s != "null")
-        .unwrap_or_else(|| "端点已隐藏".into())
+        .unwrap_or_else(|| conduit::i18n::text_static("extensions.endpoint_hidden").into())
 }
 
 fn skill_metadata(text: &str) -> (Option<String>, String) {
@@ -803,6 +850,7 @@ mod tests {
     use super::*;
     #[test]
     fn jsonc_preserves_urls_strings_and_unicode() {
+        let _locale = crate::test_support::chinese();
         let v =
             jsonc("{ // comment\n\"mcp\":{\"中文\":{\"url\":\"https://host/a//b?q=secret\",},},}")
                 .unwrap();
@@ -811,6 +859,7 @@ mod tests {
     }
     #[test]
     fn frontmatter_handles_multiline_and_quoted_fields() {
+        let _locale = crate::test_support::chinese();
         assert_eq!(
             skill_metadata("---\nname: '测试'\ndescription: >-\n  first\n  second\n---\nbody"),
             (Some("测试".into()), " first second".into())
@@ -819,6 +868,7 @@ mod tests {
     }
     #[test]
     fn mcp_metadata_never_retains_secrets() {
+        let _locale = crate::test_support::chinese();
         let cancel = AtomicBool::new(false);
         let mut scan = Scan::new(&cancel);
         scan.servers(&serde_json::json!({"test":{"url":"https://user:password@host/path-secret?token=secret#secret","headers":{"Authorization":"secret"},"env":{"KEY":"secret"},"args":["secret"]}}), Path::new("config.json"), "全局", &[]);
@@ -829,6 +879,7 @@ mod tests {
     }
     #[test]
     fn discovery_keeps_scopes_partial_errors_and_disabled_entries() {
+        let _locale = crate::test_support::chinese();
         let root = std::env::temp_dir().join(format!(
             "conduit-extensions-{}-{}",
             std::process::id(),
@@ -910,6 +961,7 @@ mod tests {
     }
     #[test]
     fn claude_and_opencode_scans_keep_disabled_sources_and_jsonc() {
+        let _locale = crate::test_support::chinese();
         let root = std::env::temp_dir().join(format!(
             "conduit-extensions-engines-{}-{}",
             std::process::id(),

@@ -38,7 +38,13 @@ pub(super) fn assistant_reply_text(session: &SessionRecord, index: usize) -> Str
 fn format_elapsed(elapsed: Duration, precise: bool) -> String {
     if elapsed > Duration::from_secs(60) {
         let seconds = elapsed.as_secs();
-        format!("{}分{:02}秒", seconds / 60, seconds % 60)
+        conduit::i18n::format(
+            "chat.m_s",
+            &[
+                ("arg0", format!("{}", seconds / 60)),
+                ("arg1", format!("{:02}", seconds % 60)),
+            ],
+        )
     } else if precise {
         format!("{:.1} s", elapsed.as_secs_f64())
     } else {
@@ -59,9 +65,12 @@ pub(super) fn reply_elapsed_label(
         .filter(|item| item.kind == ItemKind::Assistant)
         .find_map(|item| item.elapsed_ms)
     {
-        return Some(format!(
-            "耗时 {}",
-            format_elapsed(Duration::from_millis(elapsed), true)
+        return Some(conduit::i18n::format(
+            "chat.duration",
+            &[(
+                "arg0",
+                format_elapsed(Duration::from_millis(elapsed), true).to_string(),
+            )],
         ));
     }
     if live && range.end == session.messages.len() {
@@ -79,9 +88,12 @@ pub(super) fn reply_elapsed_label(
         return None;
     }
     let elapsed = end.created_at.checked_sub(start.created_at)?;
-    Some(format!(
-        "耗时约 {}",
-        format_elapsed(Duration::from_secs(elapsed), false)
+    Some(conduit::i18n::format(
+        "chat.approx_duration",
+        &[(
+            "arg0",
+            format_elapsed(Duration::from_secs(elapsed), false).to_string(),
+        )],
     ))
 }
 
@@ -125,11 +137,11 @@ impl ConduitApp {
                     .get(&session.provider)
                     .map_or_else(|| model.to_string(), |catalog| catalog.label(model))
             })
-            .unwrap_or_else(|| "CLI 默认模型".into());
+            .unwrap_or_else(|| conduit::i18n::text_static("chat.cli_default_model").into());
         let effort = if session.provider == Provider::OpenCode {
             run.opencode_variant
                 .clone()
-                .unwrap_or_else(|| "默认".into())
+                .unwrap_or_else(|| conduit::i18n::text_static("chat.default").into())
         } else {
             run.reasoning_effort.label().to_owned()
         };
@@ -151,7 +163,7 @@ impl ConduitApp {
                         .truncate()
                         .text_size(px(12.))
                         .text_color(rgb(palette().muted))
-                        .child(run.activity.clone()),
+                        .child(run.activity_label()),
                 )
                 .child(
                     div()
@@ -183,7 +195,10 @@ impl ConduitApp {
                         .flex_shrink_0()
                         .text_size(px(11.))
                         .text_color(rgb(palette().faint))
-                        .child(format!("思考强度：{effort}")),
+                        .child(conduit::i18n::format(
+                            "chat.reasoning_effort",
+                            &[("effort", effort.to_string())],
+                        )),
                 )
                 .into_any_element(),
         )
@@ -213,7 +228,7 @@ impl ConduitApp {
                 div()
                     .text_size(px(11.))
                     .text_color(rgb(palette().muted))
-                    .child("正在统计变更…")
+                    .child(conduit::i18n::text_static("chat.counting_changes"))
                     .into_any_element(),
             );
         };
@@ -247,27 +262,32 @@ impl ConduitApp {
             .gap(px(6.));
         if total > 0 {
             let done = completed == total;
-            tags = tags.child(
-                stat_tag()
-                    .child(
-                        Icon::new(if done {
-                            FullIconName::CircleCheck
-                        } else {
-                            FullIconName::CircleDashed
-                        })
-                        .size(px(11.))
-                        .text_color(rgb(if done {
-                            palette().diff_add_text
-                        } else {
-                            palette().faint
-                        })),
-                    )
-                    .child(
-                        div()
-                            .text_color(rgb(palette().muted))
-                            .child(format!("步骤 {completed} / {total}")),
-                    ),
-            );
+            tags =
+                tags.child(
+                    stat_tag()
+                        .child(
+                            Icon::new(if done {
+                                FullIconName::CircleCheck
+                            } else {
+                                FullIconName::CircleDashed
+                            })
+                            .size(px(11.))
+                            .text_color(rgb(if done {
+                                palette().diff_add_text
+                            } else {
+                                palette().faint
+                            })),
+                        )
+                        .child(div().text_color(rgb(palette().muted)).child(
+                            conduit::i18n::format(
+                                "chat.step",
+                                &[
+                                    ("completed", format!("{}", completed)),
+                                    ("total", format!("{}", total)),
+                                ],
+                            ),
+                        )),
+                );
         }
         if !stats.files.is_empty() {
             tags = tags.child(
@@ -280,7 +300,10 @@ impl ConduitApp {
                     .child(
                         div()
                             .text_color(rgb(palette().muted))
-                            .child(format!("{} 个文件", stats.files.len())),
+                            .child(conduit::i18n::format(
+                                "chat.files",
+                                &[("arg0", format!("{}", stats.files.len()))],
+                            )),
                     )
                     .child(
                         div()
@@ -302,7 +325,9 @@ impl ConduitApp {
         .px(px(0.))
         .rounded(px(8.))
         .cursor_pointer()
-        .accessibility_label("查看步骤与文件变更明细")
+        .accessibility_label(conduit::i18n::text_static(
+            "chat.view_steps_and_file_changes",
+        ))
         .child(tags);
         let panel_plan = plan;
         let panel_stats = stats;
@@ -443,8 +468,11 @@ fn turn_stats_details(
                 .justify_between()
                 .text_size(px(11.))
                 .text_color(rgb(palette().faint))
-                .child(format!("本轮文件修改 · {}", stats.files.len()))
-                .child("点击查看 Diff"),
+                .child(conduit::i18n::format(
+                    "chat.file_changes_in_this_turn",
+                    &[("arg0", format!("{}", stats.files.len()))],
+                ))
+                .child(conduit::i18n::text_static("chat.click_to_view_diff")),
         );
     }
     for (index, (path, stat)) in stats.files.iter().enumerate() {
@@ -462,8 +490,14 @@ fn turn_stats_details(
                 .px_2()
                 .rounded(px(6.))
                 .cursor_pointer()
-                .tooltip(format!("{display_path} · 查看本轮修改"))
-                .accessibility_label(format!("查看 {display_path} 的本轮 Diff"))
+                .tooltip(conduit::i18n::format(
+                    "chat.view_changes_in_this_turn",
+                    &[("display_path", display_path.to_string())],
+                ))
+                .accessibility_label(conduit::i18n::format(
+                    "chat.view_this_turn_s_diff_for",
+                    &[("display_path", display_path.to_string())],
+                ))
                 .on_click(move |_, window, cx| open_diff(&path, window, cx))
                 .child(
                     h_flex()
@@ -532,11 +566,20 @@ impl ConduitApp {
             .map(|run| run.turn_started.elapsed())
             .unwrap_or_default();
         let label = if running {
-            format!("正在执行中 · {}", format_elapsed(elapsed, false))
+            conduit::i18n::format(
+                "chat.running",
+                &[("arg0", format_elapsed(elapsed, false).to_string())],
+            )
         } else if failures > 0 {
-            format!("执行工具 {count} 次，其中 {failures} 次失败")
+            conduit::i18n::format(
+                "chat.tool_calls_failed",
+                &[
+                    ("count", format!("{}", count)),
+                    ("failures", format!("{}", failures)),
+                ],
+            )
         } else {
-            format!("执行工具 {count} 次")
+            conduit::i18n::format("chat.tool_calls", &[("count", format!("{}", count))])
         };
         let toggle_key = group_key.clone();
         let can_collapse = !running && group.replied;
@@ -552,7 +595,11 @@ impl ConduitApp {
         .when(can_collapse, |button| button.cursor_pointer())
         .accessibility_label(format!(
             "{}：{label}",
-            if expanded { "收起" } else { "展开" }
+            if expanded {
+                conduit::i18n::text_static("chat.collapse")
+            } else {
+                conduit::i18n::text_static("chat.expand")
+            }
         ))
         .when(can_collapse, |button| {
             button.on_click(cx.listener(move |this, _, _, cx| {
@@ -650,7 +697,7 @@ impl ConduitApp {
         let running = tool_running(item);
         let failed = !running && tool_failed(item);
         let category = if running && reasoning {
-            "思考中".to_string()
+            conduit::i18n::text_static("chat.thinking").to_string()
         } else {
             tool_category(item)
         };
@@ -669,7 +716,11 @@ impl ConduitApp {
         .cursor_pointer()
         .accessibility_label(format!(
             "{}{}",
-            if expanded { "收起" } else { "展开" },
+            if expanded {
+                conduit::i18n::text_static("chat.collapse")
+            } else {
+                conduit::i18n::text_static("chat.expand")
+            },
             category
         ))
         .on_click(cx.listener(move |this, _, _, cx| {
@@ -722,7 +773,7 @@ impl ConduitApp {
                             .flex_shrink_0()
                             .text_size(px(11.))
                             .text_color(rgb(palette().muted))
-                            .child(approval.status.to_string()),
+                            .child(approval.status.label().to_string()),
                     )
                 })
                 .when(running && !reasoning, |row| {
@@ -735,7 +786,7 @@ impl ConduitApp {
                                 div()
                                     .text_size(px(11.))
                                     .text_color(rgb(palette().faint))
-                                    .child("已运行"),
+                                    .child(conduit::i18n::text_static("chat.elapsed")),
                             )
                             .child(
                                 Icon::new(FullIconName::Clock3)
@@ -750,7 +801,7 @@ impl ConduitApp {
                             .flex_shrink_0()
                             .text_size(px(11.))
                             .text_color(rgb(palette().danger_text))
-                            .child("运行失败"),
+                            .child(conduit::i18n::text_static("chat.failed")),
                     )
                 })
                 .when(!summary.is_empty(), |row| {
@@ -985,7 +1036,11 @@ impl ConduitApp {
                                         message_action_button(
                                             copy_id.clone(),
                                             copy_icon,
-                                            if copied { "已复制" } else { "复制消息" },
+                                            if copied {
+                                                conduit::i18n::text_static("chat.copied")
+                                            } else {
+                                                conduit::i18n::text_static("chat.copy_message")
+                                            },
                                         )
                                         .on_click(
                                             cx.listener(move |this, _, window, cx| {
@@ -1038,7 +1093,7 @@ impl ConduitApp {
                             .map(|catalog| catalog.label(id))
                             .unwrap_or_else(|| id.into())
                     })
-                    .unwrap_or_else(|| "CLI 默认模型".into());
+                    .unwrap_or_else(|| conduit::i18n::text_static("chat.cli_default_model").into());
                 let copy_id = SharedString::from(format!("reply-copy-{}-{}", session_id, item.key));
                 let copied = self.copied_action.as_ref() == Some(&copy_id);
                 let copy_icon = if copied {
@@ -1058,7 +1113,11 @@ impl ConduitApp {
                         message_action_button(
                             copy_id.clone(),
                             copy_icon,
-                            if copied { "已复制" } else { "复制消息" },
+                            if copied {
+                                conduit::i18n::text_static("chat.copied")
+                            } else {
+                                conduit::i18n::text_static("chat.copy_message")
+                            },
                         )
                         .debug_selector(move || format!("reply-copy-button-{index}"))
                         // The 14px glyph sits centered in a 24px hit target.
@@ -1084,7 +1143,7 @@ impl ConduitApp {
                                 session_id, item.key
                             )),
                             Icon::new(IconName::RefreshCw),
-                            "重新生成",
+                            conduit::i18n::text_static("chat.regenerate"),
                         )
                         .debug_selector(move || format!("reply-retry-button-{index}"))
                         .on_click(cx.listener(
@@ -1275,7 +1334,7 @@ impl ConduitApp {
                     Vec::new()
                 };
                 let title = if edit {
-                    "编辑文件".to_string()
+                    conduit::i18n::text_static("chat.edit_file").to_string()
                 } else {
                     item.text.clone()
                 };
@@ -1285,10 +1344,20 @@ impl ConduitApp {
                     .h(px(36.))
                     .px_3()
                     .cursor_pointer()
-                    .accessibility_label(format!(
-                        "{}工具调用：{}",
-                        if expanded { "收起" } else { "展开" },
-                        item.text
+                    .accessibility_label(conduit::i18n::format(
+                        "chat.tool_call",
+                        &[
+                            (
+                                "arg0",
+                                (if expanded {
+                                    conduit::i18n::text_static("chat.collapse")
+                                } else {
+                                    conduit::i18n::text_static("chat.expand")
+                                })
+                                .to_string(),
+                            ),
+                            ("arg1", item.text.to_string()),
+                        ],
                     ))
                     .child(
                         h_flex()
@@ -1305,12 +1374,16 @@ impl ConduitApp {
                                         .rounded(px(5.))
                                         .bg(rgb(palette().surface_strong))
                                         .text_size(px(11.))
-                                        .text_color(rgb(match approval.status.as_str() {
-                                            "已允许" => palette().diff_add_text,
-                                            "已拒绝" => palette().diff_remove_text,
+                                        .text_color(rgb(match approval.status {
+                                            crate::message_status::ApprovalStatus::Allowed => {
+                                                palette().diff_add_text
+                                            }
+                                            crate::message_status::ApprovalStatus::Denied => {
+                                                palette().diff_remove_text
+                                            }
                                             _ => palette().muted,
                                         }))
-                                        .child(approval.status.to_string()),
+                                        .child(approval.status.label().to_string()),
                                 )
                             })
                             .child(
@@ -1358,7 +1431,7 @@ impl ConduitApp {
                                 div()
                                     .text_size(px(11.))
                                     .text_color(rgb(palette().faint))
-                                    .child(item.status.to_string()),
+                                    .child(item.status.label().to_string()),
                             )
                             .child(
                                 Icon::new(if expanded {
@@ -1429,14 +1502,14 @@ impl ConduitApp {
                     .take_while(|item| item.kind != ItemKind::User)
                     .any(|item| item.kind == ItemKind::Assistant && !item.text.trim().is_empty());
                 let title = if active {
-                    "引擎遇到问题，任务仍在进行"
+                    conduit::i18n::text_static("chat.the_engine_encountered_a_problem_the_task")
                 } else if recovered {
-                    "引擎曾遇到问题，随后已继续响应"
+                    conduit::i18n::text_static("chat.the_engine_encountered_a_problem_then_resumed")
                 } else {
                     failure_title(&item.text)
                 };
                 let guidance = if active {
-                    "请等待当前任务结束，无需重复发送；引擎可能会自动重试。"
+                    conduit::i18n::text_static("chat.wait_for_the_current_task_to_finish")
                 } else {
                     failure_guidance(&raw_error)
                 };
@@ -1460,9 +1533,9 @@ impl ConduitApp {
                             IconName::Copy
                         }),
                         if copied {
-                            "已复制"
+                            conduit::i18n::text_static("chat.copied")
                         } else {
-                            "复制错误详情"
+                            conduit::i18n::text_static("chat.copy_error_details")
                         },
                     )
                     .debug_selector(|| format!("cli-error-copy-{index}"))
@@ -1481,7 +1554,7 @@ impl ConduitApp {
                         .small()
                         .compact()
                         .cursor_pointer()
-                        .child("重试")
+                        .child(conduit::i18n::text_static("chat.retry"))
                         .on_click(cx.listener(
                             move |this, _, window, cx| this.retry_error(index, window, cx),
                         )),
@@ -1520,7 +1593,10 @@ impl ConduitApp {
                                     div()
                                         .text_size(px(10.))
                                         .text_color(rgb(palette().muted))
-                                        .child(format!("重复 {repeats} 次")),
+                                        .child(conduit::i18n::format(
+                                            "chat.repeated_times",
+                                            &[("repeats", format!("{}", repeats))],
+                                        )),
                                 )
                             })
                             .child(actions),
@@ -1556,9 +1632,9 @@ impl ConduitApp {
                                 IconName::ChevronRight
                             })
                             .label(if expanded {
-                                "收起详情"
+                                conduit::i18n::text_static("chat.hide_details")
                             } else {
-                                "查看详情"
+                                conduit::i18n::text_static("chat.view_details")
                             })
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {

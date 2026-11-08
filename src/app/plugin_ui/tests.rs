@@ -249,6 +249,7 @@ fn selected(app: &Entity<ConduitApp>, cx: &mut VisualTestContext, id: &str) {
 
 #[gpui_kit::test]
 fn empty_workspace_navigation_collapse_and_git_shortcut(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, Store::default(), PluginUi::new());
     click(cx, "nav-files");
     selected(&app, cx, builtins::FILES);
@@ -278,6 +279,7 @@ fn empty_workspace_navigation_collapse_and_git_shortcut(cx: &mut TestAppContext)
 
 #[gpui_kit::test]
 fn overflow_routes_owners_and_disables_unbound_actions(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, store(), plugins(2));
     for id in [
         "test.navigation.entry-missing",
@@ -334,6 +336,7 @@ fn overflow_routes_owners_and_disables_unbound_actions(cx: &mut TestAppContext) 
 
 #[gpui_kit::test]
 fn resizing_reflows_overflow_and_keeps_fixed_controls_visible(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, store(), plugins(2));
     assert!(cx.element_bounds("nav-more").is_none());
     for (width, height) in [
@@ -384,6 +387,7 @@ fn resizing_reflows_overflow_and_keeps_fixed_controls_visible(cx: &mut TestAppCo
 
 #[gpui_kit::test]
 fn overflowing_menu_stays_in_window_and_reaches_last_action(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, store(), plugins(24));
     cx.simulate_resize(gpui_kit::size(px(900.), px(350.)));
     draw(cx);
@@ -425,6 +429,7 @@ fn overflowing_menu_stays_in_window_and_reaches_last_action(cx: &mut TestAppCont
 
 #[gpui_kit::test]
 fn context_changes_and_revocation_reject_saved_navigation_requests(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, store(), plugins(1));
     click(cx, builtins::EXAMPLE_ACTIVITY);
     let stale = cx.update(|_, cx| {
@@ -474,6 +479,7 @@ fn context_changes_and_revocation_reject_saved_navigation_requests(cx: &mut Test
 
 #[gpui_kit::test]
 fn workspace_reorder_preserves_plugin_scope_and_context_version(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, store(), plugins(1));
     click(cx, builtins::EXAMPLE_ACTIVITY);
     cx.update(|_, cx| {
@@ -579,6 +585,7 @@ fn choose_workspace(cx: &mut VisualTestContext, picker: &'static str, name: &str
 fn file_navigation_refreshes_and_preserves_expansion_across_workspace_picker(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     let repositories = Repositories::new();
     let (app, cx) = fixture(cx, repositories.store(), PluginUi::new());
     click(cx, "nav-files");
@@ -610,6 +617,7 @@ fn file_navigation_refreshes_and_preserves_expansion_across_workspace_picker(
 
 #[gpui_kit::test]
 fn git_navigation_refreshes_on_click_and_routes_the_workspace_picker(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let repositories = Repositories::new();
     let (app, cx) = fixture(cx, repositories.store(), PluginUi::new());
     click(cx, "nav-git");

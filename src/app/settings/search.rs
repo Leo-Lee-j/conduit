@@ -3,7 +3,7 @@ use super::navigation::{PAGES, matches_search};
 use super::*;
 
 #[derive(Clone)]
-pub(super) struct SettingsResult {
+pub(in crate::app) struct SettingsResult {
     pub page: usize,
     pub group: Option<usize>,
     pub title: String,
@@ -14,6 +14,13 @@ pub(super) struct SettingsResult {
 // Group indexes follow each page's visible information architecture. These
 // targets open the section, including controls hidden behind disclosures.
 const ENTRIES: &[(usize, usize, &str, &str, &str)] = &[
+    (
+        0,
+        1,
+        "应用语言",
+        "选择界面语言，切换后立即生效。",
+        "language locale English 简体中文 中文 英文 语言",
+    ),
     (
         0,
         0,
@@ -178,7 +185,7 @@ const ENTRIES: &[(usize, usize, &str, &str, &str)] = &[
 ];
 
 impl ConduitApp {
-    pub(super) fn settings_search_matches(&self, query: &str) -> Vec<SettingsResult> {
+    pub(in crate::app) fn settings_search_matches(&self, query: &str) -> Vec<SettingsResult> {
         if query.trim().is_empty() {
             return vec![];
         }
@@ -186,27 +193,30 @@ impl ConduitApp {
             .iter()
             .filter(|(page, _, title, description, keywords)| {
                 matches_search(
-                    &format!("{} {title} {description} {keywords}", PAGES[*page].1),
+                    &search_text(&[PAGES[*page].1, title, description, keywords]),
                     query,
                 )
             })
             .map(|(page, group, title, description, _)| SettingsResult {
                 page: *page,
                 group: Some(*group),
-                title: (*title).into(),
-                description: (*description).into(),
+                title: conduit::i18n::source(title).into(),
+                description: conduit::i18n::source(description).into(),
                 engine: None,
             })
             .collect();
         for (page, (section, title, keywords)) in PAGES.iter().enumerate() {
             if !results.iter().any(|result| result.page == page)
-                && matches_search(&format!("{section} {title} {keywords}"), query)
+                && matches_search(&search_text(&[section, title, keywords]), query)
             {
                 results.push(SettingsResult {
                     page,
                     group: None,
-                    title: (*title).into(),
-                    description: format!("查看{title}的全部设置"),
+                    title: conduit::i18n::source(title).into(),
+                    description: conduit::i18n::format(
+                        "settings.search.view_all_settings",
+                        &[("title", conduit::i18n::source(title).to_string())],
+                    ),
                     engine: None,
                 });
             }
@@ -225,7 +235,10 @@ impl ConduitApp {
                     page: 8,
                     group: Some(0),
                     title: provider.name.clone(),
-                    description: format!("{} · 模型服务", provider.engine.label()),
+                    description: conduit::i18n::format(
+                        "settings.search.model_service",
+                        &[("arg0", provider.engine.label().to_string())],
+                    ),
                     engine: Some(provider.engine),
                 });
             }
@@ -250,7 +263,13 @@ impl ConduitApp {
                         0
                     }),
                     title: model.label,
-                    description: format!("{} · CLI 模型 · {}", engine.label(), model.id),
+                    description: conduit::i18n::format(
+                        "settings.search.cli_model",
+                        &[
+                            ("arg0", engine.label().to_string()),
+                            ("arg1", model.id.to_string()),
+                        ],
+                    ),
                     engine: Some(engine),
                 });
             }
@@ -297,25 +316,23 @@ impl ConduitApp {
                 .child(
                     v_flex()
                         .gap_2()
-                        .child(
-                            div()
-                                .text_size(ui_text_size(22.))
-                                .font_semibold()
-                                .child("搜索设置"),
-                        )
+                        .child(div().text_size(ui_text_size(22.)).font_semibold().child(
+                            conduit::i18n::text_static("settings.search.search_settings"),
+                        ))
                         .child(
                             div()
                                 .text_size(ui_text_size(13.))
                                 .text_color(rgb(palette().muted))
-                                .child(format!(
-                                    "找到 {count} 项结果 · 打开对应分组，或按 Enter 打开第一项"
+                                .child(conduit::i18n::format(
+                                    "settings.search.results_open_a_group_or_press_enter",
+                                    &[("count", format!("{}", count))],
                                 )),
                         ),
                 )
                 .child(
                     Button::new("settings-search-clear")
                         .ghost()
-                        .label("清除搜索")
+                        .label(conduit::i18n::text_static("settings.search.clear_search"))
                         .on_click(move |_, window, cx| {
                             clear.update(cx, |app, cx| {
                                 app.settings_ui
@@ -351,7 +368,11 @@ impl ConduitApp {
                                 div()
                                     .text_size(ui_text_size(12.))
                                     .text_color(rgb(palette().muted))
-                                    .child(format!("{section} / {page}")),
+                                    .child(format!(
+                                        "{} / {}",
+                                        conduit::i18n::source(section),
+                                        conduit::i18n::source(page)
+                                    )),
                             )
                             .child(
                                 div()
@@ -378,30 +399,42 @@ impl ConduitApp {
                 v_flex()
                     .py_6()
                     .gap_3()
-                    .child("没有找到匹配的设置")
+                    .child(conduit::i18n::text_static(
+                        "settings.search.no_matching_settings",
+                    ))
                     .child(
                         div()
                             .text_size(ui_text_size(13.))
                             .text_color(rgb(palette().muted))
-                            .child("试试更短的关键词，或从左侧分类浏览。"),
+                            .child(conduit::i18n::text_static(
+                                "settings.search.try_a_shorter_keyword_or_browse_the",
+                            )),
                     )
-                    .child(h_flex().gap_2().children(
-                        ["字体", "默认模型", "API Key", "快捷键"].map(|word| {
-                            let view = view.clone();
-                            Button::new(format!("settings-search-suggestion-{word}"))
-                                .outline()
-                                .small()
-                                .label(word)
-                                .on_click(move |_, window, cx| {
-                                    view.update(cx, |app, cx| {
-                                        app.settings_ui.search.update(cx, |input, cx| {
-                                            input.set_value(word, window, cx)
-                                        });
-                                        cx.notify();
+                    .child(
+                        h_flex().gap_2().children(
+                            [
+                                conduit::i18n::text_static("settings.appearance.font"),
+                                conduit::i18n::text_static("model_picker.default_model"),
+                                "API Key",
+                                conduit::i18n::text_static("settings.navigation.shortcuts"),
+                            ]
+                            .map(|word| {
+                                let view = view.clone();
+                                Button::new(format!("settings-search-suggestion-{word}"))
+                                    .outline()
+                                    .small()
+                                    .label(word)
+                                    .on_click(move |_, window, cx| {
+                                        view.update(cx, |app, cx| {
+                                            app.settings_ui.search.update(cx, |input, cx| {
+                                                input.set_value(word, window, cx)
+                                            });
+                                            cx.notify();
+                                        })
                                     })
-                                })
-                        }),
-                    )),
+                            }),
+                        ),
+                    ),
             );
         }
         div()
@@ -414,11 +447,25 @@ impl ConduitApp {
     }
 }
 
+/// Search all supported translations plus original aliases, independent of UI locale.
+fn search_text(parts: &[&str]) -> String {
+    let mut text = parts.join(" ");
+    for language in conduit::i18n::languages() {
+        let locale = language.id.clone().into();
+        for part in parts {
+            text.push(' ');
+            text.push_str(conduit::i18n::source_for(&locale, part));
+        }
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::matches_search;
     #[test]
     fn settings_search_matches_words_case_and_whitespace() {
+        let _locale = crate::test_support::chinese();
         assert!(matches_search("模型服务 API Key", "  api KEY  "));
         assert!(matches_search("聊天字号 行高", "字号 行高"));
         assert!(!matches_search("模型服务 API Key", "api 字体"));

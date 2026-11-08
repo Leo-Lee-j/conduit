@@ -31,7 +31,9 @@ pub const INSTALL_MARKER: &str = "conduit.install";
 /// Every installed app holds a shared lock. An updater requires exclusive
 /// access, including against instances using a different CONDUIT_DATA_DIR.
 pub fn running_lock(executable: &Path) -> Result<Option<File>> {
-    let dir = executable.parent().context("无法确定安装目录")?;
+    let dir = executable.parent().context(conduit::i18n::text_static(
+        "update.install.unable_to_determine_install_directory",
+    ))?;
     if !dir.join(INSTALL_MARKER).is_file() {
         return Ok(None);
     }
@@ -43,7 +45,9 @@ pub fn running_lock(executable: &Path) -> Result<Option<File>> {
             .truncate(false)
             .share_mode(3)
             .open(dir.join(".conduit-running.lock"))
-            .context("Conduit 正在更新，请稍后再启动")?,
+            .context(conduit::i18n::text_static(
+                "update.install.conduit_is_updating_try_starting_it_again",
+            ))?,
     ))
 }
 
@@ -68,26 +72,37 @@ pub fn installation(exe: &Path) -> Result<PathBuf> {
     ensure!(
         exe.file_name()
             .is_some_and(|name| name.eq_ignore_ascii_case("conduit.exe")),
-        "开发或便携构建不能自动安装更新"
+        conduit::i18n::text(
+            "update.install.development_and_portable_builds_cannot_install_updates"
+        )
     );
-    let dir = exe.parent().context("缺少安装目录")?.canonicalize()?;
+    let dir = exe
+        .parent()
+        .context(conduit::i18n::text_static(
+            "update.install.install_directory_missing",
+        ))?
+        .canonicalize()?;
     ensure!(
         dir.join(INSTALL_MARKER).is_file() && dir.join("uninstall.exe").is_file(),
-        "请先使用正式安装包安装 Conduit"
+        conduit::i18n::text("update.install.install_conduit_using_the_official_installer_first")
     );
     ensure!(
         dir == registered_install()?,
-        "当前路径不是注册的 Conduit 安装目录，请重新安装"
+        conduit::i18n::text("update.install.current_path_is_not_the_registered_conduit")
     );
     ensure!(
         dir.join("conduit-updater.exe").is_file(),
-        "当前安装缺少更新助手，请重新安装"
+        conduit::i18n::text(
+            "update.install.update_helper_missing_from_this_installation_reinstall"
+        )
     );
     Ok(dir)
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct Handoff {
+    #[serde(default = "crate::i18n::Locale::legacy")]
+    pub language: crate::i18n::Locale,
     pub parent_pid: u32,
     pub executable: PathBuf,
     pub data_dir: PathBuf,
@@ -108,13 +123,17 @@ impl Pending {
             anyhow::bail!("{error}");
         }
         if let Some(status) = self.child.try_wait()? {
-            let error = fs::read_to_string(self.dir.join("error.txt"))
-                .unwrap_or_else(|_| format!("更新助手提前退出：{status}"));
+            let error = fs::read_to_string(self.dir.join("error.txt")).unwrap_or_else(|_| {
+                conduit::i18n::format(
+                    "update.install.update_helper_exited_early",
+                    &[("status", format!("{}", status))],
+                )
+            });
             anyhow::bail!("{error}");
         }
         ensure!(
             self.started.elapsed() < Duration::from_secs(30),
-            "更新助手启动超时"
+            conduit::i18n::text("update.install.update_helper_startup_timed_out")
         );
         Ok(self.dir.join("ready").exists())
     }
@@ -156,6 +175,7 @@ pub fn prepare(release: &Release, package: &Path, data_dir: &Path) -> Result<Pen
         }
     }
     let job = Handoff {
+        language: crate::i18n::locale(),
         parent_pid: std::process::id(),
         executable,
         data_dir,
@@ -169,7 +189,9 @@ pub fn prepare(release: &Release, package: &Path, data_dir: &Path) -> Result<Pen
         .current_dir(&dir)
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
-        .context("无法启动更新助手")?;
+        .context(conduit::i18n::text_static(
+            "update.install.unable_to_start_update_helper",
+        ))?;
     Ok(Pending {
         child,
         dir,
@@ -198,14 +220,21 @@ pub fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
                 MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
             )
         } != 0,
-        "保存更新信息失败：{}",
-        std::io::Error::last_os_error()
+        conduit::i18n::format(
+            "update.install.failed_to_save_update_information",
+            &[("arg0", format!("{}", std::io::Error::last_os_error()))]
+        )
     );
     Ok(())
 }
 
 pub fn run(job_path: &Path) -> Result<()> {
-    let dir = job_path.parent().context("缺少交接目录")?.canonicalize()?;
+    let dir = job_path
+        .parent()
+        .context(conduit::i18n::text_static(
+            "update.install.handoff_directory_missing",
+        ))?
+        .canonicalize()?;
     let result = apply(job_path, &dir);
     if let Err(error) = &result {
         let _ = fs::write(dir.join("error.txt"), format!("{error:#}"));
@@ -215,10 +244,11 @@ pub fn run(job_path: &Path) -> Result<()> {
 
 fn apply(job_path: &Path, cache: &Path) -> Result<()> {
     let job: Handoff = serde_json::from_slice(&fs::read(job_path)?)?;
+    crate::i18n::set_locale(&job.language);
     let install = installation(&job.executable)?;
     ensure!(
         cache.parent() == Some(job.data_dir.join("updates").as_path()),
-        "更新交接目录无效"
+        conduit::i18n::text("update.install.invalid_update_handoff_directory")
     );
     let manifest = verify_manifest(&job.manifest, &job.signature, PUBLIC_KEY)?;
     verify_package(&job.package, &manifest)?;
@@ -226,10 +256,11 @@ fn apply(job_path: &Path, cache: &Path) -> Result<()> {
         semver::Version::parse(fs::read_to_string(install.join(INSTALL_MARKER))?.trim())?;
     ensure!(
         semver::Version::parse(&manifest.version)? > previous,
-        "不能降级或重复安装同一版本"
+        conduit::i18n::text("update.install.cannot_downgrade_or_reinstall_the_same_version")
     );
-    let _update_lock =
-        exclusive(&install.join(".conduit-update.lock")).context("另一个更新正在安装")?;
+    let _update_lock = exclusive(&install.join(".conduit-update.lock")).context(
+        conduit::i18n::text_static("update.install.another_update_is_being_installed"),
+    )?;
 
     // Open the exact parent process before acknowledging the handoff, avoiding
     // PID reuse and waiting until Windows has released its executable/mutexes.
@@ -240,7 +271,10 @@ fn apply(job_path: &Path, cache: &Path) -> Result<()> {
             job.parent_pid,
         )
     };
-    ensure!(!process.is_null(), "无法等待旧版本退出");
+    ensure!(
+        !process.is_null(),
+        conduit::i18n::text("update.install.unable_to_wait_for_the_previous_version")
+    );
     struct Handle(windows_sys::Win32::Foundation::HANDLE);
     impl Drop for Handle {
         fn drop(&mut self) {
@@ -254,22 +288,30 @@ fn apply(job_path: &Path, cache: &Path) -> Result<()> {
     let mut length = image.len() as u32;
     ensure!(
         unsafe { QueryFullProcessImageNameW(process.0, 0, image.as_mut_ptr(), &mut length) } != 0,
-        "无法核实父进程"
+        conduit::i18n::text("update.install.unable_to_verify_parent_process")
     );
     let actual = PathBuf::from(String::from_utf16(&image[..length as usize])?).canonicalize()?;
     ensure!(
         actual == job.executable.canonicalize()?,
-        "更新父进程与安装目录不一致"
+        conduit::i18n::text("update.install.update_parent_process_does_not_match_install")
     );
     fs::write(cache.join("ready"), b"ready")?;
     let waited = unsafe { WaitForSingleObject(process.0, 90_000) };
-    ensure!(waited != WAIT_TIMEOUT, "旧版本未退出，本次更新已取消");
-    ensure!(waited == WAIT_OBJECT_0, "等待旧版本失败");
+    ensure!(
+        waited != WAIT_TIMEOUT,
+        conduit::i18n::text("update.install.previous_version_did_not_exit_update_cancelled")
+    );
+    ensure!(
+        waited == WAIT_OBJECT_0,
+        conduit::i18n::text("update.install.failed_while_waiting_for_the_previous_version")
+    );
     let _running_lock = match exclusive(&install.join(".conduit-running.lock")) {
         Ok(lock) => lock,
         Err(error) => {
             let _ = restart(&job);
-            return Err(error.context("其他 Conduit 实例仍在使用此安装，请关闭后重试"));
+            return Err(error.context(conduit::i18n::text_static(
+                "update.install.other_conduit_instances_are_using_this_installation",
+            )));
         }
     };
     let backup = cache.join("backup");
@@ -283,10 +325,16 @@ fn apply(job_path: &Path, cache: &Path) -> Result<()> {
         fs::write(cache.join("installing"), &manifest.version)?;
         // NSIS requires the final /D= value to be unquoted, even with spaces.
         let status = run_installer(&job.package, &install, cache)?;
-        ensure!(status.success(), "安装失败，退出状态 {status}");
+        ensure!(
+            status.success(),
+            conduit::i18n::format(
+                "update.install.installation_failed_with_exit_status",
+                &[("status", format!("{}", status))]
+            )
+        );
         ensure!(
             fs::read_to_string(install.join(INSTALL_MARKER))?.trim() == manifest.version,
-            "安装器未完成版本更新"
+            conduit::i18n::text("update.install.installer_did_not_update_the_version")
         );
         fs::write(cache.join("completed"), &manifest.version)?;
         write_json(
@@ -301,18 +349,25 @@ fn apply(job_path: &Path, cache: &Path) -> Result<()> {
     })();
     if let Err(error) = result {
         if backup.join("complete").exists() {
-            restore(&install, &backup).context(format!(
-                "安装失败：{error:#}；恢复旧版本失败，备份位于 {}",
-                backup.display()
+            restore(&install, &backup).context(conduit::i18n::format(
+                "update.install.installation_failed_restoring_the_previous_version_failed",
+                &[
+                    ("error", format!("{:#}", error)),
+                    ("arg0", format!("{}", backup.display())),
+                ],
             ))?;
             restore_registry_version(&previous.to_string())?;
         }
         drop(_running_lock);
         let _ = restart(&job);
-        return Err(error.context("更新失败，已保留或恢复旧版本"));
+        return Err(error.context(conduit::i18n::text_static(
+            "update.install.update_failed_previous_version_preserved_or_restored",
+        )));
     }
     drop(_running_lock);
-    restart(&job).context("安装成功，但自动重启失败，请从开始菜单打开 Conduit")?;
+    restart(&job).context(conduit::i18n::text_static(
+        "update.install.installation_succeeded_but_automatic_restart_failed_open",
+    ))?;
     Ok(())
 }
 
@@ -339,7 +394,9 @@ fn run_installer(package: &Path, install: &Path, cache: &Path) -> Result<std::pr
         .current_dir(cache)
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
-        .context("启动安装器失败")?;
+        .context(conduit::i18n::text_static(
+            "update.install.failed_to_start_installer",
+        ))?;
     let start = Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
@@ -348,7 +405,9 @@ fn run_installer(package: &Path, install: &Path, cache: &Path) -> Result<std::pr
         if start.elapsed() > Duration::from_secs(10 * 60) {
             child.kill()?;
             child.wait()?;
-            anyhow::bail!("安装器超时，已停止安装并准备恢复旧版本");
+            anyhow::bail!(conduit::i18n::text(
+                "update.install.installer_timed_out_installation_stopped_preparing_to"
+            ));
         }
         std::thread::sleep(Duration::from_millis(200));
     }
@@ -365,7 +424,10 @@ fn snapshot(install: &Path, backup: &Path) -> Result<()> {
     for entry in fs::read_dir(install)? {
         let entry = entry?;
         if managed_file(&entry.path()) {
-            ensure!(entry.file_type()?.is_file(), "安装文件类型无效");
+            ensure!(
+                entry.file_type()?.is_file(),
+                conduit::i18n::text("update.install.invalid_installation_file_type")
+            );
             fs::copy(entry.path(), backup.join(entry.file_name()))?;
         }
     }
@@ -402,7 +464,9 @@ fn restart(job: &Handoff) -> Result<()> {
     Command::new(&job.executable)
         .env("CONDUIT_DATA_DIR", &job.data_dir)
         .arg("--updated")
-        .current_dir(job.executable.parent().context("缺少安装目录")?)
+        .current_dir(job.executable.parent().context(conduit::i18n::text_static(
+            "update.install.install_directory_missing",
+        ))?)
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()?;
     Ok(())
@@ -413,6 +477,7 @@ mod tests {
     use super::*;
     #[test]
     fn nsis_directory_preserves_spaces_and_unicode_without_extended_prefix() {
+        let _locale = crate::test_support::chinese();
         assert_eq!(
             nsis_directory(Path::new(r"\\?\C:\用户\Conduit App")),
             r"C:\用户\Conduit App"
@@ -424,6 +489,7 @@ mod tests {
     }
     #[test]
     fn installation_lock_blocks_updates_until_all_instances_exit() {
+        let _locale = crate::test_support::chinese();
         let root = std::env::temp_dir().join(format!("conduit-lock-test-{}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join(INSTALL_MARKER), "0.1.0").unwrap();
@@ -441,6 +507,7 @@ mod tests {
 
     #[test]
     fn recovery_json_replaces_existing_file_atomically() {
+        let _locale = crate::test_support::chinese();
         let path =
             std::env::temp_dir().join(format!("conduit-json-test-{}.json", std::process::id()));
         write_json(&path, &vec!["old"]).unwrap();
@@ -453,6 +520,7 @@ mod tests {
     }
     #[test]
     fn rollback_restores_original_files_and_removes_partial_new_files() {
+        let _locale = crate::test_support::chinese();
         let root = std::env::temp_dir().join(format!("conduit-rollback-{}", std::process::id()));
         let install = root.join("安装目录 with spaces");
         let backup = root.join("backup");

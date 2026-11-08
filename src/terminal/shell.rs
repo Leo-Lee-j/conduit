@@ -14,7 +14,7 @@ pub(crate) enum ShellProfile {
 impl ShellProfile {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Auto => "默认 Shell",
+            Self::Auto => conduit::i18n::text_static("terminal.shell.default_shell"),
             Self::PowerShell => "PowerShell",
             Self::Cmd => "cmd",
         }
@@ -39,7 +39,9 @@ impl ShellProfile {
                 return Ok((path, vec!["-NoLogo".into()]));
             }
             if self == Self::PowerShell {
-                bail!("未找到 PowerShell，请选择 cmd 或安装 PowerShell。");
+                bail!(conduit::i18n::text(
+                    "terminal.shell.powershell_not_found_choose_cmd_or_install"
+                ));
             }
         }
         let path = std::env::var_os("ComSpec")
@@ -47,7 +49,7 @@ impl ShellProfile {
             .filter(|p| p.is_absolute() && p.is_file())
             .unwrap_or_else(|| windows.join(r"System32\cmd.exe"));
         if !path.is_file() {
-            bail!("未找到 cmd.exe");
+            bail!(conduit::i18n::text("terminal.shell.cmd_exe_not_found"));
         }
         Ok((path, vec!["/d".into(), "/q".into()]))
     }

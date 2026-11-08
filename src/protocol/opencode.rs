@@ -138,7 +138,9 @@ impl Protocol {
             )
         };
         if status < 0 {
-            bail!("无法生成 OpenCode 本地服务凭证");
+            bail!(conduit::i18n::text(
+                "protocol.opencode.unable_to_generate_opencode_local_service_credentials"
+            ));
         }
         let secret: String = random.iter().map(|b| format!("{b:02x}")).collect();
         self.acp.agent = format!("conduit-{}", &secret[..16]);
@@ -158,15 +160,19 @@ impl Protocol {
             .or_else(|| std::env::var("OPENCODE_CONFIG_CONTENT").ok())
             .unwrap_or_else(|| "{}".into());
         let mut config: Value =
-            serde_json::from_str(&inherited).context("OPENCODE_CONFIG_CONTENT 不是有效 JSON")?;
-        let object = config
-            .as_object_mut()
-            .context("OPENCODE_CONFIG_CONTENT 必须是对象")?;
+            serde_json::from_str(&inherited).context(conduit::i18n::text_static(
+                "protocol.opencode.opencode_config_content_is_not_valid_json",
+            ))?;
+        let object = config.as_object_mut().context(conduit::i18n::text_static(
+            "protocol.opencode.opencode_config_content_must_be_an_object",
+        ))?;
         let agents = object
             .entry("agent")
             .or_insert_with(|| json!({}))
             .as_object_mut()
-            .context("OpenCode agent 配置必须是对象")?;
+            .context(conduit::i18n::text_static(
+                "protocol.opencode.opencode_agent_configuration_must_be_an_object",
+            ))?;
         // This new agent has no user agent-specific rules. Its rules are appended
         // after inherited global rules, including inherited concrete allow rules.
         let permission = if self.text_only {
@@ -204,7 +210,9 @@ impl Protocol {
         if self.text_only {
             let directory =
                 std::env::temp_dir().join(format!("conduit-opencode-helper-{}", &secret[..24]));
-            std::fs::create_dir(&directory).context("无法创建 OpenCode 辅助任务目录")?;
+            std::fs::create_dir(&directory).context(conduit::i18n::text_static(
+                "protocol.opencode.unable_to_create_opencode_helper_task_directory",
+            ))?;
             self.route.env.insert(
                 "OPENCODE_DB".into(),
                 directory
@@ -238,12 +246,19 @@ impl Protocol {
                             .as_str()
                             .or_else(|| value["error"]["message"].as_str())
                             .or_else(|| value["error"]["name"].as_str())
-                            .unwrap_or("模型请求失败")
+                            .unwrap_or(conduit::i18n::text_static(
+                                "protocol.opencode.model_request_failed"
+                            ))
                     ));
                 }
                 Some("tool_use") => {
                     step.done = true;
-                    step.error = Some("OpenCode 辅助任务尝试调用工具，已停止".into());
+                    step.error = Some(
+                        conduit::i18n::text_static(
+                            "protocol.opencode.opencode_helper_task_attempted_a_tool_call",
+                        )
+                        .into(),
+                    );
                 }
                 _ => {}
             }
@@ -292,7 +307,11 @@ impl Protocol {
             step.done = true;
             step.error = Some(format!(
                 "OpenCode：{}",
-                error["message"].as_str().unwrap_or("ACP 请求失败")
+                error["message"]
+                    .as_str()
+                    .unwrap_or(conduit::i18n::text_static(
+                        "protocol.opencode.acp_request_failed"
+                    ))
             ));
             return step;
         }
@@ -303,7 +322,7 @@ impl Protocol {
             Stage::Initialize => {
                 if result["protocolVersion"] != 1 || result["agentInfo"]["name"] != "OpenCode" {
                     step.done = true;
-                    step.error = Some("OpenCode ACP 协议或程序身份不兼容".into());
+                    step.error = Some(conduit::i18n::text_static("protocol.opencode.incompatible_opencode_acp_protocol_or_program_identity").into());
                     return step;
                 }
                 self.acp.stage = Stage::Session;
@@ -316,7 +335,12 @@ impl Protocol {
                         .is_some();
                     if !resume && result["agentCapabilities"]["loadSession"] != true {
                         step.done = true;
-                        step.error = Some("OpenCode 不支持原生会话恢复；请更新 CLI".into());
+                        step.error = Some(
+                            conduit::i18n::text_static(
+                                "protocol.opencode.opencode_does_not_support_native_session_resume",
+                            )
+                            .into(),
+                        );
                         return step;
                     }
                     self.acp.session_id = Some(id.clone());
@@ -342,7 +366,12 @@ impl Protocol {
                 }
                 let Some(id) = &self.acp.session_id else {
                     step.done = true;
-                    step.error = Some("OpenCode 未返回原生会话 ID".into());
+                    step.error = Some(
+                        conduit::i18n::text_static(
+                            "protocol.opencode.opencode_returned_no_native_session_id",
+                        )
+                        .into(),
+                    );
                     return step;
                 };
                 step.events.push(Event::NativeId(id.clone()));
@@ -378,9 +407,28 @@ impl Protocol {
                 step.done = true;
                 match result["stopReason"].as_str() {
                     Some("end_turn" | "cancelled") => {}
-                    Some("max_tokens") => step.error = Some("OpenCode 达到模型输出上限".into()),
-                    Some("refusal") => step.error = Some("OpenCode 模型拒绝了本次请求".into()),
-                    other => step.error = Some(format!("OpenCode 返回未支持的结束原因：{other:?}")),
+                    Some("max_tokens") => {
+                        step.error = Some(
+                            conduit::i18n::text_static(
+                                "protocol.opencode.opencode_reached_the_model_output_limit",
+                            )
+                            .into(),
+                        )
+                    }
+                    Some("refusal") => {
+                        step.error = Some(
+                            conduit::i18n::text_static(
+                                "protocol.opencode.opencode_model_refused_this_request",
+                            )
+                            .into(),
+                        )
+                    }
+                    other => {
+                        step.error = Some(conduit::i18n::format(
+                            "protocol.opencode.opencode_returned_an_unsupported_completion_reason",
+                            &[("other", format!("{:?}", other))],
+                        ))
+                    }
                 }
             }
             Stage::Done => {}
@@ -456,8 +504,12 @@ impl Protocol {
             };
             if !valid {
                 step.done = true;
-                step.error = Some(format!(
-                    "OpenCode 不支持 {key}={selection}；请刷新模型配置后重新选择"
+                step.error = Some(conduit::i18n::format(
+                    "protocol.opencode.opencode_does_not_support_refresh_model_configuration",
+                    &[
+                        ("key", key.to_string()),
+                        ("selection", selection.to_string()),
+                    ],
                 ));
                 return;
             }
@@ -486,7 +538,7 @@ impl Protocol {
         });
         let approval = Approval {
             id: format!("acp:{}", id_text(&value["id"])),
-            title: params["toolCall"]["title"].as_str().unwrap_or("请求执行 OpenCode 工具").into(),
+            title: params["toolCall"]["title"].as_str().unwrap_or(conduit::i18n::text_static("protocol.opencode.request_to_run_an_opencode_tool")).into(),
             detail: json!({"toolCallId":params["toolCall"]["toolCallId"],"toolCall":params["toolCall"],"options":params["options"]}).to_string(),
             wire_id: value["id"].clone(), input: params.clone(), allow_once, kind: ApprovalKind::OpenCodeTool,
         };
@@ -531,12 +583,12 @@ impl Protocol {
                 }
                 let status = match merged["status"].as_str() {
                     Some("completed") => "已完成",
-                    Some("failed") => "失败",
+                    Some("failed") => conduit::i18n::text_static("tools.failed"),
                     _ => "运行中",
                 };
                 step.events.push(Event::Tool {
                     key: id.into(),
-                    title: merged["title"].as_str().unwrap_or("OpenCode 工具").into(),
+                    title: merged["title"].as_str().unwrap_or(conduit::i18n::text_static("protocol.opencode.opencode_tool")).into(),
                     detail: pretty(&json!({"acpKind":merged["kind"],"content":merged["content"],"output":merged["rawOutput"],"locations":merged["locations"]})),
                     status: status.into(),
                 });

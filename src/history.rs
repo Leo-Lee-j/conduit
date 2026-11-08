@@ -97,7 +97,10 @@ pub(crate) fn prepare_imported(
         })();
         match result {
             Ok(record) => prepared.push(record),
-            Err(error) => warnings.push(format!("历史导入未覆盖原会话：{error:#}")),
+            Err(error) => warnings.push(conduit::i18n::format(
+                "history.history_import_did_not_overwrite_the_original",
+                &[("error", format!("{:#}", error))],
+            )),
         }
     }
     (prepared, warnings)
@@ -485,7 +488,10 @@ impl ClaudeState {
         }
         let native_id = native_id?;
         if title.is_empty() {
-            title = format!("Claude 会话 {native_id}");
+            title = conduit::i18n::format(
+                "history.claude_session",
+                &[("native_id", native_id.to_string())],
+            );
         }
         Some((
             cwds,
@@ -902,7 +908,7 @@ fn extend_codex(
                                 created_at: event_created_at,
                                 kind: ItemKind::Tool,
                                 text: if command.is_empty() {
-                                    "终端命令".into()
+                                    conduit::i18n::text_static("tools.terminal_command").into()
                                 } else {
                                     command.clone()
                                 },
@@ -917,7 +923,7 @@ fn extend_codex(
                                 }))
                                 .unwrap_or_default(),
                                 status: if failed {
-                                    "运行失败".into()
+                                    conduit::i18n::text_static("chat.failed").into()
                                 } else {
                                     "已完成".into()
                                 },
@@ -967,7 +973,7 @@ fn extend_codex(
                         let tool = item
                             .get("tool")
                             .and_then(Value::as_str)
-                            .unwrap_or("工具调用");
+                            .unwrap_or(conduit::i18n::text_static("events.tool_call"));
                         let status = item.get("status").and_then(Value::as_str).unwrap_or("");
                         let failed = status.eq_ignore_ascii_case("failed")
                             || item
@@ -997,7 +1003,7 @@ fn extend_codex(
                                 }))
                                 .unwrap_or_default(),
                                 status: if failed {
-                                    "运行失败".into()
+                                    conduit::i18n::text_static("chat.failed").into()
                                 } else {
                                     "已完成".into()
                                 },
@@ -1152,7 +1158,12 @@ impl CodexState {
             .iter()
             .find(|item| item.kind == ItemKind::User)
             .map(|item| truncate_title(&item.text))
-            .unwrap_or_else(|| format!("Codex 会话 {native_id}"));
+            .unwrap_or_else(|| {
+                conduit::i18n::format(
+                    "history.codex_session",
+                    &[("native_id", native_id.to_string())],
+                )
+            });
         Some((
             cwd,
             ImportedSession {
@@ -1349,6 +1360,7 @@ mod tests {
 
     #[test]
     fn claude_session_parses_messages_and_native_id() {
+        let _locale = crate::test_support::chinese();
         let workspace = tmpdir("claude-ws").canonicalize().unwrap();
         let cwd = workspace.to_string_lossy().replace('\\', "\\\\");
         let jsonl = [
@@ -1377,6 +1389,7 @@ mod tests {
 
     #[test]
     fn claude_sdk_prompt_is_rendered_as_user_message() {
+        let _locale = crate::test_support::chinese();
         let workspace = tmpdir("claude-sdk-ws").canonicalize().unwrap();
         let cwd = workspace.to_string_lossy().replace('\\', "\\\\");
         let jsonl = [
@@ -1393,6 +1406,7 @@ mod tests {
 
     #[test]
     fn codex_rollout_parses_meta_and_filters_injections() {
+        let _locale = crate::test_support::chinese();
         let workspace = tmpdir("codex-ws").canonicalize().unwrap();
         let meta = serde_json::json!({
             "type":"session_meta",
@@ -1456,6 +1470,7 @@ mod tests {
 
     #[test]
     fn codex_events_keep_commands_edits_searches_and_reasoning() {
+        let _locale = crate::test_support::chinese();
         let workspace = tmpdir("codex-events").canonicalize().unwrap();
         let meta = serde_json::json!({
             "type":"session_meta",
@@ -1555,6 +1570,7 @@ mod tests {
 
     #[test]
     fn codex_response_items_fill_gaps_when_events_are_partial() {
+        let _locale = crate::test_support::chinese();
         let workspace = tmpdir("codex-partial").canonicalize().unwrap();
         let meta = serde_json::json!({
             "type":"session_meta",
@@ -1599,6 +1615,7 @@ mod tests {
 
     #[test]
     fn codex_foreign_workspace_is_rejected() {
+        let _locale = crate::test_support::chinese();
         let workspace = tmpdir("codex-other").canonicalize().unwrap();
         let meta = serde_json::json!({
             "type":"session_meta",
@@ -1614,6 +1631,7 @@ mod tests {
 
     #[test]
     fn scan_workspace_on_missing_directories_returns_empty() {
+        let _locale = crate::test_support::chinese();
         let dir = tmpdir("scan-empty");
         // USERPROFILE is inherited on the test host; scanning a workspace no
         // CLI session ever used yields nothing instead of failing.
@@ -1632,6 +1650,7 @@ mod tests {
     #[test]
     #[ignore = "scans the real local CLI history; set CONDUIT_HISTORY_REAL_WS"]
     fn real_workspace_scan() {
+        let _locale = crate::test_support::chinese();
         let Ok(path) = std::env::var("CONDUIT_HISTORY_REAL_WS") else {
             panic!("CONDUIT_HISTORY_REAL_WS not set");
         };
@@ -1652,6 +1671,7 @@ mod tests {
 
     #[test]
     fn merge_into_dedupes_by_native_id_and_assigns_ids() {
+        let _locale = crate::test_support::chinese();
         let dir = tmpdir("merge-ws");
         let mut workspace = crate::domain::Workspace {
             path: dir.clone(),
@@ -1760,6 +1780,7 @@ mod tests {
 
     #[test]
     fn imported_turn_timings_are_scoped_and_survive_refresh() {
+        let _locale = crate::test_support::chinese();
         let lines = vec![
             serde_json::json!({"type":"session_meta","payload":{"id":"timed","cwd":"D:/timed"}}),
             serde_json::json!({"type":"event_msg","timestamp":"2026-10-27T10:00:00.100Z","payload":{"type":"task_started","turn_id":"first"}}),
@@ -1819,6 +1840,7 @@ mod tests {
 
     #[test]
     fn claude_duration_marker_attaches_to_its_reply_only() {
+        let _locale = crate::test_support::chinese();
         let lines = [
             serde_json::json!({"type":"user","promptSource":"typed","sessionId":"timed-claude","message":{"content":"第一问"}}),
             serde_json::json!({"type":"assistant","message":{"content":[{"type":"text","text":"第一答"}]}}),
@@ -1838,6 +1860,7 @@ mod tests {
 
     #[test]
     fn timestamp_helper_matches_known_epoch() {
+        let _locale = crate::test_support::chinese();
         assert_eq!(rfc3339_to_unix("1970-01-01T00:00:00Z"), 0);
         assert_eq!(rfc3339_to_unix("2026-10-23T14:29:05.122Z"), 1_792_765_745);
         assert_eq!(rfc3339_to_unix("bogus"), 0);

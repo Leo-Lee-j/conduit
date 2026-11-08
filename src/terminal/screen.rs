@@ -101,12 +101,18 @@ impl Screen {
             let cell = indexed.cell;
             let marks = cell.zerowidth().map_or(0, |s| s.len());
             if marks > 4096 {
-                return Err("终端单元格组合字符超出限制，已停止会话".into());
+                return Err(conduit::i18n::text_static(
+                    "terminal.screen.terminal_cell_combining_characters_exceeded_the_limit",
+                )
+                .into());
             }
             // Shared hyperlink allocations are charged per cell conservatively.
             bytes += marks * 4 + cell.hyperlink().map_or(0, |h| h.uri().len());
             if bytes > 8 * 1024 * 1024 {
-                return Err("终端扩展文本超出内存预算，已停止会话".into());
+                return Err(conduit::i18n::text_static(
+                    "terminal.screen.terminal_extended_text_exceeded_its_memory_budget",
+                )
+                .into());
             }
         }
         Ok(())
@@ -181,7 +187,10 @@ impl OutputGuard {
                     *len += 1;
                     extra += 1;
                     if *len > 4096 {
-                        return Err("终端控制字符串超过 4 KiB，已停止会话".into());
+                        return Err(conduit::i18n::text_static(
+                            "terminal.screen.terminal_control_string_exceeded_4_kib_session",
+                        )
+                        .into());
                     }
                 }
             } else if self.escape && byte == b']' {

@@ -38,7 +38,9 @@ impl SettingPage {
                         .debug_selector(|| "settings-show-full-page".into())
                         .small()
                         .ghost()
-                        .label("查看完整页面")
+                        .label(conduit::i18n::text_static(
+                            "settings.connections.view_full_page",
+                        ))
                         .on_click(move |_, window, cx| {
                             view.update(cx, |app, cx| {
                                 app.select_settings_page(app.settings_ui.page, window, cx);
@@ -264,7 +266,11 @@ impl SearchableListItem for FontChoice {
     type Value = Option<SharedString>;
 
     fn title(&self) -> SharedString {
-        self.label.clone()
+        if self.value.is_none() {
+            conduit::i18n::retained(&self.label).to_string().into()
+        } else {
+            self.label.clone()
+        }
     }
 
     fn value(&self) -> &Self::Value {
@@ -291,10 +297,22 @@ impl TypographyField {
     }
     pub(super) fn stepper_labels(self) -> (&'static str, &'static str) {
         match self {
-            Self::UiSize => ("减小界面字号", "增大界面字号"),
-            Self::ChatSize => ("减小聊天字号", "增大聊天字号"),
-            Self::ChatLineHeight => ("减小聊天行高", "增大聊天行高"),
-            Self::CodeSize => ("减小代码字号", "增大代码字号"),
+            Self::UiSize => (
+                conduit::i18n::text_static("settings.decrease_interface_font_size"),
+                conduit::i18n::text_static("settings.increase_interface_font_size"),
+            ),
+            Self::ChatSize => (
+                conduit::i18n::text_static("settings.decrease_chat_font_size"),
+                conduit::i18n::text_static("settings.increase_chat_font_size"),
+            ),
+            Self::ChatLineHeight => (
+                conduit::i18n::text_static("settings.decrease_chat_line_height"),
+                conduit::i18n::text_static("settings.increase_chat_line_height"),
+            ),
+            Self::CodeSize => (
+                conduit::i18n::text_static("settings.decrease_code_font_size"),
+                conduit::i18n::text_static("settings.increase_code_font_size"),
+            ),
         }
     }
     pub(super) fn display_value(self, value: f32) -> String {
@@ -485,7 +503,7 @@ impl ConduitApp {
             dialog
                 .w(px(width))
                 .centered()
-                .title("关于")
+                .title(conduit::i18n::text_static("settings.about"))
                 .entrance(gpui_kit::component::dialog::DialogEntrance::Fade)
                 .content(move |content, _, cx| {
                     content.child(
@@ -495,40 +513,39 @@ impl ConduitApp {
                             .overflow_y_scroll()
                             .gap_4()
                             .child(
-                                h_flex()
-                                    .gap_3()
-                                    .items_center()
-                                    .child(app_icon(40.))
-                                    .child(
-                                        v_flex()
-                                            .gap_1()
-                                            .min_w_0()
-                                            .child(
-                                                div()
-                                                    .text_size(ui_text_size(18.))
-                                                    .font_semibold()
-                                                    .text_color(rgb(palette().text))
-                                                    .child("Conduit"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_size(ui_text_size(11.))
-                                                    .text_color(rgb(palette().faint))
-                                                    .child(format!(
-                                                        "版本 {} · Windows",
-                                                        env!("CARGO_PKG_VERSION")
-                                                    )),
-                                            ),
-                                    ),
+                                h_flex().gap_3().items_center().child(app_icon(40.)).child(
+                                    v_flex()
+                                        .gap_1()
+                                        .min_w_0()
+                                        .child(
+                                            div()
+                                                .text_size(ui_text_size(18.))
+                                                .font_semibold()
+                                                .text_color(rgb(palette().text))
+                                                .child("Conduit"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(ui_text_size(11.))
+                                                .text_color(rgb(palette().faint))
+                                                .child(conduit::i18n::format(
+                                                    "settings.version_windows",
+                                                    &[(
+                                                        "arg0",
+                                                        env!("CARGO_PKG_VERSION").to_string(),
+                                                    )],
+                                                )),
+                                        ),
+                                ),
                             )
                             .child(
                                 div()
                                     .text_size(ui_text_size(12.))
                                     .line_height(relative(1.6))
                                     .text_color(rgb(palette().muted))
-                                    .child(
-                                        "Conduit 是本地 CLI 会话工作台：把 Claude Code、Codex 与 OpenCode 的对话、工作区和 Git 变更收进一个界面。所有文件与历史都保留在你自己的机器上，不上传云端。",
-                                    ),
+                                    .child(conduit::i18n::text_static(
+                                        "settings.conduit_is_a_local_cli_workspace_that",
+                                    )),
                             )
                             .child(view.read(cx).update_content(view.clone())),
                     )

@@ -97,6 +97,7 @@ mod tests {
     use super::*;
     #[test]
     fn registry_covers_all_engines_with_unique_stable_identifiers() {
+        let _locale = crate::test_support::chinese();
         assert_eq!(REGISTRY.len(), Provider::ALL.len());
         let mut ids = std::collections::HashSet::new();
         let mut envs = std::collections::HashSet::new();

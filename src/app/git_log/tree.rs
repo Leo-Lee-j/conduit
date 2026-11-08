@@ -154,7 +154,10 @@ impl GitLogView {
             branch
                 .upstream
                 .as_ref()
-                .map(|u| format!(" · 跟踪 {}", u.trim_start_matches("refs/remotes/")))
+                .map(|u| conduit::i18n::format(
+                    "git_log.tree.tracking",
+                    &[("arg0", u.trim_start_matches("refs/remotes/").to_string())]
+                ))
                 .unwrap_or_default(),
             branch
                 .occupied
@@ -231,14 +234,14 @@ impl GitLogView {
                     .group_hover(group.clone(), |style| style.opacity(1.))
                     .focus(|style| style.opacity(1.))
                     .tooltip(if favorite {
-                        "取消收藏"
+                        conduit::i18n::text_static("git_log.tree.unfavorite")
                     } else {
-                        "收藏分支"
+                        conduit::i18n::text_static("git_log.tree.favorite_branch")
                     })
                     .accessibility_label(if favorite {
-                        "取消收藏分支"
+                        conduit::i18n::text_static("git_log.tree.unfavorite_branch")
                     } else {
-                        "收藏分支"
+                        conduit::i18n::text_static("git_log.tree.favorite_branch")
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
@@ -255,8 +258,14 @@ impl GitLogView {
                     .opacity(0.)
                     .group_hover(group, |style| style.opacity(1.))
                     .focus(|style| style.opacity(1.))
-                    .tooltip(format!("{name} 的分支操作"))
-                    .accessibility_label(format!("{name} 的分支操作"))
+                    .tooltip(conduit::i18n::format(
+                        "git_log.tree.branch_actions_for",
+                        &[("name", name.to_string())],
+                    ))
+                    .accessibility_label(conduit::i18n::format(
+                        "git_log.tree.branch_actions_for",
+                        &[("name", name.to_string())],
+                    ))
                     .dropdown_menu(move |menu, window, cx| {
                         git_branches::branch_menu(
                             menu,
@@ -284,7 +293,9 @@ impl GitLogView {
                 .as_ref()
                 .and_then(|p| p.file_name())
                 .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "选择工作区".into());
+                .unwrap_or_else(|| {
+                    conduit::i18n::text_static("git_log.tree.select_workspace").into()
+                });
             app.update(cx, |app, cx| {
                 app.navigation_workspace_picker("branches-workspace", label, path, cx)
             })
@@ -311,7 +322,7 @@ impl GitLogView {
                 .when(all_selected, |row| row.bg(rgb(palette().surface_hover)))
                 .hover(|row| row.bg(rgb(palette().surface_hover)))
                 .child(Icon::new(FullIconName::GitFork).size(px(13.)))
-                .child("全部分支")
+                .child(conduit::i18n::text_static("git_log.tree.all_branches"))
                 .on_click(cx.listener(|this, _, _, cx| this.select_ref(None, cx))),
         );
         if let Some(repository) = &self.repository {
@@ -337,9 +348,9 @@ impl GitLogView {
                         "HEAD · {}{}",
                         repository.current,
                         if repository.detached {
-                            "（分离）"
+                            conduit::i18n::text_static("git_log.tree.detached")
                         } else {
-                            "（当前分支）"
+                            conduit::i18n::text_static("git_log.tree.current_branch")
                         }
                     )))
                     .on_prepaint(move |bounds, _, cx| {
@@ -370,7 +381,7 @@ impl GitLogView {
             let remote_expanded = self.interaction.read(cx).remote_expanded || searching;
             list = list.child(self.group_header(
                 "git-branches-local-section".into(),
-                "Local · 本地分支".into(),
+                conduit::i18n::text_static("git_log.tree.local_branches").into(),
                 local_expanded,
                 cx,
             ));
@@ -381,7 +392,7 @@ impl GitLogView {
             }
             list = list.child(self.group_header(
                 "git-branches-remote-section".into(),
-                "Remote · 远程分支".into(),
+                conduit::i18n::text_static("git_log.tree.remote_branches").into(),
                 remote_expanded,
                 cx,
             ));
@@ -415,12 +426,9 @@ impl GitLogView {
                 }
             }
             if repository.truncated {
-                list = list.child(
-                    div()
-                        .p_2()
-                        .text_size(ui_text_size(11.))
-                        .child("分支列表已达显示上限"),
-                );
+                list = list.child(div().p_2().text_size(ui_text_size(11.)).child(
+                    conduit::i18n::text_static("git_log.tree.branch_display_limit_reached"),
+                ));
             }
         } else {
             list = list.child(
@@ -429,16 +437,16 @@ impl GitLogView {
                     .text_size(ui_text_size(12.))
                     .text_color(rgb(palette().muted))
                     .child(if self.workspace.is_none() {
-                        "添加或选择工作区后查看分支"
+                        conduit::i18n::text_static("git_log.tree.add_or_select_a_workspace_to_view")
                     } else {
-                        "正在检测 Git 仓库…"
+                        conduit::i18n::text_static("git_log.tree.detecting_git_repository")
                     }),
             );
         }
         let expanded = !self.collapsed.contains("git-tags-section") || searching;
         list = list.child(self.group_header(
             "git-tags-section".into(),
-            "Tags · 标签".into(),
+            conduit::i18n::text_static("git_log.tree.tags").into(),
             expanded,
             cx,
         ));
@@ -485,7 +493,9 @@ impl GitLogView {
                         .flex_shrink_0()
                         .p_2()
                         .text_size(ui_text_size(11.))
-                        .child("仅显示前 1000 个标签"),
+                        .child(conduit::i18n::text_static(
+                            "git_log.tree.showing_the_first_1_000_tags_only",
+                        )),
                 );
             }
         }
@@ -512,7 +522,7 @@ impl GitLogView {
                         div()
                             .text_size(ui_text_size(12.))
                             .font_semibold()
-                            .child("分支"),
+                            .child(conduit::i18n::text_static("git_log.tree.branches")),
                     )
                     .child(div().flex_1())
                     .children(picker),

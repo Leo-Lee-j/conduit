@@ -40,6 +40,7 @@ fn finish_save(app: &mut ConduitApp, window: &mut Window, cx: &mut Context<Condu
 
 #[gpui_kit::test]
 fn slow_save_retains_draft_and_attachments_and_gates_cli(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, root) = fixture(cx, "send-barrier");
     // This launcher only writes a marker in its temporary fixture directory.
     std::fs::write(
@@ -112,6 +113,7 @@ fn slow_save_retains_draft_and_attachments_and_gates_cli(cx: &mut TestAppContext
 fn failed_save_restores_existing_and_new_sessions_without_consuming_drafts(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, root) = fixture(cx, "failed-send");
     let file = root.join("reference.txt");
     std::fs::write(&file, "attachment").unwrap();
@@ -180,6 +182,7 @@ fn failed_save_restores_existing_and_new_sessions_without_consuming_drafts(
 
 #[gpui_kit::test]
 fn invalid_provider_does_not_create_session_or_submit_snapshot(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _) = fixture(cx, "invalid-route");
     cx.update(|window, cx| {
         app.update(cx, |this, cx| {
@@ -231,6 +234,7 @@ fn invalid_provider_does_not_create_session_or_submit_snapshot(cx: &mut TestAppC
 
 #[gpui_kit::test]
 fn engine_switch_save_keeps_its_source_session_until_ack(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, root) = fixture(cx, "engine-switch-save");
     cx.update(|window, cx| {
         app.update(cx, |this, cx| {
@@ -260,6 +264,7 @@ fn engine_switch_save_keeps_its_source_session_until_ack(cx: &mut TestAppContext
 
 #[gpui_kit::test]
 fn new_session_selects_after_ack_and_preserves_a_changed_model_choice(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _) = fixture(cx, "new-session-ack");
     cx.update(|window, cx| {
         app.update(cx, |this, cx| {
@@ -310,6 +315,7 @@ fn new_session_selects_after_ack_and_preserves_a_changed_model_choice(cx: &mut T
 
 #[gpui_kit::test]
 fn delayed_success_preserves_edited_draft_navigation_and_model_choice(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _) = fixture(cx, "save-navigation");
     cx.update(|window, cx| {
         app.update(cx, |this, cx| {
@@ -373,6 +379,7 @@ fn delayed_success_preserves_edited_draft_navigation_and_model_choice(cx: &mut T
 
 #[gpui_kit::test]
 fn attachment_only_send_preserves_files_added_while_saving(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, root) = fixture(cx, "attachment-only-save");
     let first = root.join("first.txt");
     let second = root.join("second.txt");
@@ -401,6 +408,7 @@ fn attachment_only_send_preserves_files_added_while_saving(cx: &mut TestAppConte
 
 #[gpui_kit::test]
 fn cancel_or_close_while_saving_rolls_back_and_ignores_late_success(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _) = fixture(cx, "cancel-save");
     cx.update(|window, cx| {
         app.update(cx, |this, cx| {
@@ -432,6 +440,7 @@ fn cancel_or_close_while_saving_rolls_back_and_ignores_late_success(cx: &mut Tes
 
 #[gpui_kit::test]
 fn retry_and_regenerate_restore_original_output_when_save_fails(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _) = fixture(cx, "retry-save");
     cx.update(|window, cx| {
         app.update(cx, |this, cx| {
@@ -465,6 +474,7 @@ fn retry_and_regenerate_restore_original_output_when_save_fails(cx: &mut TestApp
 
 #[gpui_kit::test]
 fn queued_dispatch_failure_restores_paused_message_and_background_banner(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _) = fixture(cx, "queue-save-failure");
     cx.update(|window, cx| {
         app.update(cx, |this, cx| {
@@ -498,6 +508,7 @@ fn queued_dispatch_failure_restores_paused_message_and_background_banner(cx: &mu
 
 #[gpui_kit::test]
 fn pending_queue_save_blocks_deletion_and_failure_preserves_composer(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _) = fixture(cx, "queue-enqueue-failure");
     cx.update(|window, cx| {
         app.update(cx, |this, cx| {
@@ -549,6 +560,7 @@ fn pending_queue_save_blocks_deletion_and_failure_preserves_composer(cx: &mut Te
 
 #[gpui_kit::test]
 fn cleanup_fault_cancels_closing_and_keeps_alias_exclusion_until_finished(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _) = fixture(cx, "cleanup-fault");
     cx.update(|window, cx| {
         app.update(cx, |this, cx| {
@@ -583,6 +595,7 @@ fn cleanup_fault_cancels_closing_and_keeps_alias_exclusion_until_finished(cx: &m
 
 #[gpui_kit::test]
 fn helper_cleanup_faults_remain_visible_until_verified_completion(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _) = fixture(cx, "helper-cleanup");
     cx.update(|window, cx| {
         app.update(cx, |this, cx| {
@@ -602,6 +615,7 @@ fn helper_cleanup_faults_remain_visible_until_verified_completion(cx: &mut TestA
                     );
                 } else {
                     this.git.generation = Some(crate::app::CommitGeneration {
+                        cancelled: false,
                         path: this.store.workspaces[0].path.clone(),
                         runtime,
                         started: std::time::Instant::now(),
@@ -673,6 +687,7 @@ fn helper_cleanup_faults_remain_visible_until_verified_completion(cx: &mut TestA
 
 #[gpui_kit::test]
 fn failed_save_cancels_closing_even_without_a_pending_send(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _) = fixture(cx, "close-save-failure");
     cx.update(|_, cx| {
         app.update(cx, |this, cx| {

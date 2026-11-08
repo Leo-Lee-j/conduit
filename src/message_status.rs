@@ -6,6 +6,7 @@ macro_rules! status {
         #[serde(from="String", into="String")]
         pub enum $name { #[default] Unspecified, $($variant,)* Other(String) }
         impl $name {
+            pub fn label(&self) -> &str { match self { Self::Other(value) => value, _ => conduit::i18n::source(self.as_str()) } }
             pub fn as_str(&self) -> &str { match self { Self::Unspecified=>"", $(Self::$variant=>$text,)* Self::Other(s)=>s } }
         }
         impl From<String> for $name {
@@ -33,6 +34,7 @@ mod tests {
     use super::*;
     #[test]
     fn legacy_states_and_unknown_future_values_roundtrip() {
+        let _locale = crate::test_support::chinese();
         for value in ["运行中", "输出中", "completed", "future-state", ""] {
             let json = serde_json::to_string(value).unwrap();
             let state: ToolStatus = serde_json::from_str(&json).unwrap();

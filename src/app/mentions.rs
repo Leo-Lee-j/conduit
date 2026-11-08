@@ -209,18 +209,20 @@ impl ConduitApp {
         let loading = self.file_mentions.searching
             || self.file_mentions.indexing.as_ref() == Some(&target.workspace);
         let status = if loading {
-            "正在搜索工作区文件…".to_string()
+            conduit::i18n::text_static("mentions.searching_workspace_files").to_string()
         } else if let Some(error) = index.and_then(|index| index.error.clone()) {
             error
         } else if self.file_mentions.results.is_empty() {
-            "未找到匹配文件，试试文件名或相对路径".to_string()
+            conduit::i18n::text_static("mentions.no_matching_files_try_a_filename_or").to_string()
         } else {
-            "↑↓ 选择 · Enter / Tab 引用 · Esc 关闭".to_string()
+            conduit::i18n::text_static("mentions.select_enter_tab_reference_esc_close").to_string()
         };
         let mut menu = v_flex()
             .id("file-mention-menu")
             .role(Role::ListBox)
-            .aria_label("工作区文件候选")
+            .aria_label(conduit::i18n::text_static(
+                "mentions.workspace_file_suggestions",
+            ))
             .debug_selector(|| "file-mention-menu".into())
             .w((window.viewport_size().width - px(32.)).min(px(520.)))
             .min_w_0()
@@ -250,7 +252,9 @@ impl ConduitApp {
                         div()
                             .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().text))
-                            .child("引用工作区文件"),
+                            .child(conduit::i18n::text_static(
+                                "mentions.reference_workspace_file",
+                            )),
                     ),
             );
         for (index, path) in self.file_mentions.results.iter().enumerate() {
@@ -264,16 +268,27 @@ impl ConduitApp {
                 .parent()
                 .filter(|path| !path.as_os_str().is_empty())
                 .map(|path| path.to_string_lossy().to_string())
-                .unwrap_or_else(|| "工作区根目录".into());
+                .unwrap_or_else(|| conduit::i18n::text_static("mentions.workspace_root").into());
             let selected = index == self.file_mentions.selected;
             let tooltip = path.clone();
             menu = menu.child(
                 h_flex()
                     .id(("file-mention", index))
                     .role(Role::ListBoxOption)
-                    .aria_label(format!(
-                        "引用文件 {path}{}",
-                        if selected { "，当前选中" } else { "" }
+                    .aria_label(conduit::i18n::format(
+                        "mentions.reference_file",
+                        &[
+                            ("path", path.to_string()),
+                            (
+                                "arg0",
+                                (if selected {
+                                    conduit::i18n::text_static("mentions.currently_selected")
+                                } else {
+                                    ""
+                                })
+                                .to_string(),
+                            ),
+                        ],
                     ))
                     .debug_selector(move || format!("file-mention-{index}"))
                     .w_full()
@@ -342,7 +357,9 @@ impl ConduitApp {
                     .pb_1()
                     .text_size(ui_text_size(11.))
                     .text_color(rgb(palette().muted))
-                    .child("扫描范围受限，仅展示已找到的文件；可用附件按钮选择其他文件"),
+                    .child(conduit::i18n::text_static(
+                        "mentions.scan_limited_showing_discovered_files_only_use",
+                    )),
             );
         }
         // Deferred painting keeps this above the message list without resizing it.
@@ -443,6 +460,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn file_mentions_keyboard_selection_escape_and_empty_enter(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         let (app, cx, root) = fixture(cx);
         draft(&app, "检查 @", cx);
         assert!(cx.debug_bounds("file-mention-menu").is_some());
@@ -492,6 +510,7 @@ mod tests {
     fn file_mentions_mouse_preserves_suffix_dedupes_and_rejects_deleted_files(
         cx: &mut TestAppContext,
     ) {
+        let _locale = crate::test_support::chinese();
         let (app, cx, root) = fixture(cx);
         draft(&app, "检查 @资料 后面的正文", cx);
         cx.update(|_, cx| {
@@ -545,6 +564,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn file_mentions_ignore_ime_and_discard_stale_workspace_results(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         let (app, cx, root) = fixture(cx);
         draft(&app, "@fi", cx);
         cx.update(|window, cx| {

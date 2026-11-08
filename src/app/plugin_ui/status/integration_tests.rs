@@ -121,6 +121,7 @@ fn plugins(overflow: usize) -> PluginUi {
 
 #[gpui_kit::test]
 fn toolbar_reflows_around_core_controls_in_wide_narrow_and_docked_layouts(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, store(), plugins(8));
     // Include a long core error. Its space is reserved before contribution packing.
     cx.update(|_, cx| {
@@ -219,6 +220,7 @@ fn toolbar_reflows_around_core_controls_in_wide_narrow_and_docked_layouts(cx: &m
 
 #[gpui_kit::test]
 fn overflow_menu_scrolls_and_routes_last_enabled_command(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, store(), plugins(24));
     cx.simulate_resize(size(px(700.), px(350.)));
     draw(cx);
@@ -264,6 +266,7 @@ fn overflow_menu_scrolls_and_routes_last_enabled_command(cx: &mut TestAppContext
 fn activity_and_status_commands_share_owner_policy_and_disable_unbound_actions(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, store(), plugins(0));
     cx.simulate_resize(size(px(2200.), px(800.)));
     draw(cx);
@@ -318,6 +321,7 @@ fn activity_and_status_commands_share_owner_policy_and_disable_unbound_actions(
 fn saved_commands_reject_scope_readonly_revocation_missing_capability_and_closing(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, store(), plugins(0));
     let request = cx.update(|_, cx| {
         app.read(cx)
@@ -388,6 +392,7 @@ fn saved_commands_reject_scope_readonly_revocation_missing_capability_and_closin
 fn dynamic_status_uses_metadata_without_mutating_registry_and_empty_scope_hides_items(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, store(), plugins(0));
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
@@ -446,6 +451,7 @@ mod cache_tests {
 
     #[gpui_kit::test]
     fn status_cache_reuses_drafts_but_refreshes_native_values_and_theme(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         let mut ui = plugins(0);
         ui.bind_status("test.status-external.read-status", None, |app, _| {
             StatusValue {
@@ -548,6 +554,7 @@ mod cache_tests {
 
     #[gpui_kit::test]
     fn status_cache_rebinds_same_generation_registry_and_context(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         let (app, cx) = fixture(cx, store(), plugins(0));
         cx.simulate_resize(size(px(2400.), px(800.)));
         frame(cx);
@@ -610,6 +617,7 @@ mod cache_tests {
 
     #[gpui_kit::test]
     fn status_cache_tracks_command_binding_without_registry_changes(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         let (app, cx) = fixture(cx, store(), plugins(0));
         cx.simulate_resize(size(px(2400.), px(800.)));
         frame(cx);
@@ -682,6 +690,7 @@ mod cache_tests {
 
     #[gpui_kit::test]
     fn status_cache_reflows_after_hints_change_without_resize(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         let (app, cx) = fixture(cx, store(), plugins(8));
         cx.simulate_resize(size(px(1600.), px(800.)));
         frame(cx);
@@ -741,6 +750,7 @@ mod cache_tests {
 
     #[gpui_kit::test]
     fn status_cache_open_menu_rejects_revoked_requests_and_reopens(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         let (app, cx) = fixture(cx, store(), plugins(24));
         cx.simulate_resize(size(px(900.), px(500.)));
         frame(cx);

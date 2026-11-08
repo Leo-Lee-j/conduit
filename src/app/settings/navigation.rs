@@ -77,6 +77,8 @@ impl ConduitApp {
         let mut group = "";
         for index in PAGE_ORDER {
             let (section, title, _) = PAGES[index];
+            let section = conduit::i18n::source(section);
+            let title = conduit::i18n::source(title);
             if !narrow && group != section {
                 group = section;
                 navigation = navigation.child(
@@ -258,7 +260,7 @@ impl ConduitApp {
             )
         };
         if provider.is_none() && channel.is_none() && model.is_none() {
-            return "跟随当前会话".into();
+            return conduit::i18n::text_static("generation.follow_current_session").into();
         }
         let route = match channel {
             Some(ModelChannel::Provider(id)) => self
@@ -267,22 +269,30 @@ impl ConduitApp {
                 .iter()
                 .find(|p| &p.id == id)
                 .map(|p| p.name.as_str())
-                .unwrap_or("服务不可用"),
+                .unwrap_or(conduit::i18n::text_static(
+                    "settings.navigation.service_unavailable",
+                )),
             Some(ModelChannel::Ccs(_)) => "CCS",
-            Some(ModelChannel::Cli) => "CLI 默认",
+            Some(ModelChannel::Cli) => conduit::i18n::text_static("generation.cli_default"),
             None => {
                 if provider.is_some() {
-                    "CLI 默认"
+                    conduit::i18n::text_static("generation.cli_default")
                 } else {
-                    "跟随会话服务"
+                    conduit::i18n::text_static("settings.navigation.follow_session_service")
                 }
             }
         };
         format!(
             "{} · {} · {}",
-            provider.map(Provider::label).unwrap_or("跟随会话引擎"),
+            provider
+                .map(Provider::label)
+                .unwrap_or(conduit::i18n::text_static(
+                    "settings.navigation.follow_session_engine"
+                )),
             route,
-            model.as_deref().unwrap_or("默认模型")
+            model
+                .as_deref()
+                .unwrap_or(conduit::i18n::text_static("model_picker.default_model"))
         )
     }
 
@@ -315,9 +325,9 @@ impl ConduitApp {
                     .small()
                     .ghost()
                     .label(if expanded {
-                        "收起配置"
+                        conduit::i18n::text_static("settings.navigation.hide_configuration")
                     } else {
-                        "配置模型"
+                        conduit::i18n::text_static("settings.navigation.configure_model")
                     })
                     .on_click(move |_, _, cx| {
                         view.update(cx, |app, cx| {
@@ -331,7 +341,11 @@ impl ConduitApp {
                     }),
                 )
         })
-        .keywords(["模型", "引擎", "Provider"])
+        .keywords([
+            conduit::i18n::text_static("model_picker.model_98fd0c"),
+            conduit::i18n::text_static("model_picker.engine"),
+            "Provider",
+        ])
     }
 }
 
@@ -342,6 +356,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn search_opens_matching_service_engine_and_keeps_navigation_visible(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
         let output = slot.clone();

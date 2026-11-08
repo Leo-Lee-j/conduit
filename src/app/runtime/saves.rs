@@ -141,7 +141,10 @@ impl ConduitApp {
             .filter_map(|(&id, run)| {
                 let pending = run.pending_save.as_ref()?;
                 let result = if self.closing || run.runtime.is_cancelled() {
-                    Some(Err("发送已取消；消息未发送。".into()))
+                    Some(Err(conduit::i18n::text_static(
+                        "runtime.saves.send_cancelled_the_message_was_not_sent",
+                    )
+                    .into()))
                 } else {
                     pending.receipt.poll()
                 };
@@ -158,10 +161,12 @@ impl ConduitApp {
                 .take()
                 .unwrap();
             let result = result.and_then(|()| {
-                pending
-                    .release
-                    .send(())
-                    .map_err(|_| "CLI 等待线程已退出；消息未发送。".into())
+                pending.release.send(()).map_err(|_| {
+                    conduit::i18n::text_static(
+                        "runtime.saves.cli_wait_thread_exited_the_message_was",
+                    )
+                    .into()
+                })
             });
             match result {
                 Ok(()) => {
@@ -199,8 +204,10 @@ impl ConduitApp {
                         }
                     }
                     if let Some(run) = self.session_control.runs.get_mut(&id) {
-                        run.status = "正在连接 CLI…".into();
-                        run.activity = "正在启动 CLI…".into();
+                        run.status =
+                            conduit::i18n::text_static("runtime.saves.connecting_to_cli").into();
+                        run.activity =
+                            conduit::i18n::text_static("runtime.saves.starting_cli").into();
                     }
                     if let Some(snippet) = pending.naming_snippet {
                         self.start_session_naming(id, &snippet, cx);
@@ -232,8 +239,11 @@ impl ConduitApp {
                     let mut notice = Notice::new(
                         NoticeSource::Session,
                         NoticeLevel::Error,
-                        "消息未发送",
-                        format!("{error} 草稿已保留。"),
+                        conduit::i18n::text_static("runtime.saves.message_not_sent"),
+                        conduit::i18n::format(
+                            "runtime.saves.your_draft_has_been_preserved",
+                            &[("error", error.to_string())],
+                        ),
                     );
                     if let Some(target) = target {
                         notice = notice.target(target);
@@ -269,8 +279,11 @@ impl ConduitApp {
                     let mut notice = Notice::new(
                         NoticeSource::Session,
                         NoticeLevel::Error,
-                        "消息未加入队列",
-                        format!("保存失败：{error}。草稿已保留。"),
+                        conduit::i18n::text_static("queue.message_not_queued"),
+                        conduit::i18n::format(
+                            "queue.save_failed_your_draft_has_been_preserved",
+                            &[("error", error.to_string())],
+                        ),
                     );
                     if let Some(target) = self.session_notice_target(id) {
                         notice = notice.target(target);

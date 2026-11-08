@@ -71,9 +71,9 @@ impl GitChangeGroup {
         match self {
             Self::Changes => "Changes",
             Self::Untracked => "Unversioned Files",
-            Self::Added => "新增",
-            Self::Modified => "修改",
-            Self::Deleted => "删除",
+            Self::Added => conduit::i18n::text_static("git_state.added"),
+            Self::Modified => conduit::i18n::text_static("git_state.modified"),
+            Self::Deleted => conduit::i18n::text_static("git_state.deleted"),
         }
     }
 

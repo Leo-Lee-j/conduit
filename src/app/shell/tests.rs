@@ -135,6 +135,7 @@ fn pixels(delta: f32) -> ScrollDelta {
 
 #[gpui_kit::test]
 fn chat_continuous_wheel_preserves_direction_and_idle_position(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     for delta in [120., -120., 120., -120.] {
         let start = position(&app, cx);
@@ -173,6 +174,7 @@ fn chat_continuous_wheel_preserves_direction_and_idle_position(cx: &mut TestAppC
 
 #[gpui_kit::test]
 fn chat_wheel_burst_applies_each_delta_once(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     scroll_to(&app, cx, 41, 200.);
     let pointer = cx.update(|_, cx| app.read(cx).scroll.viewport_bounds().center());
@@ -193,6 +195,7 @@ fn chat_wheel_burst_applies_each_delta_once(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn chat_wheel_leaves_bottom_and_clamps_each_packet_at_boundaries(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     let pointer = cx.update(|_, cx| app.read(cx).scroll.viewport_bounds().center());
     let before = cx.debug_bounds("message-row-79").unwrap().origin.y;
@@ -222,6 +225,7 @@ fn chat_wheel_leaves_bottom_and_clamps_each_packet_at_boundaries(cx: &mut TestAp
 
 #[gpui_kit::test]
 fn chat_wheel_handles_lines_and_blank_padding(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     scroll_to(&app, cx, 41, 200.);
     let viewport = cx.update(|_, cx| app.read(cx).scroll.viewport_bounds());
@@ -241,6 +245,7 @@ fn chat_wheel_handles_lines_and_blank_padding(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn chat_wheel_handles_collapsed_groups_and_keeps_tool_scroll_independent(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
@@ -294,6 +299,7 @@ fn chat_wheel_handles_collapsed_groups_and_keeps_tool_scroll_independent(cx: &mu
 fn chat_wheel_during_stream_preserves_history_and_resumes_follow_at_bottom(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     let (runtime, sender) = ChatRuntime::test_channel();
     cx.update(|_, cx| {
@@ -390,6 +396,7 @@ fn measured(
 #[cfg(conduit_shell_desktop)]
 #[gpui_kit::test]
 fn chat_cache_reuses_visible_rows_while_typing_and_notifying(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     cx.update(|window, cx| {
         use gpui_kit::Focusable;
@@ -426,6 +433,7 @@ fn chat_cache_reuses_visible_rows_while_typing_and_notifying(cx: &mut TestAppCon
 #[cfg(conduit_shell_desktop)]
 #[gpui_kit::test]
 fn chat_cache_reflows_replaced_message_typography_and_width(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     let before = cx.debug_bounds("assistant-message-79").unwrap();
     let result = measured(cx, |cx| {
@@ -468,6 +476,7 @@ fn chat_cache_reflows_replaced_message_typography_and_width(cx: &mut TestAppCont
 #[cfg(conduit_shell_desktop)]
 #[gpui_kit::test]
 fn chat_cache_refreshes_actions_and_async_remeasurement(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     for change in 0..4 {
         let result = measured(cx, |cx| {

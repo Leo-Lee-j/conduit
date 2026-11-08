@@ -88,7 +88,7 @@ pub(super) fn message_outline_entries(
                 key: item.key.clone(),
                 index,
                 label: if preview.is_empty() {
-                    "（空消息）".into()
+                    conduit::i18n::text_static("outline.empty_message").into()
                 } else {
                     preview
                 },
@@ -165,10 +165,12 @@ impl ConduitApp {
                                 // over the workspace navigation on the left.
                                 .tooltip(outline_tooltip(&entry.label))
                                 .tooltip_placement(Placement::Right)
-                                .accessibility_label(format!(
-                                    "跳转到用户消息 {}：{}",
-                                    ordinal + 1,
-                                    entry.label
+                                .accessibility_label(conduit::i18n::format(
+                                    "outline.jump_to_user_message",
+                                    &[
+                                        ("arg0", format!("{}", ordinal + 1)),
+                                        ("arg1", entry.label.to_string()),
+                                    ],
                                 ))
                                 .child(
                                     h_flex().w_full().justify_end().child(

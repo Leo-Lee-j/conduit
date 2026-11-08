@@ -49,7 +49,12 @@ impl ConduitApp {
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => Some((
                     cwd.clone(),
                     ModelCatalog {
-                        error: Some("OpenCode 模型目录查询已停止，请刷新重试".into()),
+                        error: Some(
+                            conduit::i18n::text_static(
+                                "opencode_models.opencode_model_catalog_query_stopped_refresh_to",
+                            )
+                            .into(),
+                        ),
                         ..Default::default()
                     },
                 )),

@@ -7,6 +7,7 @@ fn patch(text: &str) -> String {
 
 #[gpui_kit::test]
 fn diff_cache_reuses_replaces_and_evicts_least_recent_card(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _) = crate::app::queue::tests::fixture(cx, "diff-cache-lru");
     cx.update(|_, cx| {
         app.update(cx, |_, cx| {
@@ -35,6 +36,7 @@ fn diff_cache_reuses_replaces_and_evicts_least_recent_card(cx: &mut TestAppConte
 
 #[gpui_kit::test]
 fn diff_cache_bounds_patch_bytes_and_does_not_retain_oversized_cards(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _) = crate::app::queue::tests::fixture(cx, "diff-cache-bytes");
     cx.update(|_, cx| {
         app.update(cx, |_, cx| {
@@ -66,6 +68,7 @@ fn diff_cache_bounds_patch_bytes_and_does_not_retain_oversized_cards(cx: &mut Te
 
 #[gpui_kit::test]
 fn deleting_session_and_removing_workspace_release_cached_diff_entities(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _) = crate::app::queue::tests::fixture(cx, "diff-cache-lifecycle");
     let (first, second) = cx.update(|_, cx| {
         app.update(cx, |app, cx| {

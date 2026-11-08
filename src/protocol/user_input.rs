@@ -82,7 +82,8 @@ impl Protocol {
             id: id_text(wire_id),
             wire_id: wire_id.clone(),
             input,
-            title: "CLI 需要你确认选项".into(),
+            title: conduit::i18n::text_static("user_input.the_cli_needs_you_to_confirm_options")
+                .into(),
             detail: String::new(),
             allow_once: true,
             kind,
@@ -97,7 +98,12 @@ impl Protocol {
             })
         {
             step.done = true;
-            step.error = Some("CLI 问答请求格式无效，已停止".into());
+            step.error = Some(
+                conduit::i18n::text_static(
+                    "protocol.user_input.invalid_cli_question_request_stopped",
+                )
+                .into(),
+            );
             return;
         }
         let mut approval = approval;
@@ -199,6 +205,7 @@ mod tests {
 
     #[test]
     fn user_input_waits_in_every_permission_mode_and_uses_provider_answer_shapes() {
+        let _locale = crate::test_support::chinese();
         for provider in [Provider::Codex, Provider::Claude] {
             for permission in [
                 PermissionLevel::ReadOnly,
@@ -265,6 +272,7 @@ mod tests {
 
     #[test]
     fn malformed_user_input_stops_instead_of_silently_skipping() {
+        let _locale = crate::test_support::chinese();
         let mut protocol = Protocol::new(Provider::Codex, "C:\\work".into(), "test".into(), None);
         for params in [
             json!({"questions":[]}),

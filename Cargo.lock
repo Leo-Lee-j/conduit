@@ -1028,7 +1028,7 @@ dependencies = [
 
 [[package]]
 name = "conduit"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -1042,6 +1042,7 @@ dependencies = [
  "mermaid-rs-renderer",
  "raw-window-handle",
  "rusqlite",
+ "rust-i18n",
  "semver",
  "serde",
  "serde_json",

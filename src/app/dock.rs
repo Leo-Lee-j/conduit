@@ -46,7 +46,10 @@ impl ConduitApp {
         let adapter = self.plugins.right_adapter();
         let view = match (adapter, self.plugins.right_key().cloned()) {
             (Some(adapter), Some(key)) => (adapter.render)(self, &key, window, cx),
-            _ => RightBody::Failed("视图暂不可用".into()).into(),
+            _ => RightBody::Failed(
+                conduit::i18n::text_static("dock.view_temporarily_unavailable").into(),
+            )
+            .into(),
         };
         let close_id = adapter.map_or("close-right-view", |a| a.close_id);
         let header = if view.actions.is_empty() {
@@ -95,11 +98,19 @@ impl ConduitApp {
             RightBody::Content(body) => body,
             state => {
                 let (selector, title, description) = match state {
-                    RightBody::Loading => ("right-view-loading", "正在加载…", String::new()),
+                    RightBody::Loading => (
+                        "right-view-loading",
+                        conduit::i18n::text_static("dock.loading"),
+                        String::new(),
+                    ),
                     RightBody::Empty { title, description } => {
                         ("detail-empty", title, description.into())
                     }
-                    RightBody::Failed(error) => ("right-view-error", "无法显示视图", error),
+                    RightBody::Failed(error) => (
+                        "right-view-error",
+                        conduit::i18n::text_static("dock.unable_to_display_view"),
+                        error,
+                    ),
                     RightBody::Content(_) => unreachable!(),
                 };
                 v_flex()
@@ -190,8 +201,14 @@ impl ConduitApp {
                     .small()
                     .compact()
                     .icon(FullIconName::X)
-                    .tooltip(format!("关闭{title}"))
-                    .accessibility_label(format!("关闭{title}"))
+                    .tooltip(conduit::i18n::format(
+                        "dock.close",
+                        &[("title", title.to_string())],
+                    ))
+                    .accessibility_label(conduit::i18n::format(
+                        "dock.close",
+                        &[("title", title.to_string())],
+                    ))
                     .on_click(cx.listener(|app, _, window, cx| app.close_right_view(window, cx))),
             );
         let header = h_flex()

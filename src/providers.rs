@@ -58,11 +58,11 @@ impl ReasoningEffort {
     }
     pub fn label(self) -> &'static str {
         match self {
-            Self::Default => "默认",
-            Self::Low => "低",
-            Self::Medium => "中",
-            Self::High => "高",
-            Self::Xhigh => "极高",
+            Self::Default => conduit::i18n::text_static("chat.default"),
+            Self::Low => conduit::i18n::text_static("providers.low"),
+            Self::Medium => conduit::i18n::text_static("providers.medium"),
+            Self::High => conduit::i18n::text_static("providers.high"),
+            Self::Xhigh => conduit::i18n::text_static("providers.extra_high"),
         }
     }
     pub fn index(self) -> usize {
@@ -131,10 +131,12 @@ impl ModelProvider {
     }
     pub fn validate(&self) -> Result<()> {
         if self.engine == Provider::OpenCode {
-            bail!("OpenCode 首版使用 CLI 自身 Provider 配置，请在 opencode 中配置模型");
+            bail!(conduit::i18n::text(
+                "providers.opencode_uses_its_native_provider_configuration_configure"
+            ));
         }
         if self.name.trim().is_empty() {
-            bail!("请输入 Provider 名称");
+            bail!(conduit::i18n::text("providers.enter_a_provider_name"));
         }
         discovery::endpoint(&self.base_url)?;
         if !self.api_key_env.is_empty()
@@ -144,7 +146,9 @@ impl ModelProvider {
                 .all(|c| c.is_ascii_alphanumeric() || c == '_')
                 || self.api_key_env.starts_with(|c: char| c.is_ascii_digit()))
         {
-            bail!("API Key 环境变量名只能包含字母、数字和下划线，且不能以数字开头");
+            bail!(conduit::i18n::text(
+                "providers.api_key_environment_variable_names_may_contain"
+            ));
         }
         if self.models.is_empty()
             || self
@@ -152,7 +156,7 @@ impl ModelProvider {
                 .iter()
                 .any(|id| id.trim().is_empty() || id.contains('\0'))
         {
-            bail!("请至少填写一个模型 ID");
+            bail!(conduit::i18n::text("providers.enter_at_least_one_model_id"));
         }
         Ok(())
     }
@@ -176,7 +180,10 @@ impl ModelProvider {
                     .ok()
                     .filter(|v| !v.trim().is_empty())
                     .ok_or_else(|| {
-                        anyhow::anyhow!("请先设置环境变量 {} 并重新启动 Conduit", self.api_key_env)
+                        anyhow::anyhow!(conduit::i18n::format(
+                            "providers.set_environment_variable_and_restart_conduit_first",
+                            &[("arg0", self.api_key_env.to_string())]
+                        ))
                     })?,
             ))
         }
@@ -242,6 +249,7 @@ mod tests {
     use super::*;
     #[test]
     fn legacy_providers_load_and_protected_credentials_only_enter_runtime_environment() {
+        let _locale = crate::test_support::chinese();
         let mut provider: ModelProvider = serde_json::from_value(json!({
             "id":"test", "name":"Test", "engine":"Codex", "base_url":"https://example.invalid/v1", "api_key_env":"", "models":["test-model"]
         })).unwrap();

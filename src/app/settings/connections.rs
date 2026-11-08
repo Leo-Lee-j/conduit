@@ -46,7 +46,9 @@ impl ConduitApp {
                     .debug_selector(|| "settings-show-full-page".into())
                     .small()
                     .ghost()
-                    .label("查看完整页面")
+                    .label(conduit::i18n::text_static(
+                        "settings.connections.view_full_page",
+                    ))
                     .on_click(move |_, window, cx| {
                         full.update(cx, |app, cx| {
                             app.select_settings_page(app.settings_ui.page, window, cx)
@@ -61,17 +63,19 @@ impl ConduitApp {
                     .small()
                     .outline()
                     .icon(FullIconName::RefreshCw)
-                    .accessibility_label("重新读取配置")
+                    .accessibility_label(conduit::i18n::text_static(
+                        "settings.connections.reload_configuration",
+                    ))
                     .tooltip(if self.connection_settings.syncing {
-                        "读取中…"
+                        conduit::i18n::text_static("settings.connections.reading")
                     } else {
-                        "重新读取配置"
+                        conduit::i18n::text_static("settings.connections.reload_configuration")
                     })
                     .when(!narrow, |button| {
                         button.label(if self.connection_settings.syncing {
-                            "读取中…"
+                            conduit::i18n::text_static("settings.connections.reading")
                         } else {
-                            "重新读取配置"
+                            conduit::i18n::text_static("settings.connections.reload_configuration")
                         })
                     })
                     .disabled(self.closing || self.connection_settings.syncing)
@@ -87,9 +91,17 @@ impl ConduitApp {
                         .small()
                         .primary()
                         .icon(FullIconName::Plus)
-                        .accessibility_label("添加服务")
-                        .tooltip("添加服务")
-                        .when(!narrow, |button| button.label("添加服务"))
+                        .accessibility_label(conduit::i18n::text_static(
+                            "settings.connections.add_service",
+                        ))
+                        .tooltip(conduit::i18n::text_static(
+                            "settings.connections.add_service",
+                        ))
+                        .when(!narrow, |button| {
+                            button.label(conduit::i18n::text_static(
+                                "settings.connections.add_service",
+                            ))
+                        })
                         .disabled(disabled)
                         .on_click(move |_, window, cx| {
                             add.update(cx, |app, cx| app.open_provider_editor(None, window, cx))
@@ -122,7 +134,9 @@ impl ConduitApp {
                                 .small()
                                 .ghost()
                                 .icon(FullIconName::Sparkles)
-                                .label("管理 Skills")
+                                .label(conduit::i18n::text_static(
+                                    "settings.connections.manage_skills",
+                                ))
                                 .on_click(move |_, window, cx| {
                                     skills.update(cx, |app, cx| {
                                         app.extensions_ui.engine = engine;
@@ -135,7 +149,9 @@ impl ConduitApp {
                                 .small()
                                 .ghost()
                                 .icon(FullIconName::Server)
-                                .label("管理 MCP")
+                                .label(conduit::i18n::text_static(
+                                    "settings.connections.manage_mcp",
+                                ))
                                 .on_click(move |_, window, cx| {
                                     mcp.update(cx, |app, cx| {
                                         app.extensions_ui.engine = engine;

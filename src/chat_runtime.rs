@@ -50,7 +50,9 @@ impl ApprovalBroker {
     fn issue(&mut self, mut approval: Approval) -> Result<Approval> {
         let source = approval.id.clone();
         if self.pending.contains_key(&source) {
-            bail!("CLI 重复发送未完成审批 ID，任务已停止");
+            bail!(conduit::i18n::text(
+                "chat_runtime.cli_repeated_a_pending_approval_id_task"
+            ));
         }
         self.next += 1;
         approval.id = format!("approval-{}", self.next);
@@ -291,7 +293,9 @@ impl ChatRuntime {
                     match gate.recv_timeout(Duration::from_millis(20)) {
                         Ok(()) => break,
                         Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                        Err(_) => bail!("保存未确认，消息未发送。"),
+                        Err(_) => bail!(conduit::i18n::text(
+                            "chat_runtime.save_not_confirmed_message_not_sent"
+                        )),
                     }
                 }
             }
@@ -372,7 +376,12 @@ fn finished_event(
     let error = match outcome {
         Ok(Ok(())) => None,
         Ok(Err(error)) => Some(format!("{error:#}")),
-        Err(_) => Some("CLI 工作线程异常；已进入进程清理流程，请检查结果后重试".into()),
+        Err(_) => Some(
+            conduit::i18n::text_static(
+                "chat_runtime.cli_worker_failed_process_cleanup_started_check",
+            )
+            .into(),
+        ),
     };
     Event::Finished { error, cancelled }
 }
@@ -417,19 +426,25 @@ impl Lines {
                 let line = &self.buffer[consumed..index];
                 consumed = index + 1;
                 if line.len() > 8 * 1024 * 1024 {
-                    bail!("CLI 单条协议消息超过 8 MiB 限制");
+                    bail!(conduit::i18n::text(
+                        "chat_runtime.cli_protocol_message_exceeds_the_8_mib"
+                    ));
                 }
                 if line.iter().all(u8::is_ascii_whitespace) {
                     continue;
                 }
                 messages.push(serde_json::from_slice(line).map_err(|_| {
-                    anyhow::anyhow!("CLI 返回非 JSON 协议消息，未将诊断文本混入模型回复")
+                    anyhow::anyhow!(conduit::i18n::text(
+                        "chat_runtime.cli_returned_a_non_json_protocol_message"
+                    ))
                 })?);
             }
         }
         self.buffer.drain(..consumed);
         if self.buffer.len() > 8 * 1024 * 1024 {
-            bail!("CLI 单条协议消息超过 8 MiB 限制");
+            bail!(conduit::i18n::text(
+                "chat_runtime.cli_protocol_message_exceeds_the_8_mib"
+            ));
         }
         if self.eof && !self.buffer.is_empty() {
             messages.push(serde_json::from_slice(&self.buffer)?);
@@ -442,9 +457,11 @@ impl Lines {
 fn send(writer: &SyncSender<Vec<u8>>, value: Value) -> Result<()> {
     let mut bytes = serde_json::to_vec(&value)?;
     bytes.push(b'\n');
-    writer
-        .try_send(bytes)
-        .map_err(|_| anyhow::anyhow!("CLI 输入队列不可用，任务未继续"))
+    writer.try_send(bytes).map_err(|_| {
+        anyhow::anyhow!(conduit::i18n::text(
+            "chat_runtime.cli_input_queue_unavailable_task_did_not"
+        ))
+    })
 }
 
 fn respond(
@@ -548,7 +565,10 @@ fn execute(
                 }
             }
             if let Ok(error) = failures.try_recv() {
-                bail!("CLI 标准输入错误：{error}");
+                bail!(conduit::i18n::format(
+                    "chat_runtime.cli_stdin_error",
+                    &[("error", format!("{}", error))]
+                ));
             }
             let mut messages = lines.poll(&mut pipes.stdout)?;
             if !cancel.load(Ordering::Acquire)
@@ -600,9 +620,9 @@ fn execute(
                         other => other,
                     };
                     events.send(event).map_err(|_| {
-                        anyhow::anyhow!(
-                            "事件积压超过限制或界面已关闭；任务已停止，请检查已接收的结果"
-                        )
+                        anyhow::anyhow!(conduit::i18n::text(
+                            "chat_runtime.event_backlog_exceeded_its_limit_or_the"
+                        ))
                     })?;
                 }
                 if step.done {
@@ -686,19 +706,27 @@ fn execute(
                         return Ok(());
                     }
                     let diagnostic = String::from_utf8_lossy(&stderr);
-                    bail!("CLI 在返回任务完成事件前退出（{code}）。{diagnostic}");
+                    bail!(conduit::i18n::format(
+                        "chat_runtime.cli_exited_before_reporting_task_completion",
+                        &[
+                            ("code", format!("{}", code)),
+                            ("diagnostic", format!("{}", diagnostic))
+                        ]
+                    ));
                 }
             }
             if protocol.startup_pending() && last_message.elapsed() > Duration::from_secs(60) {
-                bail!("CLI 初始化超过 60 秒；请检查登录状态、CLI 配置和 MCP 启动项");
+                bail!(conduit::i18n::text(
+                    "chat_runtime.cli_initialization_exceeded_60_seconds_check_sign"
+                ));
             }
             thread::sleep(Duration::from_millis(10));
         }
     }))
     .unwrap_or_else(|_| {
-        Err(anyhow::anyhow!(
-            "CLI 协议处理线程异常；已进入进程清理流程，请检查结果后重试"
-        ))
+        Err(anyhow::anyhow!(conduit::i18n::text(
+            "chat_runtime.cli_protocol_thread_failed_process_cleanup_started"
+        )))
     });
     // No Finished event is emitted before the entire Job has been confirmed empty.
     done.store(true, Ordering::Release);
@@ -755,8 +783,9 @@ fn cleanup_process(
             && !termination_error_reported
         {
             termination_error = Some(error.to_string());
-            let _ = events.send(Event::Notice(format!(
-                "进程树停止失败，该会话保持占用：{error}"
+            let _ = events.send(Event::Notice(conduit::i18n::format(
+                "chat_runtime.failed_to_stop_the_process_tree_this",
+                &[("error", format!("{}", error))],
             )));
             termination_error_reported = true;
         }
@@ -767,17 +796,38 @@ fn cleanup_process(
             let active = child
                 .active_processes()
                 .map(|count| count.to_string())
-                .unwrap_or_else(|error| format!("查询失败：{error}"));
+                .unwrap_or_else(|error| {
+                    conduit::i18n::format(
+                        "chat_runtime.query_failed",
+                        &[("error", format!("{}", error))],
+                    )
+                });
             let exit = child
                 .exit_code()
                 .map(|code| format!("{code:?}"))
-                .unwrap_or_else(|error| format!("查询失败：{error}"));
+                .unwrap_or_else(|error| {
+                    conduit::i18n::format(
+                        "chat_runtime.query_failed",
+                        &[("error", format!("{}", error))],
+                    )
+                });
             let detail = termination_error
                 .as_ref()
-                .map(|error| format!("最近一次终止错误：{error}；"))
+                .map(|error| {
+                    conduit::i18n::format(
+                        "chat_runtime.latest_termination_error",
+                        &[("error", error.to_string())],
+                    )
+                })
                 .unwrap_or_default();
-            let cleanup_error =
-                anyhow::anyhow!("进程树清理超时；{detail}仍有 {active} 个活动进程，退出码：{exit}");
+            let cleanup_error = anyhow::anyhow!(conduit::i18n::format(
+                "chat_runtime.process_cleanup_timed_out_processes_still_active",
+                &[
+                    ("detail", detail.to_string()),
+                    ("active", active.to_string()),
+                    ("exit", exit.to_string())
+                ]
+            ));
             if let Event::Finished { error, .. } = finished {
                 *error = Some(match error.take() {
                     None => cleanup_error.to_string(),
@@ -786,8 +836,9 @@ fn cleanup_process(
             }
             // A timeout is a visible fault, not proof that the Job is empty.
             // Retain its handles and exclusion while the worker observes cleanup.
-            let _ = events.send(Event::CleanupBlocked(format!(
-                "{cleanup_error:#}。已停止接收任务，正在后台重试清理；此会话暂不可重启。"
+            let _ = events.send(Event::CleanupBlocked(conduit::i18n::format(
+                "chat_runtime.new_tasks_are_blocked_while_cleanup_retries",
+                &[("cleanup_error", format!("{:#}", cleanup_error))],
             )));
             quarantined = true;
         }
@@ -801,6 +852,7 @@ mod tests {
 
     #[test]
     fn lines_streams_more_than_32_mib_and_parses_final_message_at_eof() {
+        let _locale = crate::test_support::chinese();
         use std::os::windows::io::FromRawHandle;
         use windows_sys::Win32::System::Pipes::CreatePipe;
 
@@ -862,6 +914,7 @@ mod tests {
 
     #[test]
     fn broker_queues_independent_approvals_and_revocation_invalidates_only_its_ticket() {
+        let _locale = crate::test_support::chinese();
         let mut broker = ApprovalBroker::default();
         let first = broker.issue(approval("wire-1")).unwrap();
         let second = broker.issue(approval("wire-2")).unwrap();
@@ -912,6 +965,7 @@ mod tests {
     }
     #[test]
     fn worker_panic_becomes_terminal_finished_event() {
+        let _locale = crate::test_support::chinese();
         let runtime = ChatRuntime::start_worker(|_, _, _, _| panic!("fixture panic"));
         match runtime.events.recv_timeout(Duration::from_secs(3)).unwrap() {
             Event::Finished { error, cancelled } => {
@@ -928,6 +982,7 @@ mod tests {
 
     #[test]
     fn worker_setup_panic_keeps_child_owned_until_verified_exit() {
+        let _locale = crate::test_support::chinese();
         let (tx, rx) = mpsc::channel();
         let runtime = ChatRuntime::start_worker(move |_, _, _, owned| {
             let program = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
@@ -965,6 +1020,7 @@ mod tests {
 
     #[test]
     fn cleanup_timeout_reports_fault_and_waits_for_verified_recovery() {
+        let _locale = crate::test_support::chinese();
         struct StalledTree(Arc<AtomicBool>);
         impl ProcessTree for StalledTree {
             fn terminate(&self) -> Result<()> {
@@ -1010,6 +1066,7 @@ mod tests {
     }
     #[test]
     fn runtime_cancellation_finishes_after_descendant_exits() {
+        let _locale = crate::test_support::chinese();
         use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
         use windows_sys::Win32::{
             Foundation::WAIT_OBJECT_0,
@@ -1056,6 +1113,7 @@ mod tests {
     }
     #[test]
     fn cancelling_one_runtime_leaves_another_running() {
+        let _locale = crate::test_support::chinese();
         let directory = std::env::temp_dir().join(format!(
             "conduit-cancel-isolation-{}-{}",
             std::process::id(),
@@ -1134,6 +1192,7 @@ mod tests {
     }
     #[test]
     fn runtime_queues_multiple_approvals_and_answers_each_once() {
+        let _locale = crate::test_support::chinese();
         let log =
             std::env::temp_dir().join(format!("conduit-approval-queue-{}.log", std::process::id()));
         let command = r#"
@@ -1201,6 +1260,7 @@ mod tests {
 
     #[test]
     fn runtime_user_input_waits_for_complete_answers_even_after_enabling_full_access() {
+        let _locale = crate::test_support::chinese();
         let command = r#"
             [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding
             [Console]::WriteLine('{"id":72,"method":"item/tool/requestUserInput","params":{"questions":[{"id":"choice","header":"Choice","question":"Which?","options":[{"label":"A","description":"First"},{"label":"B","description":"Second"}]}]}}')
@@ -1258,6 +1318,7 @@ mod tests {
 
     #[test]
     fn selecting_full_access_resolves_pending_and_future_approvals_in_the_active_turn() {
+        let _locale = crate::test_support::chinese();
         let log = std::env::temp_dir().join(format!(
             "conduit-live-full-access-{}.jsonl",
             std::process::id()
@@ -1337,6 +1398,7 @@ mod tests {
 
     #[test]
     fn full_access_answers_tool_permission_without_showing_an_approval() {
+        let _locale = crate::test_support::chinese();
         let log =
             std::env::temp_dir().join(format!("conduit-full-access-{}.jsonl", std::process::id()));
         let command = r#"
@@ -1392,6 +1454,7 @@ mod tests {
     }
     #[test]
     fn runtime_reports_premature_exit_and_malformed_protocol() {
+        let _locale = crate::test_support::chinese();
         for (command, expected) in [
             ("[Console]::ReadLine() | Out-Null; exit 9", "退出（9）"),
             (
@@ -1416,6 +1479,7 @@ mod tests {
     }
     #[test]
     fn missing_executable_finishes_with_error() {
+        let _locale = crate::test_support::chinese();
         let runtime = ChatRuntime::start(
             Provider::Codex,
             PathBuf::from(r"Z:\missing-conduit-cli.exe"),
@@ -1436,6 +1500,7 @@ mod tests {
     }
     #[test]
     fn text_helper_runs_in_the_requested_workspace_without_a_model_request() {
+        let _locale = crate::test_support::chinese();
         let directory = std::env::temp_dir().join(format!(
             "conduit-helper-cwd-{}-{}",
             std::process::id(),
@@ -1486,6 +1551,7 @@ mod tests {
     #[test]
     #[ignore = "requires installed CLIs; handshake only, no model request"]
     fn installed_commit_helpers_initialize_without_model_request() {
+        let _locale = crate::test_support::chinese();
         for provider in [Provider::Claude, Provider::Codex] {
             let executable = provider.executable().expect("CLI not installed");
             let mut protocol = Protocol::new(
@@ -1546,6 +1612,7 @@ mod tests {
     #[test]
     #[ignore = "requires installed Codex; custom provider start/resume only, no model request"]
     fn installed_custom_codex_route_initializes_without_model_request() {
+        let _locale = crate::test_support::chinese();
         use crate::providers::{ReasoningEffort, RuntimeRoute};
         let executable = Provider::Codex.executable().expect("Codex not installed");
         let directory = std::env::temp_dir().join(format!(
@@ -1667,6 +1734,7 @@ mod tests {
     #[test]
     #[ignore = "requires installed CLIs; handshake only, no model request"]
     fn installed_cli_protocol_handshakes() {
+        let _locale = crate::test_support::chinese();
         for (provider, permission) in [
             (Provider::Claude, PermissionLevel::WorkspaceWrite),
             (Provider::Claude, PermissionLevel::FullAccess),
@@ -1773,11 +1841,13 @@ mod tests {
     #[test]
     #[ignore = "sends two tiny synthetic model prompts through installed Codex CLI"]
     fn real_codex_chat_and_resume() {
+        let _locale = crate::test_support::chinese();
         real_chat_and_resume(Provider::Codex);
     }
     #[test]
     #[ignore = "sends two tiny synthetic model prompts through installed Claude CLI"]
     fn real_claude_chat_and_resume() {
+        let _locale = crate::test_support::chinese();
         real_chat_and_resume(Provider::Claude);
     }
     fn real_chat_and_resume(provider: Provider) {
@@ -1805,6 +1875,7 @@ mod tests {
     #[test]
     #[ignore = "sends one small tool-use prompt through installed Codex CLI and denies approval"]
     fn real_codex_command_approval_can_be_denied() {
+        let _locale = crate::test_support::chinese();
         let cwd =
             std::env::temp_dir().join(format!("conduit-approval-smoke-{}", std::process::id()));
         std::fs::create_dir_all(&cwd).unwrap();
@@ -1857,6 +1928,7 @@ mod tests {
     #[test]
     #[ignore = "sends one tool-use prompt through installed Codex CLI and cancels while approval is pending"]
     fn real_codex_cancel_during_pending_approval() {
+        let _locale = crate::test_support::chinese();
         let cwd = std::env::temp_dir().join(format!("conduit-codex-cancel-{}", std::process::id()));
         std::fs::create_dir_all(&cwd).unwrap();
         let target = cwd.join("cancel.txt");
@@ -1966,6 +2038,7 @@ mod tests {
     #[test]
     #[ignore = "sends two apply_patch prompts through installed Codex CLI; first denies, then allows"]
     fn real_codex_file_change_approval_allow_and_deny() {
+        let _locale = crate::test_support::chinese();
         let cwd = std::env::temp_dir().join(format!("conduit-codex-file-{}", std::process::id()));
         std::fs::create_dir_all(&cwd).unwrap();
 
@@ -2069,6 +2142,7 @@ mod tests {
     #[test]
     #[ignore = "sends two small Write-tool prompts through installed Claude CLI; set CONDUIT_CLAUDE_TEST_MODEL if the configured model is unavailable"]
     fn real_claude_tool_approval_allow_and_deny() {
+        let _locale = crate::test_support::chinese();
         let cwd =
             std::env::temp_dir().join(format!("conduit-claude-approval-{}", std::process::id()));
         std::fs::create_dir_all(&cwd).unwrap();
@@ -2110,6 +2184,7 @@ mod tests {
     #[test]
     #[ignore = "sends one small Write-tool prompt through installed Claude CLI and cancels while approval is pending; set CONDUIT_CLAUDE_TEST_MODEL if the configured model is unavailable"]
     fn real_claude_cancel_during_pending_approval() {
+        let _locale = crate::test_support::chinese();
         let cwd =
             std::env::temp_dir().join(format!("conduit-claude-cancel-{}", std::process::id()));
         std::fs::create_dir_all(&cwd).unwrap();

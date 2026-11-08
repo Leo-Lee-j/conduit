@@ -182,7 +182,9 @@ pub fn load_from(provider: Provider, home: &Path) -> ModelCatalog {
         Provider::Claude => claude(home),
         Provider::Codex => codex(home),
         Provider::OpenCode => ModelCatalog {
-            note: Some("打开模型面板后从 OpenCode CLI 读取原生模型目录".into()),
+            note: Some(
+                conduit::i18n::text_static("models.the_native_model_catalog_is_read_from").into(),
+            ),
             ..Default::default()
         },
     }
@@ -253,7 +255,15 @@ pub(crate) fn push_model_with_context(
 }
 
 fn read_text(path: &Path, label: &str) -> Result<String, String> {
-    let bytes = fs::read(path).map_err(|error| format!("无法读取{label}：{error}"))?;
+    let bytes = fs::read(path).map_err(|error| {
+        conduit::i18n::format(
+            "models.unable_to_read",
+            &[
+                ("label", label.to_string()),
+                ("error", format!("{}", error)),
+            ],
+        )
+    })?;
     let text = String::from_utf8_lossy(&bytes);
     Ok(text.trim_start_matches('\u{feff}').to_string())
 }
@@ -265,10 +275,16 @@ fn claude(home: &Path) -> ModelCatalog {
         ..Default::default()
     };
     if !path.exists() {
-        catalog.note = Some("未找到 Claude 配置；将使用 CLI 自身默认模型。".into());
+        catalog.note = Some(
+            conduit::i18n::text_static("models.claude_configuration_not_found_using_the_cli")
+                .into(),
+        );
         return catalog;
     }
-    let text = match read_text(&path, " Claude 配置") {
+    let text = match read_text(
+        &path,
+        conduit::i18n::text_static("models.claude_configuration"),
+    ) {
         Ok(text) => text,
         Err(error) => {
             catalog.error = Some(error);
@@ -278,7 +294,10 @@ fn claude(home: &Path) -> ModelCatalog {
     let value: serde_json::Value = match serde_json::from_str(&text) {
         Ok(value) => value,
         Err(error) => {
-            catalog.error = Some(format!("Claude 配置不是有效 JSON：{error}"));
+            catalog.error = Some(conduit::i18n::format(
+                "models.claude_configuration_is_not_valid_json",
+                &[("error", format!("{}", error))],
+            ));
             return catalog;
         }
     };
@@ -301,21 +320,32 @@ fn claude(home: &Path) -> ModelCatalog {
         .map(str::to_string);
     catalog.endpoint = env_text("ANTHROPIC_BASE_URL").map(str::to_string);
     if let Some(current) = &catalog.current {
-        push_model(&mut catalog.models, current, current, "当前默认");
+        push_model(
+            &mut catalog.models,
+            current,
+            current,
+            conduit::i18n::text_static("models.current_default"),
+        );
     }
     for (key, role) in [
         ("ANTHROPIC_DEFAULT_OPUS_MODEL", "Opus"),
         ("ANTHROPIC_DEFAULT_SONNET_MODEL", "Sonnet"),
         ("ANTHROPIC_DEFAULT_HAIKU_MODEL", "Haiku"),
         ("ANTHROPIC_DEFAULT_FABLE_MODEL", "Fable"),
-        ("CLAUDE_CODE_SUBAGENT_MODEL", "子代理"),
+        (
+            "CLAUDE_CODE_SUBAGENT_MODEL",
+            conduit::i18n::text_static("ccs.subagent"),
+        ),
     ] {
         if let Some(id) = env_text(key) {
             push_model(&mut catalog.models, id, id, role);
         }
     }
     if catalog.models.is_empty() {
-        catalog.note = Some("配置中未声明模型；将使用 CLI 自身默认模型。".into());
+        catalog.note = Some(
+            conduit::i18n::text_static("models.no_model_declared_in_configuration_using_the")
+                .into(),
+        );
     }
     catalog
 }
@@ -328,10 +358,15 @@ fn codex(home: &Path) -> ModelCatalog {
         ..Default::default()
     };
     if !path.exists() {
-        catalog.note = Some("未找到 Codex 配置；将使用 CLI 自身默认模型。".into());
+        catalog.note = Some(
+            conduit::i18n::text_static("models.codex_configuration_not_found_using_the_cli").into(),
+        );
         return catalog;
     }
-    let text = match read_text(&path, " Codex 配置") {
+    let text = match read_text(
+        &path,
+        conduit::i18n::text_static("models.codex_configuration"),
+    ) {
         Ok(text) => text,
         Err(error) => {
             catalog.error = Some(error);
@@ -341,7 +376,10 @@ fn codex(home: &Path) -> ModelCatalog {
     let value: toml::Value = match text.parse() {
         Ok(value) => value,
         Err(error) => {
-            catalog.error = Some(format!("Codex 配置不是有效 TOML：{error}"));
+            catalog.error = Some(conduit::i18n::format(
+                "models.codex_configuration_is_not_valid_toml",
+                &[("error", format!("{}", error))],
+            ));
             return catalog;
         }
     };
@@ -373,7 +411,10 @@ fn codex(home: &Path) -> ModelCatalog {
             parts.push(format!("provider {provider}"));
         }
         if let Some(effort) = effort {
-            parts.push(format!("推理 {effort}"));
+            parts.push(conduit::i18n::format(
+                "models.reasoning",
+                &[("effort", effort.to_string())],
+            ));
         }
         (!parts.is_empty()).then(|| parts.join(" · "))
     };
@@ -419,7 +460,12 @@ fn codex(home: &Path) -> ModelCatalog {
                                 let note = entry
                                     .get("default_reasoning_level")
                                     .and_then(serde_json::Value::as_str)
-                                    .map(|level| format!("推理 {level}"))
+                                    .map(|level| {
+                                        conduit::i18n::format(
+                                            "models.reasoning_5b95e3",
+                                            &[("level", level.to_string())],
+                                        )
+                                    })
                                     .unwrap_or_default();
                                 let context_window = entry
                                     .get("context_window")
@@ -435,24 +481,36 @@ fn codex(home: &Path) -> ModelCatalog {
                         }
                     }
                     Err(error) => {
-                        catalog.note =
-                            Some(format!("模型目录不是有效 JSON，仅显示当前配置：{error}"));
+                        catalog.note = Some(conduit::i18n::format(
+                            "models.model_catalog_is_not_valid_json_showing",
+                            &[("error", format!("{}", error))],
+                        ));
                     }
                 }
             }
             Err(error) => {
-                catalog.note = Some(format!(
-                    "未读取模型目录 {}：{error}",
-                    catalog_path.display()
+                catalog.note = Some(conduit::i18n::format(
+                    "models.model_catalog_was_not_read",
+                    &[
+                        ("arg0", format!("{}", catalog_path.display())),
+                        ("error", format!("{}", error)),
+                    ],
                 ));
             }
         }
     }
     if let Some(current) = &catalog.current {
-        push_model(&mut catalog.models, current, current, "当前配置");
+        push_model(
+            &mut catalog.models,
+            current,
+            current,
+            conduit::i18n::text_static("models.current_configuration"),
+        );
     }
     if catalog.models.is_empty() {
-        catalog.note = Some("未发现模型定义；将使用 CLI 自身默认模型。".into());
+        catalog.note = Some(
+            conduit::i18n::text_static("models.no_model_definitions_found_using_the_cli").into(),
+        );
     }
     catalog
 }
@@ -477,6 +535,7 @@ mod tests {
 
     #[test]
     fn claude_models_dedupe_mappings_and_ignore_secrets() {
+        let _locale = crate::test_support::chinese();
         let home = home("claude");
         let directory = home.join(".claude");
         fs::create_dir_all(&directory).unwrap();
@@ -509,6 +568,7 @@ mod tests {
 
     #[test]
     fn codex_catalog_resolves_relative_path_and_hides_hidden_models() {
+        let _locale = crate::test_support::chinese();
         let home = home("codex");
         let directory = home.join(".codex");
         fs::create_dir_all(&directory).unwrap();
@@ -556,6 +616,7 @@ base_url = "https://example.invalid"
 
     #[test]
     fn synced_models_merge_without_losing_cli_notes() {
+        let _locale = crate::test_support::chinese();
         let mut catalog = ModelCatalog {
             current: Some("shared-model".into()),
             ..Default::default()
@@ -593,6 +654,7 @@ base_url = "https://example.invalid"
 
     #[test]
     fn context_suffix_supports_k_and_m_and_rejects_invalid_or_overflow() {
+        let _locale = crate::test_support::chinese();
         for (id, expected) in [
             ("model[200K]", Some(200_000)),
             ("model[1M]", Some(1_000_000)),
@@ -614,6 +676,7 @@ base_url = "https://example.invalid"
 
     #[test]
     fn synced_context_window_survives_merge_for_existing_and_new_models() {
+        let _locale = crate::test_support::chinese();
         let mut catalog = ModelCatalog::default();
         push_model(&mut catalog.models, "shared", "Shared", "CLI");
         let merged = catalog.with_synced(
@@ -639,6 +702,7 @@ base_url = "https://example.invalid"
 
     #[test]
     fn brand_of_resolves_each_marked_family() {
+        let _locale = crate::test_support::chinese();
         for (id, brand) in [
             ("claude-sonnet-4-6", ModelBrand::Anthropic),
             ("claude-fable-5-1-reversed[1M]", ModelBrand::Anthropic),
@@ -693,6 +757,7 @@ base_url = "https://example.invalid"
 
     #[test]
     fn missing_and_invalid_configs_are_reported_without_models() {
+        let _locale = crate::test_support::chinese();
         let home = home("missing");
         let claude = load_from(Provider::Claude, &home);
         assert!(claude.models.is_empty());

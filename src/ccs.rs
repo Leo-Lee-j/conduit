@@ -64,7 +64,9 @@ impl CcsCatalog {
 pub fn load() -> CcsCatalog {
     let Some(home) = std::env::var_os("USERPROFILE").map(PathBuf::from) else {
         return CcsCatalog {
-            note: Some("无法定位用户目录，未读取 cc-switch。".into()),
+            note: Some(
+                conduit::i18n::text_static("ccs.unable_to_locate_the_user_directory_cc").into(),
+            ),
             ..Default::default()
         };
     };
@@ -93,17 +95,22 @@ pub fn runtime_route(
             rusqlite::params![id, app],
             |row| row.get(0),
         )
-        .context("所选 CCS Provider 已不存在，请重新选择")?;
-    let settings: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|_| anyhow::anyhow!("CCS Provider 配置格式无效"))?;
+        .context(conduit::i18n::text_static(
+            "ccs.the_selected_ccs_provider_no_longer_exists",
+        ))?;
+    let settings: serde_json::Value = serde_json::from_str(&raw).map_err(|_| {
+        anyhow::anyhow!(conduit::i18n::text(
+            "ccs.invalid_ccs_provider_configuration"
+        ))
+    })?;
     match engine {
-        Provider::OpenCode => bail!("OpenCode 暂不支持 CCS 路由，请使用 CLI 默认渠道"),
+        Provider::OpenCode => bail!(conduit::i18n::text(
+            "ccs.ccs_routing_is_not_yet_supported_for"
+        )),
         Provider::Claude => {
             let env = &settings["env"];
             let Some(url) = env["ANTHROPIC_BASE_URL"].as_str().filter(|v| !v.is_empty()) else {
-                bail!(
-                    "此 CCS Provider 未配置 Base URL，请使用 CLI 默认渠道或在 cc-switch 补全配置"
-                );
+                bail!(conduit::i18n::text("ccs.this_ccs_provider_has_no_base_url"));
             };
             let key = env["ANTHROPIC_AUTH_TOKEN"]
                 .as_str()
@@ -127,21 +134,29 @@ pub fn runtime_route(
         }
         Provider::Codex => {
             let config = settings["config"].as_str().unwrap_or("");
-            let config: toml::Value = config
-                .parse()
-                .map_err(|_| anyhow::anyhow!("CCS Codex 配置不是有效 TOML"))?;
+            let config: toml::Value = config.parse().map_err(|_| {
+                anyhow::anyhow!(conduit::i18n::text(
+                    "ccs.ccs_codex_configuration_is_not_valid_toml"
+                ))
+            })?;
             let name = config
                 .get("model_provider")
                 .and_then(toml::Value::as_str)
-                .context("此 CCS Provider 未指定 model_provider，请使用 CLI 默认渠道")?;
+                .context(conduit::i18n::text_static(
+                    "ccs.this_ccs_provider_has_no_model_provider",
+                ))?;
             let provider = config
                 .get("model_providers")
                 .and_then(|v| v.get(name))
-                .context("CCS Provider 缺少端点定义")?;
+                .context(conduit::i18n::text_static(
+                    "ccs.ccs_provider_endpoint_definition_missing",
+                ))?;
             let url = provider
                 .get("base_url")
                 .and_then(toml::Value::as_str)
-                .context("CCS Provider 缺少 Base URL")?;
+                .context(conduit::i18n::text_static(
+                    "ccs.ccs_provider_base_url_missing",
+                ))?;
             let key = settings
                 .pointer("/auth/OPENAI_API_KEY")
                 .and_then(serde_json::Value::as_str)
@@ -182,36 +197,50 @@ pub fn load_from(path: &Path) -> CcsCatalog {
         ..Default::default()
     };
     if !path.exists() {
-        catalog.note = Some("未找到 cc-switch 数据库；仅显示 CLI 当前模型。".into());
+        catalog.note =
+            Some(conduit::i18n::text_static("ccs.cc_switch_database_not_found_showing_the").into());
         return catalog;
     }
     let connection = match Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
         Ok(connection) => connection,
         Err(error) => {
-            catalog.error = Some(format!("无法以只读方式打开 cc-switch 数据库：{error}"));
+            catalog.error = Some(conduit::i18n::format(
+                "ccs.unable_to_open_the_cc_switch_database",
+                &[("error", format!("{}", error))],
+            ));
             return catalog;
         }
     };
     if let Err(error) = connection.busy_timeout(Duration::from_millis(500)) {
-        catalog.error = Some(format!("无法设置 cc-switch 读取超时：{error}"));
+        catalog.error = Some(conduit::i18n::format(
+            "ccs.unable_to_set_cc_switch_read_timeout",
+            &[("error", format!("{}", error))],
+        ));
         return catalog;
     }
     let mut providers = match claude_providers(&connection) {
         Ok(providers) => providers,
         Err(error) => {
-            catalog.error = Some(format!("读取 cc-switch Claude 模型失败：{error}"));
+            catalog.error = Some(conduit::i18n::format(
+                "ccs.failed_to_read_cc_switch_claude_models",
+                &[("error", format!("{}", error))],
+            ));
             return catalog;
         }
     };
     match codex_providers(&connection) {
         Ok(codex) => providers.extend(codex),
         Err(error) => {
-            catalog.error = Some(format!("读取 cc-switch Codex 模型失败：{error}"));
+            catalog.error = Some(conduit::i18n::format(
+                "ccs.failed_to_read_cc_switch_codex_models",
+                &[("error", format!("{}", error))],
+            ));
             return catalog;
         }
     }
     if providers.is_empty() {
-        catalog.note = Some("cc-switch 中没有可列出的 Claude / Codex 模型。".into());
+        catalog.note =
+            Some(conduit::i18n::text_static("ccs.no_claude_codex_models_to_list_in").into());
     }
     // Synchronize public configuration metadata without querying auth fields.
     for provider in &mut providers {
@@ -264,14 +293,14 @@ fn claude_providers(connection: &Connection) -> rusqlite::Result<Vec<CcsProvider
         let current: bool = row.get::<_, i64>(1)? != 0;
         let mut models = Vec::new();
         for (index, role) in [
-            "默认",
-            "默认",
+            conduit::i18n::text_static("chat.default"),
+            conduit::i18n::text_static("chat.default"),
             "Opus",
             "Sonnet",
             "Haiku",
             "Fable",
-            "子代理",
-            "推理",
+            conduit::i18n::text_static("ccs.subagent"),
+            conduit::i18n::text_static("ccs.reasoning"),
         ]
         .into_iter()
         .enumerate()
@@ -394,7 +423,12 @@ fn codex_providers(connection: &Connection) -> rusqlite::Result<Vec<CcsProvider>
         if let Some(config) = config.and_then(|v| v.parse::<toml::Value>().ok())
             && let Some(model) = config.get("model").and_then(toml::Value::as_str)
         {
-            models::push_model(&mut models, model, model, "默认");
+            models::push_model(
+                &mut models,
+                model,
+                model,
+                conduit::i18n::text_static("chat.default"),
+            );
         }
         providers.push(CcsProvider {
             provider: Provider::Codex,
@@ -410,10 +444,13 @@ fn codex_providers(connection: &Connection) -> rusqlite::Result<Vec<CcsProvider>
 
 fn context_note(context: Option<i64>) -> String {
     match context {
-        Some(tokens) if tokens >= 1_000_000 => {
-            format!("上下文 {:.1}M", tokens as f64 / 1_000_000.0)
+        Some(tokens) if tokens >= 1_000_000 => conduit::i18n::format(
+            "ccs.context_m",
+            &[("arg0", format!("{:.1}", tokens as f64 / 1_000_000.0))],
+        ),
+        Some(tokens) if tokens >= 1_000 => {
+            conduit::i18n::format("ccs.context_k", &[("arg0", format!("{}", tokens / 1_000))])
         }
-        Some(tokens) if tokens >= 1_000 => format!("上下文 {}K", tokens / 1_000),
         _ => String::new(),
     }
 }
@@ -456,6 +493,7 @@ mod tests {
 
     #[test]
     fn reads_model_fields_without_credentials() {
+        let _locale = crate::test_support::chinese();
         let path = database("models");
         create_database(&path);
         let connection = Connection::open(&path).unwrap();
@@ -530,6 +568,7 @@ mod tests {
 
     #[test]
     fn missing_or_invalid_database_is_reported() {
+        let _locale = crate::test_support::chinese();
         let missing = database("missing");
         let catalog = load_from(&missing);
         assert!(catalog.note.is_some());
@@ -543,6 +582,7 @@ mod tests {
 
     #[test]
     fn config_only_ccs_routes_use_stable_ids_and_selected_credentials() {
+        let _locale = crate::test_support::chinese();
         let path = database("routes");
         create_database(&path);
         let connection = Connection::open(&path).unwrap();

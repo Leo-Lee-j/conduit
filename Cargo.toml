@@ -1,12 +1,13 @@
 [package]
 name = "conduit"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2024"
 publish = false
 default-run = "conduit"
 
 [dependencies]
 anyhow = "1"
+rust-i18n = "=4.2.4"
 alacritty_terminal = { version = "=0.25.1", default-features = false }
 ignore = "0.4"
 image = { version = "0.25.10", default-features = false }

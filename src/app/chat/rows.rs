@@ -321,6 +321,7 @@ mod tests {
     }
     #[test]
     fn collapsed_tools_have_one_row_and_streaming_reuses_classification() {
+        let _locale = crate::test_support::chinese();
         let mut session = conversation();
         let mut rows = Rows::default();
         let mut expanded = HashSet::new();
@@ -347,6 +348,7 @@ mod tests {
     }
     #[test]
     fn placeholders_and_later_turns_do_not_collapse_unanswered_tools() {
+        let _locale = crate::test_support::chinese();
         let mut session = conversation();
         session.messages[401] = message(401, "Assistant", "");
         session.messages.push(message(402, "User", "next turn"));
@@ -368,6 +370,7 @@ mod tests {
     fn session_switch_restores_stable_reading_anchor_and_bottom_preference(
         cx: &mut gpui_kit::TestAppContext,
     ) {
+        let _locale = crate::test_support::chinese();
         let (app, cx, _) = crate::app::queue::tests::fixture(cx, "reading-anchor");
         cx.update(|window, cx| {
             app.update(cx, |app, cx| {
@@ -420,6 +423,7 @@ mod tests {
     fn dense_collapsed_group_builds_only_visible_rows_and_preserves_jump(
         cx: &mut gpui_kit::TestAppContext,
     ) {
+        let _locale = crate::test_support::chinese();
         use super::{ConduitApp, Store, Workspace};
         use gpui_kit::AppContext;
         cx.update(gpui_kit::init);

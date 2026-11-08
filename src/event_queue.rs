@@ -170,6 +170,7 @@ mod tests {
     use super::*;
     #[test]
     fn deltas_coalesce_without_crossing_snapshots_or_message_keys() {
+        let _locale = crate::test_support::chinese();
         let (tx, rx) = channel();
         for text in ["a", "b"] {
             tx.send(Event::Delta {
@@ -194,6 +195,7 @@ mod tests {
     }
     #[test]
     fn saturation_preserves_completion_without_waiting_on_consumer() {
+        let _locale = crate::test_support::chinese();
         let (tx, rx) = channel();
         for i in 0..MAX_EVENTS {
             tx.send(Event::Delta {
@@ -224,6 +226,7 @@ mod tests {
 
     #[test]
     fn control_saturation_reserves_a_final_completion_slot() {
+        let _locale = crate::test_support::chinese();
         let (sender, receiver) = channel();
         for _ in 0..MAX_EVENTS + CONTROL_RESERVE {
             sender.send(Event::Notice("notice".into())).unwrap();

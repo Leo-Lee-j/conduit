@@ -71,6 +71,7 @@ fn connected(native: Option<&str>, resume: bool, variant: Option<&str>) -> (Prot
 
 #[test]
 fn opencode_new_load_and_resume_apply_model_and_variant_before_prompt() {
+    let _locale = crate::test_support::chinese();
     for (native, resume) in [
         (None, true),
         (Some("ses_test"), true),
@@ -105,6 +106,7 @@ fn opencode_new_load_and_resume_apply_model_and_variant_before_prompt() {
 
 #[test]
 fn opencode_unsupported_effort_fails_without_prompt_or_silent_fallback() {
+    let _locale = crate::test_support::chinese();
     let (mut protocol, _) = connected(None, true, None);
     protocol.acp.stage = Stage::Configure;
     protocol
@@ -120,6 +122,7 @@ fn opencode_unsupported_effort_fails_without_prompt_or_silent_fallback() {
 
 #[test]
 fn opencode_automatic_effort_uses_medium_only_when_advertised() {
+    let _locale = crate::test_support::chinese();
     let (mut protocol, _) = connected(None, true, None);
     for (levels, explicit, expected) in [
         (vec!["default", "medium", "high"], None, Some("medium")),
@@ -168,6 +171,7 @@ fn permission(session: &str) -> Value {
 
 #[test]
 fn opencode_permission_uses_option_kind_and_preserves_tool_and_wire_ids() {
+    let _locale = crate::test_support::chinese();
     let (mut protocol, _) = connected(None, true, None);
     let step = protocol.accept(permission("ses_test"));
     let Event::Approval(approval) = &step.events[0] else {
@@ -195,6 +199,7 @@ fn opencode_permission_uses_option_kind_and_preserves_tool_and_wire_ids() {
 
 #[test]
 fn opencode_tool_updates_merge_input_and_title_and_ignore_other_session() {
+    let _locale = crate::test_support::chinese();
     let (mut protocol, _) = connected(None, true, None);
     for update in [
         json!({"sessionUpdate":"tool_call","toolCallId":"tool","title":"read file","status":"pending","rawInput":{"path":"a.rs"}}),
@@ -215,6 +220,7 @@ fn opencode_tool_updates_merge_input_and_title_and_ignore_other_session() {
 
 #[test]
 fn opencode_managed_agents_override_inherited_rules_and_helpers_have_private_storage() {
+    let _locale = crate::test_support::chinese();
     for permission in [
         PermissionLevel::ReadOnly,
         PermissionLevel::WorkspaceWrite,
@@ -288,6 +294,7 @@ fn opencode_managed_agents_override_inherited_rules_and_helpers_have_private_sto
 
 #[test]
 fn opencode_user_input_answers_preserve_order_and_wait_in_full_access() {
+    let _locale = crate::test_support::chinese();
     let (mut protocol, _) = connected(None, true, None);
     protocol.enable_full_access();
     let input = json!({"id":"que_test","sessionID":"ses_test","questions":[
@@ -325,6 +332,7 @@ fn opencode_user_input_answers_preserve_order_and_wait_in_full_access() {
 
 #[test]
 fn opencode_text_helpers_report_api_errors_without_waiting_for_acp_idle() {
+    let _locale = crate::test_support::chinese();
     let mut helper = Protocol::new(Provider::OpenCode, "C:/work".into(), "title".into(), None)
         .with_model(Some("test/model".into()))
         .text_only();
@@ -345,6 +353,7 @@ fn opencode_text_helpers_report_api_errors_without_waiting_for_acp_idle() {
 
 #[test]
 fn opencode_context_uses_reported_used_not_prompt_total() {
+    let _locale = crate::test_support::chinese();
     let (mut protocol, writes) = connected(None, true, None);
     protocol.accept(
         json!({"method":"session/update","params":{"sessionId":"ses_test","update":{
@@ -371,6 +380,7 @@ fn opencode_context_uses_reported_used_not_prompt_total() {
 
 #[test]
 fn full_access_opencode_permission_never_requires_a_ui_gate() {
+    let _locale = crate::test_support::chinese();
     for (options, allowed, expected) in [
         (
             json!([{"kind":"allow_always","optionId":"permanent"},

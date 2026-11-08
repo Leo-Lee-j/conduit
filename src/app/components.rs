@@ -9,9 +9,9 @@ pub(super) use app_logo::app_icon;
 /// element/animation keys so both can be mounted for the same session.
 pub(super) fn session_activity_dot(scope: &'static str, id: u64, running: bool) -> AnyElement {
     let label = if running {
-        "正在执行"
+        conduit::i18n::text_static("components.running")
     } else {
-        "回复完成，未读"
+        conduit::i18n::text_static("components.response_complete_unread")
     };
     let dot = div()
         .size(px(7.))
@@ -269,6 +269,7 @@ mod brand_tests {
 
     #[test]
     fn brand_rasterization_matches_device_pixels_and_reuses_cached_images() {
+        let _locale = crate::test_support::chinese();
         for pixels in [14, 18, 21, 28, 42] {
             let image = brand_render("openai", true, pixels, pixels);
             let cached = brand_render("openai", true, pixels, pixels);
@@ -281,6 +282,7 @@ mod brand_tests {
 
     #[test]
     fn embedded_brand_images_render_in_both_themes_and_keep_colors() {
+        let _locale = crate::test_support::chinese();
         for &(name, _) in BRAND_SVGS {
             for dark in [false, true] {
                 let rendered = brand_render(name, dark, 28, 28);

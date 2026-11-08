@@ -58,7 +58,10 @@ impl ConduitApp {
         kind: GenerationKind,
         session_id: Option<u64>,
     ) -> anyhow::Result<(Provider, Option<String>, RuntimeRoute)> {
-        anyhow::ensure!(!self.cli_installing(), "CLI 正在更新，请等待更新完成后重试");
+        anyhow::ensure!(
+            !self.cli_installing(),
+            conduit::i18n::text("generation.cli_update_in_progress_try_again_when")
+        );
         let (engine, channel, model) = self.generation_selection(kind, session_id);
         Ok((engine, model, self.channel_route(engine, &channel)?))
     }
@@ -144,11 +147,11 @@ impl ConduitApp {
         let (engine_override, channel_override, model_override) = self.generation_settings(kind);
         let (engine, channel, _) = self.generation_selection(kind, self.selected_session);
         let label = if engine_override.is_none() && channel_override.is_none() {
-            "跟随当前会话"
+            conduit::i18n::text_static("generation.follow_current_session")
         } else if channel == ModelChannel::Cli {
-            "CLI 默认"
+            conduit::i18n::text_static("generation.cli_default")
         } else {
-            "Provider 默认"
+            conduit::i18n::text_static("generation.provider_default")
         };
         // A native OpenCode provider is encoded in a concrete provider/model ID.
         // Clearing the model would discard the independently selected provider.
@@ -186,16 +189,20 @@ impl ConduitApp {
             GenerationKind::Git => "git-channel",
         };
         let default_label = if engine_override.is_none() {
-            "跟随当前会话"
+            conduit::i18n::text_static("generation.follow_current_session")
         } else {
-            "CLI 默认"
+            conduit::i18n::text_static("generation.cli_default")
         };
         let label = if follow_session {
-            format!(
-                "跟随当前会话 · {}",
-                native
-                    .clone()
-                    .unwrap_or_else(|| self.channel_label(engine, &channel))
+            conduit::i18n::format(
+                "generation.follow_current_session_7b6e69",
+                &[(
+                    "arg0",
+                    native
+                        .clone()
+                        .unwrap_or_else(|| self.channel_label(engine, &channel))
+                        .to_string(),
+                )],
             )
         } else {
             native
@@ -246,8 +253,12 @@ impl ConduitApp {
             .disabled(disabled)
             .when(!disabled, |b| b.cursor_pointer())
             .accessibility_label(match kind {
-                GenerationKind::Naming => "选择命名 Provider",
-                GenerationKind::Git => "选择生成 Provider",
+                GenerationKind::Naming => {
+                    conduit::i18n::text_static("generation.select_naming_provider")
+                }
+                GenerationKind::Git => {
+                    conduit::i18n::text_static("generation.select_generation_provider")
+                }
             })
             .child(
                 h_flex()
@@ -355,6 +366,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn generation_routes_are_independent_of_sessions_and_each_other(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         cx.add_window_view(|window, cx| {
             let app = cx.new(|cx| {

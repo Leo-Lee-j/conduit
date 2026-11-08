@@ -777,10 +777,10 @@ impl ConduitApp {
                 .px_2()
                 .py_3()
                 .gap_3()
-                .child("尚未选择工作区")
+                .child(conduit::i18n::text_static("files.no_workspace_selected"))
                 .child(
                     Button::new("files-pick-workspace")
-                        .label("查看工作区")
+                        .label(conduit::i18n::text_static("files.view_workspace"))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.open_navigation(&ViewId::new(builtins::WORKSPACES).unwrap(), cx);
                         })),
@@ -804,7 +804,7 @@ impl ConduitApp {
                 rows.push(TreeRow::Status(
                     path.to_owned(),
                     depth,
-                    "目录层级超过 64 层".into(),
+                    conduit::i18n::text_static("files.directory_depth_exceeds_64_levels").into(),
                 ));
                 return;
             }
@@ -812,11 +812,19 @@ impl ConduitApp {
                 return;
             };
             if directory.loading && directory.entries.is_empty() {
-                rows.push(TreeRow::Status(path.to_owned(), depth, "正在加载…".into()));
+                rows.push(TreeRow::Status(
+                    path.to_owned(),
+                    depth,
+                    conduit::i18n::text_static("dock.loading").into(),
+                ));
             } else if let Some(error) = &directory.error {
                 rows.push(TreeRow::Status(path.to_owned(), depth, error.clone()));
             } else if directory.entries.is_empty() {
-                rows.push(TreeRow::Status(path.to_owned(), depth, "无可见文件".into()));
+                rows.push(TreeRow::Status(
+                    path.to_owned(),
+                    depth,
+                    conduit::i18n::text_static("files.no_visible_files").into(),
+                ));
             }
             for entry in &directory.entries {
                 rows.push(TreeRow::Entry(entry.clone(), depth));
@@ -1023,7 +1031,7 @@ impl ConduitApp {
                             .small()
                             .compact()
                             .icon(IconName::RefreshCw)
-                            .tooltip("刷新文件树")
+                            .tooltip(conduit::i18n::text_static("files.refresh_file_tree"))
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.refresh_tree(refresh_root.clone(), cx)
@@ -1037,9 +1045,9 @@ impl ConduitApp {
                         .ghost()
                         .small()
                         .label(if show_ignored {
-                            "隐藏忽略文件"
+                            conduit::i18n::text_static("files.hide_ignored_files")
                         } else {
-                            "显示忽略文件"
+                            conduit::i18n::text_static("files.show_ignored_files")
                         })
                         .selected(show_ignored)
                         .cursor_pointer()
@@ -1063,7 +1071,9 @@ impl ConduitApp {
             return div().into_any_element();
         };
         let Some(document) = self.files.documents.get(&id) else {
-            return div().child("文件标签已关闭").into_any_element();
+            return div()
+                .child(conduit::i18n::text_static("files.file_tab_closed"))
+                .into_any_element();
         };
         let path = document.key.workspace.join(&document.key.relative);
         let path_label = workspace_files::display_path(&path);
@@ -1086,11 +1096,17 @@ impl ConduitApp {
         let copy = text.clone();
         let wrap = document.wrap;
         let status = if document.loading {
-            "正在读取…".to_string()
+            conduit::i18n::text_static("files.reading").to_string()
         } else if document.error.is_some() {
-            "只读 · 预览不可用".to_string()
+            conduit::i18n::text_static("files.read_only_preview_unavailable").to_string()
         } else {
-            format!("只读 · {} · {} 行", document.encoding, text.lines().count())
+            conduit::i18n::format(
+                "files.read_only_lines",
+                &[
+                    ("arg0", document.encoding.to_string()),
+                    ("arg1", format!("{}", text.lines().count())),
+                ],
+            )
         };
         // Cached views are laid out as roots: flex_1 alone is not a definite
         // viewport height and lets long files grow beyond the window.
@@ -1121,8 +1137,8 @@ impl ConduitApp {
                             .small()
                             .compact()
                             .icon(FullIconName::ArrowLeft)
-                            .tooltip("返回聊天")
-                            .accessibility_label("返回聊天")
+                            .tooltip(conduit::i18n::text_static("files.back_to_chat"))
+                            .accessibility_label(conduit::i18n::text_static("files.back_to_chat"))
                             .cursor_pointer()
                             .on_click(cx.listener(|this, _, window, cx| {
                                 if let Some(id) = this.selected_session {
@@ -1198,13 +1214,13 @@ impl ConduitApp {
                             .compact()
                             .icon(FullIconName::TextWrap)
                             .tooltip(if markdown {
-                                "Markdown 预览始终自动换行"
+                                conduit::i18n::text_static("files.markdown_previews_always_wrap")
                             } else if wrap {
-                                "自动换行已开启 · 点击关闭"
+                                conduit::i18n::text_static("files.word_wrap_on_click_to_disable")
                             } else {
-                                "开启自动换行"
+                                conduit::i18n::text_static("files.enable_word_wrap")
                             })
-                            .accessibility_label("自动换行")
+                            .accessibility_label(conduit::i18n::text_static("files.word_wrap"))
                             .selected(wrap || markdown)
                             .disabled(markdown)
                             .cursor_pointer()
@@ -1222,8 +1238,8 @@ impl ConduitApp {
                             .small()
                             .compact()
                             .icon(IconName::RefreshCw)
-                            .tooltip("重新读取文件")
-                            .accessibility_label("重新读取文件")
+                            .tooltip(conduit::i18n::text_static("files.reload_file"))
+                            .accessibility_label(conduit::i18n::text_static("files.reload_file"))
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| this.load_file(id, cx))),
                     )
@@ -1234,8 +1250,10 @@ impl ConduitApp {
                             .small()
                             .compact()
                             .icon(IconName::Copy)
-                            .tooltip("复制文件内容")
-                            .accessibility_label("复制文件内容")
+                            .tooltip(conduit::i18n::text_static("files.copy_file_contents"))
+                            .accessibility_label(conduit::i18n::text_static(
+                                "files.copy_file_contents",
+                            ))
                             .disabled(document.error.is_some() || document.loading)
                             .on_click(move |_, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(copy.to_string()))
@@ -1248,7 +1266,9 @@ impl ConduitApp {
                     .flex_1()
                     .p_6()
                     .gap_3()
-                    .child(div().font_semibold().child("无法预览此文件"))
+                    .child(div().font_semibold().child(conduit::i18n::text_static(
+                        "files.unable_to_preview_this_file",
+                    )))
                     .child(
                         div()
                             .text_sm()
@@ -1258,7 +1278,7 @@ impl ConduitApp {
                     .child(
                         Button::new(("file-copy-path", id))
                             .debug_selector(|| "file-copy-path".into())
-                            .label("复制文件路径")
+                            .label(conduit::i18n::text_static("files.copy_file_path"))
                             .on_click(move |_, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(path_label.clone()))
                             }),
@@ -1278,7 +1298,7 @@ impl ConduitApp {
                     .flex_1()
                     .items_center()
                     .justify_center()
-                    .child("空文件"),
+                    .child(conduit::i18n::text_static("files.empty_file")),
             );
         } else {
             let mut typography = self.chat_typography();
@@ -1337,8 +1357,8 @@ impl ConduitApp {
         for tab in self.open_tabs.iter().copied() {
             let (title, tooltip, icon, running, unread, selector) = match tab {
                 DocumentTab::Settings => (
-                    "设置".to_owned(),
-                    "设置".to_owned(),
+                    conduit::i18n::text_static("files.settings").to_owned(),
+                    conduit::i18n::text_static("files.settings").to_owned(),
                     Icon::new(IconName::Settings).small().into_any_element(),
                     false,
                     false,
@@ -1349,7 +1369,7 @@ impl ConduitApp {
                         continue;
                     };
                     let title = single_line_title(if s.title.is_empty() {
-                        "新会话"
+                        conduit::i18n::text_static("files.new_session")
                     } else {
                         &s.title
                     });
@@ -1419,9 +1439,12 @@ impl ConduitApp {
                     );
                     (
                         title,
-                        format!(
-                            "{} · HEAD → 工作区",
-                            d.workspace.join(&d.file.path).display()
+                        conduit::i18n::format(
+                            "files.head_working_tree",
+                            &[(
+                                "arg0",
+                                format!("{}", d.workspace.join(&d.file.path).display()),
+                            )],
                         ),
                         Icon::new(gpui_kit::assets::IconName::FileDiff)
                             .small()
@@ -1475,7 +1498,7 @@ impl ConduitApp {
                         .opacity(0.)
                         .group_hover(group, |s| s.opacity(1.))
                         .focus_visible(|s| s.opacity(1.))
-                        .tooltip("关闭标签")
+                        .tooltip(conduit::i18n::text_static("files.close_tab"))
                         .cursor_pointer()
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.close_documents(&[tab], window, cx);
@@ -1501,7 +1524,7 @@ impl ConduitApp {
                 div()
                     .pl_3()
                     .text_size(ui_text_size(12.))
-                    .child("选择会话或文件"),
+                    .child(conduit::i18n::text_static("files.select_a_session_or_file")),
             );
         }
         let app = cx.entity();
@@ -1546,45 +1569,50 @@ impl ConduitApp {
                 let pin = app.clone();
                 menu.when(matches!(target, DocumentTab::File(_)), |menu| {
                     menu.item(
-                        PopupMenuItem::new("固定文件标签").on_click(move |_, _, cx| {
-                            pin.update(cx, |this, cx| {
-                                if let DocumentTab::File(id) = target
-                                    && this.files.preview == Some(id)
-                                {
-                                    this.files.preview = None;
-                                    cx.notify();
-                                }
-                            });
-                        }),
+                        PopupMenuItem::new(conduit::i18n::text_static("files.pin_file_tab"))
+                            .on_click(move |_, _, cx| {
+                                pin.update(cx, |this, cx| {
+                                    if let DocumentTab::File(id) = target
+                                        && this.files.preview == Some(id)
+                                    {
+                                        this.files.preview = None;
+                                        cx.notify();
+                                    }
+                                });
+                            }),
                     )
                 })
                 .item(
-                    PopupMenuItem::new("关闭右侧标签").on_click(move |_, window, cx| {
-                        right.update(cx, |this, cx| {
-                            if let Some(i) = this.open_tabs.iter().position(|t| *t == target) {
-                                let tabs = this.open_tabs[i + 1..].to_vec();
-                                this.close_documents(&tabs, window, cx);
-                            }
-                        });
-                    }),
+                    PopupMenuItem::new(conduit::i18n::text_static("files.close_tabs_to_the_right"))
+                        .on_click(move |_, window, cx| {
+                            right.update(cx, |this, cx| {
+                                if let Some(i) = this.open_tabs.iter().position(|t| *t == target) {
+                                    let tabs = this.open_tabs[i + 1..].to_vec();
+                                    this.close_documents(&tabs, window, cx);
+                                }
+                            });
+                        }),
                 )
                 .item(
-                    PopupMenuItem::new("关闭左侧标签").on_click(move |_, window, cx| {
-                        left.update(cx, |this, cx| {
-                            if let Some(i) = this.open_tabs.iter().position(|t| *t == target) {
-                                let tabs = this.open_tabs[..i].to_vec();
-                                this.close_documents(&tabs, window, cx);
-                            }
-                        });
-                    }),
+                    PopupMenuItem::new(conduit::i18n::text_static("files.close_tabs_to_the_left"))
+                        .on_click(move |_, window, cx| {
+                            left.update(cx, |this, cx| {
+                                if let Some(i) = this.open_tabs.iter().position(|t| *t == target) {
+                                    let tabs = this.open_tabs[..i].to_vec();
+                                    this.close_documents(&tabs, window, cx);
+                                }
+                            });
+                        }),
                 )
                 .item(
-                    PopupMenuItem::new("全部关闭").on_click(move |_, window, cx| {
-                        all.update(cx, |this, cx| {
-                            let tabs = this.open_tabs.clone();
-                            this.close_documents(&tabs, window, cx);
-                        });
-                    }),
+                    PopupMenuItem::new(conduit::i18n::text_static("files.close_all")).on_click(
+                        move |_, window, cx| {
+                            all.update(cx, |this, cx| {
+                                let tabs = this.open_tabs.clone();
+                                this.close_documents(&tabs, window, cx);
+                            });
+                        },
+                    ),
                 )
             })
             .into_any_element()
@@ -1794,7 +1822,7 @@ impl ConduitApp {
                             .text_color(rgb(palette().activity_running))
                             .text_size(ui_text_size(12.))
                             .font_semibold()
-                            .child("提交"),
+                            .child(conduit::i18n::text_static("files.commit")),
                     )
                     .child(div().flex_1())
                     .child(self.navigation_workspace_picker(
@@ -1808,7 +1836,9 @@ impl ConduitApp {
             pane = pane.child(
                 sidebar::navigation_header()
                     .text_size(ui_text_size(12.))
-                    .child("Git 变更 · 未选择工作区"),
+                    .child(conduit::i18n::text_static(
+                        "files.git_changes_no_workspace_selected",
+                    )),
             );
         }
         pane.child(
@@ -1927,7 +1957,9 @@ impl ConduitApp {
             return div().into_any_element();
         };
         let Some(document) = self.files.diffs.get(&id) else {
-            return div().child("差异标签已关闭").into_any_element();
+            return div()
+                .child(conduit::i18n::text_static("files.diff_tab_closed"))
+                .into_any_element();
         };
         v_flex()
             .id("git-diff-document")
@@ -1958,7 +1990,7 @@ impl ConduitApp {
                         Button::new("diff-return-chat")
                             .ghost()
                             .small()
-                            .label("返回聊天")
+                            .label(conduit::i18n::text_static("files.back_to_chat"))
                             .cursor_pointer()
                             .on_click(cx.listener(|this, _, window, cx| {
                                 if let Some(id) = this.selected_session {
@@ -2001,7 +2033,13 @@ impl ConduitApp {
             Some(
                 Button::new("document-pending-approval")
                     .debug_selector(|| "file-pending-approval".into())
-                    .label(format!("{title} 有 {count} 项待审批，返回聊天处理"))
+                    .label(conduit::i18n::format(
+                        "files.has_pending_approvals_return_to_chat_to",
+                        &[
+                            ("title", title.to_string()),
+                            ("count", format!("{}", count)),
+                        ],
+                    ))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.select_document(DocumentTab::Chat(id), window, cx)
                     }))
@@ -2019,7 +2057,9 @@ impl ConduitApp {
                 })
                 .map(|id| {
                     Button::new("document-task-error")
-                        .label("后台任务失败，返回聊天查看详情")
+                        .label(conduit::i18n::text_static(
+                            "files.background_task_failed_return_to_chat_for",
+                        ))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.select_document(DocumentTab::Chat(id), window, cx)
                         }))
@@ -2105,6 +2145,7 @@ mod tests {
     fn active_tabs_reveal_on_selection_resize_and_close_without_resetting_manual_scroll(
         cx: &mut TestAppContext,
     ) {
+        let _locale = crate::test_support::chinese();
         fn draw(cx: &mut gpui_kit::VisualTestContext) {
             cx.run_until_parked();
             cx.update(|window, cx| {
@@ -2219,6 +2260,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn transcript_links_open_preview_and_preserve_chat_context(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let fixture = Fixture::new();
         let mut store = fixture.store();
@@ -2316,6 +2358,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn file_navigation_preview_pin_close_and_workspace_context(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let fixture = Fixture::new();
         let store = fixture.store();
@@ -2480,6 +2523,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn file_preview_long_unicode_path_and_content_scroll(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         use gpui_kit::{Focusable as _, test::TestQueryExt as _};
         use gpui_kit::{ScrollDelta, ScrollWheelEvent, VisualTestContext, point, size};
         fn draw(cx: &mut VisualTestContext) {
@@ -2679,6 +2723,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn file_preview_markdown_wraps_inside_viewport(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         use gpui_kit::{
             ScrollDelta, ScrollWheelEvent, VisualTestContext, point, size, test::TestWindowExt as _,
         };
@@ -2781,6 +2826,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn file_refresh_errors_and_background_chat_remain_independent(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let fixture = Fixture::new();
         let store = fixture.store();
@@ -3072,6 +3118,7 @@ mod git_navigation_tests {
 
     #[gpui_kit::test]
     fn file_tree_drag_git_status_tag_cache_and_discard(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         use super::TreeGitStatus;
         use gpui_kit::{point, px};
         cx.update(gpui_kit::init);
@@ -3209,6 +3256,7 @@ mod git_navigation_tests {
     fn commit_button_requires_checks_and_commits_only_checked_staged_files(
         cx: &mut TestAppContext,
     ) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let repo = Repo::new();
         repo.git(&["add", "."]);
@@ -3266,6 +3314,7 @@ mod git_navigation_tests {
 
     #[gpui_kit::test]
     fn git_refresh_auto_stages_tracked_changes_when_writable_and_idle(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let repo = Repo::new();
         let store = repo.store();
@@ -3405,6 +3454,7 @@ mod git_navigation_tests {
 
     #[gpui_kit::test]
     fn git_navigation_staging_diff_tabs_and_unique_settings(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let repo = Repo::new();
         let store = repo.store();
@@ -3872,6 +3922,7 @@ mod git_navigation_tests {
 
     #[gpui_kit::test]
     fn start_in_git_opens_left_navigation_without_right_dock(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let (_, cx) = cx.add_window_view(|window, cx| {
             let app = cx.new(|cx| {
@@ -3928,6 +3979,7 @@ mod file_search_tests {
 
     #[gpui_kit::test]
     fn double_shift_file_search_keyboard_and_workspace_scope(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let root = std::env::temp_dir().join(format!(
             "conduit-shift-search-{}-{}",
@@ -4078,5 +4130,18 @@ mod file_search_tests {
         let resolved = root.canonicalize().unwrap();
         assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
         std::fs::remove_dir_all(resolved).unwrap();
+    }
+}
+
+impl FileBrowser {
+    pub(super) fn refresh_language(&mut self, window: &mut Window, cx: &mut App) {
+        for document in self.documents.values() {
+            document
+                .preview
+                .update(cx, |preview, cx| preview.refresh_language(window, cx));
+        }
+        for document in self.diffs.values() {
+            document.view.update(cx, |_, cx| cx.notify());
+        }
     }
 }

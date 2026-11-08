@@ -82,6 +82,7 @@ fn visible_sessions(app: &Entity<ConduitApp>, cx: &mut VisualTestContext) -> Vec
 fn virtual_sidebar_keyboard_opens_hundredth_session_and_restores_menu_focus(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, 120);
     cx.update(|window, cx| {
         let focus = app.read(cx).sidebar.focus.clone().unwrap();
@@ -121,6 +122,7 @@ fn virtual_sidebar_keyboard_opens_hundredth_session_and_restores_menu_focus(
 fn session_context_menu_pins_and_unpins_without_switching_the_conversation(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     use gpui_kit::{Modifiers, MouseButton};
     let (app, cx) = fixture(cx, 3);
     cx.update(|_, cx| {
@@ -162,6 +164,7 @@ fn session_context_menu_pins_and_unpins_without_switching_the_conversation(
 fn pinned_sessions_keep_the_ordinary_quota_and_follow_archive_and_search_filters(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, 8);
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
@@ -239,6 +242,7 @@ fn pinned_sessions_keep_the_ordinary_quota_and_follow_archive_and_search_filters
 
 #[gpui_kit::test]
 fn chat_new_session_uses_the_current_workspace_and_preserves_the_draft(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use gpui_kit::{Focusable as _, px, size};
     let (app, cx) = fixture(cx, 2);
     cx.simulate_resize(size(px(1200.), px(800.)));
@@ -307,6 +311,7 @@ fn chat_new_session_uses_the_current_workspace_and_preserves_the_draft(cx: &mut 
 
 #[gpui_kit::test]
 fn about_stays_centered_from_the_first_frame_and_after_resize(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use gpui_kit::{px, size};
     let (app, cx) = fixture(cx, 1);
     cx.update(|window, cx| {
@@ -332,6 +337,7 @@ fn about_stays_centered_from_the_first_frame_and_after_resize(cx: &mut TestAppCo
 
 #[gpui_kit::test]
 fn ten_thousand_sessions_only_construct_viewport_rows(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, 10_000);
     cx.update(|_, cx| app.read(cx).sidebar.rendered_rows.set(0));
     draw(&app, cx);
@@ -359,6 +365,7 @@ fn ten_thousand_sessions_only_construct_viewport_rows(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn streaming_text_reuses_sidebar_and_order_but_title_and_archive_refresh(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, 1000);
     let (renders, sorts, rebuilds, rows, sizes) = cx.update(|_, cx| {
         let app = app.read(cx);
@@ -426,6 +433,7 @@ fn streaming_text_reuses_sidebar_and_order_but_title_and_archive_refresh(cx: &mu
 
 #[gpui_kit::test]
 fn pending_push_changes_refresh_the_cached_branch_entry(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, 1);
     cx.update(|_, cx| {
         app.update(cx, |app, _| {
@@ -504,6 +512,7 @@ fn pending_push_changes_refresh_the_cached_branch_entry(cx: &mut TestAppContext)
 
 #[gpui_kit::test]
 fn reordering_activity_above_viewport_preserves_top_session_and_offset(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, 100);
     cx.update(|_, cx| {
         let app = app.read(cx);
@@ -548,6 +557,7 @@ fn reordering_activity_above_viewport_preserves_top_session_and_offset(cx: &mut 
 
 #[gpui_kit::test]
 fn sidebar_search_includes_matches_beyond_popup_limit(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, 100);
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
@@ -601,6 +611,7 @@ fn sidebar_search_includes_matches_beyond_popup_limit(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn wheel_scroll_more_collapse_and_menu_survive_virtualization(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use gpui_kit::{Modifiers, MouseButton, ScrollDelta, ScrollWheelEvent, point, px};
     let (app, cx) = fixture(cx, 100);
     cx.update(|_, cx| {
@@ -695,6 +706,7 @@ fn wheel_scroll_more_collapse_and_menu_survive_virtualization(cx: &mut TestAppCo
 
 #[gpui_kit::test]
 fn running_priority_and_same_count_import_refresh_order(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::app::{ActiveRun, ChatRuntime};
     let (app, cx) = fixture(cx, 100);
     let sender = cx.update(|_, cx| {

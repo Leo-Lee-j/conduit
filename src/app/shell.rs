@@ -171,7 +171,10 @@ impl ConduitApp {
                                 div()
                                     .text_size(ui_text_size(13.))
                                     .text_color(rgb(palette().muted))
-                                    .child(format!("正在加载 {workspaces} 个工作区的 CLI 历史…")),
+                                    .child(conduit::i18n::format(
+                                        "shell.loading_cli_history_for_workspaces",
+                                        &[("workspaces", format!("{}", workspaces))],
+                                    )),
                             ),
                     ),
             )
@@ -234,7 +237,7 @@ impl Render for ConduitApp {
         let directory = self
             .selected_workspace
             .map(|i| self.store.workspaces[i].name())
-            .unwrap_or_else(|| "未选择工作区".into());
+            .unwrap_or_else(|| conduit::i18n::text_static("git_ui.no_workspace_selected").into());
         let sidebar = self
             .sidebar_view
             .clone()
@@ -342,9 +345,11 @@ impl Render for ConduitApp {
                             div()
                                 .text_size(ui_text_size(14.))
                                 .child(if error.is_some() {
-                                    "会话正文加载失败"
+                                    conduit::i18n::text_static(
+                                        "shell.failed_to_load_session_messages",
+                                    )
                                 } else {
-                                    "正在加载会话…"
+                                    conduit::i18n::text_static("shell.loading_session")
                                 }),
                         );
                     if let Some(error) = error {
@@ -357,7 +362,7 @@ impl Render for ConduitApp {
                             )
                             .child(
                                 Button::new("retry-transcript")
-                                    .label("重试加载")
+                                    .label(conduit::i18n::text_static("shell.retry_loading"))
                                     .small()
                                     .ghost()
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -385,9 +390,9 @@ impl Render for ConduitApp {
                                         div()
                                             .text_size(ui_text_size(12.))
                                             .text_color(rgb(palette().faint))
-                                            .child(format!(
-                                                "{} · 可以开始输入",
-                                                session.provider.label()
+                                            .child(conduit::i18n::format(
+                                                "shell.ready_for_your_input",
+                                                &[("arg0", session.provider.label().to_string())],
                                             )),
                                     ),
                             )
@@ -396,15 +401,17 @@ impl Render for ConduitApp {
                                     .text_size(ui_text_size(30.))
                                     .font_bold()
                                     .text_color(rgb(palette().text))
-                                    .child("今天想完成什么？"),
+                                    .child(conduit::i18n::text_static(
+                                        "shell.what_would_you_like_to_work_on",
+                                    )),
                             )
                             .child(
                                 div()
                                     .text_size(ui_text_size(14.))
                                     .text_color(rgb(palette().muted))
-                                    .child(format!(
-                                        "在 {} 中开始你的任务；CLI 登录与模型权限将在执行时确认。",
-                                        directory
+                                    .child(conduit::i18n::format(
+                                        "shell.start_your_task_in_cli_sign_in",
+                                        &[("arg0", directory.to_string())],
                                     )),
                             ),
                     );
@@ -435,46 +442,49 @@ impl Render for ConduitApp {
                 }
             } else if has_workspace {
                 messages = messages.child(
-                v_flex()
-                    .flex_1()
-                    .items_center()
-                    .justify_center()
-                    .gap_3()
-                    .py_20()
-                    .child(
-                        h_flex()
-                            .w(px(44.))
-                            .h(px(44.))
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(12.))
-                            .border_1()
-                            .border_color(rgb(palette().border))
-                            .bg(rgb(palette().surface))
-                            .child(
-                                div()
-                                    .text_base()
-                                    .font_bold()
-                                    .text_color(rgb(palette().muted))
-                                    .child("C"),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_size(ui_text_size(30.))
-                            .font_semibold()
-                            .text_color(rgb(palette().text))
-                            .child("今天想完成什么？"),
-                    )
-                    .child(
-                        div()
-                            .text_size(ui_text_size(14.))
-                            .text_color(rgb(palette().muted))
-                            .child(format!(
-                                "会话将在 {directory} 中运行，输入任务后会按上次使用的引擎新建会话。"
-                            )),
-                    ),
-            );
+                    v_flex()
+                        .flex_1()
+                        .items_center()
+                        .justify_center()
+                        .gap_3()
+                        .py_20()
+                        .child(
+                            h_flex()
+                                .w(px(44.))
+                                .h(px(44.))
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(12.))
+                                .border_1()
+                                .border_color(rgb(palette().border))
+                                .bg(rgb(palette().surface))
+                                .child(
+                                    div()
+                                        .text_base()
+                                        .font_bold()
+                                        .text_color(rgb(palette().muted))
+                                        .child("C"),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_size(ui_text_size(30.))
+                                .font_semibold()
+                                .text_color(rgb(palette().text))
+                                .child(conduit::i18n::text_static(
+                                    "shell.what_would_you_like_to_work_on",
+                                )),
+                        )
+                        .child(
+                            div()
+                                .text_size(ui_text_size(14.))
+                                .text_color(rgb(palette().muted))
+                                .child(conduit::i18n::format(
+                                    "shell.the_session_will_run_in_enter_a",
+                                    &[("directory", directory.to_string())],
+                                )),
+                        ),
+                );
             } else {
                 messages = messages.child(self.session_heatmap(13, cx));
             }
@@ -540,7 +550,13 @@ impl Render for ConduitApp {
                     .get(&id)
                     .is_some_and(|run| run.expanded_approvals.contains(&deny_id));
                 let queue_label = if approval_count > 1 {
-                    format!("第 {} / {} 项", index + 1, approval_count)
+                    conduit::i18n::format(
+                        "shell.item",
+                        &[
+                            ("arg0", format!("{}", index + 1)),
+                            ("arg1", format!("{}", approval_count)),
+                        ],
+                    )
                 } else {
                     String::new()
                 };
@@ -615,12 +631,12 @@ impl Render for ConduitApp {
                                                     .text_size(ui_text_size(11.))
                                                     .line_height(relative(1.4))
                                                     .text_color(rgb(palette().warning_muted))
-                                                    .child("CLI 请求授权，仅对本次操作生效。"),
+                                                    .child(conduit::i18n::text_static("shell.the_cli_requests_permission_for_this_operation")),
                                             ),
                                     )
                                     .child(
                                         Button::new(("approval-toggle", index))
-                                            .label(if expanded { "收起" } else { "展开详情" })
+                                            .label(if expanded { conduit::i18n::text_static("chat.collapse") } else { conduit::i18n::text_static("shell.show_details") })
                                             .small()
                                             .ghost()
                                             .cursor_pointer()
@@ -646,7 +662,7 @@ impl Render for ConduitApp {
                                 div()
                                     .text_xs()
                                     .text_color(rgb(palette().warning_muted))
-                                    .child(format!("工作区：{origin}")),
+                                    .child(conduit::i18n::format("shell.workspace", &[("origin", origin.to_string())])),
                             )
                             .when(expanded, |column| {
                                 column.child(
@@ -672,7 +688,7 @@ impl Render for ConduitApp {
                                     .gap_2()
                                     .child(
                                         Button::new(("approval-copy", index))
-                                            .label("复制完整请求")
+                                            .label(conduit::i18n::text_static("shell.copy_full_request"))
                                             .small()
                                             .ghost()
                                             .on_click(move |_, _, cx| {
@@ -688,14 +704,14 @@ impl Render for ConduitApp {
                                                 .text_size(ui_text_size(11.))
                                                 .text_color(rgb(palette().warning_accent))
                                                 .child(
-                                                    "CLI 未提供「允许本次」选项，此请求只能拒绝。",
+                                                    conduit::i18n::text_static("shell.the_cli_did_not_offer_allow_once"),
                                                 ),
                                         )
                                     })
                                     .when(approval.allow_once, |row| row.child(div().flex_1()))
                                     .child(
                                         Button::new(("deny", index))
-                                            .label("拒绝")
+                                            .label(conduit::i18n::text_static("notifications.deny"))
                                             .small()
                                             .ghost()
                                             .disabled(self.closing || submitted)
@@ -708,7 +724,7 @@ impl Render for ConduitApp {
                                     )
                                     .child(
                                         Button::new(("allow", index))
-                                            .label("允许本次")
+                                            .label(conduit::i18n::text_static("notifications.allow_once"))
                                             .small()
                                             .primary()
                                             .disabled(
@@ -745,17 +761,22 @@ impl Render for ConduitApp {
                                 cx.notify();
                             })),
                         )
-                        .when(message.contains("AI 引擎"), |body| {
-                            body.child(
-                                Button::new("message-engine-settings")
-                                    .label("打开 AI 引擎设置")
-                                    .small()
-                                    .ghost()
-                                    .on_click(cx.listener(|app, _, window, cx| {
-                                        app.open_engine_settings(window, cx)
-                                    })),
-                            )
-                        }),
+                        .when(
+                            self.selected_session.is_some() || self.selected_workspace.is_some(),
+                            |body| {
+                                body.child(
+                                    Button::new("message-engine-settings")
+                                        .label(conduit::i18n::text_static(
+                                            "shell.open_ai_engine_settings",
+                                        ))
+                                        .small()
+                                        .ghost()
+                                        .on_click(cx.listener(|app, _, window, cx| {
+                                            app.open_engine_settings(window, cx)
+                                        })),
+                                )
+                            },
+                        ),
                 );
             }
             let composer = {
@@ -799,7 +820,7 @@ impl Render for ConduitApp {
                         div()
                             .text_size(ui_text_size(10.))
                             .text_color(rgb(palette().faint))
-                            .child("Chat M0 · Preview"),
+                            .child(conduit::i18n::text_static("common.preview_build")),
                     ),
             );
         let title_bar = title_bar.child(div().flex_1()).child(
@@ -814,7 +835,7 @@ impl Render for ConduitApp {
                 .child(
                     Button::new("title-settings")
                         .debug_selector(|| "title-settings".into())
-                        .accessibility_label("设置")
+                        .accessibility_label(conduit::i18n::text_static("files.settings"))
                         .ghost()
                         .small()
                         .compact()
@@ -822,9 +843,13 @@ impl Render for ConduitApp {
                         .h(px(28.))
                         .flex_shrink_0()
                         .icon(IconName::Settings)
-                        .tooltip(format!(
-                            "设置（{}）",
-                            shortcuts::display("open_settings", &self.store.ui.shortcuts)
+                        .tooltip(conduit::i18n::format(
+                            "shell.settings",
+                            &[(
+                                "arg0",
+                                shortcuts::display("open_settings", &self.store.ui.shortcuts)
+                                    .to_string(),
+                            )],
                         ))
                         .cursor_pointer()
                         .on_click(
@@ -834,7 +859,7 @@ impl Render for ConduitApp {
                 .child(
                     Button::new("title-about")
                         .debug_selector(|| "title-about".into())
-                        .accessibility_label("关于")
+                        .accessibility_label(conduit::i18n::text_static("settings.about"))
                         .ghost()
                         .small()
                         .compact()
@@ -842,7 +867,7 @@ impl Render for ConduitApp {
                         .h(px(28.))
                         .flex_shrink_0()
                         .icon(IconName::Info)
-                        .tooltip("关于 Conduit")
+                        .tooltip(conduit::i18n::text_static("shell.about_conduit"))
                         .cursor_pointer()
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.open_about_dialog(window, cx);

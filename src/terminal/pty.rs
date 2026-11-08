@@ -21,7 +21,7 @@ use windows_sys::Win32::{
 fn wide(s: &OsStr) -> Result<Vec<u16>> {
     let mut value: Vec<_> = s.encode_wide().collect();
     if value.contains(&0) {
-        bail!("路径或参数包含 NUL");
+        bail!(conduit::i18n::text("child.path_or_argument_contains_nul"));
     }
     value.push(0);
     Ok(value)
@@ -173,7 +173,12 @@ impl Pty {
                 &startup.StartupInfo,
                 &mut info,
             ))
-            .with_context(|| format!("启动 {}", executable.display()))?;
+            .with_context(|| {
+                conduit::i18n::format(
+                    "child.start",
+                    &[("arg0", format!("{}", executable.display()))],
+                )
+            })?;
             let process = OwnedHandle::from_raw_handle(info.hProcess);
             let thread = OwnedHandle::from_raw_handle(info.hThread);
             if let Err(error) = checked(AssignProcessToJobObject(
@@ -182,7 +187,9 @@ impl Pty {
             )) {
                 TerminateProcess(process.as_raw_handle(), 1);
                 WaitForSingleObject(process.as_raw_handle(), 5000);
-                return Err(error).context("绑定 Job 失败，已终止未启动的子进程");
+                return Err(error).context(conduit::i18n::text_static(
+                    "terminal.pty.failed_to_assign_job_child_process_terminated",
+                ));
             }
             if ResumeThread(thread.as_raw_handle()) == u32::MAX {
                 let error = io::Error::last_os_error();

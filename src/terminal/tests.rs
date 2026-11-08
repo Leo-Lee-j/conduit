@@ -25,6 +25,7 @@ fn cmd(cwd: PathBuf) -> Runtime {
 }
 #[test]
 fn native_terminal_workspace_input_resize_and_exit() {
+    let _locale = crate::test_support::chinese();
     let path = std::env::temp_dir().join(format!("conduit terminal 中文 & {}", std::process::id()));
     std::fs::create_dir_all(&path).unwrap();
     let runtime = cmd(path.clone());
@@ -59,6 +60,7 @@ fn native_terminal_workspace_input_resize_and_exit() {
 }
 #[test]
 fn startup_cancel_and_invalid_directory_finish() {
+    let _locale = crate::test_support::chinese();
     let runtime = cmd(std::env::temp_dir());
     runtime.stop();
     wait(&runtime, |s| !s.active());
@@ -67,6 +69,7 @@ fn startup_cancel_and_invalid_directory_finish() {
 }
 #[test]
 fn separate_sessions_keep_output_and_lifetime_independent() {
+    let _locale = crate::test_support::chinese();
     let a = cmd(std::env::temp_dir());
     let b = cmd(std::env::temp_dir());
     wait(&a, |s| *s == RunState::Running);
@@ -79,6 +82,7 @@ fn separate_sessions_keep_output_and_lifetime_independent() {
 }
 #[test]
 fn shell_controls_are_encoded_without_app_actions() {
+    let _locale = crate::test_support::chinese();
     for (key, byte) in [
         ("c", 3),
         ("w", 23),
@@ -112,6 +116,7 @@ fn powershell(script: &str) -> Runtime {
 
 #[test]
 fn termination_unblocks_full_input_and_output_pipes() {
+    let _locale = crate::test_support::chinese();
     let runtime = powershell(
         "[Console]::Write('FLOOD_READY'); while ($true) { [Console]::Write(('x' * 4096)) }",
     );
@@ -133,6 +138,7 @@ fn termination_unblocks_full_input_and_output_pipes() {
 
 #[test]
 fn stopping_terminal_reaps_descendant_processes() {
+    let _locale = crate::test_support::chinese();
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use windows_sys::Win32::{
         Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT},

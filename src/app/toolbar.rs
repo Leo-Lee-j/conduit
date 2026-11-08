@@ -19,9 +19,13 @@ impl ConduitApp {
         // The toolbar belongs to the conversation; workspace navigation and
         // the independent right dock use their full height.
         let toolbar_hint: Option<String> = if self.closing {
-            Some("正在清理进程…".into())
+            Some(conduit::i18n::text_static("toolbar.cleaning_up_processes").into())
         } else if active {
-            Some(status.clone().unwrap_or_else(|| "正在执行…".into()))
+            Some(
+                status
+                    .clone()
+                    .unwrap_or_else(|| conduit::i18n::text_static("stream_events.running").into()),
+            )
         } else {
             None
         };
@@ -59,8 +63,13 @@ impl ConduitApp {
             .when_some(naming_status, |bar, status| {
                 let failed = status.is_err();
                 let text = match &status {
-                    Ok(()) => "自动重命名中…".to_string(),
-                    Err(reason) => format!("自动重命名失败：{reason}"),
+                    Ok(()) => {
+                        conduit::i18n::text_static("toolbar.renaming_automatically").to_string()
+                    }
+                    Err(reason) => conduit::i18n::format(
+                        "toolbar.automatic_renaming_failed",
+                        &[("reason", reason.to_string())],
+                    ),
                 };
                 let tooltip = SharedString::from(text.clone());
                 bar.child(
@@ -130,7 +139,9 @@ impl ConduitApp {
                                         .small()
                                         .compact()
                                         .icon(gpui_kit::assets::IconName::Activity)
-                                        .accessibility_label("性能检测")
+                                        .accessibility_label(conduit::i18n::text_static(
+                                            "performance_view.performance_monitor",
+                                        ))
                                         .cursor_pointer(),
                                 )
                                 .content(move |_, _, _| pinned_monitor.clone()),

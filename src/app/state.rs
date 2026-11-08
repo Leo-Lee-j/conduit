@@ -247,6 +247,7 @@ pub(super) struct ActiveRun {
     /// What the engine is doing right now, shown above the composer while
     /// the turn is still running.
     pub(super) activity: String,
+    pub(super) activity_message: Option<(String, conduit::i18n::Message)>,
     /// Model selected for this turn; `None` means the CLI default.
     pub(super) model: Option<String>,
     /// Snapshot of this turn's effort; picker changes apply only to the next turn.
@@ -266,11 +267,19 @@ pub(super) struct ActiveRun {
 }
 
 impl ActiveRun {
+    pub(super) fn activity_label(&self) -> String {
+        self.activity_message
+            .as_ref()
+            .filter(|(original, _)| original == &self.activity)
+            .map(|(_, message)| message.render())
+            .unwrap_or_else(|| conduit::i18n::retained(&self.activity).to_string())
+    }
+
     pub(super) fn waiting_status(&self) -> &'static str {
         if self.approvals.front().is_some_and(|a| a.is_user_input()) {
-            "等待你的回答"
+            conduit::i18n::text_static("state.awaiting_your_answer")
         } else {
-            "等待你的审批"
+            conduit::i18n::text_static("state.awaiting_your_approval")
         }
     }
     pub(super) fn new(
@@ -296,8 +305,9 @@ impl ActiveRun {
             expanded_approvals: HashSet::new(),
             question_drafts: HashMap::new(),
             prefix,
-            status: "正在连接 CLI…".into(),
-            activity: "正在启动 CLI…".into(),
+            status: conduit::i18n::text_static("runtime.saves.connecting_to_cli").into(),
+            activity_message: None,
+            activity: conduit::i18n::text_static("runtime.saves.starting_cli").into(),
             model,
             reasoning_effort,
             opencode_variant: None,
@@ -316,9 +326,9 @@ impl ActiveRun {
         self.expanded_approvals.clear();
         self.question_drafts.clear();
         self.status = if self.cleanup_error.is_some() {
-            "进程清理异常，正在后台重试…"
+            conduit::i18n::text_static("state.process_cleanup_failed_retrying_in_background")
         } else {
-            "正在停止…"
+            conduit::i18n::text_static("settings.cli.stopping")
         }
         .into();
         self.activity = self.status.clone();
@@ -354,6 +364,7 @@ pub(super) struct CommitDraft {
 }
 
 pub(super) struct CommitGeneration {
+    pub(super) cancelled: bool,
     pub(super) path: PathBuf,
     pub(super) runtime: ChatRuntime,
     pub(super) started: Instant,

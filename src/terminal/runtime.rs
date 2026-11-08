@@ -40,12 +40,20 @@ impl RunState {
     }
     pub fn label(&self) -> String {
         match self {
-            Self::Starting => "启动中".into(),
-            Self::Running => "运行中".into(),
-            Self::Stopping => "正在终止…".into(),
-            Self::Exited(code) => format!("已退出 · {code}"),
-            Self::Failed(e) => format!("启动/运行失败：{e}"),
-            Self::CleanupFailed(e) => format!("清理未完成：{e}"),
+            Self::Starting => conduit::i18n::text_static("terminal.runtime.starting").into(),
+            Self::Running => conduit::i18n::text_static("events.running").into(),
+            Self::Stopping => conduit::i18n::text_static("terminal.runtime.terminating").into(),
+            Self::Exited(code) => {
+                conduit::i18n::format("terminal.runtime.exited", &[("code", format!("{}", code))])
+            }
+            Self::Failed(e) => conduit::i18n::format(
+                "terminal.runtime.startup_runtime_failed",
+                &[("e", e.to_string())],
+            ),
+            Self::CleanupFailed(e) => conduit::i18n::format(
+                "terminal.runtime.cleanup_incomplete",
+                &[("e", e.to_string())],
+            ),
         }
     }
 }
@@ -88,10 +96,16 @@ impl InputQueue {
     fn push(&self, bytes: Vec<u8>, response: bool) -> Result<(), String> {
         let mut q = self.pending.lock().unwrap();
         if q.closed {
-            return Err("终端已停止接收输入".into());
+            return Err(conduit::i18n::text_static(
+                "terminal.runtime.terminal_stopped_accepting_input",
+            )
+            .into());
         }
         if bytes.len() > MAX_INPUT {
-            return Err("单次输入不能超过 1 MiB".into());
+            return Err(conduit::i18n::text_static(
+                "terminal.runtime.a_single_input_cannot_exceed_1_mib",
+            )
+            .into());
         }
         if q.items.iter().filter(|(_, r)| *r == response).count() >= 128
             || if response {
@@ -100,7 +114,10 @@ impl InputQueue {
                 q.bytes + bytes.len() > QUEUE_BYTES
             }
         {
-            return Err("终端暂时无法接收输入，请稍后重试".into());
+            return Err(conduit::i18n::text_static(
+                "terminal.runtime.terminal_cannot_accept_input_right_now_try",
+            )
+            .into());
         }
         if response {
             q.responses += bytes.len();
@@ -202,7 +219,10 @@ impl Runtime {
     }
     pub fn send(&self, bytes: Vec<u8>) -> Result<(), String> {
         if self.state() != RunState::Running || self.stop.load(Ordering::Acquire) {
-            return Err("终端尚未就绪或已停止".into());
+            return Err(conduit::i18n::text_static(
+                "terminal.runtime.terminal_is_not_ready_or_has_stopped",
+            )
+            .into());
         }
         self.input.push(bytes, false)?;
         if let Ok(mut screen) = self.screen.try_lock() {
@@ -281,10 +301,15 @@ impl Worker {
         let command = resolve().and_then(|(exe, args, cwd)| {
             anyhow::ensure!(
                 cwd.is_absolute() && cwd.is_dir(),
-                "启动目录不存在或不可访问：{}",
-                cwd.display()
+                conduit::i18n::format(
+                    "terminal.runtime.startup_directory_does_not_exist_or_is",
+                    &[("arg0", format!("{}", cwd.display()))]
+                )
             );
-            anyhow::ensure!(!self.stop.load(Ordering::Acquire), "启动已取消");
+            anyhow::ensure!(
+                !self.stop.load(Ordering::Acquire),
+                conduit::i18n::text("terminal.runtime.startup_cancelled")
+            );
             Ok((exe, args, cwd))
         });
         let (exe, args, cwd) = match command {
@@ -326,7 +351,7 @@ impl Worker {
                                     continue;
                                 }
                                 Err(_) => {
-                                    reader_fault.fail("终端解析器异常，正在清理进程".into());
+                                    reader_fault.fail(conduit::i18n::text_static("terminal.runtime.terminal_parser_failed_cleaning_up_processes").into());
                                     parsing = false;
                                     continue;
                                 }
@@ -340,7 +365,10 @@ impl Worker {
                         Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                         Err(error) => {
                             if !matches!(error.raw_os_error(), Some(109 | 232 | 995)) {
-                                reader_fault.fail(format!("终端读取失败：{error}"));
+                                reader_fault.fail(conduit::i18n::format(
+                                    "terminal.runtime.terminal_read_failed",
+                                    &[("error", format!("{}", error))],
+                                ));
                             }
                             break;
                         }
@@ -389,7 +417,10 @@ impl Worker {
                 drop(q);
                 if let Err(error) = result {
                     if !closed {
-                        input.fail(format!("终端写入失败：{error}"));
+                        input.fail(conduit::i18n::format(
+                            "terminal.runtime.terminal_write_failed",
+                            &[("error", format!("{}", error))],
+                        ));
                     }
                     break;
                 }
@@ -412,7 +443,15 @@ impl Worker {
                 _ => {}
             }
             if reader.as_ref().is_some_and(|r| r.is_finished()) {
-                break (1, Some("终端输出管道提前关闭".into()));
+                break (
+                    1,
+                    Some(
+                        conduit::i18n::text_static(
+                            "terminal.runtime.terminal_output_pipe_closed_early",
+                        )
+                        .into(),
+                    ),
+                );
             }
             let desired = self.desired_size.load(Ordering::Acquire);
             if desired != self.geometry.load(Ordering::Acquire)
@@ -485,7 +524,10 @@ impl Worker {
             }
             if started.elapsed() > Duration::from_secs(5) {
                 self.state(RunState::CleanupFailed(
-                    "正在等待管道和进程树释放；可重试终止".into(),
+                    conduit::i18n::text_static(
+                        "terminal.runtime.waiting_for_pipes_and_process_tree_to",
+                    )
+                    .into(),
                 ));
             }
             thread::sleep(Duration::from_millis(25));
@@ -497,7 +539,12 @@ impl Worker {
         self.state(if let Some(error) = failure {
             RunState::Failed(error)
         } else if !writer_ok || !reader_ok || !console_ok {
-            RunState::Failed("终端线程异常退出，资源已释放".into())
+            RunState::Failed(
+                conduit::i18n::text_static(
+                    "terminal.runtime.terminal_thread_exited_unexpectedly_resources_released",
+                )
+                .into(),
+            )
         } else {
             RunState::Exited(code)
         });
@@ -518,6 +565,7 @@ mod tests {
     }
     #[test]
     fn parser_preserves_unicode_ansi_selection_and_alt_screen() {
+        let _locale = crate::test_support::chinese();
         use alacritty_terminal::{
             term::{TermMode, cell::Flags},
             vte::ansi::Color,
@@ -558,6 +606,7 @@ mod tests {
     }
     #[test]
     fn parser_rejects_unbounded_control_and_combining_payloads() {
+        let _locale = crate::test_support::chinese();
         let (mut screen, _) = test_screen();
         screen.advance(b"\x1b]").unwrap();
         assert!(screen.advance(&vec![b'x'; 5000]).is_err());
@@ -575,6 +624,7 @@ mod tests {
     }
     #[test]
     fn parser_history_and_snapshot_stay_bounded_under_large_logs() {
+        let _locale = crate::test_support::chinese();
         use alacritty_terminal::grid::Dimensions;
         let (mut screen, _) = test_screen();
         screen.resize(160, 40);
@@ -602,6 +652,7 @@ mod tests {
     }
     #[test]
     fn input_reserves_full_transaction_and_rejects_after_close() {
+        let _locale = crate::test_support::chinese();
         let queue = InputQueue::new(Arc::new(Wake::new()));
         assert!(queue.push(vec![0; MAX_INPUT], false).is_ok());
         assert!(queue.push(vec![0; MAX_INPUT], false).is_ok());

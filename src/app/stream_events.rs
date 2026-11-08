@@ -144,7 +144,9 @@ impl ConduitApp {
                         .map(|q| {
                             let input = cx.new(|cx| {
                                 InputState::new(window, cx)
-                                    .placeholder("输入你的回答")
+                                    .placeholder(conduit::i18n::text_static(
+                                        "stream_events.enter_your_answer",
+                                    ))
                                     .masked(q.secret)
                             });
                             let subscription =
@@ -189,8 +191,9 @@ impl ConduitApp {
                         run.question_drafts.remove(&request);
                         approval = run.approvals.remove(&request);
                         if run.approvals.is_empty() && !run.runtime.is_cancelled() {
-                            run.status = "正在执行…".into();
-                            run.activity = "正在继续处理…".into();
+                            run.status = conduit::i18n::text_static("stream_events.running").into();
+                            run.activity =
+                                conduit::i18n::text_static("stream_events.continuing").into();
                         } else if !run.runtime.is_cancelled() {
                             run.status = run.waiting_status().into();
                             run.activity = run.status.clone();
@@ -222,13 +225,13 @@ impl ConduitApp {
                         run.question_drafts.remove(&request);
                         let approval = run.approvals.remove(&request);
                         run.status = if run.approvals.is_empty() {
-                            "正在执行…"
+                            conduit::i18n::text_static("stream_events.running")
                         } else {
                             run.waiting_status()
                         }
                         .into();
                         run.activity = if run.approvals.is_empty() {
-                            "正在继续处理…"
+                            conduit::i18n::text_static("stream_events.continuing")
                         } else {
                             run.waiting_status()
                         }
@@ -265,9 +268,17 @@ impl ConduitApp {
                             .map(|session| session.title.clone())
                             .unwrap_or_default();
                         let (level, title, message) = if let Some(error) = &error {
-                            (NoticeLevel::Error, "会话执行失败", error.clone())
+                            (
+                                NoticeLevel::Error,
+                                conduit::i18n::text_static("stream_events.session_failed"),
+                                error.clone(),
+                            )
                         } else {
-                            (NoticeLevel::Success, "会话已完成", session_title)
+                            (
+                                NoticeLevel::Success,
+                                conduit::i18n::text_static("stream_events.session_completed"),
+                                session_title,
+                            )
                         };
                         self.notify_user(
                             Notice::new(NoticeSource::Session, level, title, message)
@@ -286,9 +297,9 @@ impl ConduitApp {
                         self.pause_queued_message(
                             id,
                             if cancelled {
-                                "当前回复已停止；待发送消息不会自动发送。"
+                                conduit::i18n::text_static("composer.the_current_response_has_stopped_queued_messages")
                             } else {
-                                "当前回复失败；待发送消息不会自动发送。"
+                                conduit::i18n::text_static("stream_events.the_current_response_failed_queued_messages_will")
                             },
                         );
                     }
@@ -375,7 +386,10 @@ impl ConduitApp {
                                     key: format!("{prefix}-finish"),
                                     created_at: unix_now(),
                                     kind: ItemKind::Notice,
-                                    text: "已取消；不会自动重试。".into(),
+                                    text: conduit::i18n::text_static(
+                                        "stream_events.cancelled_will_not_retry_automatically",
+                                    )
+                                    .into(),
                                     input: String::new(),
                                     detail: error.clone().unwrap_or_default(),
                                     status: Default::default(),
@@ -390,7 +404,12 @@ impl ConduitApp {
                         run.cleanup_error = Some(error.clone());
                         run.cancel();
                     }
-                    self.pause_queued_message(id, "进程清理异常；待发送消息已暂停。");
+                    self.pause_queued_message(
+                        id,
+                        conduit::i18n::text_static(
+                            "stream_events.process_cleanup_failed_queued_messages_paused",
+                        ),
+                    );
                     self.closing = false;
                     self.message = Some(error.clone());
                     if let Some(session) = self.session_mut(id) {
@@ -401,7 +420,7 @@ impl ConduitApp {
                             Notice::new(
                                 NoticeSource::Session,
                                 NoticeLevel::Error,
-                                "进程清理异常",
+                                conduit::i18n::text_static("stream_events.process_cleanup_failed"),
                                 error,
                             )
                             .target(target),
@@ -415,8 +434,8 @@ impl ConduitApp {
                         session.native_id = Some(native_id);
                     }
                     if let Some(run) = self.session_control.runs.get_mut(&id) {
-                        run.status = "正在执行…".into();
-                        run.activity = "正在思考…".into();
+                        run.status = conduit::i18n::text_static("stream_events.running").into();
+                        run.activity = conduit::i18n::text_static("stream_events.thinking").into();
                     }
                     self.dirty = true;
                     self.persist();
@@ -424,19 +443,50 @@ impl ConduitApp {
                 other => {
                     if let Some(run) = self.session_control.runs.get_mut(&id) {
                         let activity = match &other {
-                            Event::Delta { .. } | Event::Text { .. } => "正在生成回复…".to_string(),
-                            Event::ToolInput { .. } => "正在准备工具调用…".to_string(),
+                            Event::Delta { .. } | Event::Text { .. } => {
+                                conduit::i18n::text_static("stream_events.generating_response")
+                                    .to_string()
+                            }
+                            Event::ToolInput { .. } => {
+                                conduit::i18n::text_static("stream_events.preparing_tool_call")
+                                    .to_string()
+                            }
                             Event::Tool { title, status, .. } => match status.as_str() {
-                                "运行中" if !title.is_empty() => {
-                                    format!("正在调用工具：{title}")
+                                "运行中" if !title.is_empty() => conduit::i18n::format(
+                                    "stream_events.calling_tool",
+                                    &[("title", title.to_string())],
+                                ),
+                                "运行中" => {
+                                    conduit::i18n::text_static("stream_events.calling_tool_72ae8e")
+                                        .to_string()
                                 }
-                                "运行中" => "正在调用工具…".to_string(),
-                                "输出中" => "正在接收工具输出…".to_string(),
-                                _ => "正在继续处理…".to_string(),
+                                "输出中" => conduit::i18n::text_static(
+                                    "stream_events.receiving_tool_output",
+                                )
+                                .to_string(),
+                                _ => conduit::i18n::text_static("stream_events.continuing")
+                                    .to_string(),
                             },
                             _ => String::new(),
                         };
                         if !activity.is_empty() {
+                            run.activity_message = match &other {
+                                Event::Tool { title, status, .. }
+                                    if !title.is_empty()
+                                        && status
+                                            == crate::message_status::ToolStatus::Running
+                                                .as_str() =>
+                                {
+                                    Some((
+                                        activity.clone(),
+                                        conduit::i18n::Message::new(
+                                            "stream_events.calling_tool",
+                                            &[("title", title.clone())],
+                                        ),
+                                    ))
+                                }
+                                _ => None,
+                            };
                             run.activity = activity;
                         }
                     }

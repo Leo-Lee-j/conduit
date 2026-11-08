@@ -93,8 +93,14 @@ fn detail_section(
                         .small()
                         .compact()
                         .icon(FullIconName::Copy)
-                        .tooltip(format!("复制{label}"))
-                        .accessibility_label(format!("复制{label}"))
+                        .tooltip(conduit::i18n::format(
+                            "tool_details.copy",
+                            &[("label", label.to_string())],
+                        ))
+                        .accessibility_label(conduit::i18n::format(
+                            "tool_details.copy",
+                            &[("label", label.to_string())],
+                        ))
                         .disabled(text.trim().is_empty())
                         .cursor_pointer()
                         .on_click(move |_, _, cx| {
@@ -163,17 +169,27 @@ impl ConduitApp {
         _: &mut Context<Self>,
     ) -> RightView {
         let ScopeKey::Session { workspace, id } = &key.scope else {
-            return RightBody::Failed("工具详情需要会话上下文".into()).into();
+            return RightBody::Failed(
+                conduit::i18n::text_static("tool_details.tool_details_require_session_context")
+                    .into(),
+            )
+            .into();
         };
         let session = SessionKey {
             workspace: workspace.clone(),
             id: *id,
         };
         if self.plugins.session_key().as_ref() != Some(&session) {
-            return RightBody::Failed("会话上下文已改变".into()).into();
+            return RightBody::Failed(
+                conduit::i18n::text_static("tool_details.session_context_changed").into(),
+            )
+            .into();
         }
         let Some(record) = self.session(session.id) else {
-            return RightBody::Failed("会话已不存在".into()).into();
+            return RightBody::Failed(
+                conduit::i18n::text_static("tool_details.the_session_no_longer_exists").into(),
+            )
+            .into();
         };
         if !record.transcript.loaded {
             return self
@@ -194,10 +210,12 @@ impl ConduitApp {
         let typography = self.chat_typography();
         let mut actions = Vec::new();
         if let Some(item) = &item {
-            let copy = format!(
-                "输入\n{}\n\n输出 / 结果\n{}",
-                format_tool_text(&item.input),
-                format_tool_text(&item.detail),
+            let copy = conduit::i18n::format(
+                "tools.input_output_result_eddfa0",
+                &[
+                    ("arg0", format_tool_text(&item.input).to_string()),
+                    ("arg1", format_tool_text(&item.detail).to_string()),
+                ],
             );
             actions.push(
                 Button::new("copy-details")
@@ -205,8 +223,12 @@ impl ConduitApp {
                     .small()
                     .compact()
                     .icon(FullIconName::Copy)
-                    .tooltip("复制全部输入与输出")
-                    .accessibility_label("复制全部输入与输出")
+                    .tooltip(conduit::i18n::text_static(
+                        "tool_details.copy_all_input_and_output",
+                    ))
+                    .accessibility_label(conduit::i18n::text_static(
+                        "tool_details.copy_all_input_and_output",
+                    ))
                     .cursor_pointer()
                     .on_click(move |_, _, cx| {
                         cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
@@ -220,11 +242,11 @@ impl ConduitApp {
             let running = tool_running(&item);
             let failed = tool_failed(&item);
             let status = if running {
-                "执行中"
+                conduit::i18n::text_static("tool_details.running")
             } else if failed {
-                "未成功"
+                conduit::i18n::text_static("tool_details.unsuccessful")
             } else if item.status.is_empty() {
-                "未提供状态"
+                conduit::i18n::text_static("tool_details.no_status_provided")
             } else {
                 &item.status
             };
@@ -284,14 +306,20 @@ impl ConduitApp {
                                             })
                                             .small(),
                                         )
-                                        .child(status.to_owned()),
+                                        .child(conduit::i18n::source(status).to_owned()),
                                 ),
                         )
                         .child(
                             div()
                                 .text_size(px(12.))
                                 .text_color(rgb(palette().muted))
-                                .child(item.text.clone()),
+                                .child(match item.text.as_str() {
+                                    "修改文件" => conduit::i18n::text("history.modify_file"),
+                                    "命令输出" => {
+                                        conduit::i18n::text("protocol.command_output")
+                                    }
+                                    _ => item.text.clone(),
+                                }),
                         )
                         .child(
                             div()
@@ -305,20 +333,20 @@ impl ConduitApp {
                 .child(detail_section(
                     &scope,
                     "input",
-                    "输入",
+                    conduit::i18n::text_static("tools.input"),
                     &item.input,
-                    "未提供输入",
+                    conduit::i18n::text_static("tools.no_input_provided"),
                     &typography,
                 ))
                 .child(detail_section(
                     &scope,
                     "output",
-                    "输出 / 结果",
+                    conduit::i18n::text_static("tools.output_result"),
                     &item.detail,
                     if running {
-                        "等待工具输出…"
+                        conduit::i18n::text_static("tools.waiting_for_tool_output")
                     } else {
-                        "没有输出内容"
+                        conduit::i18n::text_static("tools.no_output")
                     },
                     &typography,
                 ));
@@ -332,7 +360,9 @@ impl ConduitApp {
                             div()
                                 .text_size(px(11.))
                                 .text_color(rgb(palette().muted))
-                                .child("原生会话 ID"),
+                                .child(conduit::i18n::text_static(
+                                    "tool_details.native_session_id",
+                                )),
                         )
                         .child(gpui_kit::base::SelectableText::new(
                             SharedString::from(format!("{scope}-native-id")),
@@ -344,7 +374,7 @@ impl ConduitApp {
                 .id(SharedString::from(scope))
                 .test_support()
                 .role(Role::Group)
-                .aria_label("工具调用详情")
+                .aria_label(conduit::i18n::text_static("tool_details.tool_call_details"))
                 .debug_selector(|| "detail-content".into())
                 .relative()
                 .flex_1()
@@ -359,8 +389,10 @@ impl ConduitApp {
                 .into_any_element()
         } else {
             return RightBody::Empty {
-                title: "选择一个工具调用",
-                description: "展开聊天中的工具卡片，点击详情图标，在这里查看完整输入与输出。",
+                title: conduit::i18n::text_static("tool_details.select_a_tool_call"),
+                description: conduit::i18n::text_static(
+                    "tool_details.expand_a_tool_card_in_chat_and",
+                ),
             }
             .into();
         };

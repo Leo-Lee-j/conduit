@@ -164,7 +164,13 @@ pub(crate) fn install_theme_packs(cx: &mut gpui_kit::App) {
     let packs = match serde_json::from_str::<ThemeSet>(THEME_PACKS) {
         Ok(set) => set.themes,
         Err(error) => {
-            eprintln!("内置主题包解析失败: {error}");
+            eprintln!(
+                "{}",
+                conduit::i18n::format(
+                    "theme.failed_to_parse_bundled_themes",
+                    &[("error", format!("{}", error))]
+                )
+            );
             return;
         }
     };
@@ -181,7 +187,13 @@ pub(crate) fn install_theme_packs(cx: &mut gpui_kit::App) {
     // Register the packs so the registry's name-based reload resolves them
     // instead of dropping back to the library themes.
     if let Err(error) = ThemeRegistry::global_mut(cx).load_themes_from_str(THEME_PACKS) {
-        eprintln!("内置主题包注册失败: {error}");
+        eprintln!(
+            "{}",
+            conduit::i18n::format(
+                "theme.failed_to_register_bundled_themes",
+                &[("error", format!("{}", error))]
+            )
+        );
     }
     Theme::update(cx, |theme| {
         if let Some(light) = light {
@@ -199,6 +211,7 @@ mod tests {
 
     #[test]
     fn functional_text_and_focus_have_contrast_on_all_base_surfaces() {
+        let _locale = crate::test_support::chinese();
         fn luminance(color: u32) -> f64 {
             let channel = |shift: u32| {
                 let value = ((color >> shift) & 255u32) as f64 / 255.;
@@ -235,6 +248,7 @@ mod tests {
 
     #[test]
     fn builtin_packs_cover_both_modes_and_own_the_tab_tokens() {
+        let _locale = crate::test_support::chinese();
         let set: ThemeSet = serde_json::from_str(THEME_PACKS).expect("theme packs parse");
         let dark = set
             .themes

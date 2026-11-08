@@ -189,7 +189,9 @@ impl Transcript {
         if let Some(reference) = &mut self.reference {
             validate_hash(&reference.hash)?;
             if reference.message_count == 0 {
-                bail!("会话正文摘要缺少消息数量");
+                bail!(conduit::i18n::text(
+                    "transcript.session_summary_is_missing_message_count"
+                ));
             }
             reference.directory = directory.to_owned();
             reference.lease = Some(acquire(path(reference)?));
@@ -237,7 +239,9 @@ fn validate_hash(hash: &str) -> Result<()> {
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
     {
-        bail!("会话正文引用无效");
+        bail!(conduit::i18n::text(
+            "transcript.invalid_session_message_reference"
+        ));
     }
     Ok(())
 }
@@ -245,7 +249,9 @@ fn validate_hash(hash: &str) -> Result<()> {
 fn path(reference: &Reference) -> Result<PathBuf> {
     validate_hash(&reference.hash)?;
     if reference.directory.as_os_str().is_empty() {
-        bail!("会话正文缺少存储目录");
+        bail!(conduit::i18n::text(
+            "transcript.session_message_storage_directory_missing"
+        ));
     }
     Ok(reference.directory.join(format!("{}.json", reference.hash)))
 }
@@ -278,7 +284,10 @@ pub(crate) fn resident_bytes(messages: &[ChatItem]) -> usize {
 /// Called only on the disk writer/background executor. Never rewrites a referenced blob.
 pub(crate) fn save(session: &SessionRecord, directory: &Path) -> Result<Option<Reference>> {
     if !session.transcript.loaded && !session.messages.is_empty() {
-        bail!("会话 {} 正文未加载，拒绝保存覆盖", session.id);
+        bail!(conduit::i18n::format(
+            "transcript.session_messages_are_not_loaded_refusing_to",
+            &[("arg0", format!("{}", session.id))]
+        ));
     }
     if let Some(reference) = session.transcript.saved(&session.messages) {
         if reference.directory == directory {
@@ -293,7 +302,10 @@ pub(crate) fn save(session: &SessionRecord, directory: &Path) -> Result<Option<R
         return save(&restored, directory);
     }
     if !session.transcript.loaded {
-        bail!("会话 {} 缺少正文引用", session.id);
+        bail!(conduit::i18n::format(
+            "transcript.session_is_missing_its_message_reference",
+            &[("arg0", format!("{}", session.id))]
+        ));
     }
     if session.messages.is_empty() {
         return Ok(None);
@@ -311,11 +323,16 @@ pub(crate) fn save(session: &SessionRecord, directory: &Path) -> Result<Option<R
 
 /// Durable immutable publication shared by roots, pages, and raw text blocks.
 fn publish(bytes: &[u8], hash: &str, destination: &Path) -> Result<()> {
-    let directory = destination.parent().context("会话正文缺少存储目录")?;
+    let directory = destination.parent().context(conduit::i18n::text_static(
+        "transcript.session_message_storage_directory_missing",
+    ))?;
     if destination.exists() {
         // An interrupted/externally damaged file is never mistaken for a durable receipt.
         if fs::read(destination)?.as_slice() != bytes {
-            bail!("会话正文校验失败：{}", destination.display());
+            bail!(conduit::i18n::format(
+                "transcript.chunks.session_message_validation_failed",
+                &[("arg0", format!("{}", destination.display()))]
+            ));
         }
     } else {
         // Import and persistence can save identical bodies concurrently. Each stages a unique file.
@@ -352,18 +369,23 @@ pub(crate) fn read(session: &SessionRecord) -> Result<Vec<ChatItem>> {
         .transcript
         .reference
         .as_ref()
-        .context("会话缺少正文引用")?;
+        .context(conduit::i18n::text_static(
+            "transcript.session_message_reference_missing",
+        ))?;
     Ok(chunks::read(reference)?.messages)
 }
 
 /// Load and recover interrupted turns on a worker. The caller still checks identity before applying.
 pub(crate) fn load(mut session: SessionRecord) -> Result<SessionRecord> {
     if !session.transcript.loaded {
-        let reference = session
-            .transcript
-            .reference
-            .clone()
-            .context("会话缺少正文引用")?;
+        let reference =
+            session
+                .transcript
+                .reference
+                .clone()
+                .context(conduit::i18n::text_static(
+                    "transcript.session_message_reference_missing",
+                ))?;
         let loaded = chunks::read(&reference)?;
         session.messages = loaded.messages;
         session

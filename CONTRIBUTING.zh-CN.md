@@ -124,3 +124,7 @@ cargo test --locked --features ui-tests --bin conduit app:: -- --test-threads=1
 - [性能与指标](docs/performance.md)：测量方法、有界工作与缓存。
 - [发布与更新](docs/releasing.md)：打包、签名与失败恢复。
 - [插件开发](docs/plugins/README.md)：已支持的贡献机制与实验运行时。
+
+## 界面翻译
+
+新增语言与界面文案请参考[国际化指南](docs/internationalization.md)。在 `assets/languages.json` 注册语言，在 `locales/` 添加对应翻译，并执行 `python scripts/check-i18n.py`。保持消息键与命名参数稳定，检查即时切换时草稿不丢失，以及中英文在窄窗口中的布局。

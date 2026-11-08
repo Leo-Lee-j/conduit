@@ -64,6 +64,7 @@ fn draw_memory(cx: &mut VisualTestContext, frames: &str) {
 
 #[gpui_kit::test]
 fn memory_frame_driver_delivers_deferred_work(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (_, cx) = fixture(cx);
     let calls = Rc::new(std::cell::Cell::new(0));
     cx.update(|window, _| {
@@ -92,6 +93,7 @@ fn memory_frame_driver_delivers_deferred_work(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 #[ignore = "allocation instrumentation; run retained binary with allocation-probe feature"]
 fn desktop_native_memory_probe(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let scenario = std::env::var("CONDUIT_PERF_SCENARIO").unwrap();
     assert!(matches!(scenario.as_str(), "lifecycle" | "idle"));
     let recording = std::env::var("CONDUIT_MEMORY_RECORDING").unwrap();

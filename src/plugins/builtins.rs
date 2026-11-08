@@ -49,43 +49,85 @@ pub fn core() -> Result<ContributionSet> {
     set.views = vec![
         view(
             WORKSPACES,
-            "工作区与会话",
+            conduit::i18n::text_static("plugins.builtins.workspaces_and_sessions"),
             Location::Navigation,
             Scope::Global,
         )?,
-        view(FILES, "文件", Location::Navigation, Scope::Global)?,
-        view(GIT, "Git 变更", Location::Navigation, Scope::Global)?,
+        view(
+            FILES,
+            conduit::i18n::text_static("plugins.builtins.files"),
+            Location::Navigation,
+            Scope::Global,
+        )?,
+        view(
+            GIT,
+            conduit::i18n::text_static("plugins.builtins.git_changes"),
+            Location::Navigation,
+            Scope::Global,
+        )?,
         view(
             BRANCHES,
-            "Git 分支与日志",
+            conduit::i18n::text_static("plugin_ui.git_branches_and_log"),
             Location::Navigation,
             Scope::Global,
         )?,
-        view(TOOL_DETAILS, "工具详情", Location::Right, Scope::Session)?,
-        view(NOTIFICATIONS, "通知", Location::Right, Scope::Global)?,
+        view(
+            TOOL_DETAILS,
+            conduit::i18n::text_static("plugins.builtins.tool_details"),
+            Location::Right,
+            Scope::Session,
+        )?,
+        view(
+            NOTIFICATIONS,
+            conduit::i18n::text_static("plugins.builtins.notifications"),
+            Location::Right,
+            Scope::Global,
+        )?,
     ];
     set.activity_items = vec![
         activity(
             "conduit.core.workspaces-entry",
-            "工作区与会话",
+            conduit::i18n::text_static("plugins.builtins.workspaces_and_sessions"),
             "folder",
             WORKSPACES,
             0,
         )?,
-        activity("conduit.core.files-entry", "文件", "file", FILES, 10)?,
-        activity("conduit.core.git-entry", "Git 变更", "git-fork", GIT, 20)?,
+        activity(
+            "conduit.core.files-entry",
+            conduit::i18n::text_static("plugins.builtins.files"),
+            "file",
+            FILES,
+            10,
+        )?,
+        activity(
+            "conduit.core.git-entry",
+            conduit::i18n::text_static("plugins.builtins.git_changes"),
+            "git-fork",
+            GIT,
+            20,
+        )?,
     ];
     set.commands.push(CommandDescriptor {
         id: CommandId::new(SHOW_TOOL_DETAILS)?,
-        title: "打开工具详情".into(),
+        title: conduit::i18n::text_static("plugins.builtins.open_tool_details").into(),
         scope: Scope::Session,
         arguments: ArgumentPolicy::None,
         required_capabilities: BTreeSet::from([Capability::SessionSummary]),
         requires_writable: false,
     });
     for (id, title, scope, requires_writable) in [
-        (TOGGLE_TERMINAL, "打开或收起终端", Scope::Global, false),
-        (NEW_TERMINAL, "在当前工作区新建终端", Scope::Workspace, true),
+        (
+            TOGGLE_TERMINAL,
+            conduit::i18n::text_static("plugins.builtins.open_or_collapse_terminal"),
+            Scope::Global,
+            false,
+        ),
+        (
+            NEW_TERMINAL,
+            conduit::i18n::text_static("plugins.builtins.new_terminal_in_current_workspace"),
+            Scope::Workspace,
+            true,
+        ),
     ] {
         set.commands.push(CommandDescriptor {
             id: CommandId::new(id)?,
@@ -102,7 +144,7 @@ pub fn core() -> Result<ContributionSet> {
         alignment: Alignment::Left,
         priority: 100,
         initial: StatusValue {
-            text: "工作区".into(),
+            text: conduit::i18n::text_static("git_compare.workspace").into(),
             tooltip: None,
         },
         icon: Some("folder".into()),
@@ -115,7 +157,7 @@ pub fn workspace_overview() -> Result<ContributionSet> {
     let mut set = ContributionSet::empty(Owner::host(PluginId::new(EXAMPLE)?));
     set.commands.push(CommandDescriptor {
         id: CommandId::new(EXAMPLE_COMMAND)?,
-        title: "打开工作区概览".into(),
+        title: conduit::i18n::text_static("plugins.builtins.open_workspace_overview").into(),
         scope: Scope::Workspace,
         arguments: ArgumentPolicy::None,
         required_capabilities: BTreeSet::from([Capability::WorkspaceSummary]),
@@ -124,20 +166,20 @@ pub fn workspace_overview() -> Result<ContributionSet> {
     set.views = vec![
         view(
             EXAMPLE_INDEX,
-            "工作区概览",
+            conduit::i18n::text_static("plugin_ui.example.workspace_overview"),
             Location::Navigation,
             Scope::Workspace,
         )?,
         view(
             EXAMPLE_SUMMARY,
-            "工作区摘要",
+            conduit::i18n::text_static("plugin_ui.example.workspace_summary"),
             Location::Right,
             Scope::Workspace,
         )?,
     ];
     set.activity_items.push(activity(
         EXAMPLE_ACTIVITY,
-        "工作区概览",
+        conduit::i18n::text_static("plugin_ui.example.workspace_overview"),
         "layout-dashboard",
         EXAMPLE_INDEX,
         100,
@@ -148,8 +190,11 @@ pub fn workspace_overview() -> Result<ContributionSet> {
         alignment: Alignment::Right,
         priority: 10,
         initial: StatusValue {
-            text: "工作区概览".into(),
-            tooltip: Some("查看当前工作区摘要".into()),
+            text: conduit::i18n::text_static("plugin_ui.example.workspace_overview").into(),
+            tooltip: Some(
+                conduit::i18n::text_static("plugins.builtins.view_current_workspace_summary")
+                    .into(),
+            ),
         },
         icon: None,
         command: Some(CommandId::new(EXAMPLE_COMMAND)?),

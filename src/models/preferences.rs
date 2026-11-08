@@ -43,7 +43,7 @@ impl ModelPreferences {
                 && model.id.len() <= 256
                 && !model.id.chars().any(char::is_whitespace)
                 && !model.id.chars().any(char::is_control),
-            "模型 ID 不能为空、包含空白或控制字符，且最多 256 字节"
+            conduit::i18n::text("models.preferences.model_id_must_be_nonempty_contain_no")
         );
         ensure!(
             engine != Provider::OpenCode
@@ -51,26 +51,28 @@ impl ModelPreferences {
                     .id
                     .split_once('/')
                     .is_some_and(|(p, m)| !p.is_empty() && !m.is_empty()),
-            "OpenCode 模型 ID 使用 provider/model 格式"
+            conduit::i18n::text("models.preferences.opencode_model_ids_use_provider_model_format")
         );
         ensure!(
             model.label.len() <= 256 && !model.label.chars().any(char::is_control),
-            "显示名称最多 256 字节，不能包含控制字符"
+            conduit::i18n::text("models.preferences.display_name_must_be_at_most_256")
         );
         ensure!(
             model.note.len() <= 1200 && !model.note.chars().any(char::is_control),
-            "备注最多 1200 字节，不能包含控制字符"
+            conduit::i18n::text("models.preferences.notes_must_be_at_most_1_200")
         );
         ensure!(
             model.context_window != Some(0),
-            "上下文窗口必须为正整数或留空"
+            conduit::i18n::text(
+                "settings.model_management.context_window_must_be_a_positive_integer"
+            )
         );
         ensure!(
             !self
                 .custom
                 .iter()
                 .any(|m| m.id == model.id && Some(m.id.as_str()) != original),
-            "此模型 ID 已有本地定义，请编辑已有模型"
+            conduit::i18n::text("models.preferences.this_model_id_already_has_a_local")
         );
         if model.label.is_empty() {
             model.label = model.id.clone();
@@ -96,6 +98,7 @@ mod tests {
     }
     #[test]
     fn overlays_survive_refresh_and_roundtrip_without_mutating_native_models() {
+        let _locale = crate::test_support::chinese();
         let native = vec![model("a"), model("b")];
         let mut prefs = ModelPreferences::default();
         let mut custom = model("a");
@@ -113,6 +116,7 @@ mod tests {
     }
     #[test]
     fn invalid_model_ids_and_context_windows_are_rejected() {
+        let _locale = crate::test_support::chinese();
         let mut prefs = ModelPreferences::default();
         for id in ["", "x\ny", "a b", "x\0y"] {
             assert!(prefs.save(Provider::Codex, None, model(id)).is_err());

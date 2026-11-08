@@ -9,6 +9,7 @@ use gpui_kit::{
 
 #[gpui_kit::test]
 fn error_retry_keeps_partial_output_when_context_validation_fails(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{domain::Workspace, protocol::Event, store::Store};
     use gpui_kit::AppContext as _;
 
@@ -66,6 +67,7 @@ fn error_retry_keeps_partial_output_when_context_validation_fails(cx: &mut TestA
 
 #[gpui_kit::test]
 fn error_retry_clears_cards_before_repeated_failures_and_preserves_output(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{domain::Workspace, protocol::Event, store::Store};
     use gpui_kit::AppContext as _;
 
@@ -181,6 +183,7 @@ fn error_retry_clears_cards_before_repeated_failures_and_preserves_output(cx: &m
 
 #[gpui_kit::test]
 fn settings_workspace_keeps_layout_and_returns_without_losing_context(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use gpui_kit::{AppContext as _, Focusable as _, Modifiers, MouseButton};
     cx.update(gpui_kit::init);
     let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -297,6 +300,7 @@ fn settings_workspace_keeps_layout_and_returns_without_losing_context(cx: &mut T
 fn settings_connections_switch_engines_and_keep_read_only_actions_disabled(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     use gpui_kit::{AppContext as _, Modifiers, MouseButton};
     cx.update(gpui_kit::init);
     let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -396,6 +400,7 @@ fn settings_connections_switch_engines_and_keep_read_only_actions_disabled(
 
 #[gpui_kit::test]
 fn opencode_new_session_keeps_permission_selected_before_sending(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{
         domain::{PermissionLevel, Provider, Workspace},
         store::Store,
@@ -438,6 +443,7 @@ fn opencode_new_session_keeps_permission_selected_before_sending(cx: &mut TestAp
 fn model_picker_switches_engine_and_applies_the_full_route_to_a_new_session(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     use crate::{
         domain::{Provider, Workspace},
         providers::{ModelChannel, ModelProvider, ProviderSource, ReasoningEffort},
@@ -554,6 +560,7 @@ fn model_picker_switches_engine_and_applies_the_full_route_to_a_new_session(
 
 #[gpui_kit::test]
 fn model_picker_is_available_before_the_first_session(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{domain::Workspace, store::Store};
     use gpui_kit::{AppContext as _, Modifiers, MouseButton};
     cx.update(gpui_kit::init);
@@ -597,6 +604,7 @@ fn model_picker_is_available_before_the_first_session(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn opencode_model_picker_defaults_to_native_catalog_and_never_ccs(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{
         ccs::{CcsCatalog, CcsProvider},
         domain::{Provider, Workspace},
@@ -735,6 +743,7 @@ fn opencode_model_picker_defaults_to_native_catalog_and_never_ccs(cx: &mut TestA
 
 #[gpui_kit::test]
 fn opencode_model_picker_uses_session_catalog_and_saves_native_effort(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{
         domain::{Provider, Workspace},
         store::Store,
@@ -866,6 +875,7 @@ fn opencode_model_picker_uses_session_catalog_and_saves_native_effort(cx: &mut T
 
 #[gpui_kit::test]
 fn git_branch_menu_opens_create_form_and_remains_usable_after_repaint(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{domain::Workspace, git, store::Store};
     use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
     use gpui_kit::{AppContext as _, Modifiers, MouseButton};
@@ -1300,6 +1310,7 @@ fn git_branch_menu_opens_create_form_and_remains_usable_after_repaint(cx: &mut T
 
 #[gpui_kit::test]
 fn git_branch_mouse_actions_checkout_create_and_track_real_repository(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{domain::Workspace, git, store::Store};
     use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
     use gpui_kit::{AppContext as _, Modifiers, MouseButton, VisualTestContext};
@@ -1586,6 +1597,7 @@ fn git_branch_mouse_actions_checkout_create_and_track_real_repository(cx: &mut T
 
 #[gpui_kit::test]
 fn model_picker_renders_search_provider_and_effort_without_overlapping(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{
         domain::Workspace,
         models::{ModelCatalog, ModelOption},
@@ -1760,6 +1772,7 @@ fn model_picker_renders_search_provider_and_effort_without_overlapping(cx: &mut 
 
 #[gpui_kit::test]
 fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{
         domain::{Usage, Workspace},
         protocol::Event,
@@ -2033,6 +2046,7 @@ fn live_activity_shares_stats_row_and_tools_collapse_when_reply_starts(cx: &mut 
 fn empty_chat_blocks_have_no_chrome_and_streaming_replies_reflow_tool_groups(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     use crate::{domain::Workspace, protocol::Event, store::Store};
     use gpui_kit::AppContext as _;
 
@@ -2203,6 +2217,7 @@ fn empty_chat_blocks_have_no_chrome_and_streaming_replies_reflow_tool_groups(
 fn session_naming_applies_success_and_reports_failure_without_starting_cli(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     use crate::{domain::Workspace, protocol::Event, store::Store};
     use gpui_kit::AppContext as _;
 
@@ -2293,6 +2308,7 @@ fn session_naming_applies_success_and_reports_failure_without_starting_cli(
 
 #[gpui_kit::test]
 fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{
         domain::{Provider, SessionRecord, Workspace},
         protocol::{Approval, ApprovalKind, Event},
@@ -2584,6 +2600,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
 
 #[gpui_kit::test]
 fn long_chat_virtualizes_real_rows_and_keeps_history_jump_on_append(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{
         domain::{ItemKind, PermissionLevel, Provider, SessionRecord, Usage, Workspace},
         store::Store,
@@ -2737,6 +2754,7 @@ struct ToolScrollFixture {
 fn tool_dock_keeps_header_visible_and_scrolls_independently_in_both_layouts(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     use gpui_kit::{AppContext as _, Modifiers, MouseButton};
     cx.update(gpui_kit::init);
     let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -2873,6 +2891,7 @@ impl Render for ToolScrollFixture {
 
 #[gpui_kit::test]
 fn expanded_tool_long_text_scrolls_inside_its_fixed_viewport(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     cx.update(gpui_kit::init);
     let outer = ScrollHandle::new();
     let inner = ScrollHandle::new();
@@ -2949,6 +2968,7 @@ fn expanded_tool_long_text_scrolls_inside_its_fixed_viewport(cx: &mut TestAppCon
 /// painted highlight do at each pointer position.
 #[gpui_kit::test]
 fn drag_across_assistant_reply_tracks_the_pointer(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     const REPLY: &str = "第一段回复内容用于验证拖拽选中是否跟随指针移动，这里需要足够长的中文来覆盖两行以上的文本区域。第二段内容继续保持长度以便跨行拖拽选中。";
     check_assistant_drag_selection(cx, REPLY, REPLY, false);
 }
@@ -2957,12 +2977,14 @@ const SELECTION_CODE: &str = "let selected_text = \"CODE_SELECTION enough words 
 
 #[gpui_kit::test]
 fn drag_across_numbered_code_tracks_the_pointer(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let reply = format!("```rust\n{SELECTION_CODE}\n```");
     check_assistant_drag_selection(cx, &reply, SELECTION_CODE, true);
 }
 
 #[gpui_kit::test]
 fn drag_across_stock_code_tracks_the_pointer(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let reply = format!("```rust\n{SELECTION_CODE}\n```");
     check_assistant_drag_selection(cx, &reply, SELECTION_CODE, false);
 }
@@ -3220,6 +3242,7 @@ fn check_assistant_drag_selection(
 
 #[gpui_kit::test]
 fn sidebar_bottom_bar_matches_the_toolbar_and_opens_about(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use gpui_kit::AppContext;
     cx.update(gpui_kit::init);
     let (_, cx) = cx.add_window_view(|window, cx| {
@@ -3296,6 +3319,7 @@ fn sidebar_bottom_bar_matches_the_toolbar_and_opens_about(cx: &mut TestAppContex
 /// 这里从平台事件一路打到输入框，验证 composer 的 drop 接线确实生效。
 #[gpui_kit::test]
 fn platform_file_drop_becomes_a_reference_in_the_composer(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{domain::Workspace, store::Store};
     use gpui_kit::{AppContext as _, ExternalPaths, FileDropEvent};
 
@@ -3386,6 +3410,7 @@ fn platform_file_drop_becomes_a_reference_in_the_composer(cx: &mut TestAppContex
 /// 引用形式——相对化无从谈起，就用绝对路径，两类路径可以同时挂进输入框。
 #[gpui_kit::test]
 fn attaching_a_file_outside_the_workspace_uses_an_absolute_mention(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{domain::Workspace, store::Store};
     use gpui_kit::AppContext as _;
 
@@ -3463,6 +3488,7 @@ fn attaching_a_file_outside_the_workspace_uses_an_absolute_mention(cx: &mut Test
 }
 #[gpui_kit::test]
 fn composer_files_paste_drafts_removal_and_failed_send(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{
         domain::{Provider, SessionRecord, Workspace},
         store::Store,
@@ -3678,6 +3704,7 @@ fn composer_files_paste_drafts_removal_and_failed_send(cx: &mut TestAppContext) 
 fn clipboard_images_are_collected_after_the_last_draft_or_history_reference(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     use crate::{domain::Workspace, store::Store};
     use gpui_kit::{AppContext as _, ClipboardItem};
     use std::os::windows::fs::OpenOptionsExt as _;
@@ -3815,6 +3842,7 @@ fn clipboard_images_are_collected_after_the_last_draft_or_history_reference(
 
 #[gpui_kit::test]
 fn attachment_tags_size_to_names_and_stay_inside_the_user_bubble(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{
         domain::{ItemKind, Provider, SessionRecord, Workspace},
         file_ref::FileReference,
@@ -3967,6 +3995,7 @@ fn attachment_tags_size_to_names_and_stay_inside_the_user_bubble(cx: &mut TestAp
 }
 #[gpui_kit::test]
 fn cli_error_details_expand_copy_raw_diagnostics_and_collapse(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{domain::Workspace, store::Store};
     use gpui_kit::{AppContext as _, Modifiers, MouseButton};
     cx.update(gpui_kit::init);
@@ -4042,6 +4071,7 @@ fn cli_error_details_expand_copy_raw_diagnostics_and_collapse(cx: &mut TestAppCo
 
 #[gpui_kit::test]
 fn deleting_blank_session_skips_confirmation(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{
         domain::{ItemKind, Provider, SessionRecord, Workspace},
         store::Store,
@@ -4203,6 +4233,7 @@ fn deleting_blank_session_skips_confirmation(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn historical_reply_elapsed_footer_is_available_on_hover(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use gpui_kit::{AppContext as _, Modifiers};
     cx.update(gpui_kit::init);
     let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -4368,6 +4399,7 @@ fn historical_reply_elapsed_footer_is_available_on_hover(cx: &mut TestAppContext
 
 #[gpui_kit::test]
 fn tabs_share_running_and_unread_dots_and_clear_on_open(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::protocol::Event;
     use gpui_kit::{AppContext as _, Modifiers, MouseButton};
     cx.update(gpui_kit::init);
@@ -4446,6 +4478,7 @@ fn tabs_share_running_and_unread_dots_and_clear_on_open(cx: &mut TestAppContext)
 
 #[gpui_kit::test]
 fn session_tab_right_click_menu_targets_the_tab_under_the_pointer(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AppContext as _, Modifiers, MouseButton};
     cx.update(gpui_kit::init);
@@ -4511,6 +4544,7 @@ fn session_tab_right_click_menu_targets_the_tab_under_the_pointer(cx: &mut TestA
 
 #[gpui_kit::test]
 fn session_tab_close_button_closes_without_selecting_the_tab(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use gpui_kit::{AppContext as _, Modifiers, MouseButton};
     cx.update(gpui_kit::init);
     let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -4560,6 +4594,7 @@ fn session_tab_close_button_closes_without_selecting_the_tab(cx: &mut TestAppCon
 
 #[gpui_kit::test]
 fn composer_recalls_sent_prompts_with_arrow_keys(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{
         domain::{ChatItem, ItemKind, Provider, SessionRecord, Workspace},
         store::Store,
@@ -4681,6 +4716,7 @@ fn composer_recalls_sent_prompts_with_arrow_keys(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn startup_page_gates_the_layout_until_history_imports_merge(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{domain::Workspace, store::Store};
     use gpui_kit::AppContext as _;
     use std::time::{Duration, Instant};
@@ -4744,6 +4780,7 @@ fn startup_page_gates_the_layout_until_history_imports_merge(cx: &mut TestAppCon
 
 #[gpui_kit::test]
 fn startup_page_times_out_when_the_scan_stalls(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{domain::Workspace, store::Store};
     use gpui_kit::AppContext as _;
     use std::time::{Duration, Instant};
@@ -4792,6 +4829,7 @@ fn startup_page_times_out_when_the_scan_stalls(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn startup_page_stays_away_without_workspaces(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::store::Store;
     use gpui_kit::AppContext as _;
     cx.update(gpui_kit::init);
@@ -4819,6 +4857,7 @@ fn startup_page_stays_away_without_workspaces(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn builtin_theme_packs_back_the_active_theme(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::store::{AppearanceMode, Store};
     use gpui_kit::{AppContext as _, Hsla, component::Theme, rgb};
     cx.update(gpui_kit::init);
@@ -4865,6 +4904,7 @@ fn builtin_theme_packs_back_the_active_theme(cx: &mut TestAppContext) {
 fn session_average_speed_survives_new_turns_and_counts_stream_updates_once(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     use crate::{
         domain::{Usage, Workspace},
         protocol::Event,
@@ -4986,6 +5026,7 @@ fn session_average_speed_survives_new_turns_and_counts_stream_updates_once(
 
 #[gpui_kit::test]
 fn workspace_drag_reorders_and_preserves_navigation_identity(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use gpui_kit::{AppContext as _, Modifiers, MouseButton};
     cx.update(gpui_kit::init);
     let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -5069,6 +5110,7 @@ fn workspace_drag_reorders_and_preserves_navigation_identity(cx: &mut TestAppCon
 fn commit_generation_recovers_from_transient_errors_and_preserves_edited_drafts(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     use crate::protocol::Event;
     use gpui_kit::AppContext as _;
     cx.update(gpui_kit::init);
@@ -5108,6 +5150,7 @@ fn commit_generation_recovers_from_transient_errors_and_preserves_edited_drafts(
                 let path = this.selected_workspace_path().unwrap();
                 let original = this.git.drafts[&path].input.read(cx).value().to_string();
                 this.git.generation = Some(super::CommitGeneration {
+                    cancelled: false,
                     path: path.clone(),
                     runtime,
                     started: std::time::Instant::now(),
@@ -5170,6 +5213,7 @@ fn commit_generation_recovers_from_transient_errors_and_preserves_edited_drafts(
 fn navigation_modes_share_default_and_retained_width_without_duplicate_git(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     use gpui_kit::{AppContext as _, Modifiers, MouseButton};
     cx.update(gpui_kit::init);
     let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -5320,6 +5364,7 @@ fn navigation_modes_share_default_and_retained_width_without_duplicate_git(
 
 #[gpui_kit::test]
 fn checkbox_theme_pairs_remain_contrasting_when_switching_appearance(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use gpui_kit::component::{ActiveTheme as _, Colorize as _, Theme, ThemeMode};
     cx.update(gpui_kit::init);
     cx.update(super::install_theme_packs);
@@ -5343,6 +5388,7 @@ fn checkbox_theme_pairs_remain_contrasting_when_switching_appearance(cx: &mut Te
 
 #[gpui_kit::test]
 fn settings_extensions_lists_search_details_and_context_are_isolated(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::extensions::{Catalog, Context as ExtensionContext, Entry, Kind};
     use gpui_kit::{AppContext as _, Modifiers, MouseButton};
     cx.update(gpui_kit::init);
@@ -5518,6 +5564,7 @@ fn settings_extensions_lists_search_details_and_context_are_isolated(cx: &mut Te
 
 #[gpui_kit::test]
 fn workspace_collapse_hides_sessions_without_changing_selection(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use gpui_kit::{AppContext as _, Modifiers, MouseButton};
     cx.update(gpui_kit::init);
     let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -5628,6 +5675,7 @@ mod history_and_search {
 
     #[gpui_kit::test]
     fn stale_history_cannot_replace_messages_after_a_turn_completes(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         let (app, cx, path) = fixture(cx);
         cx.update(|window, cx| {
             app.update(cx, |app, cx| {
@@ -5658,6 +5706,7 @@ mod history_and_search {
     fn native_replacement_invalidates_outline_keys_even_with_same_message_count(
         cx: &mut TestAppContext,
     ) {
+        let _locale = crate::test_support::chinese();
         let (app, cx, path) = fixture(cx);
         cx.update(|window, cx| {
             app.update(cx, |app, cx| {
@@ -5686,6 +5735,7 @@ mod history_and_search {
 
     #[gpui_kit::test]
     fn search_discards_results_after_transcript_changes(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         let (app, cx, _) = fixture(cx);
         cx.update(|_, cx| {
             app.update(cx, |app, cx| {
@@ -5712,6 +5762,7 @@ mod history_and_search {
 
     #[gpui_kit::test]
     fn content_updates_do_not_cancel_an_active_search(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         let (app, cx, _) = fixture(cx);
         cx.update(|_, cx| {
             app.update(cx, |app, cx| {
@@ -5739,6 +5790,7 @@ mod history_and_search {
     fn history_batches_keep_the_original_revision_until_the_import_finishes(
         cx: &mut TestAppContext,
     ) {
+        let _locale = crate::test_support::chinese();
         let (app, cx, path) = fixture(cx);
         cx.update(|window, cx| {
             app.update(cx, |app, cx| {

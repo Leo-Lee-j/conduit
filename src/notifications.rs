@@ -30,12 +30,12 @@ pub(crate) enum Source {
 impl Source {
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::App => "应用",
-            Self::Session => "会话",
+            Self::App => conduit::i18n::text_static("settings.appearance.application"),
+            Self::Session => conduit::i18n::text_static("notifications.session"),
             Self::Git => "Git",
-            Self::Update => "应用更新",
-            Self::Settings => "设置",
-            Self::Persistence => "数据保存",
+            Self::Update => conduit::i18n::text_static("settings.general.application_updates"),
+            Self::Settings => conduit::i18n::text_static("files.settings"),
+            Self::Persistence => conduit::i18n::text_static("notifications.data_saving"),
         }
     }
 }
@@ -74,6 +74,7 @@ pub(crate) struct Notice {
     pub level: Level,
     pub title: String,
     pub message: String,
+    pub message_i18n: Option<conduit::i18n::Message>,
     pub target: Option<Target>,
     pub key: Option<String>,
     pub event: Option<String>,
@@ -93,12 +94,18 @@ impl Notice {
             level,
             title: title.into(),
             message: message.into(),
+            message_i18n: None,
             target: None,
             key: None,
             event: None,
             active: false,
             presentation: Presentation::Toast,
         }
+    }
+    pub(crate) fn localized_message(mut self, message: conduit::i18n::Message) -> Self {
+        self.message = message.render();
+        self.message_i18n = Some(message);
+        self
     }
     pub(crate) fn target(mut self, target: Target) -> Self {
         self.target = Some(target);
@@ -129,10 +136,10 @@ pub(crate) enum ApprovalOutcome {
 impl ApprovalOutcome {
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Allowed => "已允许",
-            Self::Denied => "已拒绝",
-            Self::Cancelled => "已取消",
-            Self::Expired => "已失效",
+            Self::Allowed => conduit::i18n::text_static("stream_events.allowed"),
+            Self::Denied => conduit::i18n::text_static("stream_events.denied"),
+            Self::Cancelled => conduit::i18n::text_static("events.cancelled"),
+            Self::Expired => conduit::i18n::text_static("notifications.expired"),
         }
     }
 }
@@ -143,7 +150,11 @@ pub(crate) struct Record {
     pub source: Source,
     pub level: Level,
     pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_i18n: Option<conduit::i18n::Message>,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_i18n: Option<conduit::i18n::Message>,
     pub target: Option<Target>,
     pub created_at: u64,
     pub updated_at: u64,
@@ -201,7 +212,10 @@ fn truncate(text: &mut String, limit: usize) {
 impl Center {
     pub(crate) fn restore(mut snapshot: Snapshot, now: u64) -> Result<Self, String> {
         if snapshot.schema != 1 {
-            return Err("通知历史版本不受支持，原文件已保留".into());
+            return Err(conduit::i18n::text_static(
+                "notifications.unsupported_notification_history_version_original_file_preserved",
+            )
+            .into());
         }
         let mut ids = HashSet::new();
         for record in &mut snapshot.records {
@@ -212,7 +226,10 @@ impl Center {
                 || record.key.as_ref().is_some_and(|key| key.len() > 4096)
                 || record.seen_events.iter().any(|event| event.len() > 4096)
             {
-                return Err("通知历史记录无效，原文件已保留".into());
+                return Err(conduit::i18n::text_static(
+                    "notifications.invalid_notification_history_record_original_file_preserved",
+                )
+                .into());
             }
             if let Some(
                 Target::Workspace(path)
@@ -222,15 +239,19 @@ impl Center {
             ) = &record.target
                 && !path.is_absolute()
             {
-                return Err("通知历史目标无效，原文件已保留".into());
+                return Err(conduit::i18n::text_static(
+                    "notifications.invalid_notification_history_target_original_file_preserved",
+                )
+                .into());
             }
             truncate(&mut record.title, 256);
             truncate(&mut record.message, MAX_TEXT_BYTES - record.title.len());
             if record.lifecycle == Lifecycle::Active {
                 record.lifecycle = Lifecycle::Resolved;
-                record
-                    .message
-                    .push_str("\n原任务已结束；当前状态请查看来源。");
+                record.message_i18n = None;
+                record.message.push_str(conduit::i18n::text_static(
+                    "notifications.the_original_task_has_ended_check_its",
+                ));
                 truncate(&mut record.message, MAX_TEXT_BYTES - record.title.len());
             }
         }
@@ -243,7 +264,10 @@ impl Center {
                 .unwrap_or(1),
         );
         if snapshot.next_id == u64::MAX {
-            return Err("通知历史编号无效，原文件已保留".into());
+            return Err(conduit::i18n::text_static(
+                "notifications.invalid_notification_history_id_original_file_preserved",
+            )
+            .into());
         }
         snapshot
             .records
@@ -336,6 +360,8 @@ impl Center {
                 source: request.source,
                 level: request.level,
                 title: String::new(),
+                title_i18n: None,
+                message_i18n: None,
                 message: String::new(),
                 target: request.target.clone(),
                 created_at: now,
@@ -349,6 +375,8 @@ impl Center {
             }
         };
         record.level = request.level;
+        record.title_i18n = conduit::i18n::Message::capture_label(&request.title);
+        record.message_i18n = request.message_i18n;
         record.title = request.title;
         record.message = request.message;
         record.updated_at = now;
@@ -471,6 +499,21 @@ impl Center {
     }
 }
 
+impl Record {
+    pub(crate) fn display_title(&self) -> String {
+        self.title_i18n
+            .as_ref()
+            .map(conduit::i18n::Message::render)
+            .unwrap_or_else(|| conduit::i18n::retained(&self.title).to_string())
+    }
+    pub(crate) fn display_message(&self) -> String {
+        self.message_i18n
+            .as_ref()
+            .map(conduit::i18n::Message::render)
+            .unwrap_or_else(|| self.message.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,6 +524,7 @@ mod tests {
     }
     #[test]
     fn idempotence_preserves_reads_and_does_not_rewind_newer_events() {
+        let _locale = crate::test_support::chinese();
         let mut center = Center::default();
         let first = center.publish(notice("failed"), 100);
         center.mark_read(first.id, 101);
@@ -495,6 +539,7 @@ mod tests {
     }
     #[test]
     fn reading_and_clearing_cannot_resolve_an_active_problem() {
+        let _locale = crate::test_support::chinese();
         let mut center = Center::default();
         let first = center.publish(notice("failed").active(), 100);
         center.mark_all_read(101);
@@ -507,6 +552,7 @@ mod tests {
     }
     #[test]
     fn resolved_events_do_not_reopen_on_late_delivery_but_new_episodes_can_start() {
+        let _locale = crate::test_support::chinese();
         let mut center = Center::default();
         let first = center.publish(notice("failure-1").active(), 100).id;
         center.resolve("operation-1", 101);
@@ -520,6 +566,7 @@ mod tests {
     }
     #[test]
     fn restored_history_is_bounded_and_pending_actions_end() {
+        let _locale = crate::test_support::chinese();
         let mut center = Center::default();
         for index in 0..205 {
             center.publish(
@@ -549,6 +596,7 @@ mod tests {
     }
     #[test]
     fn text_limits_preserve_utf8_and_navigation_identity() {
+        let _locale = crate::test_support::chinese();
         let mut request = notice("created");
         request.title = "提示".repeat(300);
         request.message = "内容".repeat(5000);
@@ -561,6 +609,7 @@ mod tests {
 
     #[test]
     fn confirmed_approval_outcome_is_read_terminal_and_persisted() {
+        let _locale = crate::test_support::chinese();
         let mut center = Center::default();
         let id = center.publish(notice("waiting").active(), 100).id;
         center.resolve_approval(id, ApprovalOutcome::Denied, 101);
@@ -584,6 +633,7 @@ mod tests {
 
     #[test]
     fn expired_approvals_remain_unread_and_old_history_needs_no_outcome_field() {
+        let _locale = crate::test_support::chinese();
         let mut center = Center::default();
         let id = center.publish(notice("waiting").active(), 100).id;
         let legacy = serde_json::to_value(center.snapshot()).unwrap();
@@ -596,5 +646,55 @@ mod tests {
             center.get(id).unwrap().approval_outcome,
             Some(ApprovalOutcome::Expired)
         );
+    }
+}
+
+#[cfg(test)]
+mod localization_tests {
+    use super::*;
+    #[test]
+    fn history_translates_structured_messages_but_preserves_user_text() {
+        let _locale = crate::test_support::scoped("zh-CN");
+        let mut center = Center::default();
+        let user = center.publish(
+            Notice::new(
+                Source::Session,
+                Level::Success,
+                conduit::i18n::text("stream_events.session_completed"),
+                "已完成",
+            ),
+            10,
+        );
+        let update = center.publish(
+            Notice::new(
+                Source::Update,
+                Level::Info,
+                conduit::i18n::text("update.new_version_available_010474"),
+                "",
+            )
+            .localized_message(conduit::i18n::Message::new(
+                "update.new_version_available",
+                &[("arg0", "2.0.0".into())],
+            )),
+            11,
+        );
+        let encoded = serde_json::to_string(&center.snapshot).unwrap();
+        conduit::i18n::set_locale(&conduit::i18n::Locale::default());
+        let restored = Center::restore(serde_json::from_str(&encoded).unwrap(), 12).unwrap();
+        assert_eq!(
+            restored.get(user.id).unwrap().display_title(),
+            "Session completed"
+        );
+        assert_eq!(restored.get(user.id).unwrap().display_message(), "已完成");
+        assert_eq!(
+            restored.get(update.id).unwrap().display_message(),
+            "New version available: 2.0.0"
+        );
+        let mut legacy: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        for record in legacy["records"].as_array_mut().unwrap() {
+            record.as_object_mut().unwrap().remove("title_i18n");
+            record.as_object_mut().unwrap().remove("message_i18n");
+        }
+        assert!(Center::restore(serde_json::from_value(legacy).unwrap(), 12).is_ok());
     }
 }

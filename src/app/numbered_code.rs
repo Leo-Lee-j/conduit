@@ -207,8 +207,8 @@ pub(super) fn code_actions(
         })
         .child(
             Clipboard::new(id)
-                .tooltip("复制代码")
-                .accessibility_label("复制代码")
+                .tooltip(conduit::i18n::text_static("numbered_code.copy_code"))
+                .accessibility_label(conduit::i18n::text_static("numbered_code.copy_code"))
                 .value(code),
         )
 }
@@ -529,6 +529,7 @@ mod tests {
 
     #[test]
     fn line_numbers_cover_every_logical_line() {
+        let _locale = crate::test_support::chinese();
         assert_eq!(line_count(""), 0);
         assert_eq!(line_count("one"), 1);
         assert_eq!(line_count("one\ntwo"), 2);

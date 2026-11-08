@@ -42,13 +42,17 @@ impl QuestionBridge {
             .header("Authorization", &self.authorization)
             .query("directory", &self.directory)
             .call()
-            .context("无法读取 OpenCode 待回答问题")?;
+            .context(conduit::i18n::text_static(
+                "cli_adapter.opencode.questions.unable_to_read_pending_opencode_questions",
+            ))?;
         let requests: Vec<Value> = response
             .body_mut()
             .with_config()
             .limit(2 * 1024 * 1024)
             .read_json()
-            .context("OpenCode 问题列表格式无效")?;
+            .context(conduit::i18n::text_static(
+                "cli_adapter.opencode.questions.invalid_opencode_question_list",
+            ))?;
         let mut current = HashSet::new();
         let mut messages = vec![];
         for request in requests {
@@ -58,10 +62,14 @@ impl QuestionBridge {
             let id = request["id"]
                 .as_str()
                 .filter(|id| !id.is_empty())
-                .context("OpenCode 问题缺少请求 ID")?
+                .context(conduit::i18n::text_static(
+                    "cli_adapter.opencode.questions.opencode_question_is_missing_a_request_id",
+                ))?
                 .to_owned();
             if !current.insert(id.clone()) {
-                bail!("OpenCode 问题列表包含重复请求 ID");
+                bail!(conduit::i18n::text(
+                    "cli_adapter.opencode.questions.opencode_question_list_contains_duplicate_request_ids"
+                ));
             }
             if !self.known.contains(&id) {
                 messages.push(
@@ -78,7 +86,12 @@ impl QuestionBridge {
     }
 
     pub(super) fn respond(&self, approval: &Approval, response: Value) -> Result<()> {
-        let id = approval.wire_id.as_str().context("OpenCode 问题 ID 无效")?;
+        let id = approval
+            .wire_id
+            .as_str()
+            .context(conduit::i18n::text_static(
+                "cli_adapter.opencode.questions.invalid_opencode_question_id",
+            ))?;
         let id: String = id
             .bytes()
             .map(|b| {
@@ -99,7 +112,9 @@ impl QuestionBridge {
             .header("Authorization", &self.authorization)
             .query("directory", &self.directory)
             .send_json(response)
-            .context("OpenCode 回答提交失败")?;
+            .context(conduit::i18n::text_static(
+                "cli_adapter.opencode.questions.failed_to_submit_opencode_answers",
+            ))?;
         Ok(())
     }
 }

@@ -69,7 +69,9 @@ fn resolve_commit(
     )?;
     let oid = output.trim();
     if !matches!(oid.len(), 40 | 64) || !oid.bytes().all(|b| b.is_ascii_hexdigit()) {
-        bail!("Git 返回了无效的提交标识");
+        bail!(conduit::i18n::text(
+            "git.log.git_returned_an_invalid_commit_id"
+        ));
     }
     Ok(oid.to_string())
 }
@@ -79,7 +81,8 @@ pub fn load_history(
     query: &HistoryQuery,
     cancel: &AtomicBool,
 ) -> Result<History> {
-    let git = resolve_git().ok_or_else(|| anyhow!("未找到 git.exe"))?;
+    let git = resolve_git()
+        .ok_or_else(|| anyhow!(conduit::i18n::text("git.branches.git_exe_not_found")))?;
     let root = run_git(&git, workspace, &["rev-parse", "--show-toplevel"], cancel)?;
     let workspace = Path::new(root.trim());
     let context = branches::context(&git, workspace, cancel)?;
@@ -203,7 +206,9 @@ pub fn load_history(
         });
     }
     if !result.truncated && !remainder.is_empty() {
-        bail!("Git 日志输出不完整，请刷新后重试");
+        bail!(conduit::i18n::text(
+            "git.log.incomplete_git_log_output_refresh_and_retry"
+        ));
     }
     let has_more = commits.len() > query.limit || result.truncated;
     commits.truncate(query.limit.clamp(1, 5000));
@@ -220,7 +225,8 @@ pub fn load_commit_details(
     oid: &str,
     cancel: &AtomicBool,
 ) -> Result<CommitDetails> {
-    let git = resolve_git().ok_or_else(|| anyhow!("未找到 git.exe"))?;
+    let git = resolve_git()
+        .ok_or_else(|| anyhow!(conduit::i18n::text("git.branches.git_exe_not_found")))?;
     let root = run_git(&git, workspace, &["rev-parse", "--show-toplevel"], cancel)?;
     let workspace = Path::new(root.trim());
     let oid = resolve_commit(&git, workspace, oid, cancel)?;
@@ -232,7 +238,7 @@ pub fn load_commit_details(
     )?;
     let (parents, message) = message
         .split_once('\0')
-        .ok_or_else(|| anyhow!("Git 提交输出不完整"))?;
+        .ok_or_else(|| anyhow!(conduit::i18n::text("git.log.incomplete_git_commit_output")))?;
     let parents: Vec<_> = parents.split_whitespace().collect();
     let parent = parents.first().map(|s| s.to_string());
     let mut args = vec![
@@ -261,12 +267,16 @@ pub fn load_commit_details(
         false,
     )?;
     if output.truncated {
-        bail!("此提交的文件列表过大，请在终端查看完整提交");
+        bail!(conduit::i18n::text(
+            "git.log.this_commit_s_file_list_is_too"
+        ));
     }
     let mut fields = output.text.split_terminator('\0');
     let mut files = Vec::new();
     while let Some(status) = fields.next() {
-        let path = fields.next().ok_or_else(|| anyhow!("Git 文件列表不完整"))?;
+        let path = fields
+            .next()
+            .ok_or_else(|| anyhow!(conduit::i18n::text("git.log.incomplete_git_file_list")))?;
         files.push(ChangedFile {
             path: path.into(),
             original: None,
@@ -289,7 +299,8 @@ pub fn load_commit_diff(
     file: &ChangedFile,
     cancel: &AtomicBool,
 ) -> Result<FileDiff> {
-    let git = resolve_git().ok_or_else(|| anyhow!("未找到 git.exe"))?;
+    let git = resolve_git()
+        .ok_or_else(|| anyhow!(conduit::i18n::text("git.branches.git_exe_not_found")))?;
     let root = run_git(&git, workspace, &["rev-parse", "--show-toplevel"], cancel)?;
     let workspace = Path::new(root.trim());
     let oid = resolve_commit(&git, workspace, &request.oid, cancel)?;
@@ -325,7 +336,9 @@ pub fn load_commit_diff(
         false,
     )?;
     let notes = if output.truncated {
-        vec!["差异超过显示上限，仅显示前 200 KiB。".into()]
+        vec![
+            conduit::i18n::text_static("git.log.diff_exceeds_the_display_limit_showing_the").into(),
+        ]
     } else {
         vec![]
     };
@@ -385,6 +398,7 @@ mod tests {
 
     #[test]
     fn history_filters_merges_tags_and_immutable_commit_diffs() {
+        let _locale = crate::test_support::chinese();
         let repo = Repo::new();
         let cancel = AtomicBool::new(false);
         let root = repo.write_commit("中文 [1].txt", "original\n", "initial message\n\nfull body");
@@ -529,6 +543,7 @@ mod tests {
 
     #[test]
     fn empty_history_and_cancelled_reads_are_explicit() {
+        let _locale = crate::test_support::chinese();
         let repo = Repo::new();
         for reference in [None, Some("HEAD".into())] {
             let result = load_history(

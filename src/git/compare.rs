@@ -27,17 +27,20 @@ pub fn load_comparison(
     request: ComparisonRequest,
     cancel: &AtomicBool,
 ) -> Result<Comparison> {
-    let git = resolve_git().ok_or_else(|| anyhow!("未找到 git.exe"))?;
+    let git = resolve_git()
+        .ok_or_else(|| anyhow!(conduit::i18n::text("git.branches.git_exe_not_found")))?;
     let root = run_git(&git, workspace, &["rev-parse", "--show-toplevel"], cancel)?;
     let workspace = Path::new(root.trim());
     if branches::context(&git, workspace, cancel)? != request.expected {
-        bail!("HEAD 已变化，请关闭比较并重新打开");
+        bail!(conduit::i18n::text(
+            "git.compare.head_changed_close_and_reopen_the_comparison"
+        ));
     }
-    let head = request
-        .expected
-        .head
-        .as_deref()
-        .ok_or_else(|| anyhow!("当前分支尚无提交"))?;
+    let head = request.expected.head.as_deref().ok_or_else(|| {
+        anyhow!(conduit::i18n::text(
+            "git.branches.current_branch_has_no_commits_yet"
+        ))
+    })?;
     let mut args = vec![
         "--no-optional-locks",
         "diff",
@@ -62,13 +65,17 @@ pub fn load_comparison(
         false,
     )?;
     if output.truncated {
-        bail!("比较文件列表过大，请在终端缩小比较范围");
+        bail!(conduit::i18n::text(
+            "git.compare.comparison_file_list_is_too_large_narrow"
+        ));
     }
     let mut fields = output.text.split('\0');
     let mut files = Vec::new();
     while let Some(status) = fields.next().filter(|s| !s.is_empty()) {
         let Some(path) = fields.next() else {
-            bail!("Git 比较输出不完整");
+            bail!(conduit::i18n::text(
+                "git.compare.incomplete_git_comparison_output"
+            ));
         };
         files.push(ChangedFile {
             path: path.into(),
@@ -89,7 +96,9 @@ pub fn load_comparison(
             false,
         )?;
         if untracked.truncated {
-            bail!("未跟踪文件列表过大，请在终端查看");
+            bail!(conduit::i18n::text(
+                "git.compare.untracked_file_list_is_too_large_view"
+            ));
         }
         for path in untracked.text.split('\0').filter(|s| !s.is_empty()) {
             if let Some(file) = files.iter_mut().find(|file| file.path == path) {
@@ -106,10 +115,18 @@ pub fn load_comparison(
                 });
             }
         }
-        notes.push("工作区含暂存、未暂存和未跟踪文件；两次读取间文件仍可能被外部修改".into());
+        notes.push(
+            conduit::i18n::text_static(
+                "git.compare.working_tree_includes_staged_unstaged_and_untracked",
+            )
+            .into(),
+        );
     }
     if files.len() > MAX_FILES {
-        bail!("比较文件超过 {MAX_FILES} 项，请在终端缩小范围");
+        bail!(conduit::i18n::format(
+            "git.compare.comparison_exceeds_files_narrow_the_scope_in",
+            &[("MAX_FILES", format!("{}", MAX_FILES))]
+        ));
     }
     let commits = if request.kind == ComparisonKind::Branches {
         let range = format!("{}...{head}", request.selected.oid);
@@ -133,7 +150,7 @@ pub fn load_comparison(
             false,
         )?;
         notes.push(
-            "< 仅所选分支拥有；> 仅当前分支拥有。最多显示 200 条提交；文件差异比较两端最终内容。"
+            conduit::i18n::text_static("git.compare.only_on_selected_branch_only_on_current")
                 .into(),
         );
         output.text
@@ -141,7 +158,9 @@ pub fn load_comparison(
         String::new()
     };
     if branches::context(&git, workspace, cancel)? != request.expected {
-        bail!("读取期间 HEAD 已变化，请重新打开比较");
+        bail!(conduit::i18n::text(
+            "git.compare.head_changed_while_reading_reopen_the_comparison"
+        ));
     }
     Ok(Comparison {
         request,
@@ -157,11 +176,14 @@ pub fn load_comparison_diff(
     file: &ChangedFile,
     cancel: &AtomicBool,
 ) -> Result<FileDiff> {
-    let git = resolve_git().ok_or_else(|| anyhow!("未找到 git.exe"))?;
+    let git = resolve_git()
+        .ok_or_else(|| anyhow!(conduit::i18n::text("git.branches.git_exe_not_found")))?;
     let root = run_git(&git, workspace, &["rev-parse", "--show-toplevel"], cancel)?;
     let workspace = Path::new(root.trim());
     if branches::context(&git, workspace, cancel)? != request.expected {
-        bail!("HEAD 已变化，请重新打开比较");
+        bail!(conduit::i18n::text(
+            "git.compare.head_changed_reopen_the_comparison"
+        ));
     }
     if request.kind == ComparisonKind::WorkingTree && file.worktree == '?' {
         return untracked_diff(&git, workspace, request, file, cancel);
@@ -181,13 +203,11 @@ pub fn load_comparison_diff(
         &request.selected.oid,
     ];
     if request.kind == ComparisonKind::Branches {
-        args.push(
-            request
-                .expected
-                .head
-                .as_deref()
-                .ok_or_else(|| anyhow!("当前分支尚无提交"))?,
-        );
+        args.push(request.expected.head.as_deref().ok_or_else(|| {
+            anyhow!(conduit::i18n::text(
+                "git.branches.current_branch_has_no_commits_yet"
+            ))
+        })?);
     }
     args.extend(["--", &file.path]);
     let output = run_git_bounded(
@@ -200,7 +220,9 @@ pub fn load_comparison_diff(
         true,
     )?;
     if output.truncated {
-        bail!("文件差异超过 4 MiB，无法完整显示");
+        bail!(conduit::i18n::text(
+            "git.compare.file_diff_exceeds_4_mib_and_cannot"
+        ));
     }
     Ok(FileDiff {
         patch: output.text,
@@ -217,7 +239,9 @@ fn untracked_diff(
 ) -> Result<FileDiff> {
     let content = read_file_content(workspace, &file.path)?;
     if content.truncated {
-        bail!("未跟踪文件超过 4 MiB，无法完整显示");
+        bail!(conduit::i18n::text(
+            "git.compare.untracked_file_exceeds_4_mib_and_cannot"
+        ));
     }
     if file.untracked() {
         return Ok(FileDiff {
@@ -236,7 +260,9 @@ fn untracked_diff(
         true,
     )?;
     if source.truncated {
-        bail!("所选分支中的文件超过 4 MiB，无法完整显示");
+        bail!(conduit::i18n::text(
+            "git.compare.file_in_selected_branch_exceeds_4_mib"
+        ));
     }
     if content.text.is_none() || source.text.contains(['\0', '\u{fffd}']) {
         return Ok(FileDiff {
@@ -280,11 +306,16 @@ fn untracked_diff(
             "--no-textconv",
             &context,
             "--",
-            scratch
-                .0
-                .to_str()
-                .ok_or_else(|| anyhow!("临时路径无法编码"))?,
-            actual.to_str().ok_or_else(|| anyhow!("文件路径无法编码"))?,
+            scratch.0.to_str().ok_or_else(|| {
+                anyhow!(conduit::i18n::text(
+                    "git.compare.unable_to_encode_temporary_path"
+                ))
+            })?,
+            actual.to_str().ok_or_else(|| {
+                anyhow!(conduit::i18n::text(
+                    "git.compare.unable_to_encode_file_path"
+                ))
+            })?,
         ],
         cancel,
         MAX_FILE_DIFF_BYTES,
@@ -292,7 +323,9 @@ fn untracked_diff(
         true,
     )?;
     if output.truncated {
-        bail!("文件差异超过 4 MiB，无法完整显示");
+        bail!(conduit::i18n::text(
+            "git.compare.file_diff_exceeds_4_mib_and_cannot"
+        ));
     }
     let patch = output
         .text

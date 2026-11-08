@@ -53,7 +53,13 @@ impl ConduitApp {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some(format!("选择 {} 可执行文件（.exe 或 .cmd）", provider.label()).into()),
+            prompt: Some(
+                conduit::i18n::format(
+                    "settings.cli.select_executable_exe_or_cmd",
+                    &[("arg0", provider.label().to_string())],
+                )
+                .into(),
+            ),
         });
         cx.spawn_in(window, async move |this, cx| match paths.await {
             Ok(Ok(Some(paths))) => {
@@ -62,8 +68,13 @@ impl ConduitApp {
                         match cli::validate_executable(&path) {
                             Ok(path) => this.set_cli_path(provider, Some(path), cx),
                             Err(error) => {
-                                this.diagnostics
-                                    .insert(provider, format!("路径未保存：{error:#}"));
+                                this.diagnostics.insert(
+                                    provider,
+                                    conduit::i18n::format(
+                                        "settings.cli.path_not_saved",
+                                        &[("error", format!("{:#}", error))],
+                                    ),
+                                );
                             }
                         }
                         cx.notify();
@@ -73,8 +84,13 @@ impl ConduitApp {
             Ok(Ok(None)) => {}
             other => {
                 let _ = this.update(cx, |this, cx| {
-                    this.diagnostics
-                        .insert(provider, format!("打开文件失败：{other:?}"));
+                    this.diagnostics.insert(
+                        provider,
+                        conduit::i18n::format(
+                            "settings.cli.failed_to_open_file",
+                            &[("other", format!("{:?}", other))],
+                        ),
+                    );
                     cx.notify();
                 });
             }
@@ -108,9 +124,9 @@ impl ConduitApp {
             self.store.cli = previous;
             self.diagnostics.insert(
                 provider,
-                self.message
-                    .clone()
-                    .unwrap_or_else(|| "配置保存失败".into()),
+                self.message.clone().unwrap_or_else(|| {
+                    conduit::i18n::text_static("settings.cli.configuration_save_failed").into()
+                }),
             );
         }
         cx.notify();
@@ -134,9 +150,10 @@ impl ConduitApp {
                 self.diagnostics.insert(
                     provider,
                     if probe.installing_update {
-                        "正在停止更新进程…".into()
+                        conduit::i18n::text_static("settings.cli.stopping_the_update_process")
+                            .into()
                     } else {
-                        "正在取消更新检查…".into()
+                        conduit::i18n::text_static("settings.cli.cancelling_update_check").into()
                     },
                 );
                 cx.notify();
@@ -184,8 +201,11 @@ impl ConduitApp {
             return;
         }
         if self.cli_update_busy() {
-            self.diagnostics
-                .insert(provider, "请等待正在运行的 CLI 任务结束后再更新。".into());
+            self.diagnostics.insert(
+                provider,
+                conduit::i18n::text_static("settings.cli.wait_for_running_cli_tasks_to_finish")
+                    .into(),
+            );
             cx.notify();
             return;
         }
@@ -193,12 +213,22 @@ impl ConduitApp {
             Ok(cli) => {
                 self.probes
                     .insert(provider, VersionProbe::start_install(provider, cli.path));
-                self.diagnostics
-                    .insert(provider, "正在检查版本并识别安装方式…".into());
+                self.diagnostics.insert(
+                    provider,
+                    conduit::i18n::text_static(
+                        "settings.cli.checking_version_and_detecting_installation_method",
+                    )
+                    .into(),
+                );
             }
             Err(error) => {
-                self.diagnostics
-                    .insert(provider, format!("无法更新：{error:#}"));
+                self.diagnostics.insert(
+                    provider,
+                    conduit::i18n::format(
+                        "settings.cli.unable_to_update",
+                        &[("error", format!("{:#}", error))],
+                    ),
+                );
             }
         }
         cx.notify();
@@ -225,15 +255,24 @@ impl ConduitApp {
                 self.diagnostics.insert(
                     provider,
                     if checking_updates {
-                        "正在读取本机版本并检查官方最新版本…".into()
+                        conduit::i18n::text_static(
+                            "settings.cli.reading_local_version_and_checking_the_latest",
+                        )
+                        .into()
                     } else {
-                        "正在运行 --version，最多等待 10 秒…".into()
+                        conduit::i18n::text_static("settings.cli.running_version_up_to_10_seconds")
+                            .into()
                     },
                 );
             }
             Err(error) => {
-                self.diagnostics
-                    .insert(provider, format!("无法检测：{error:#}"));
+                self.diagnostics.insert(
+                    provider,
+                    conduit::i18n::format(
+                        "settings.cli.unable_to_detect_version",
+                        &[("error", format!("{:#}", error))],
+                    ),
+                );
             }
         }
         cx.notify();
@@ -272,7 +311,10 @@ impl ConduitApp {
                     probe.checking_updates,
                     probe.installing_update,
                     probe.is_cancelled(),
-                    Err("检测线程已退出，请重新检测".into()),
+                    Err(conduit::i18n::text_static(
+                        "settings.cli.detection_thread_exited_run_detection_again",
+                    )
+                    .into()),
                 )),
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
@@ -283,9 +325,12 @@ impl ConduitApp {
                 self.diagnostics.insert(
                     provider,
                     if installing_update {
-                        "更新已停止，安装可能未完成，请重新检测或重试。".into()
+                        conduit::i18n::text_static(
+                            "settings.cli.update_stopped_installation_may_be_incomplete_detect",
+                        )
+                        .into()
                     } else {
-                        "更新检查已取消。".into()
+                        conduit::i18n::text_static("settings.cli.update_check_cancelled").into()
                     },
                 );
                 cx.notify();
@@ -304,7 +349,8 @@ impl ConduitApp {
                 .is_none_or(|cli| cli.path != path)
             {
                 self.connection_settings.cli_updates.remove(&provider);
-                "配置已变更，请重新检测。".into()
+                conduit::i18n::text_static("settings.cli.configuration_changed_run_detection_again")
+                    .into()
             } else {
                 if checking_updates || installing_update {
                     if let Ok(info) = &result
@@ -335,21 +381,31 @@ impl ConduitApp {
                                 self.opencode_model_probes.clear();
                                 self.opencode_catalogs.clear();
                             }
-                            format!("更新完成，已重新检测。\n{}", info.diagnostic())
+                            conduit::i18n::format(
+                                "settings.cli.update_complete_detection_refreshed",
+                                &[("arg0", info.diagnostic().to_string())],
+                            )
                         } else {
                             info.diagnostic()
                         }
                     }
-                    Err(error) if error == "检测已取消" => error,
-                    Err(error) => format!(
-                        "{}失败：{error}",
-                        if installing_update {
-                            "一键更新"
-                        } else if checking_updates {
-                            "检查更新"
-                        } else {
-                            "检测"
-                        }
+                    Err(error) if cancelled => error,
+                    Err(error) => conduit::i18n::format(
+                        "settings.cli.failed",
+                        &[
+                            (
+                                "arg0",
+                                (if installing_update {
+                                    conduit::i18n::text_static("settings.cli.update_now")
+                                } else if checking_updates {
+                                    conduit::i18n::text_static("settings.cli.check_for_updates")
+                                } else {
+                                    conduit::i18n::text_static("settings.cli.detect")
+                                })
+                                .to_string(),
+                            ),
+                            ("error", error.to_string()),
+                        ],
                     ),
                 }
             };
@@ -361,11 +417,11 @@ impl ConduitApp {
                         "{} CLI {}",
                         provider.label(),
                         if installing_update {
-                            "一键更新"
+                            conduit::i18n::text_static("settings.cli.update_now")
                         } else if checking_updates {
-                            "更新检查"
+                            conduit::i18n::text_static("settings.cli.update_check")
                         } else {
-                            "检测"
+                            conduit::i18n::text_static("settings.cli.detect")
                         }
                     ),
                     text.clone(),
@@ -392,14 +448,22 @@ impl ConduitApp {
             .cli
             .path(provider)
             .map(display_path)
-            .unwrap_or_else(|| "自动查找已安装的 CLI".into());
+            .unwrap_or_else(|| {
+                conduit::i18n::text_static("settings.cli.automatically_locate_installed_cli").into()
+            });
         let has_path = self.store.cli.path(provider).is_some();
         let (effective, resolved_path) = match cli::resolve(provider, &self.store.cli) {
             Ok(cli) => (
                 format!("{} · {}", cli.source.label(), display_path(&cli.path)),
                 Some(cli.path),
             ),
-            Err(error) => (format!("尚不可用：{error:#}"), None),
+            Err(error) => (
+                conduit::i18n::format(
+                    "settings.cli.unavailable",
+                    &[("error", format!("{:#}", error))],
+                ),
+                None,
+            ),
         };
         let available = resolved_path.is_some();
         let action = self
@@ -429,11 +493,9 @@ impl ConduitApp {
             .probes
             .get(&provider)
             .is_some_and(VersionProbe::is_cancelled);
-        let diagnostic = self
-            .diagnostics
-            .get(&provider)
-            .cloned()
-            .unwrap_or_else(|| "检查更新以获取当前版本与官方最新版本。".into());
+        let diagnostic = self.diagnostics.get(&provider).cloned().unwrap_or_else(|| {
+            conduit::i18n::text_static("settings.cli.check_for_updates_to_get_the_installed").into()
+        });
         let self_writable = self.writable;
         let closing = self.closing;
         let expanded = self.connection_settings.path_help;
@@ -444,70 +506,322 @@ impl ConduitApp {
             let clear = view.clone();
             let update = view.clone();
             let help = view.clone();
-            v_flex().w_full().gap_4().p_4().rounded_lg().border_1().border_color(rgb(palette().border))
+            v_flex()
+                .w_full()
+                .gap_4()
+                .p_4()
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(palette().border))
                 .bg(rgb(palette().surface))
-                .child(h_flex().w_full().gap_3()
-                    .child(div().size(px(40.)).flex_shrink_0().rounded_lg().bg(rgb(palette().surface_strong))
-                        .flex().items_center().justify_center().child(provider_icon(provider)))
-                    .child(v_flex().flex_1().min_w_0().gap_1()
-                        .child(div().text_size(ui_text_size(16.)).font_semibold().child(provider.label()))
-                        .child(h_flex().gap_2().flex_wrap()
-                            .child(management_badge(if available { "已找到 CLI" } else { "未找到 CLI" }, available))
-                            .child(management_badge(descriptor.capabilities.protocol, false))))
-                    .child(Button::new(("engine-enabled", index)).debug_selector(move || format!("engine-enabled-{index}"))
-                        .small().outline().label(if enabled { "已启用 · 停用" } else { "已停用 · 启用" })
-                        .disabled(disabled).on_click(move |_, _, cx| toggle.update(cx, |app, cx| app.set_engine_enabled(provider, !enabled, cx)))))
-                .child(v_flex().w_full().gap_2().pt_3().border_t_1().border_color(rgb(palette().border))
-                    .child(h_flex().w_full().gap_2().flex_wrap().justify_between()
-                        .child(div().text_size(ui_text_size(12.)).font_semibold().child("版本与更新"))
-                        .child(h_flex().gap_2().flex_wrap()
-                            .child(Button::new(("settings-check-updates", index)).debug_selector(move || format!("settings-check-updates-{index}"))
+                .child(
+                    h_flex()
+                        .w_full()
+                        .gap_3()
+                        .child(
+                            div()
+                                .size(px(40.))
+                                .flex_shrink_0()
+                                .rounded_lg()
+                                .bg(rgb(palette().surface_strong))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(provider_icon(provider)),
+                        )
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_size(ui_text_size(16.))
+                                        .font_semibold()
+                                        .child(provider.label()),
+                                )
+                                .child(
+                                    h_flex()
+                                        .gap_2()
+                                        .flex_wrap()
+                                        .child(management_badge(
+                                            if available {
+                                                conduit::i18n::text_static("settings.cli.cli_found")
+                                            } else {
+                                                conduit::i18n::text_static(
+                                                    "settings.cli.cli_not_found",
+                                                )
+                                            },
+                                            available,
+                                        ))
+                                        .child(management_badge(
+                                            descriptor.capabilities.protocol,
+                                            false,
+                                        )),
+                                ),
+                        )
+                        .child(
+                            Button::new(("engine-enabled", index))
+                                .debug_selector(move || format!("engine-enabled-{index}"))
                                 .small()
-                                .when(install_available || installing, |button| button.primary())
-                                .when(!install_available && !installing, |button| button.outline())
-                                .icon(if installing || install_available { FullIconName::Download } else if latest { FullIconName::Check } else { FullIconName::RefreshCw })
-                                .label(if cancelling {
-                                    if installing { "正在停止…" } else { "正在取消…" }
-                                } else if installing { "停止更新" }
-                                else if checking_updates { "取消检查" }
-                                else if probing { "检测中…" }
-                                else if install_available { "一键更新" }
-                                else if latest { "已经是最新版本" }
-                                else { "检查更新" })
-                                .disabled(closing || cancelling || latest || (any_installing && !installing)
-                                    || (probing && !checking_updates && !installing)
-                                    || (!probing && (!available || (install_available && (!self_writable || update_busy)))))
-                                .on_click(move |_, _, cx| update.update(cx, |app, cx| app.cli_update_action(provider, cx))))))
-                    .when(update_busy && install_available && !installing, |body| body.child(div().text_size(ui_text_size(11.)).text_color(rgb(palette().muted))
-                        .child("请等待正在运行的 CLI 任务结束后再更新。")))
-                    .child(div().debug_selector(move || format!("settings-cli-diagnostic-{index}"))
-                        .text_size(ui_text_size(12.)).text_color(rgb(palette().muted)).child(diagnostic.clone()))
-                    .child(h_flex().w_full().gap_2().flex_wrap()
-                        .child(Button::new(("settings-update-guide", index)).small().ghost().label("官方更新说明")
-                            .on_click(move |_, _, cx| cx.open_url(cli::updates::guide_url(provider))))
-                        .child(div().text_size(ui_text_size(11.)).text_color(rgb(palette().faint))
-                            .child(format!("已验证版本 {}", cli::tested_version(provider))))))
-                .child(v_flex().w_full().gap_2().pt_3().border_t_1().border_color(rgb(palette().border))
-                    .child(div().text_size(ui_text_size(12.)).font_semibold().child("启动路径"))
-                    .child(div().w_full().min_w_0().p_3().rounded_md().bg(rgb(palette().surface_strong))
-                        .text_size(ui_text_size(12.)).child(configured.clone()))
-                    .child(div().text_size(ui_text_size(12.)).text_color(rgb(if available { palette().muted } else { palette().danger_text })).child(effective.clone()))
-                    .child(h_flex().gap_2().flex_wrap()
-                        .child(Button::new(("settings-choose", index)).small().outline().icon(FullIconName::FolderOpen)
-                            .label("选择文件").disabled(disabled)
-                            .on_click(move |_, window, cx| choose.update(cx, |app, cx| app.choose_cli(provider, window, cx))))
-                        .when(has_path, |row| row.child(Button::new(("settings-clear", index)).small().ghost().label("恢复自动查找")
-                            .disabled(disabled).on_click(move |_, _, cx| clear.update(cx, |app, cx| app.set_cli_path(provider, None, cx)))))
-                        .child(Button::new(("engine-guide", index)).small().ghost().label("安装与登录说明")
-                            .on_click(move |_, _, cx| cx.open_url(descriptor.guide)))))
-                .child(Button::new("settings-path-help").small().ghost().justify_start()
-                    .icon(if expanded { FullIconName::ChevronUp } else { FullIconName::ChevronDown })
-                    .label("路径查找与生效范围")
-                    .on_click(move |_, _, cx| help.update(cx, |app, cx| {
-                        app.connection_settings.path_help = !expanded; cx.notify();
-                    })))
-                .when(expanded, |card| card.child(div().text_size(ui_text_size(12.)).text_color(rgb(palette().muted))
-                    .child("查找顺序：环境变量 → 应用指定路径 → PATH → 常见安装位置。CONDUIT_CLAUDE_PATH / CONDUIT_CODEX_PATH / CONDUIT_OPENCODE_PATH 优先于应用设置。路径修改与停用对后续任务生效，在途任务继续运行。")))
+                                .outline()
+                                .label(if enabled {
+                                    conduit::i18n::text_static("settings.cli.enabled_disable")
+                                } else {
+                                    conduit::i18n::text_static("settings.cli.disabled_enable")
+                                })
+                                .disabled(disabled)
+                                .on_click(move |_, _, cx| {
+                                    toggle.update(cx, |app, cx| {
+                                        app.set_engine_enabled(provider, !enabled, cx)
+                                    })
+                                }),
+                        ),
+                )
+                .child(
+                    v_flex()
+                        .w_full()
+                        .gap_2()
+                        .pt_3()
+                        .border_t_1()
+                        .border_color(rgb(palette().border))
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .gap_2()
+                                .flex_wrap()
+                                .justify_between()
+                                .child(div().text_size(ui_text_size(12.)).font_semibold().child(
+                                    conduit::i18n::text_static("settings.cli.version_and_updates"),
+                                ))
+                                .child(
+                                    h_flex().gap_2().flex_wrap().child(
+                                        Button::new(("settings-check-updates", index))
+                                            .debug_selector(move || {
+                                                format!("settings-check-updates-{index}")
+                                            })
+                                            .small()
+                                            .when(install_available || installing, |button| {
+                                                button.primary()
+                                            })
+                                            .when(!install_available && !installing, |button| {
+                                                button.outline()
+                                            })
+                                            .icon(if installing || install_available {
+                                                FullIconName::Download
+                                            } else if latest {
+                                                FullIconName::Check
+                                            } else {
+                                                FullIconName::RefreshCw
+                                            })
+                                            .label(if cancelling {
+                                                if installing {
+                                                    conduit::i18n::text_static(
+                                                        "settings.cli.stopping",
+                                                    )
+                                                } else {
+                                                    conduit::i18n::text_static(
+                                                        "settings.cli.cancelling",
+                                                    )
+                                                }
+                                            } else if installing {
+                                                conduit::i18n::text_static(
+                                                    "settings.cli.stop_update",
+                                                )
+                                            } else if checking_updates {
+                                                conduit::i18n::text_static(
+                                                    "settings.cli.cancel_check",
+                                                )
+                                            } else if probing {
+                                                conduit::i18n::text_static("settings.cli.detecting")
+                                            } else if install_available {
+                                                conduit::i18n::text_static(
+                                                    "settings.cli.update_now",
+                                                )
+                                            } else if latest {
+                                                conduit::i18n::text_static(
+                                                    "settings.cli.up_to_date",
+                                                )
+                                            } else {
+                                                conduit::i18n::text_static(
+                                                    "settings.cli.check_for_updates",
+                                                )
+                                            })
+                                            .disabled(
+                                                closing
+                                                    || cancelling
+                                                    || latest
+                                                    || (any_installing && !installing)
+                                                    || (probing
+                                                        && !checking_updates
+                                                        && !installing)
+                                                    || (!probing
+                                                        && (!available
+                                                            || (install_available
+                                                                && (!self_writable
+                                                                    || update_busy)))),
+                                            )
+                                            .on_click(move |_, _, cx| {
+                                                update.update(cx, |app, cx| {
+                                                    app.cli_update_action(provider, cx)
+                                                })
+                                            }),
+                                    ),
+                                ),
+                        )
+                        .when(update_busy && install_available && !installing, |body| {
+                            body.child(
+                                div()
+                                    .text_size(ui_text_size(11.))
+                                    .text_color(rgb(palette().muted))
+                                    .child(conduit::i18n::text_static(
+                                        "settings.cli.wait_for_running_cli_tasks_to_finish",
+                                    )),
+                            )
+                        })
+                        .child(
+                            div()
+                                .debug_selector(move || format!("settings-cli-diagnostic-{index}"))
+                                .text_size(ui_text_size(12.))
+                                .text_color(rgb(palette().muted))
+                                .child(diagnostic.clone()),
+                        )
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .gap_2()
+                                .flex_wrap()
+                                .child(
+                                    Button::new(("settings-update-guide", index))
+                                        .small()
+                                        .ghost()
+                                        .label(conduit::i18n::text_static(
+                                            "settings.cli.official_release_notes",
+                                        ))
+                                        .on_click(move |_, _, cx| {
+                                            cx.open_url(cli::updates::guide_url(provider))
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(ui_text_size(11.))
+                                        .text_color(rgb(palette().faint))
+                                        .child(conduit::i18n::format(
+                                            "settings.cli.verified_version",
+                                            &[("arg0", cli::tested_version(provider).to_string())],
+                                        )),
+                                ),
+                        ),
+                )
+                .child(
+                    v_flex()
+                        .w_full()
+                        .gap_2()
+                        .pt_3()
+                        .border_t_1()
+                        .border_color(rgb(palette().border))
+                        .child(
+                            div()
+                                .text_size(ui_text_size(12.))
+                                .font_semibold()
+                                .child(conduit::i18n::text_static("settings.cli.executable_path")),
+                        )
+                        .child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .p_3()
+                                .rounded_md()
+                                .bg(rgb(palette().surface_strong))
+                                .text_size(ui_text_size(12.))
+                                .child(configured.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_size(ui_text_size(12.))
+                                .text_color(rgb(if available {
+                                    palette().muted
+                                } else {
+                                    palette().danger_text
+                                }))
+                                .child(effective.clone()),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .flex_wrap()
+                                .child(
+                                    Button::new(("settings-choose", index))
+                                        .small()
+                                        .outline()
+                                        .icon(FullIconName::FolderOpen)
+                                        .label(conduit::i18n::text_static(
+                                            "settings.cli.choose_file",
+                                        ))
+                                        .disabled(disabled)
+                                        .on_click(move |_, window, cx| {
+                                            choose.update(cx, |app, cx| {
+                                                app.choose_cli(provider, window, cx)
+                                            })
+                                        }),
+                                )
+                                .when(has_path, |row| {
+                                    row.child(
+                                        Button::new(("settings-clear", index))
+                                            .small()
+                                            .ghost()
+                                            .label(conduit::i18n::text_static(
+                                                "settings.cli.restore_automatic_detection",
+                                            ))
+                                            .disabled(disabled)
+                                            .on_click(move |_, _, cx| {
+                                                clear.update(cx, |app, cx| {
+                                                    app.set_cli_path(provider, None, cx)
+                                                })
+                                            }),
+                                    )
+                                })
+                                .child(
+                                    Button::new(("engine-guide", index))
+                                        .small()
+                                        .ghost()
+                                        .label(conduit::i18n::text_static(
+                                            "settings.cli.installation_and_sign_in_instructions",
+                                        ))
+                                        .on_click(move |_, _, cx| cx.open_url(descriptor.guide)),
+                                ),
+                        ),
+                )
+                .child(
+                    Button::new("settings-path-help")
+                        .small()
+                        .ghost()
+                        .justify_start()
+                        .icon(if expanded {
+                            FullIconName::ChevronUp
+                        } else {
+                            FullIconName::ChevronDown
+                        })
+                        .label(conduit::i18n::text_static(
+                            "settings.cli.path_lookup_and_when_changes_apply",
+                        ))
+                        .on_click(move |_, _, cx| {
+                            help.update(cx, |app, cx| {
+                                app.connection_settings.path_help = !expanded;
+                                cx.notify();
+                            })
+                        }),
+                )
+                .when(expanded, |card| {
+                    card.child(
+                        div()
+                            .text_size(ui_text_size(12.))
+                            .text_color(rgb(palette().muted))
+                            .child(conduit::i18n::text_static(
+                                "settings.cli.lookup_order_environment_variable_app_specified_path",
+                            )),
+                    )
+                })
         });
         SettingGroup::new()
             .variant(GroupBoxVariant::Normal)

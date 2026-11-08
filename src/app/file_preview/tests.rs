@@ -133,6 +133,7 @@ fn reload(cx: &mut VisualTestContext, view: &Entity<FilePreview>, text: &str) {
 
 #[gpui_kit::test]
 fn file_find_ctrl_f_toggles_and_reopen_keeps_the_active_match(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let source = format!(
         "opfile\n\n{}opfile\n\n{}open_workspace_file\n",
         "ordinary paragraph\n\n".repeat(30),
@@ -196,6 +197,7 @@ fn file_find_ctrl_f_toggles_and_reopen_keeps_the_active_match(cx: &mut TestAppCo
 
 #[gpui_kit::test]
 fn file_find_toggle_buttons_and_exact_whitespace(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (cx, _, views) = fixture(
         cx,
         &[(
@@ -270,6 +272,7 @@ fn file_find_toggle_buttons_and_exact_whitespace(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn file_find_rapid_queries_reload_and_close_cancel_old_results(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let source = "alpha alpha\n\nbeta\n\ngamma gamma gamma\n";
     let (cx, harness, views) = fixture(cx, &[(false, source), (true, source)]);
     for (index, view) in views.iter().enumerate() {
@@ -306,6 +309,7 @@ fn file_find_rapid_queries_reload_and_close_cancel_old_results(cx: &mut TestAppC
 
 #[gpui_kit::test]
 fn file_find_inactive_reload_keeps_other_tabs_and_refreshes_on_return(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (cx, harness, views) = fixture(
         cx,
         &[
@@ -351,6 +355,7 @@ fn file_find_inactive_reload_keeps_other_tabs_and_refreshes_on_return(cx: &mut T
 
 #[gpui_kit::test]
 fn file_find_selection_prefill_and_input_copy_keep_focus(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (cx, _, views) = fixture(cx, &[(false, "chosen\nsecond\n")]);
     let view = &views[0];
     let source = cx.debug_bounds("file-source-view").unwrap();
@@ -410,6 +415,7 @@ fn file_find_selection_prefill_and_input_copy_keep_focus(cx: &mut TestAppContext
 
 #[gpui_kit::test]
 fn file_find_source_shortcuts_wrap_reload_and_independent_tabs(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     cx.update(gpui_kit::init);
     cx.update(init);
     let slot = Rc::new(std::cell::RefCell::new(None));
@@ -548,6 +554,7 @@ fn file_find_source_shortcuts_wrap_reload_and_independent_tabs(cx: &mut TestAppC
 
 #[gpui_kit::test]
 fn file_find_markdown_prose_numbered_code_and_diagram_reveal(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     cx.update(gpui_kit::init);
     cx.update(init);
     let slot = Rc::new(std::cell::RefCell::new(None));

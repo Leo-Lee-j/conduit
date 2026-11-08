@@ -158,6 +158,7 @@ pub(in crate::app) fn assert_no_overlays(cx: &mut VisualTestContext) {
 
 #[gpui_kit::test]
 fn desktop_disable_cleans_script_overlays_and_preserves_settings(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     command(&app, "example.workspace-overview.overlays", cx);
     let weak = runtime(&app, cx);
@@ -176,6 +177,7 @@ fn desktop_disable_cleans_script_overlays_and_preserves_settings(cx: &mut TestAp
 
 #[gpui_kit::test]
 fn desktop_registry_revocation_stops_without_waiting_for_a_render(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     command(&app, "example.workspace-overview.overlays", cx);
     command(&app, "example.workspace-overview.read-delayed", cx);
@@ -204,6 +206,7 @@ fn desktop_registry_revocation_stops_without_waiting_for_a_render(cx: &mut TestA
 
 #[gpui_kit::test]
 fn desktop_entries_are_static_and_three_surfaces_use_real_metadata(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     cx.update(|_, cx| {
         let app = app.read(cx);
@@ -249,6 +252,7 @@ fn desktop_entries_are_static_and_three_surfaces_use_real_metadata(cx: &mut Test
 
 #[gpui_kit::test]
 fn desktop_context_change_stops_vm_and_requires_explicit_reopen(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     click(cx, builtins::EXAMPLE_ACTIVITY);
     command(&app, "example.workspace-overview.increment", cx);
@@ -294,6 +298,7 @@ fn desktop_context_change_stops_vm_and_requires_explicit_reopen(cx: &mut TestApp
 fn desktop_hidden_views_refresh_without_reactivation_and_readonly_releases(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     click(cx, builtins::EXAMPLE_ACTIVITY);
     command(&app, "example.workspace-overview.increment", cx);
@@ -347,6 +352,7 @@ fn desktop_hidden_views_refresh_without_reactivation_and_readonly_releases(
 
 #[gpui_kit::test]
 fn desktop_stop_revokes_saved_actions_and_pending_results(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     click(cx, builtins::EXAMPLE_ACTIVITY);
     command(&app, "example.workspace-overview.read-delayed", cx);
@@ -373,6 +379,7 @@ fn desktop_stop_revokes_saved_actions_and_pending_results(cx: &mut TestAppContex
 
 #[gpui_kit::test]
 fn desktop_narrow_dock_keeps_toolbar_and_host_dialog_focus(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     command(&app, "example.workspace-overview.increment", cx);
     for width in [1600., 1100., 850.] {
@@ -414,6 +421,7 @@ fn desktop_narrow_dock_keeps_toolbar_and_host_dialog_focus(cx: &mut TestAppConte
 
 #[gpui_kit::test]
 fn desktop_window_close_stops_vm_with_pending_command(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     command(&app, "example.workspace-overview.overlays", cx);
     command(&app, "example.workspace-overview.read-delayed", cx);

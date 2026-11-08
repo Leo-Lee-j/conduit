@@ -57,10 +57,9 @@ pub(super) fn is_groupable_activity(item: &ChatItem) -> bool {
 pub(super) fn is_compact_tool(item: &ChatItem) -> bool {
     item.kind == ItemKind::Tool
         && !is_tool_edit(item)
-        && item
-            .approval
-            .as_ref()
-            .is_none_or(|approval| approval.status == "已允许")
+        && item.approval.as_ref().is_none_or(|approval| {
+            approval.status == crate::message_status::ApprovalStatus::Allowed
+        })
 }
 
 /// A later turn must not hide the tool history of a turn that never replied.
@@ -115,11 +114,13 @@ pub(super) fn tool_failed(item: &ChatItem) -> bool {
         code: Option<i64>,
         exit_code: Option<i64>,
     }
-    if item
-        .approval
-        .as_ref()
-        .is_some_and(|approval| matches!(approval.status.as_str(), "已拒绝" | "已中断"))
-    {
+    if item.approval.as_ref().is_some_and(|approval| {
+        matches!(
+            approval.status,
+            crate::message_status::ApprovalStatus::Denied
+                | crate::message_status::ApprovalStatus::Interrupted
+        )
+    }) {
         return true;
     }
     let status = item.status.trim();
@@ -139,26 +140,34 @@ pub(super) fn tool_failed(item: &ChatItem) -> bool {
 /// activity rows (terminal command, workspace search, reasoning, ...).
 pub(super) fn tool_category(item: &ChatItem) -> String {
     if item.kind == ItemKind::Reasoning {
-        return "已思考".into();
+        return conduit::i18n::text_static("tools.thought").into();
     }
     let title = item.text.trim();
     if is_tool_edit(item) {
-        return "修改代码".into();
+        return conduit::i18n::text_static("tools.edit_code").into();
     }
     if is_tool_command(item) {
-        return "终端命令".into();
+        return conduit::i18n::text_static("tools.terminal_command").into();
     }
     let lowered = title.to_lowercase();
     match lowered.as_str() {
-        "websearch" | "web_search" | "web search" | "search" => "网络搜索".into(),
-        "webfetch" | "web_fetch" => "读取网页".into(),
-        "read" | "read_file" | "readfile" | "view" => "读取文件".into(),
-        "grep" | "glob" | "ls" | "list" => "检索工作区".into(),
-        "task" | "agent" => "子任务".into(),
-        "todowrite" | "todo_write" => "规划任务".into(),
-        "" => "工具调用".into(),
-        _ if lowered.contains("search") || lowered.contains("grep") => "检索工作区".into(),
-        _ if lowered.contains("read") => "读取文件".into(),
+        "websearch" | "web_search" | "web search" | "search" => {
+            conduit::i18n::text_static("tools.web_search").into()
+        }
+        "webfetch" | "web_fetch" => conduit::i18n::text_static("tools.read_webpage").into(),
+        "read" | "read_file" | "readfile" | "view" => {
+            conduit::i18n::text_static("tools.read_file").into()
+        }
+        "grep" | "glob" | "ls" | "list" => {
+            conduit::i18n::text_static("tools.search_workspace").into()
+        }
+        "task" | "agent" => conduit::i18n::text_static("tools.subtask").into(),
+        "todowrite" | "todo_write" => conduit::i18n::text_static("tools.plan_task").into(),
+        "" => conduit::i18n::text_static("events.tool_call").into(),
+        _ if lowered.contains("search") || lowered.contains("grep") => {
+            conduit::i18n::text_static("tools.search_workspace").into()
+        }
+        _ if lowered.contains("read") => conduit::i18n::text_static("tools.read_file").into(),
         _ => title.to_string(),
     }
 }
@@ -217,7 +226,10 @@ pub(super) fn tool_summary(item: &ChatItem) -> String {
     }
     let title = first_line(&item.text);
     if !title.is_empty() && !is_tool_edit(item) {
-        return title;
+        return match title.as_str() {
+            "命令输出" => conduit::i18n::text("protocol.command_output"),
+            _ => title,
+        };
     }
     first_line(&item.detail)
 }
@@ -535,9 +547,15 @@ pub(super) fn codex_change_note(kind: &serde_json::Value) -> String {
             .map(str::to_string)
     });
     match name.as_deref() {
-        Some("add") | Some("added") | Some("create") => "新增".into(),
-        Some("delete") | Some("deleted") | Some("remove") => "删除".into(),
-        Some("update") | Some("modified") | Some("edit") => "更新".into(),
+        Some("add") | Some("added") | Some("create") => {
+            conduit::i18n::text_static("git_state.added").into()
+        }
+        Some("delete") | Some("deleted") | Some("remove") => {
+            conduit::i18n::text_static("git_state.deleted").into()
+        }
+        Some("update") | Some("modified") | Some("edit") => {
+            conduit::i18n::text_static("tools.update").into()
+        }
         _ => String::new(),
     }
 }
@@ -553,7 +571,8 @@ pub(super) fn codex_edit_diffs(input: &str, detail: &str) -> Option<Vec<EditFile
     let changes = changes(input).or_else(|| changes(detail))?;
     let mut files = Vec::new();
     for (index, change) in changes.iter().enumerate() {
-        let path = json_path(change).unwrap_or_else(|| "未知文件".into());
+        let path = json_path(change)
+            .unwrap_or_else(|| conduit::i18n::text_static("tools.unknown_file").into());
         let note = codex_change_note(&change["kind"]);
         let mut lines = parse_unified_patch(
             change
@@ -570,9 +589,13 @@ pub(super) fn codex_edit_diffs(input: &str, detail: &str) -> Option<Vec<EditFile
         if lines.is_empty() {
             continue;
         }
-        let status = match note.as_str() {
-            "新增" => EditFileStatus::Added,
-            "删除" => EditFileStatus::Deleted,
+        let kind = change["kind"]
+            .as_str()
+            .or_else(|| change["kind"]["type"].as_str())
+            .unwrap_or("");
+        let status = match kind {
+            "add" | "added" | "create" => EditFileStatus::Added,
+            "delete" | "deleted" | "remove" => EditFileStatus::Deleted,
             _ => EditFileStatus::Modified,
         };
         files.push(lines.finish(path, note, status));
@@ -582,19 +605,23 @@ pub(super) fn codex_edit_diffs(input: &str, detail: &str) -> Option<Vec<EditFile
 
 pub(super) fn claude_edit_diffs(title: &str, input: &str) -> Option<Vec<EditFileDiff>> {
     let value: serde_json::Value = serde_json::from_str(input).ok()?;
-    let path = json_path(&value).unwrap_or_else(|| "未知文件".into());
+    let path = json_path(&value)
+        .unwrap_or_else(|| conduit::i18n::text_static("tools.unknown_file").into());
     let mut lines = PreviewLines::default();
     let mut note = String::new();
     match title {
         "Write" => {
             let content = value.get("content").and_then(|value| value.as_str())?;
             lines.text(EditLineKind::Add, content);
-            note = "写入".into();
+            note = conduit::i18n::text_static("tools.write").into();
         }
         "MultiEdit" => {
             let edits = value.get("edits").and_then(|value| value.as_array())?;
             for (index, edit) in edits.iter().enumerate() {
-                lines.push(EditLineKind::Hunk, &format!("@@ 修改 {} @@", index + 1));
+                lines.push(
+                    EditLineKind::Hunk,
+                    &conduit::i18n::format("tools.change", &[("arg0", format!("{}", index + 1))]),
+                );
                 for line in edit
                     .get("old_string")
                     .and_then(|value| value.as_str())
@@ -612,7 +639,7 @@ pub(super) fn claude_edit_diffs(title: &str, input: &str) -> Option<Vec<EditFile
                     lines.push(EditLineKind::Add, line);
                 }
             }
-            note = format!("{} 处修改", edits.len());
+            note = conduit::i18n::format("tools.changes", &[("arg0", format!("{}", edits.len()))]);
         }
         _ => {
             let old = value.get("old_string").and_then(|value| value.as_str())?;
@@ -625,9 +652,12 @@ pub(super) fn claude_edit_diffs(title: &str, input: &str) -> Option<Vec<EditFile
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false)
             {
-                note = "全部替换".into();
+                note = conduit::i18n::text_static("tools.replace_all").into();
             }
-            lines.push(EditLineKind::Hunk, "@@ 修改 @@");
+            lines.push(
+                EditLineKind::Hunk,
+                conduit::i18n::text_static("tools.change_fc68b6"),
+            );
             lines.text(EditLineKind::Remove, old);
             lines.text(EditLineKind::Add, new);
         }
@@ -683,11 +713,16 @@ fn opencode_edit_diffs(detail: &str) -> Option<Vec<EditFileDiff>> {
             lines.push(EditLineKind::Hunk, "@@ OpenCode @@");
             lines.text(EditLineKind::Remove, old);
             lines.text(EditLineKind::Add, new);
-            Some(lines.finish(
-                part["path"].as_str().unwrap_or("未知文件").into(),
-                "OpenCode".into(),
-                status,
-            ))
+            Some(
+                lines.finish(
+                    part["path"]
+                        .as_str()
+                        .unwrap_or(conduit::i18n::text_static("tools.unknown_file"))
+                        .into(),
+                    "OpenCode".into(),
+                    status,
+                ),
+            )
         })
         .collect::<Vec<_>>();
     (!files.is_empty()).then_some(files)
@@ -709,7 +744,10 @@ pub(super) fn edit_diff_content(
     let copy_text = String::new(); // Full input/output is formatted lazily by the copy action.
     let Some(value) = analysis.get(item, cx) else {
         return (
-            div().p_3().child("正在读取变更…").into_any_element(),
+            div()
+                .p_3()
+                .child(conduit::i18n::text_static("tools.reading_changes"))
+                .into_any_element(),
             copy_text,
         );
     };
@@ -771,7 +809,7 @@ pub(super) fn edit_diff_content(
                         div()
                             .text_size(px(9.))
                             .text_color(rgb(palette().warning_text))
-                            .child("已截断"),
+                            .child(conduit::i18n::text_static("tools.truncated")),
                     )
                 })
                 .into_any_element()
@@ -810,7 +848,10 @@ pub(super) fn tool_content(
 ) -> (AnyElement, String) {
     let input = format_tool_text(&item.input);
     let output = format_tool_text(&item.detail);
-    let copy_text = format!("输入\n{input}\n\n输出 / 结果\n{output}");
+    let copy_text = conduit::i18n::format(
+        "tools.input_output_result",
+        &[("input", input.to_string()), ("output", output.to_string())],
+    );
     let mut content = v_flex()
         .w_full()
         .min_w_0()
@@ -822,19 +863,24 @@ pub(super) fn tool_content(
         .line_height(relative(1.5))
         .text_color(rgb(palette().muted));
     for (section, label, text, empty) in [
-        ("input", "输入", input, "未提供输入"),
+        (
+            "input",
+            conduit::i18n::text_static("tools.input"),
+            input,
+            conduit::i18n::text_static("tools.no_input_provided"),
+        ),
         (
             "output",
-            "输出 / 结果",
+            conduit::i18n::text_static("tools.output_result"),
             output,
             if matches!(
                 item.status,
                 crate::message_status::ToolStatus::Running
                     | crate::message_status::ToolStatus::Output
             ) {
-                "等待工具输出…"
+                conduit::i18n::text_static("tools.waiting_for_tool_output")
             } else {
-                "没有输出内容"
+                conduit::i18n::text_static("tools.no_output")
             },
         ),
     ] {
@@ -916,9 +962,9 @@ pub(super) fn tool_detail_panel(
                         .text_size(px(10.))
                         .text_color(rgb(palette().faint))
                         .child(if edit {
-                            "代码变更"
+                            conduit::i18n::text_static("tools.code_changes")
                         } else {
-                            "工具调用内容"
+                            conduit::i18n::text_static("tools.tool_call_content")
                         }),
                 )
                 .child(
@@ -927,7 +973,9 @@ pub(super) fn tool_detail_panel(
                         .small()
                         .compact()
                         .icon(gpui_kit::assets::IconName::PanelRight)
-                        .tooltip("在右侧查看工具详情")
+                        .tooltip(conduit::i18n::text_static(
+                            "tools.view_tool_details_on_the_right",
+                        ))
                         .cursor_pointer()
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.open_tool_details(dock_session, &dock_key, window, cx);
@@ -939,14 +987,16 @@ pub(super) fn tool_detail_panel(
                         .small()
                         .compact()
                         .icon(gpui_kit::assets::IconName::Copy)
-                        .tooltip("复制输入与输出")
+                        .tooltip(conduit::i18n::text_static("tools.copy_input_and_output"))
                         .cursor_pointer()
                         .on_click(move |_, _, cx| {
                             let text = if edit {
-                                format!(
-                                    "输入\n{}\n\n输出 / 结果\n{}",
-                                    format_tool_text(&copy_item.input),
-                                    format_tool_text(&copy_item.detail)
+                                conduit::i18n::format(
+                                    "tools.input_output_result_eddfa0",
+                                    &[
+                                        ("arg0", format_tool_text(&copy_item.input).to_string()),
+                                        ("arg1", format_tool_text(&copy_item.detail).to_string()),
+                                    ],
                                 )
                             } else {
                                 copy_text.clone()

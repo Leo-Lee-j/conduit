@@ -130,11 +130,13 @@ impl ConduitApp {
         window.open_dialog(cx, move |dialog, _, _| {
             let app = app.clone();
             dialog
-                .title("终止终端并退出？")
+                .title(conduit::i18n::text_static(
+                    "terminal.terminate_terminals_and_exit",
+                ))
                 .content(|content, _, _| {
-                    content.child(
-                        "仍有终端在运行。退出将终止所有终端及其子进程，未完成的命令会被中断。",
-                    )
+                    content.child(conduit::i18n::text_static(
+                        "terminal.terminals_are_still_running_exiting_terminates_all",
+                    ))
                 })
                 .on_ok(move |_, window, cx| {
                     app.update(cx, |app, cx| {
@@ -156,7 +158,9 @@ impl ConduitApp {
             return;
         }
         let Some(key) = self.terminal_key() else {
-            self.terminals.feedback = Some("选择工作区后打开终端".into());
+            self.terminals.feedback = Some(
+                conduit::i18n::text_static("terminal.select_a_workspace_to_open_a_terminal").into(),
+            );
             self.terminals.open = true;
             cx.notify();
             return;
@@ -170,8 +174,9 @@ impl ConduitApp {
                 .count()
                 >= 4
         {
-            self.terminals.feedback =
-                Some("每个工作区最多 4 个终端，全局最多 8 个；请关闭不再使用的标签。".into());
+            self.terminals.feedback = Some(
+                conduit::i18n::text_static("terminal.up_to_4_terminals_per_workspace_and").into(),
+            );
             self.terminals.open = true;
             cx.notify();
             return;
@@ -398,8 +403,9 @@ impl ConduitApp {
         {
             self.closing = false;
             self.terminals.close_confirmed = false;
-            self.message = Some(format!(
-                "终端清理尚未完成，已暂停退出：{error}。可再次退出重试。"
+            self.message = Some(conduit::i18n::format(
+                "terminal.exit_paused_because_terminal_cleanup_is_incomplete",
+                &[("error", error.to_string())],
             ));
             changed = true;
         }
@@ -427,10 +433,14 @@ impl ConduitApp {
                         .compact()
                         .icon(FullIconName::SquareTerminal)
                         .selected(self.terminals.open)
-                        .tooltip(format!(
-                            "打开/收起终端 · 当前工作区 {count} 个 · Ctrl+反引号"
+                        .tooltip(conduit::i18n::format(
+                            "terminal.toggle_terminal_in_this_workspace_ctrl_backtick",
+                            &[("count", format!("{}", count))],
                         ))
-                        .accessibility_label(format!("打开工作区终端，{count} 个终端"))
+                        .accessibility_label(conduit::i18n::format(
+                            "terminal.open_workspace_terminal_terminals",
+                            &[("count", format!("{}", count))],
+                        ))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.terminal_command(false, window, cx)
                         })),
@@ -506,17 +516,23 @@ impl ConduitApp {
                 if s.runtime.active() {
                     ""
                 } else {
-                    " · 已退出"
+                    conduit::i18n::text_static("terminal.exited")
                 }
             );
             let close_selector = format!("terminal-tab-close-{id}");
             let confirming = self.terminals.confirm_close == Some(id) && s.runtime.active();
             let close_label = if confirming {
-                format!("再次点击终止并关闭 {title}（包括子进程）；点击标签取消")
+                conduit::i18n::format(
+                    "terminal.click_again_to_terminate_and_close_including",
+                    &[("title", title.to_string())],
+                )
             } else if s.runtime.active() {
-                format!("终止并关闭 {title}（需再次点击确认）")
+                conduit::i18n::format(
+                    "terminal.terminate_and_close_click_again_to_confirm",
+                    &[("title", title.to_string())],
+                )
             } else {
-                format!("关闭 {title}")
+                conduit::i18n::format("terminal.close", &[("title", title.to_string())])
             };
             tabs =
                 tabs.child(
@@ -565,7 +581,11 @@ impl ConduitApp {
             .flex_shrink_0()
             .border_t_1()
             .border_color(rgb(palette().border))
-            .child(div().text_size(ui_text_size(12.)).child("终端"))
+            .child(
+                div()
+                    .text_size(ui_text_size(12.))
+                    .child(conduit::i18n::text_static("shortcuts.terminal")),
+            )
             .child(tabs)
             .child(
                 Button::new("terminal-new")
@@ -574,8 +594,10 @@ impl ConduitApp {
                     .small()
                     .compact()
                     .icon(FullIconName::Plus)
-                    .tooltip("新建终端 · Ctrl+Shift+反引号")
-                    .accessibility_label("新建终端")
+                    .tooltip(conduit::i18n::text_static(
+                        "terminal.new_terminal_ctrl_shift_backtick",
+                    ))
+                    .accessibility_label(conduit::i18n::text_static("shortcuts.new_terminal"))
                     .disabled(!can_create)
                     .on_click(cx.listener(|this, _, w, cx| this.terminal_command(true, w, cx))),
             )
@@ -585,8 +607,8 @@ impl ConduitApp {
                     .small()
                     .compact()
                     .icon(FullIconName::ChevronDown)
-                    .tooltip("选择 Shell")
-                    .accessibility_label("选择 Shell")
+                    .tooltip(conduit::i18n::text_static("terminal.select_shell"))
+                    .accessibility_label(conduit::i18n::text_static("terminal.select_shell"))
                     .disabled(!can_create)
                     .dropdown_menu(move |menu, _, _| {
                         let mut menu = menu;
@@ -615,8 +637,12 @@ impl ConduitApp {
                     .small()
                     .compact()
                     .icon(FullIconName::Maximize)
-                    .tooltip("最大化/恢复终端")
-                    .accessibility_label("最大化或恢复终端")
+                    .tooltip(conduit::i18n::text_static(
+                        "terminal.maximize_restore_terminal",
+                    ))
+                    .accessibility_label(conduit::i18n::text_static(
+                        "terminal.maximize_or_restore_terminal",
+                    ))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.terminals.maximized = !this.terminals.maximized;
                         cx.notify();
@@ -628,8 +654,10 @@ impl ConduitApp {
                     .small()
                     .compact()
                     .icon(FullIconName::ChevronDown)
-                    .tooltip("收起面板，保留进程")
-                    .accessibility_label("收起终端")
+                    .tooltip(conduit::i18n::text_static(
+                        "terminal.collapse_panel_and_keep_processes_running",
+                    ))
+                    .accessibility_label(conduit::i18n::text_static("terminal.collapse_terminal"))
                     .on_click(cx.listener(|this, _, w, cx| this.hide_terminal(w, cx))),
             );
         let mut panel = v_flex()
@@ -688,7 +716,7 @@ impl ConduitApp {
                                 Button::new("terminal-restart")
                                     .ghost()
                                     .xsmall()
-                                    .label("重新启动")
+                                    .label(conduit::i18n::text_static("terminal.restart"))
                                     .disabled(!can_create)
                                     .on_click(cx.listener(move |this, _, w, cx| {
                                         this.restart_terminal(id, w, cx)
@@ -713,13 +741,13 @@ impl ConduitApp {
                     .justify_center()
                     .gap_2()
                     .child(if key.is_some() {
-                        "当前工作区没有终端"
+                        conduit::i18n::text_static("terminal.no_terminals_in_this_workspace")
                     } else {
-                        "选择工作区后打开终端"
+                        conduit::i18n::text_static("terminal.select_a_workspace_to_open_a_terminal")
                     })
                     .child(
                         Button::new("terminal-create-first")
-                            .label("新建终端")
+                            .label(conduit::i18n::text_static("shortcuts.new_terminal"))
                             .disabled(!can_create)
                             .on_click(
                                 cx.listener(|this, _, w, cx| this.terminal_command(true, w, cx)),

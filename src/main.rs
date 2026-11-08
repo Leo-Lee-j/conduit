@@ -86,6 +86,11 @@ fn main() {
         .as_ref()
         .map(|store| store.ui.appearance)
         .unwrap_or_default();
+    let language = loaded
+        .as_ref()
+        .map(|store| store.ui.language.clone())
+        .unwrap_or_default();
+    conduit::i18n::set_locale(&language);
     gpui_kit::application()
         // The full icon catalog keeps the UI glyphs that the default component
         // bundle does not embed (e.g. the composer Pin and the settings CLI
@@ -95,7 +100,7 @@ fn main() {
             gpui_kit::init(cx);
             #[cfg(conduit_shell_desktop)]
             gpui_shell::init(cx);
-            gpui_kit::component::set_locale("zh-CN");
+            conduit::i18n::set_locale(&language);
             app::install_theme_packs(cx);
             let initial_mode = match appearance {
                 store::AppearanceMode::System => {
@@ -131,7 +136,13 @@ fn main() {
                     if let Some(packages) = development_package
                         && let Err(error) = app.install_development_packages(packages, cx)
                     {
-                        eprintln!("开发插件加载失败：{error:#}");
+                        eprintln!(
+                            "{}",
+                            conduit::i18n::format(
+                                "main.failed_to_load_development_plugin",
+                                &[("error", format!("{:#}", error))]
+                            )
+                        );
                     }
                     // The loading page is the window's very first frame; the
                     // initial history import below releases it once merged.
@@ -188,23 +199,39 @@ fn print_history() {
     let workspace = workspace.canonicalize().unwrap_or(workspace);
     let sessions = history::scan_workspace(&workspace);
     if sessions.is_empty() {
-        println!("未在 CLI 历史中发现 {} 的会话", workspace.display());
+        println!(
+            "{}",
+            conduit::i18n::format(
+                "main.no_sessions_for_found_in_cli_history",
+                &[("arg0", format!("{}", workspace.display()))]
+            )
+        );
         return;
     }
     println!(
-        "工作区 {} 共发现 {} 条 CLI 历史会话：",
-        workspace.display(),
-        sessions.len()
+        "{}",
+        conduit::i18n::format(
+            "main.found_cli_history_sessions_in_workspace",
+            &[
+                ("arg0", format!("{}", workspace.display())),
+                ("arg1", format!("{}", sessions.len()))
+            ]
+        )
     );
     for session in &sessions {
         println!(
-            "[{:?}] {} | native_id={} | {} | 消息 {} 条 | {}",
-            session.provider,
-            chrono_like(session.created_at),
-            session.native_id,
-            session.title,
-            session.messages.len(),
-            session.model.as_deref().unwrap_or("-")
+            "{}",
+            conduit::i18n::format(
+                "main.native_id_messages",
+                &[
+                    ("arg0", format!("{:?}", session.provider)),
+                    ("arg1", chrono_like(session.created_at).to_string()),
+                    ("arg2", session.native_id.to_string()),
+                    ("arg3", session.title.to_string()),
+                    ("arg4", format!("{}", session.messages.len())),
+                    ("arg5", session.model.as_deref().unwrap_or("-").to_string())
+                ]
+            )
         );
     }
 }
@@ -271,8 +298,13 @@ fn single_instance() -> anyhow::Result<std::os::windows::io::OwnedHandle> {
         let existing = GetLastError() == ERROR_ALREADY_EXISTS;
         let handle = OwnedHandle::from_raw_handle(handle);
         if existing {
-            anyhow::bail!("Conduit 已在运行，请使用已有窗口");
+            anyhow::bail!(conduit::i18n::text(
+                "main.conduit_is_already_running_use_the_existing"
+            ));
         }
         Ok(handle)
     }
 }
+
+#[cfg(test)]
+mod test_support;

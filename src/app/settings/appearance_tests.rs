@@ -67,6 +67,7 @@ fn confirm_ui_font(
 
 #[gpui_kit::test]
 fn settings_ui_font_is_independent_and_survives_theme_changes(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, Store::default());
     let (before, default_font, chosen) = cx.update(|_, cx| {
         let app = app.read(cx);
@@ -134,6 +135,7 @@ fn settings_ui_font_is_independent_and_survives_theme_changes(cx: &mut TestAppCo
 
 #[gpui_kit::test]
 fn settings_ui_font_missing_font_falls_back_to_the_original_default(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let mut store = Store::default();
     store.ui.ui_font_family = Some("Conduit Missing UI Font 7D820ABF".into());
     let (app, cx) = fixture(cx, store);
@@ -152,6 +154,7 @@ fn settings_ui_font_missing_font_falls_back_to_the_original_default(cx: &mut Tes
 
 #[gpui_kit::test]
 fn settings_ui_font_search_picker_and_default_fit_the_existing_tab(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, Store::default());
     cx.simulate_keystrokes("ctrl-f");
     cx.simulate_input("界面字体");
@@ -235,6 +238,7 @@ fn click(cx: &mut VisualTestContext, selector: &'static str) {
 fn settings_ui_font_size_buttons_save_clamp_and_reset_without_touching_chat(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, Store::default());
     cx.simulate_resize(size(px(1440.), px(900.)));
     let before = cx.update(|window, cx| {
@@ -338,6 +342,7 @@ fn settings_ui_font_size_buttons_save_clamp_and_reset_without_touching_chat(
 fn settings_ui_font_size_restores_saved_values_and_clamps_old_configuration(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     let mut store = Store::default();
     store.ui.ui_font_size = 18.;
     let (app, cx) = fixture(cx, store);

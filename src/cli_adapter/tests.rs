@@ -24,6 +24,7 @@ fn request() -> AdapterRequest {
 
 #[test]
 fn registered_factories_preserve_model_resume_and_handshake_contracts() {
+    let _locale = crate::test_support::chinese();
     for provider in [Provider::Claude, Provider::Codex] {
         let mut request = request();
         request.native_id = Some("original".into());
@@ -72,6 +73,7 @@ fn registered_factories_preserve_model_resume_and_handshake_contracts() {
 
 #[test]
 fn opencode_launch_has_final_port_and_keeps_helper_resources_until_drop() {
+    let _locale = crate::test_support::chinese();
     let mut adapter = (Provider::OpenCode.descriptor().adapter)(request());
     let launch = adapter.launch().unwrap();
     let port = launch.args.windows(2).find(|p| p[0] == "--port").unwrap()[1]
@@ -111,6 +113,7 @@ fn opencode_launch_has_final_port_and_keeps_helper_resources_until_drop() {
 
 #[test]
 fn registered_helper_cannot_grant_permissions_after_full_access_selection() {
+    let _locale = crate::test_support::chinese();
     let approval = Approval {
         id: "permission".into(),
         title: String::new(),
@@ -132,6 +135,7 @@ fn registered_helper_cannot_grant_permissions_after_full_access_selection() {
 
 #[test]
 fn opencode_side_channel_filters_sessions_routes_answers_and_revokes_questions() {
+    let _locale = crate::test_support::chinese();
     use base64::Engine as _;
     use std::{
         io::{Read, Write},

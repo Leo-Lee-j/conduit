@@ -82,7 +82,7 @@ pub(super) fn bind_core(ui: &mut PluginUi) {
             StatusValue {
                 text: workspace
                     .map(Workspace::name)
-                    .unwrap_or_else(|| "工作区".into()),
+                    .unwrap_or_else(|| conduit::i18n::text_static("git_compare.workspace").into()),
                 tooltip: Some(display_path(key.path())),
             }
         },
@@ -380,8 +380,10 @@ impl ConduitApp {
                     .ml(px(GAP))
                     .flex_shrink_0()
                     .icon(IconName::Ellipsis)
-                    .tooltip("更多状态")
-                    .accessibility_label("更多状态")
+                    .tooltip(conduit::i18n::text_static("plugin_ui.status.more_statuses"))
+                    .accessibility_label(conduit::i18n::text_static(
+                        "plugin_ui.status.more_statuses",
+                    ))
                     .dropdown_menu(move |mut menu, _, _| {
                         menu = menu.scrollable(true).max_w(px(360.));
                         for entry in &hidden {
@@ -436,6 +438,7 @@ mod tests {
 
     #[test]
     fn priority_prefix_reserves_overflow_and_does_not_backfill() {
+        let _locale = crate::test_support::chinese();
         let widths = [180., 80., 40.];
         for (width, expected) in [
             (0., 0),
@@ -455,6 +458,7 @@ mod tests {
 
     #[test]
     fn native_status_values_are_bounded_utf8_single_lines() {
+        let _locale = crate::test_support::chinese();
         assert_eq!(bounded_text("ab\n中文", 6), "ab 中");
         assert_eq!(bounded_text(&"界".repeat(300), 256).len(), 255);
         assert_eq!(bounded_text(&"x".repeat(2000), 1024).len(), 1024);

@@ -34,12 +34,22 @@ impl ConduitApp {
                         Button::new("settings-back")
                             .debug_selector(|| "settings-close".into())
                             .icon(FullIconName::ArrowLeft)
-                            .accessibility_label("返回工作台")
-                            .when(!narrow, |button| button.label("返回工作台"))
+                            .accessibility_label(conduit::i18n::text_static(
+                                "settings.workspace.back_to_workbench",
+                            ))
+                            .when(!narrow, |button| {
+                                button.label(conduit::i18n::text_static(
+                                    "settings.workspace.back_to_workbench",
+                                ))
+                            })
                             .ghost()
-                            .tooltip(format!(
-                                "返回工作台（{}）",
-                                shortcuts::display("settings_back", &self.store.ui.shortcuts)
+                            .tooltip(conduit::i18n::format(
+                                "settings.workspace.back_to_workbench_a9f951",
+                                &[(
+                                    "arg0",
+                                    shortcuts::display("settings_back", &self.store.ui.shortcuts)
+                                        .to_string(),
+                                )],
                             ))
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.close_settings(window, cx)),
@@ -49,7 +59,9 @@ impl ConduitApp {
                         div().flex_1().min_w_0().child(
                             Input::new(&self.settings_ui.search)
                                 .prefix(FullIconName::Search)
-                                .aria_label("搜索全部设置")
+                                .aria_label(conduit::i18n::text_static(
+                                    "settings.workspace.search_all_settings",
+                                ))
                                 .cleanable(true),
                         ),
                     ),
@@ -124,29 +136,45 @@ impl ConduitApp {
             (
                 FullIconName::TriangleAlert,
                 palette().danger_text,
-                format!("保存失败：{error}"),
+                conduit::i18n::format("notifications.save_failed", &[("error", error.to_string())]),
             )
         } else if disabled {
             (
                 FullIconName::Lock,
                 palette().muted,
-                "当前为只读模式，设置无法修改。".into(),
+                conduit::i18n::text_static(
+                    "settings.workspace.read_only_mode_settings_cannot_be_changed",
+                )
+                .into(),
             )
         } else if self.persistence.busy() {
-            (FullIconName::Clock, palette().muted, "正在保存更改…".into())
+            (
+                FullIconName::Clock,
+                palette().muted,
+                conduit::i18n::text_static("settings.workspace.saving_changes").into(),
+            )
         } else {
             (
                 FullIconName::Check,
                 palette().muted,
-                "偏好设置自动保存".into(),
+                conduit::i18n::text_static("settings.workspace.preferences_save_automatically")
+                    .into(),
             )
         };
         let hint = match self.settings_ui.page {
-            3 => "路径选择后立即保存，新会话使用更新后的配置。",
-            8 => "服务配置在编辑表单中保存，新会话使用更新后的配置。",
-            4 | 9 => "来源文件在编辑器中保存，下次启动会话时加载。",
-            10 => "默认值仅用于新会话，已有会话保留原选择。",
-            _ => "更改适用于这台设备。",
+            3 => conduit::i18n::text_static(
+                "settings.workspace.paths_save_immediately_new_sessions_use_the",
+            ),
+            8 => conduit::i18n::text_static(
+                "settings.workspace.service_configuration_saves_in_the_edit_form",
+            ),
+            4 | 9 => {
+                conduit::i18n::text_static("settings.workspace.source_files_save_in_the_editor_and")
+            }
+            10 => conduit::i18n::text_static(
+                "settings.workspace.defaults_apply_only_to_new_sessions_existing",
+            ),
+            _ => conduit::i18n::text_static("settings.workspace.changes_apply_to_this_device"),
         };
         h_flex()
             .id("settings-workspace-footer")

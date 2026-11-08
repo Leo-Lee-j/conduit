@@ -180,7 +180,12 @@ impl GitDiffDialog {
                     self.state
                         .update(cx, |state, cx| state.set_files(files, cx));
                 }
-                Err(error) => self.error = Some(format!("无法解析该文件的差异：{error}")),
+                Err(error) => {
+                    self.error = Some(conduit::i18n::format(
+                        "git_diff.unable_to_parse_this_file_s_diff",
+                        &[("error", format!("{}", error))],
+                    ))
+                }
             },
             Err(error) => self.error = Some(format!("{error:#}")),
         }
@@ -241,9 +246,16 @@ impl GitDiffDialog {
                 commit
                     .parent
                     .as_ref()
-                    .map(|oid| format!("父提交 · {}", &oid[..7]))
-                    .unwrap_or_else(|| "空树（首次提交）".into()),
-                format!("提交 · {}", &commit.oid[..7]),
+                    .map(|oid| {
+                        conduit::i18n::format(
+                            "git_diff.parent_commit",
+                            &[("arg0", oid[..7].to_string())],
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        conduit::i18n::text_static("git_diff.empty_tree_initial_commit").into()
+                    }),
+                conduit::i18n::format("git_diff.commit", &[("arg0", commit.oid[..7].to_string())]),
             );
         }
         if let Some(request) = &self.comparison {
@@ -253,7 +265,7 @@ impl GitDiffDialog {
                 &request.selected.oid[..7.min(request.selected.oid.len())]
             );
             let after = if request.kind == git::ComparisonKind::WorkingTree {
-                "工作区（含暂存）".into()
+                conduit::i18n::text_static("git_diff.working_tree_including_staged").into()
             } else {
                 format!(
                     "{} · {}",
@@ -277,13 +289,17 @@ impl GitDiffDialog {
         }
         match self.scope {
             git::FileDiffScope::Staged => (
-                "HEAD（无提交时为空树）".into(),
-                "暂存区 · 待提交内容".into(),
+                conduit::i18n::text_static("git_diff.head_empty_tree_if_no_commits").into(),
+                conduit::i18n::text_static("git_diff.staging_area_changes_to_commit").into(),
             ),
-            git::FileDiffScope::Unstaged => ("暂存区".into(), "工作区 · 未暂存修改".into()),
-            git::FileDiffScope::All => {
-                ("HEAD（无提交时为空树）".into(), "工作区 · 全部修改".into())
-            }
+            git::FileDiffScope::Unstaged => (
+                conduit::i18n::text_static("git_diff.staging_area").into(),
+                conduit::i18n::text_static("git_diff.working_tree_unstaged_changes").into(),
+            ),
+            git::FileDiffScope::All => (
+                conduit::i18n::text_static("git_diff.head_empty_tree_if_no_commits").into(),
+                conduit::i18n::text_static("git_diff.working_tree_all_changes").into(),
+            ),
         }
     }
 
@@ -364,7 +380,7 @@ impl GitDiffDialog {
                     .border_color(rgb(palette().border))
                     .text_size(ui_text_size(9.))
                     .text_color(rgb(palette().faint))
-                    .child("只读"),
+                    .child(conduit::i18n::text_static("git_diff.read_only")),
             );
         if let Some(original) = &self.file.original {
             details = details.child(
@@ -417,7 +433,9 @@ impl GitDiffDialog {
                                             div()
                                                 .text_size(ui_text_size(9.))
                                                 .text_color(rgb(palette().warning_text))
-                                                .child("二进制"),
+                                                .child(conduit::i18n::text_static(
+                                                    "git_diff.binary",
+                                                )),
                                         )
                                     }),
                             ),
@@ -429,8 +447,12 @@ impl GitDiffDialog {
                                 .small()
                                 .compact()
                                 .icon(FullIconName::X)
-                                .tooltip("关闭差异窗口 (Esc)")
-                                .accessibility_label("关闭差异窗口")
+                                .tooltip(conduit::i18n::text_static(
+                                    "git_diff.close_diff_window_esc",
+                                ))
+                                .accessibility_label(conduit::i18n::text_static(
+                                    "git_diff.close_diff_window",
+                                ))
                                 .cursor_pointer()
                                 .on_click(|_, window, cx| window.close_dialog(cx)),
                         )
@@ -488,8 +510,14 @@ impl GitDiffDialog {
                 .ghost()
                 .small()
                 .selected(mode == value)
-                .tooltip(format!("{label}显示"))
-                .accessibility_label(format!("{label}显示"))
+                .tooltip(conduit::i18n::format(
+                    "git_diff.view",
+                    &[("label", label.to_string())],
+                ))
+                .accessibility_label(conduit::i18n::format(
+                    "git_diff.view",
+                    &[("label", label.to_string())],
+                ))
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.set_mode(value, window, cx);
@@ -508,13 +536,13 @@ impl GitDiffDialog {
             .bg(rgb(palette().sidebar_bg))
             .child(mode_button(
                 "git-diff-split",
-                "并排",
+                conduit::i18n::text_static("chat.turn_diff.side_by_side"),
                 FullIconName::Columns2,
                 DiffMode::Split,
             ))
             .child(mode_button(
                 "git-diff-unified",
-                "统一",
+                conduit::i18n::text_static("chat.turn_diff.unified"),
                 FullIconName::Rows3,
                 DiffMode::Unified,
             ))
@@ -525,11 +553,13 @@ impl GitDiffDialog {
                     .small()
                     .compact()
                     .icon(IconName::ChevronUp)
-                    .tooltip(format!(
-                        "上一个差异（{}）",
-                        shortcuts::hint("previous_diff", cx)
+                    .tooltip(conduit::i18n::format(
+                        "git_diff.previous_change",
+                        &[("arg0", shortcuts::hint("previous_diff", cx).to_string())],
                     ))
-                    .accessibility_label("上一个差异")
+                    .accessibility_label(conduit::i18n::text_static(
+                        "git_diff.previous_change_1ca9b9",
+                    ))
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.previous_change(window, cx);
@@ -541,11 +571,11 @@ impl GitDiffDialog {
                     .small()
                     .compact()
                     .icon(IconName::ChevronDown)
-                    .tooltip(format!(
-                        "下一个差异（{}）",
-                        shortcuts::hint("next_diff", cx)
+                    .tooltip(conduit::i18n::format(
+                        "git_diff.next_change",
+                        &[("arg0", shortcuts::hint("next_diff", cx).to_string())],
                     ))
-                    .accessibility_label("下一个差异")
+                    .accessibility_label(conduit::i18n::text_static("git_diff.next_change_425f6c"))
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.next_change(window, cx);
@@ -555,16 +585,16 @@ impl GitDiffDialog {
             .child(
                 Button::new("git-diff-fold")
                     .label(if self.unchanged_expanded {
-                        "折叠未变更"
+                        conduit::i18n::text_static("git_diff.fold_unchanged_lines")
                     } else {
-                        "展开未变更"
+                        conduit::i18n::text_static("git_diff.expand_unchanged_lines")
                     })
                     .ghost()
                     .small()
                     .tooltip(if self.unchanged_expanded {
-                        "恢复只显示变更附近的上下文"
+                        conduit::i18n::text_static("git_diff.show_only_context_around_changes")
                     } else {
-                        "显示所有未变更行"
+                        conduit::i18n::text_static("git_diff.show_all_unchanged_lines")
                     })
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -578,8 +608,8 @@ impl GitDiffDialog {
                     .small()
                     .compact()
                     .icon(IconName::RefreshCw)
-                    .tooltip("重新读取差异")
-                    .accessibility_label("重新读取差异")
+                    .tooltip(conduit::i18n::text_static("git_diff.reload_diff"))
+                    .accessibility_label(conduit::i18n::text_static("git_diff.reload_diff"))
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _, window, cx| this.reload(window, cx))),
             )
@@ -633,7 +663,7 @@ impl GitDiffDialog {
                     div()
                         .text_size(ui_text_size(11.))
                         .text_color(rgb(palette().muted))
-                        .child("正在读取差异…"),
+                        .child(conduit::i18n::text_static("git_diff.loading_diff")),
                 )
                 .into_any_element();
         }
@@ -659,7 +689,7 @@ impl GitDiffDialog {
                 )
                 .child(
                     Button::new("git-diff-retry")
-                        .label("重新读取")
+                        .label(conduit::i18n::text_static("git_diff.reload"))
                         .small()
                         .ghost()
                         .cursor_pointer()
@@ -678,13 +708,17 @@ impl GitDiffDialog {
                     div()
                         .text_size(ui_text_size(11.))
                         .text_color(rgb(palette().muted))
-                        .child("没有可显示的文本差异"),
+                        .child(conduit::i18n::text_static(
+                            "git_diff.no_text_diff_to_display",
+                        )),
                 )
                 .child(
                     div()
                         .text_size(ui_text_size(10.))
                         .text_color(rgb(palette().faint))
-                        .child("文件可能已被还原，或只有属性变更"),
+                        .child(conduit::i18n::text_static(
+                            "git_diff.the_file_may_have_been_restored_or",
+                        )),
                 )
                 .into_any_element();
         }
@@ -704,7 +738,7 @@ impl GitDiffDialog {
                     div()
                         .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().text))
-                        .child("二进制文件已更改"),
+                        .child(conduit::i18n::text_static("git_diff.binary_file_changed")),
                 )
                 .child(
                     div()
@@ -712,7 +746,9 @@ impl GitDiffDialog {
                         .line_height(relative(1.5))
                         .text_align(gpui::TextAlign::Center)
                         .text_color(rgb(palette().muted))
-                        .child("此窗口仅显示文本差异，请在外部工具中查看二进制内容。"),
+                        .child(conduit::i18n::text_static(
+                            "git_diff.this_window_shows_text_diffs_only_use",
+                        )),
                 )
                 .into_any_element();
         }
@@ -767,11 +803,13 @@ impl GitDiffDialog {
                     .text_size(ui_text_size(9.))
                     .text_color(rgb(palette().faint))
                     .child(if binary {
-                        "二进制文件无法显示逐行差异"
+                        conduit::i18n::text_static(
+                            "git_diff.line_by_line_diffs_are_unavailable_for",
+                        )
                     } else if self.comparison.is_some() {
-                        "只读差异 · 比较两端版本"
+                        conduit::i18n::text_static("git_diff.read_only_diff_compare_both_versions")
                     } else {
-                        "只读差异 · 与 HEAD 对比"
+                        conduit::i18n::text_static("git_diff.read_only_diff_compare_with_head")
                     }),
             )
             .child(div().flex_1())
@@ -780,17 +818,21 @@ impl GitDiffDialog {
                     .text_size(ui_text_size(9.))
                     .text_color(rgb(palette().faint))
                     .child(if self.embedded {
-                        format!(
-                            "{} 下一处差异 · {} 上一处 · {} 关闭标签",
-                            shortcuts::hint("next_diff", cx),
-                            shortcuts::hint("previous_diff", cx),
-                            shortcuts::hint("close_diff", cx)
+                        conduit::i18n::format(
+                            "git_diff.next_change_previous_close_tab",
+                            &[
+                                ("arg0", shortcuts::hint("next_diff", cx).to_string()),
+                                ("arg1", shortcuts::hint("previous_diff", cx).to_string()),
+                                ("arg2", shortcuts::hint("close_diff", cx).to_string()),
+                            ],
                         )
                     } else {
-                        format!(
-                            "{} 下一处差异 · {} 上一处 · Esc 关闭",
-                            shortcuts::hint("next_diff", cx),
-                            shortcuts::hint("previous_diff", cx)
+                        conduit::i18n::format(
+                            "git_diff.next_change_previous_esc_close",
+                            &[
+                                ("arg0", shortcuts::hint("next_diff", cx).to_string()),
+                                ("arg1", shortcuts::hint("previous_diff", cx).to_string()),
+                            ],
                         )
                     }),
             )

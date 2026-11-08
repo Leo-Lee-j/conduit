@@ -36,6 +36,7 @@ fn assert_branch_ok(result: OperationResult) -> OperationResult {
 
 #[test]
 fn branch_create_switch_rename_track_delete_and_validate_names() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     for name in ["-bad", "bad..name", "bad name", "", "@{-1}"] {
         assert!(
@@ -105,6 +106,7 @@ fn branch_create_switch_rename_track_delete_and_validate_names() {
 
 #[test]
 fn branch_mutations_reject_stale_head_ref_upstream_and_cancel() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     repo.run(&["branch", "other"]);
     let request = branch_request(&repo, "other", BranchAction::Delete);
@@ -158,6 +160,7 @@ fn branch_mutations_reject_stale_head_ref_upstream_and_cancel() {
 
 #[test]
 fn checkout_preserves_local_edits_and_refuses_overwrite() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     repo.run(&["branch", "other"]);
     std::fs::write(repo.path.join("tracked.txt"), "local\n").unwrap();
@@ -185,6 +188,7 @@ fn checkout_preserves_local_edits_and_refuses_overwrite() {
 
 #[test]
 fn remote_checkout_creates_tracking_branch_and_rejects_local_collision() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     repo.seed_remote();
     repo.run(&["push", "origin", "main:feature/test"]);
@@ -209,6 +213,7 @@ fn remote_checkout_creates_tracking_branch_and_rejects_local_collision() {
 
 #[test]
 fn push_selected_branch_uses_its_tip_instead_of_current_head() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     let remote = repo.seed_remote();
     repo.run(&["branch", "other"]);
@@ -246,6 +251,7 @@ fn push_selected_branch_uses_its_tip_instead_of_current_head() {
 
 #[test]
 fn worktree_creation_reports_path_and_enforces_shared_branch_occupancy() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     let linked = std::fs::canonicalize(&repo.path).unwrap().join("linked");
     let result = assert_branch_ok(branch_run(
@@ -287,6 +293,7 @@ fn worktree_creation_reports_path_and_enforces_shared_branch_occupancy() {
 
 #[test]
 fn branch_compare_tracks_final_content_unique_commits_and_worktree_from_subdirectory() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     repo.run(&["branch", "other"]);
     repo.stage("main changed\n");
@@ -356,6 +363,7 @@ fn branch_compare_tracks_final_content_unique_commits_and_worktree_from_subdirec
 
 #[test]
 fn merge_conflict_is_detected_blocks_mutations_and_can_abort_or_continue() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     repo.run(&["switch", "-c", "other"]);
     repo.stage("other\n");
@@ -410,6 +418,7 @@ fn merge_conflict_is_detected_blocks_mutations_and_can_abort_or_continue() {
 
 #[test]
 fn checkout_rebase_uses_original_current_branch_and_reports_conflict_after_checkout() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     repo.run(&["branch", "other"]);
     repo.stage("main\n");
@@ -444,6 +453,7 @@ fn checkout_rebase_uses_original_current_branch_and_reports_conflict_after_check
 
 #[test]
 fn rebase_conflict_can_continue_after_external_resolution() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     repo.run(&["switch", "-c", "other"]);
     repo.stage("other\n");
@@ -475,6 +485,7 @@ fn rebase_conflict_can_continue_after_external_resolution() {
 
 #[test]
 fn integration_refuses_dirty_files_and_delete_refuses_unmerged_tip() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     repo.run(&["switch", "-c", "other"]);
     repo.stage("other\n");
@@ -502,6 +513,7 @@ fn integration_refuses_dirty_files_and_delete_refuses_unmerged_tip() {
 
 #[test]
 fn update_fetches_and_fast_forwards_noncurrent_branch_without_checkout() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     let remote = repo.seed_remote();
     repo.run(&["branch", "--track", "other", "origin/main"]);
@@ -554,6 +566,7 @@ fn update_fetches_and_fast_forwards_noncurrent_branch_without_checkout() {
 
 #[test]
 fn checkout_update_partial_failure_keeps_new_branch_and_reports_it() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     repo.run(&["branch", "other"]);
     let result = branch_run(
@@ -570,6 +583,7 @@ fn checkout_update_partial_failure_keeps_new_branch_and_reports_it() {
 
 #[test]
 fn update_noncurrent_ahead_branch_keeps_its_commits_and_rejects_divergence() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     repo.seed_remote();
     repo.run(&["switch", "-c", "other", "--track", "origin/main"]);
@@ -597,6 +611,7 @@ fn update_noncurrent_ahead_branch_keeps_its_commits_and_rejects_divergence() {
 
 #[test]
 fn current_branch_update_respects_merge_or_rebase_choice_on_divergence() {
+    let _locale = crate::test_support::chinese();
     for rebase in [false, true] {
         let repo = seeded_branch_repo();
         repo.seed_remote();
@@ -623,6 +638,7 @@ fn current_branch_update_respects_merge_or_rebase_choice_on_divergence() {
 
 #[test]
 fn worktree_comparison_reads_recreated_untracked_file_against_selected_branch() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     repo.run(&["branch", "other"]);
     repo.run(&["rm", "tracked.txt"]);
@@ -661,6 +677,7 @@ fn worktree_comparison_reads_recreated_untracked_file_against_selected_branch() 
 
 #[test]
 fn branch_fetch_prunes_remote_refs_and_detached_head_can_create_branch() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     let remote = repo.seed_remote();
     repo.run(&["push", "origin", "main:obsolete"]);

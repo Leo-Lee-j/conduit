@@ -185,8 +185,11 @@ fn codex_error_summary(params: &Value) -> String {
     let info = &error["codexErrorInfo"];
     let mut summary = if let Some(disconnected) = info.get("responseStreamDisconnected") {
         let mut summary = match disconnected["httpStatusCode"].as_i64() {
-            Some(code) => format!("连接中断（HTTP {code}）"),
-            None => "连接中断".to_string(),
+            Some(code) => conduit::i18n::format(
+                "failure.connection_interrupted_http_650cf7",
+                &[("code", format!("{}", code))],
+            ),
+            None => conduit::i18n::text_static("failure.connection_interrupted_3eb19e").to_string(),
         };
         let detail = text(disconnected, "additionalDetails");
         if !detail.is_empty() {
@@ -211,7 +214,10 @@ fn codex_error_summary(params: &Value) -> String {
     // The CLI is reconnecting by itself, so tell the user instead of making
     // the banner look like a fatal failure.
     if error["willRetry"].as_bool().unwrap_or(false) {
-        summary = format!("{summary}（正在自动重试）");
+        summary = conduit::i18n::format(
+            "protocol.retrying_automatically",
+            &[("summary", summary.to_string())],
+        );
     }
     summary
 }
@@ -586,7 +592,10 @@ impl Protocol {
                     .unwrap_or("");
                 if id.is_empty() {
                     step.done = true;
-                    step.error = Some("Codex 未返回 thread ID，未发送任务".into());
+                    step.error = Some(
+                        conduit::i18n::text_static("protocol.codex_returned_no_thread_id_task_not")
+                            .into(),
+                    );
                     return step;
                 }
                 if self
@@ -595,8 +604,12 @@ impl Protocol {
                     .is_some_and(|expected| expected != id)
                 {
                     step.done = true;
-                    step.error =
-                        Some("Codex 返回了不同的 thread ID，未发送任务。请新建会话。".into());
+                    step.error = Some(
+                        conduit::i18n::text_static(
+                            "protocol.codex_returned_a_different_thread_id_task",
+                        )
+                        .into(),
+                    );
                     return step;
                 }
                 self.thread_id = Some(id.into());
@@ -806,7 +819,12 @@ impl Protocol {
                     .is_some_and(|v| v.is_string() || v.is_i64() || v.is_u64())
                 {
                     step.done = true;
-                    step.error = Some("Codex 审批请求缺少有效 ID，已停止".into());
+                    step.error = Some(
+                        conduit::i18n::text_static(
+                            "protocol.codex_approval_request_is_missing_a_valid",
+                        )
+                        .into(),
+                    );
                     return step;
                 }
                 let mut details = p.clone();
@@ -821,11 +839,11 @@ impl Protocol {
                         .get("networkApprovalContext")
                         .is_some_and(|v| !v.is_null())
                     {
-                        "请求网络访问"
+                        conduit::i18n::text_static("protocol.request_for_network_access")
                     } else if method.contains("commandExecution") {
-                        "请求执行命令"
+                        conduit::i18n::text_static("protocol.request_to_run_a_command")
                     } else {
-                        "请求修改文件"
+                        conduit::i18n::text_static("protocol.request_to_modify_files")
                     }
                     .into(),
                     detail: pretty(&details),
@@ -856,7 +874,12 @@ impl Protocol {
                     .is_some_and(|v| v.is_string() || v.is_i64() || v.is_u64())
                 {
                     step.done = true;
-                    step.error = Some("Codex 权限扩展请求缺少有效 ID，已停止".into());
+                    step.error = Some(
+                        conduit::i18n::text_static(
+                            "protocol.codex_permission_expansion_request_is_missing_a",
+                        )
+                        .into(),
+                    );
                     return step;
                 }
                 // Codex asks to extend the sandbox (additional network or
@@ -872,7 +895,8 @@ impl Protocol {
                     id: id_text(&v["id"]),
                     wire_id: v["id"].clone(),
                     input: p.clone(),
-                    title: "请求扩展权限".into(),
+                    title: conduit::i18n::text_static("protocol.request_for_expanded_permissions")
+                        .into(),
                     detail: pretty(&details),
                     allow_once: true,
                     kind: ApprovalKind::Permissions,
@@ -881,8 +905,10 @@ impl Protocol {
             _ if v.get("id").is_some() && !method.is_empty() => {
                 // Unknown interactive protocols are rejected, never silently approved.
                 step.writes.push(json!({"id":v["id"],"error":{"code":-32601,"message":"Conduit 尚不支持该交互，请取消任务并使用官方 CLI"}}));
-                step.events
-                    .push(Event::Notice(format!("尚不支持的 CLI 交互：{method}")));
+                step.events.push(Event::Notice(conduit::i18n::format(
+                    "protocol.unsupported_cli_interaction",
+                    &[("method", method.to_string())],
+                )));
             }
             _ => {}
         }
@@ -901,8 +927,12 @@ impl Protocol {
                 .is_some_and(|expected| expected != id)
             {
                 step.done = true;
-                step.error =
-                    Some("Claude 返回了不同的 session ID，已停止，避免丢失上下文。".into());
+                step.error = Some(
+                    conduit::i18n::text_static(
+                        "protocol.claude_returned_a_different_session_id_stopped",
+                    )
+                    .into(),
+                );
                 return step;
             }
             if self.thread_id.as_deref() != Some(id) {
@@ -1031,9 +1061,9 @@ impl Protocol {
                                 pretty(&block["content"])
                             },
                             status: if block["is_error"].as_bool().unwrap_or(false) {
-                                "失败"
+                                conduit::i18n::text_static("tools.failed")
                             } else {
-                                "完成"
+                                conduit::i18n::text_static("protocol.done")
                             }
                             .into(),
                         });
@@ -1046,7 +1076,12 @@ impl Protocol {
                 if text(request, "subtype") == "can_use_tool" {
                     if id.is_empty() {
                         step.done = true;
-                        step.error = Some("Claude 审批请求缺少有效 ID，已停止".into());
+                        step.error = Some(
+                            conduit::i18n::text_static(
+                                "protocol.claude_approval_request_is_missing_a_valid",
+                            )
+                            .into(),
+                        );
                         return step;
                     }
                     if text(request, "tool_name") == "AskUserQuestion" {
@@ -1061,7 +1096,10 @@ impl Protocol {
                     step.events.push(Event::Approval(Approval {
                         id: id.into(),
                         wire_id: json!(id),
-                        title: format!("请求使用 {}", text(request, "tool_name")),
+                        title: conduit::i18n::format(
+                            "protocol.request_to_use",
+                            &[("arg0", text(request, "tool_name").to_string())],
+                        ),
                         detail: pretty(request),
                         input: request["input"].clone(),
                         allow_once: true,
@@ -1069,9 +1107,9 @@ impl Protocol {
                     }));
                 } else {
                     step.writes.push(json!({"type":"control_response","response":{"subtype":"error","request_id":id,"error":"Unsupported control request"}}));
-                    step.events.push(Event::Notice(format!(
-                        "不支持的 Claude 控制请求：{}",
-                        text(request, "subtype")
+                    step.events.push(Event::Notice(conduit::i18n::format(
+                        "protocol.unsupported_claude_control_request",
+                        &[("arg0", text(request, "subtype").to_string())],
                     )));
                 }
             }
@@ -1213,6 +1251,7 @@ mod tests {
 
     #[test]
     fn codex_startup_uses_selected_route_and_model_for_new_and_resumed_threads() {
+        let _locale = crate::test_support::chinese();
         use crate::providers::RuntimeRoute;
         for native in [None, Some("known-thread".into())] {
             let mut route = RuntimeRoute::endpoint(
@@ -1258,6 +1297,7 @@ mod tests {
 
     #[test]
     fn full_access_and_effort_override_resumed_thread_and_turn_defaults() {
+        let _locale = crate::test_support::chinese();
         use crate::providers::{ReasoningEffort, RuntimeRoute};
         for native in [None, Some("original-thread".into())] {
             let route = RuntimeRoute::endpoint(
@@ -1321,6 +1361,7 @@ mod tests {
 
     #[test]
     fn automatic_tool_approvals_follow_the_run_snapshot_and_helpers_never_grant() {
+        let _locale = crate::test_support::chinese();
         let request = json!({"id":9,"method":"item/commandExecution/requestApproval","params":{"itemId":"tool"}});
         let mut normal = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
         let step = normal.accept(request);
@@ -1343,6 +1384,7 @@ mod tests {
 
     #[test]
     fn full_access_handles_session_only_and_deny_only_codex_decisions() {
+        let _locale = crate::test_support::chinese();
         for method in [
             "item/commandExecution/requestApproval",
             "item/fileChange/requestApproval",
@@ -1389,6 +1431,7 @@ mod tests {
 
     #[test]
     fn full_access_claude_tool_requests_are_automatic_even_when_resumed() {
+        let _locale = crate::test_support::chinese();
         for native in [None, Some("resumed-session".into())] {
             let mut full =
                 Protocol::new(Provider::Claude, "C:/work".into(), "hello".into(), native)
@@ -1411,6 +1454,7 @@ mod tests {
 
     #[test]
     fn provider_default_model_and_route_survive_text_only_options() {
+        let _locale = crate::test_support::chinese();
         use crate::providers::{ReasoningEffort, RuntimeRoute};
         let mut route =
             RuntimeRoute::endpoint(Provider::Codex, "proxy", "https://proxy.invalid/v1", None);
@@ -1434,6 +1478,7 @@ mod tests {
     }
     #[test]
     fn commit_message_helper_uses_ephemeral_read_only_turn_and_disables_claude_tools() {
+        let _locale = crate::test_support::chinese();
         let mut codex =
             Protocol::new(Provider::Codex, "C:\\temp".into(), "diff".into(), None).text_only();
         let step = codex.accept(json!({"id":1,"result":{}}));
@@ -1453,6 +1498,7 @@ mod tests {
     }
     #[test]
     fn model_override_reaches_both_wire_formats() {
+        let _locale = crate::test_support::chinese();
         let claude = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None)
             .with_model(Some("claude-custom".into()));
         let args = claude.args();
@@ -1485,6 +1531,7 @@ mod tests {
     }
     #[test]
     fn codex_exposes_only_provider_reasoning_summaries() {
+        let _locale = crate::test_support::chinese();
         let mut p = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
         let delta = p.accept(json!({
             "method":"item/reasoning/summaryTextDelta",
@@ -1508,6 +1555,7 @@ mod tests {
 
     #[test]
     fn codex_ignores_other_threads_and_previous_turn_completion() {
+        let _locale = crate::test_support::chinese();
         let mut p = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
         p.accept(json!({"id":2,"result":{"thread":{"id":"thread-1"}}}));
         p.accept(json!({"id":3,"result":{"turn":{"id":"turn-2"}}}));
@@ -1520,6 +1568,7 @@ mod tests {
     }
     #[test]
     fn codex_exact_resume_and_no_silent_new_thread() {
+        let _locale = crate::test_support::chinese();
         let mut protocol = Protocol::new(
             Provider::Codex,
             "C:\\work".into(),
@@ -1536,6 +1585,7 @@ mod tests {
     }
     #[test]
     fn codex_approval_preserves_request_id_and_only_grants_once() {
+        let _locale = crate::test_support::chinese();
         let mut protocol = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
         let step = protocol.accept(json!({"id":"server-42","method":"item/commandExecution/requestApproval","params":{"command":"echo test","itemId":"item1"}}));
         let Event::Approval(approval) = &step.events[0] else {
@@ -1552,6 +1602,7 @@ mod tests {
     }
     #[test]
     fn codex_file_change_approval_and_resolved_request_keep_exact_identity() {
+        let _locale = crate::test_support::chinese();
         let mut protocol = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
         let step = protocol.accept(json!({"id":41,"method":"item/fileChange/requestApproval","params":{"itemId":"file-1","changes":[{"path":"src/main.rs","kind":"update"}],"availableDecisions":["accept","decline"]}}));
         let Event::Approval(approval) = &step.events[0] else {
@@ -1577,6 +1628,7 @@ mod tests {
     }
     #[test]
     fn claude_control_response_preserves_tool_input() {
+        let _locale = crate::test_support::chinese();
         let mut protocol = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None);
         let step = protocol.accept(json!({"type":"control_request","request_id":"req-1","request":{"subtype":"can_use_tool","tool_name":"Edit","input":{"file_path":"test.rs","new_string":"a"}}}));
         let Event::Approval(approval) = &step.events[0] else {
@@ -1600,6 +1652,7 @@ mod tests {
     }
     #[test]
     fn claude_partial_and_snapshot_share_message_key() {
+        let _locale = crate::test_support::chinese();
         let mut protocol = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None);
         protocol.accept(
             json!({"type":"stream_event","event":{"type":"message_start","message":{"id":"m1"}}}),
@@ -1611,6 +1664,7 @@ mod tests {
     }
     #[test]
     fn plan_updates_from_both_providers_become_plan_events() {
+        let _locale = crate::test_support::chinese();
         let mut codex = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
         codex.accept(json!({"id":2,"result":{"thread":{"id":"thread-1"}}}));
         codex.accept(json!({"id":3,"result":{"turn":{"id":"turn-1"}}}));
@@ -1656,6 +1710,7 @@ mod tests {
     }
     #[test]
     fn unknown_interactive_requests_are_never_auto_approved() {
+        let _locale = crate::test_support::chinese();
         let mut protocol = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
         let step = protocol.accept(json!({"id":88,"method":"unsupported/approval","params":{}}));
         assert_eq!(step.writes[0]["error"]["code"], -32601);
@@ -1672,6 +1727,7 @@ mod tests {
     }
     #[test]
     fn codex_permissions_approval_grants_requested_profile_or_nothing() {
+        let _locale = crate::test_support::chinese();
         let mut protocol = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
         // Shape follows PermissionsRequestApprovalParams from the 0.163.0
         // app-server schema: additional filesystem/network access beyond the
@@ -1721,6 +1777,7 @@ mod tests {
     }
     #[test]
     fn claude_hidden_thinking_block_does_not_duplicate_visible_text() {
+        let _locale = crate::test_support::chinese();
         let mut protocol = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None);
         protocol.accept(
             json!({"type":"stream_event","event":{"type":"message_start","message":{"id":"m1"}}}),
@@ -1737,6 +1794,7 @@ mod tests {
     }
     #[test]
     fn codex_token_usage_notification_maps_to_usage_event() {
+        let _locale = crate::test_support::chinese();
         let mut protocol = Protocol::new(
             Provider::Codex,
             "C:\\work".into(),
@@ -1782,6 +1840,7 @@ mod tests {
     }
     #[test]
     fn claude_assistant_usage_maps_to_usage_event() {
+        let _locale = crate::test_support::chinese();
         let mut protocol = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None);
         let step = protocol.accept(json!({
             "type": "assistant",
@@ -1833,6 +1892,7 @@ mod tests {
 
     #[test]
     fn codex_context_is_last_request_not_thread_total_and_can_compact() {
+        let _locale = crate::test_support::chinese();
         let mut protocol = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
         let first = protocol.accept(json!({"method":"thread/tokenUsage/updated","params":{"tokenUsage":{
             "total":{"inputTokens":290000,"cachedInputTokens":250000,"outputTokens":10000,"totalTokens":300000},
@@ -1853,6 +1913,7 @@ mod tests {
 
     #[test]
     fn codex_missing_last_does_not_substitute_cumulative_context() {
+        let _locale = crate::test_support::chinese();
         let mut protocol = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
         let step = protocol.accept(json!({"method":"thread/tokenUsage/updated","params":{"tokenUsage":{
             "total":{"inputTokens":290000,"outputTokens":10000,"totalTokens":300000},"modelContextWindow":200000
@@ -1862,6 +1923,7 @@ mod tests {
 
     #[test]
     fn claude_stream_usage_merges_caches_and_deduplicates_response_snapshots() {
+        let _locale = crate::test_support::chinese();
         let mut protocol = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None);
         let start = protocol.accept(json!({"type":"stream_event","event":{"type":"message_start","message":{
             "id":"m1","usage":{"input_tokens":100,"cache_read_input_tokens":500,"cache_creation_input_tokens":200,"output_tokens":1}
@@ -1889,6 +1951,7 @@ mod tests {
 
     #[test]
     fn claude_multiple_requests_accumulate_but_context_stays_latest_and_result_corrects_output() {
+        let _locale = crate::test_support::chinese();
         let mut protocol = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None);
         protocol.accept(json!({"type":"assistant","message":{"id":"m1","model":"main-model","content":[],
             "usage":{"input_tokens":100,"cache_read_input_tokens":500,"cache_creation_input_tokens":200,"output_tokens":50}
@@ -1918,6 +1981,7 @@ mod tests {
 
     #[test]
     fn claude_subagent_usage_does_not_pollute_main_agent_context_or_speed() {
+        let _locale = crate::test_support::chinese();
         let mut protocol = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None);
         protocol.accept(json!({"type":"stream_event","event":{"type":"message_start","message":{"id":"main","usage":{"input_tokens":100,"output_tokens":1}}}}));
         let child = protocol.accept(json!({"type":"stream_event","parent_tool_use_id":"tool1","event":{"type":"message_start","message":{"id":"child","usage":{"input_tokens":10000,"output_tokens":500}}}}));
@@ -1940,6 +2004,7 @@ mod tests {
 
     #[test]
     fn claude_output_only_or_result_only_usage_does_not_invent_current_context() {
+        let _locale = crate::test_support::chinese();
         let mut protocol = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None);
         let output = protocol.accept(json!({"type":"assistant","message":{"id":"m1","content":[],"usage":{"output_tokens":20}}}));
         assert_eq!(reported_usage(&output).context_tokens, None);
@@ -1951,6 +2016,7 @@ mod tests {
 
     #[test]
     fn permission_level_reaches_both_wire_formats() {
+        let _locale = crate::test_support::chinese();
         let protocol = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None)
             .with_permission(crate::domain::PermissionLevel::FullAccess);
         let args = protocol.args();

@@ -89,6 +89,7 @@ fn open_first_view(app: &Entity<ConduitApp>, index: usize, cx: &mut VisualTestCo
 #[gpui_kit::test]
 #[ignore = "component breakdown; use verify-desktop.py --phase breakdown"]
 fn desktop_breakdown_probe(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let scenario = std::env::var("CONDUIT_PERF_SCENARIO").unwrap();
     assert!(matches!(
         scenario.as_str(),

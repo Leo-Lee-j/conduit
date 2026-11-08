@@ -409,7 +409,12 @@ impl ConduitApp {
         self.sync_plugin_context();
         match self.plugins.select(id) {
             Ok(adapter) => (adapter.activate)(self, cx),
-            Err(error) => self.message = Some(format!("无法打开导航：{error}")),
+            Err(error) => {
+                self.message = Some(conduit::i18n::format(
+                    "plugin_ui.unable_to_open_navigation",
+                    &[("error", format!("{}", error))],
+                ))
+            }
         }
         cx.notify();
     }
@@ -462,9 +467,15 @@ impl ConduitApp {
         let pending = self.session_control.unread_completed.len() + self.session_control.runs.len();
         let badge = adapter.is_some_and(|a| a.task_badge);
         let tooltip = if badge {
-            format!("{} · {pending} 个运行中或未读任务", item.title)
+            conduit::i18n::format(
+                "plugin_ui.running_or_unread_tasks",
+                &[
+                    ("arg0", contribution_title(item.id.as_str(), &item.title)),
+                    ("pending", format!("{}", pending)),
+                ],
+            )
         } else {
-            item.title.clone()
+            contribution_title(item.id.as_str(), &item.title)
         };
         let button = Button::new(SharedString::from(id.clone()))
             .debug_selector(move || id.clone())
@@ -478,7 +489,7 @@ impl ConduitApp {
             .icon(activity_icon(&item.icon).unwrap_or(FullIconName::CirclePile))
             .selected(self.activity_selected(item))
             .tooltip(tooltip)
-            .accessibility_label(item.title.clone())
+            .accessibility_label(contribution_title(item.id.as_str(), &item.title))
             .disabled(request.is_none())
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, window, cx| {
@@ -572,8 +583,8 @@ impl ConduitApp {
                     .flex_shrink_0()
                     .icon(IconName::Ellipsis)
                     .selected(selected)
-                    .tooltip("更多功能")
-                    .accessibility_label("更多功能")
+                    .tooltip(conduit::i18n::text_static("plugin_ui.more_features"))
+                    .accessibility_label(conduit::i18n::text_static("plugin_ui.more_features"))
                     .dropdown_menu(move |mut menu, _, _| {
                         // Keep every contribution reachable even when the menu has
                         // more rows than the rail or the window can display. The
@@ -582,7 +593,7 @@ impl ConduitApp {
                         for (item, request, selected) in &hidden {
                             let app = app.clone();
                             let request = request.clone();
-                            let label = item.title.clone();
+                            let label = contribution_title(item.id.as_str(), &item.title);
                             let debug = format!("nav-more-{}", item.id);
                             let entry = PopupMenuItem::element(move |_, _| {
                                 div()
@@ -615,8 +626,13 @@ impl ConduitApp {
         }
         let pending_push = self.pending_push_status();
         let branch_tooltip = pending_push.as_ref().map_or_else(
-            || "Git 分支与日志".to_owned(),
-            |(_, tooltip)| format!("Git 分支与日志 · {tooltip}"),
+            || conduit::i18n::text_static("plugin_ui.git_branches_and_log").to_owned(),
+            |(_, tooltip)| {
+                conduit::i18n::format(
+                    "plugin_ui.git_branches_and_log_27c010",
+                    &[("tooltip", tooltip.to_string())],
+                )
+            },
         );
         let rail = rail.child(div().flex_1()).child(
             div()
@@ -683,7 +699,9 @@ impl ConduitApp {
                 } else {
                     IconName::ChevronLeft
                 })
-                .tooltip("展开 / 收起侧栏")
+                .tooltip(conduit::i18n::text_static(
+                    "plugin_ui.expand_collapse_sidebar",
+                ))
                 .cursor_pointer()
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.plugins.set_collapsed(!this.plugins.collapsed());
@@ -698,9 +716,14 @@ impl ConduitApp {
             .plugins
             .adapter(self.plugins.selected())
             .map(|adapter| adapter.render);
-        let pane = renderer
-            .map(|render| render(self, cx))
-            .unwrap_or_else(|| div().p_3().child("导航视图不可用").into_any_element());
+        let pane = renderer.map(|render| render(self, cx)).unwrap_or_else(|| {
+            div()
+                .p_3()
+                .child(conduit::i18n::text_static(
+                    "plugin_ui.navigation_view_unavailable",
+                ))
+                .into_any_element()
+        });
         h_flex()
             .id("navigation-panel")
             .test_support()
@@ -709,5 +732,13 @@ impl ConduitApp {
             .child(rail)
             .child(div().flex_1().min_w_0().h_full().child(pane))
             .into_any_element()
+    }
+}
+
+fn contribution_title(id: &str, title: &str) -> String {
+    if id.starts_with("conduit.") {
+        conduit::i18n::retained(title).to_string()
+    } else {
+        title.to_string()
     }
 }

@@ -20,14 +20,18 @@ fn decode_path(text: &str) -> Result<String, String> {
             let high = source.next().and_then(hex);
             let low = source.next().and_then(hex);
             let (Some(high), Some(low)) = (high, low) else {
-                return Err("文件链接包含无效的路径编码。".into());
+                return Err(conduit::i18n::text_static(
+                    "file_links.the_file_link_contains_invalid_path_encoding",
+                )
+                .into());
             };
             bytes.push(high * 16 + low);
         } else {
             bytes.push(byte);
         }
     }
-    String::from_utf8(bytes).map_err(|_| "文件链接不是有效的 UTF-8 路径。".into())
+    String::from_utf8(bytes)
+        .map_err(|_| conduit::i18n::text_static("file_links.the_file_link_is_not_a_valid").into())
 }
 
 fn normalize(path: &Path) -> Result<PathBuf, String> {
@@ -37,7 +41,10 @@ fn normalize(path: &Path) -> Result<PathBuf, String> {
             Component::CurDir => {}
             Component::ParentDir => {
                 if !result.pop() {
-                    return Err("此链接指向工作区外部，请在对应工作区中打开。".into());
+                    return Err(conduit::i18n::text_static(
+                        "file_links.this_link_points_outside_the_workspace_open",
+                    )
+                    .into());
                 }
             }
             _ => result.push(component.as_os_str()),
@@ -77,7 +84,9 @@ fn resolve_link(workspace: &Path, href: &str) -> Result<LinkTarget, String> {
             }
         }
     } else if lower.contains("://") {
-        return Err("此链接无法在文件预览中打开。".into());
+        return Err(
+            conduit::i18n::text_static("file_links.this_link_cannot_be_opened_in_file").into(),
+        );
     }
     // CLI citations commonly append :line or :line:column. Leave the drive
     // letter intact, and decode afterwards so %3A in a filename stays literal.
@@ -99,19 +108,26 @@ fn resolve_link(workspace: &Path, href: &str) -> Result<LinkTarget, String> {
 /// Attachment references are native paths, so %, # and + stay literal.
 fn resolve_file(workspace: &Path, path: &str) -> Result<FileKey, String> {
     if path.is_empty() || path.chars().any(char::is_control) {
-        return Err("文件链接缺少有效路径。".into());
+        return Err(
+            conduit::i18n::text_static("file_links.the_file_link_is_missing_a_valid").into(),
+        );
     }
     if path.contains(':')
         && !(path.as_bytes().get(1) == Some(&b':') && path.as_bytes()[0].is_ascii_alphabetic())
     {
-        return Err("此链接无法在文件预览中打开。".into());
+        return Err(
+            conduit::i18n::text_static("file_links.this_link_cannot_be_opened_in_file").into(),
+        );
     }
     let root = normalize(Path::new(&display_path(workspace)))?;
     let path = PathBuf::from(display_path(Path::new(path)));
     if (path.has_root() || path.components().any(|c| matches!(c, Component::Prefix(_))))
         && !path.is_absolute()
     {
-        return Err("文件链接需要完整的绝对路径或工作区相对路径。".into());
+        return Err(conduit::i18n::text_static(
+            "file_links.file_links_require_a_full_absolute_path",
+        )
+        .into());
     }
     let full = normalize(&if path.is_absolute() {
         path
@@ -123,7 +139,10 @@ fn resolve_file(workspace: &Path, path: &str) -> Result<FileKey, String> {
     let mut components = full.components();
     for expected in root.components() {
         let Some(actual) = components.next() else {
-            return Err("此链接指向工作区外部，请在对应工作区中打开。".into());
+            return Err(conduit::i18n::text_static(
+                "file_links.this_link_points_outside_the_workspace_open",
+            )
+            .into());
         };
         let matches = if cfg!(windows) {
             actual
@@ -134,12 +153,18 @@ fn resolve_file(workspace: &Path, path: &str) -> Result<FileKey, String> {
             actual == expected
         };
         if !matches {
-            return Err("此链接指向工作区外部，请在对应工作区中打开。".into());
+            return Err(conduit::i18n::text_static(
+                "file_links.this_link_points_outside_the_workspace_open",
+            )
+            .into());
         }
     }
     let relative = components.as_path().to_owned();
     if relative.as_os_str().is_empty() {
-        return Err("此链接指向工作区目录，请选择具体文件。".into());
+        return Err(conduit::i18n::text_static(
+            "file_links.this_link_points_to_a_workspace_directory",
+        )
+        .into());
     }
     Ok(FileKey {
         workspace: workspace.to_owned(),
@@ -207,6 +232,7 @@ mod tests {
 
     #[test]
     fn local_links_decode_and_normalize_citations() {
+        let _locale = crate::test_support::chinese();
         let root = std::env::temp_dir().join("conduit-links");
         for href in [
             "./src/../docs/%E4%B8%AD%E6%96%87%20notes.md#L12",
@@ -263,6 +289,7 @@ mod tests {
 
     #[test]
     fn local_links_reject_escape_and_bad_encoding() {
+        let _locale = crate::test_support::chinese();
         let root = std::env::temp_dir().join("conduit-links");
         for href in [
             "../outside.rs",

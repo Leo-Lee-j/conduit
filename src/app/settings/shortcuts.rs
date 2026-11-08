@@ -122,7 +122,8 @@ impl Render for ShortcutEditor {
                             .gap_2()
                             .child(div().text_size(ui_text_size(18.)).child(
                                 if self.keys.is_empty() {
-                                    "未绑定".to_owned()
+                                    conduit::i18n::text_static("settings.shortcuts.unbound")
+                                        .to_owned()
                                 } else {
                                     self.keys
                                         .iter()
@@ -134,12 +135,18 @@ impl Render for ShortcutEditor {
                             .child(div().text_color(rgb(palette().muted)).child(
                                 if self.recording {
                                     if self.first_shift.is_some() {
-                                        "再按一次 Shift…"
+                                        conduit::i18n::text_static(
+                                            "settings.shortcuts.press_shift_again",
+                                        )
                                     } else {
-                                        "请按下新的快捷键…"
+                                        conduit::i18n::text_static(
+                                            "settings.shortcuts.press_the_new_shortcut",
+                                        )
                                     }
                                 } else {
-                                    "点击此处重新录制"
+                                    conduit::i18n::text_static(
+                                        "settings.shortcuts.click_here_to_record_again",
+                                    )
                                 },
                             )),
                     )
@@ -175,7 +182,9 @@ impl Render for ShortcutEditor {
                             .debug_selector(|| "shortcut-reset".into())
                             .small()
                             .ghost()
-                            .label("恢复此项默认")
+                            .label(conduit::i18n::text_static(
+                                "settings.shortcuts.restore_default_for_this_shortcut",
+                            ))
                             .disabled(disabled)
                             .on_click(cx.listener(|editor, _, window, cx| {
                                 editor.save(
@@ -195,7 +204,9 @@ impl Render for ShortcutEditor {
                             .debug_selector(|| "shortcut-unbind".into())
                             .small()
                             .ghost()
-                            .label("取消绑定")
+                            .label(conduit::i18n::text_static(
+                                "settings.shortcuts.remove_binding",
+                            ))
                             .disabled(disabled)
                             .on_click(cx.listener(|editor, _, _, cx| {
                                 editor.keys.clear();
@@ -210,7 +221,7 @@ impl Render for ShortcutEditor {
                         Button::new("shortcut-cancel")
                             .small()
                             .outline()
-                            .label("取消")
+                            .label(conduit::i18n::text_static("git_branches.cancel"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
@@ -218,7 +229,9 @@ impl Render for ShortcutEditor {
                             .debug_selector(|| "shortcut-save".into())
                             .small()
                             .primary()
-                            .label("保存绑定")
+                            .label(conduit::i18n::text_static(
+                                "settings.shortcuts.save_binding",
+                            ))
                             .disabled(disabled || self.recording || error.is_some())
                             .on_click(cx.listener(|editor, _, window, cx| {
                                 editor.save(editor.keys.clone(), window, cx);
@@ -275,7 +288,10 @@ impl ConduitApp {
         window.open_dialog(cx, move |dialog, window, _| {
             let editor = editor.clone();
             dialog
-                .title(format!("修改快捷键 · {}", shortcut.label))
+                .title(conduit::i18n::format(
+                    "settings.shortcuts.edit_shortcut",
+                    &[("arg0", conduit::i18n::source(shortcut.label).to_string())],
+                ))
                 .w(px((f32::from(window.viewport_size().width) - 48.).min(520.)))
                 .overlay_closable(false)
                 .keyboard(false)
@@ -289,53 +305,69 @@ impl ConduitApp {
         disabled: bool,
         view: Entity<Self>,
     ) -> SettingPage {
-        let groups = [(true, "全局快捷键"), (false, "当前区域快捷键")]
-            .into_iter()
-            .map(|(global, title)| {
-                settings_section(title).items(
-                    SHORTCUTS
-                        .iter()
-                        .filter(|shortcut| (shortcut.scope == Scope::Global) == global)
-                        .map(|shortcut| {
-                            let value = shortcuts::display(shortcut.id, &self.store.ui.shortcuts);
-                            let customized = self.store.ui.shortcuts.contains_key(shortcut.id);
+        let groups = [
+            (
+                true,
+                conduit::i18n::text_static("settings.shortcuts.global_shortcuts"),
+            ),
+            (
+                false,
+                conduit::i18n::text_static("settings.shortcuts.context_shortcuts"),
+            ),
+        ]
+        .into_iter()
+        .map(|(global, title)| {
+            settings_section(title).items(
+                SHORTCUTS
+                    .iter()
+                    .filter(|shortcut| (shortcut.scope == Scope::Global) == global)
+                    .map(|shortcut| {
+                        let value = shortcuts::display(shortcut.id, &self.store.ui.shortcuts);
+                        let customized = self.store.ui.shortcuts.contains_key(shortcut.id);
+                        let view = view.clone();
+                        let field = SettingField::render(move |_, _, _| {
                             let view = view.clone();
-                            let field = SettingField::render(move |_, _, _| {
-                                let view = view.clone();
-                                Button::new(SharedString::from(format!(
-                                    "shortcut-edit-{}",
-                                    shortcut.id
-                                )))
-                                .debug_selector(move || format!("shortcut-edit-{}", shortcut.id))
-                                .small()
-                                .outline()
-                                .label(value.clone())
-                                .icon(FullIconName::Pencil)
-                                .accessibility_label(format!("修改{}快捷键", shortcut.label))
-                                .disabled(disabled)
-                                .on_click(
-                                    move |_, window, cx| {
-                                        view.update(cx, |app, cx| {
-                                            app.open_shortcut_editor(shortcut.id, window, cx)
-                                        })
-                                    },
-                                )
-                            });
-                            SettingItem::new(shortcut.label, field).description(format!(
+                            Button::new(SharedString::from(format!(
+                                "shortcut-edit-{}",
+                                shortcut.id
+                            )))
+                            .debug_selector(move || format!("shortcut-edit-{}", shortcut.id))
+                            .small()
+                            .outline()
+                            .label(value.clone())
+                            .icon(FullIconName::Pencil)
+                            .accessibility_label(conduit::i18n::format(
+                                "settings.shortcuts.edit_shortcut_bde991",
+                                &[("arg0", conduit::i18n::source(shortcut.label).to_string())],
+                            ))
+                            .disabled(disabled)
+                            .on_click(move |_, window, cx| {
+                                view.update(cx, |app, cx| {
+                                    app.open_shortcut_editor(shortcut.id, window, cx)
+                                })
+                            })
+                        });
+                        SettingItem::new(conduit::i18n::source(shortcut.label), field).description(
+                            format!(
                                 "{}{}",
                                 shortcut.scope.label(),
                                 if customized {
-                                    " · 已自定义"
+                                    conduit::i18n::text_static("settings.shortcuts.customized")
                                 } else {
-                                    " · 默认"
+                                    conduit::i18n::text_static("settings.shortcuts.default")
                                 }
-                            ))
-                        })
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect::<Vec<_>>();
-        let mut page = settings_page("快捷键", FullIconName::Keyboard).groups(groups);
+                            ),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+        let mut page = settings_page(
+            conduit::i18n::text_static("settings.navigation.shortcuts"),
+            FullIconName::Keyboard,
+        )
+        .groups(groups);
         page.page = page
             .page
             .title("")
@@ -346,7 +378,9 @@ impl ConduitApp {
                     .debug_selector(|| "shortcuts-reset-all".into())
                     .small()
                     .ghost()
-                    .label("恢复全部默认")
+                    .label(conduit::i18n::text_static(
+                        "settings.shortcuts.restore_all_defaults",
+                    ))
                     .disabled(disabled)
                     .on_click(move |_, _, cx| {
                         view.update(cx, |app, cx| {
@@ -420,6 +454,7 @@ mod tests {
     fn settings_shortcuts_editor_blocks_conflicts_records_saves_and_restores(
         cx: &mut TestAppContext,
     ) {
+        let _locale = crate::test_support::chinese();
         let (app, cx) = fixture(cx, Store::default());
         assert!(cx.debug_bounds("shortcuts-reset-all").is_some());
         click(cx, "shortcut-edit-open_settings");
@@ -470,6 +505,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn settings_shortcuts_recorder_captures_reserved_keys_and_can_unbind(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         let (app, cx) = fixture(cx, Store::default());
         assert!(cx.debug_bounds("shortcuts-reset-all").is_some());
         click(cx, "shortcut-edit-open_settings");
@@ -501,6 +537,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn settings_shortcuts_recorder_can_restore_double_shift(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         let mut store = Store::default();
         store
             .ui
@@ -525,6 +562,7 @@ mod tests {
     fn settings_shortcuts_load_saved_keys_unbind_and_keep_file_find_separate(
         cx: &mut TestAppContext,
     ) {
+        let _locale = crate::test_support::chinese();
         let mut store = Store::default();
         store
             .ui

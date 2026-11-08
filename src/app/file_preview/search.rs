@@ -133,6 +133,7 @@ mod tests {
 
     #[test]
     fn literal_unicode_offsets_and_multiple_occurrences() {
+        let _locale = crate::test_support::chinese();
         let text = "前İ后 i\n中文 中文\n";
         assert_eq!(
             search(text, "i", false)
@@ -152,6 +153,7 @@ mod tests {
 
     #[test]
     fn fuzzy_is_bounded_and_preserves_matched_characters() {
+        let _locale = crate::test_support::chinese();
         let text = "open_workspace_file\nopfile opfile\n文件内容搜索\nop\nfile\n";
         let hits = search(text, "opfile", true).hits;
         assert_eq!(hits.len(), 3);
@@ -174,6 +176,7 @@ mod tests {
 
     #[test]
     fn results_are_capped_in_document_order() {
+        let _locale = crate::test_support::chinese();
         let result = search(&"a ".repeat(LIMIT + 1), "a", true);
         assert_eq!(result.hits.len(), LIMIT);
         assert!(result.truncated);
@@ -187,6 +190,7 @@ mod tests {
 
     #[test]
     fn queries_preserve_whitespace_and_enforce_the_character_limit() {
+        let _locale = crate::test_support::chinese();
         let text = "a target b\r\ntarget\r\na target b\n";
         let hits = search(text, " target ", false).hits;
         assert_eq!(hits.len(), 2);
@@ -201,6 +205,7 @@ mod tests {
 
     #[test]
     fn exact_limit_and_unicode_expansions_do_not_report_extra_matches() {
+        let _locale = crate::test_support::chinese();
         let results = search(&"a ".repeat(LIMIT), "a", true);
         assert_eq!(results.hits.len(), LIMIT);
         assert!(!results.truncated);

@@ -14,7 +14,7 @@ fn format_release_time(value: &str) -> String {
     } else if let Ok(date) = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
         date.format("%Y-%m-%d 00:00:00").to_string()
     } else {
-        "未知时间".into()
+        conduit::i18n::text_static("update.unknown_time").into()
     }
 }
 
@@ -51,7 +51,7 @@ impl Default for UpdateUi {
             task: None,
             release: None,
             package: None,
-            status: "可手动检查更新".into(),
+            status: conduit::i18n::text_static("update.you_can_check_for_updates_manually").into(),
             next_check: Instant::now() + Duration::from_secs(30),
             install_requested: false,
             snoozed: false,
@@ -94,8 +94,10 @@ impl ConduitApp {
             return;
         }
         if let Ok(release) = service::installed_release(Store::path().parent().unwrap()) {
-            self.updater.status =
-                format!("已更新至 {}，草稿和工作区已恢复", release.manifest.version);
+            self.updater.status = conduit::i18n::format(
+                "update.updated_to_drafts_and_workspaces_restored",
+                &[("arg0", release.manifest.version.to_string())],
+            );
             self.updater.release = Some(release);
             self.store.updates.last_seen_version = env!("CARGO_PKG_VERSION").into();
             self.persist();
@@ -131,7 +133,7 @@ impl ConduitApp {
         }
         self.updater.next_check = Instant::now() + Duration::from_secs(6 * 3600);
         self.updater.phase = Phase::Checking;
-        self.updater.status = "正在检查更新…".into();
+        self.updater.status = conduit::i18n::text_static("update.checking_for_updates").into();
         self.updater.release = None;
         self.updater.package = None;
         self.updater.install_requested = false;
@@ -150,7 +152,8 @@ impl ConduitApp {
                 Store::path().with_file_name("updates"),
             ));
             self.updater.phase = Phase::Downloading;
-            self.updater.status = "正在后台下载…".into();
+            self.updater.status =
+                conduit::i18n::text_static("update.downloading_in_background").into();
             cx.notify();
         }
     }
@@ -184,7 +187,10 @@ impl ConduitApp {
                     self.updater.task = None;
                     self.updater.release = release;
                     if let Some(release) = &self.updater.release {
-                        self.updater.status = format!("发现新版本 {}", release.manifest.version);
+                        self.updater.status = conduit::i18n::format(
+                            "update.new_version_available",
+                            &[("arg0", release.manifest.version.to_string())],
+                        );
                         self.updater.phase = Phase::Available;
                         if self.store.updates.auto_download
                             && self.store.updates.skipped_version.as_deref()
@@ -194,27 +200,41 @@ impl ConduitApp {
                         }
                     } else {
                         self.updater.phase = Phase::Idle;
-                        self.updater.status = "当前已是最新可用版本".into();
+                        self.updater.status = conduit::i18n::text_static(
+                            "update.you_have_the_latest_available_version",
+                        )
+                        .into();
                     }
                 }
                 UpdateEvent::Progress { downloaded, total } => {
-                    self.updater.status = format!(
-                        "后台下载 {:.0}% · {:.1} / {:.1} MiB",
-                        downloaded as f64 / total as f64 * 100.,
-                        downloaded as f64 / 1048576.,
-                        total as f64 / 1048576.
+                    self.updater.status = conduit::i18n::format(
+                        "update.downloading_mib",
+                        &[
+                            (
+                                "arg0",
+                                format!("{:.0}", downloaded as f64 / total as f64 * 100.),
+                            ),
+                            ("arg1", format!("{:.1}", downloaded as f64 / 1048576.)),
+                            ("arg2", format!("{:.1}", total as f64 / 1048576.)),
+                        ],
                     );
                 }
                 UpdateEvent::Downloaded(path) => {
                     self.updater.package = Some(path);
                     self.updater.task = None;
                     self.updater.phase = Phase::Ready;
-                    self.updater.status = "下载及签名验证完成，可以安装并重启".into();
+                    self.updater.status = conduit::i18n::text_static(
+                        "update.download_and_signature_verification_complete_ready_to",
+                    )
+                    .into();
                 }
                 UpdateEvent::Cancelled => {
                     self.updater.task = None;
                     self.updater.phase = Phase::Available;
-                    self.updater.status = "下载已取消，可重新下载".into();
+                    self.updater.status = conduit::i18n::text_static(
+                        "update.download_cancelled_you_can_download_again",
+                    )
+                    .into();
                 }
                 UpdateEvent::Failed(error) => self.updater.fail(error),
             }
@@ -230,9 +250,13 @@ impl ConduitApp {
                 self.begin_update_install(window, cx);
             } else {
                 let waiting = if self.terminals.active() {
-                    "等待终端退出后安装；可终止终端后继续，或选择稍后"
+                    conduit::i18n::text_static(
+                        "update.waiting_for_terminals_to_exit_before_installing",
+                    )
                 } else {
-                    "等待后台任务结束后安装；可选择稍后"
+                    conduit::i18n::text_static(
+                        "update.waiting_for_background_tasks_before_installing_you",
+                    )
                 };
                 if self.updater.status != waiting {
                     self.updater.status = waiting.into();
@@ -247,7 +271,10 @@ impl ConduitApp {
             .as_ref()
             .and_then(|rx| match rx.try_recv() {
                 Ok(result) => Some(result),
-                Err(mpsc::TryRecvError::Disconnected) => Some(Err("更新准备线程已退出".into())),
+                Err(mpsc::TryRecvError::Disconnected) => Some(Err(conduit::i18n::text_static(
+                    "update.update_preparation_thread_exited",
+                )
+                .into())),
                 Err(mpsc::TryRecvError::Empty) => None,
             })
         {
@@ -271,7 +298,10 @@ impl ConduitApp {
                         self.updater.pending = None;
                         self.closing = false;
                         self.updater.phase = Phase::Ready;
-                        self.updater.status = "检测到新的后台任务，将在任务结束后安装".into();
+                        self.updater.status = conduit::i18n::text_static(
+                            "update.new_background_tasks_detected_installation_will_start",
+                        )
+                        .into();
                         cx.notify();
                         return;
                     }
@@ -283,8 +313,10 @@ impl ConduitApp {
                         }
                         self.updater.pending = None;
                         self.closing = false;
-                        self.updater
-                            .fail(format!("保存失败，更新已取消：{error:#}"));
+                        self.updater.fail(conduit::i18n::format(
+                            "update.save_failed_update_cancelled",
+                            &[("error", format!("{:#}", error))],
+                        ));
                         cx.notify();
                         return;
                     }
@@ -308,7 +340,9 @@ impl ConduitApp {
 
     fn begin_update_install(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.writable {
-            self.updater.fail("当前数据不可写，不能安全重启".into());
+            self.updater.fail(
+                conduit::i18n::text_static("update.data_is_read_only_unable_to_restart").into(),
+            );
             cx.notify();
             return;
         }
@@ -318,7 +352,9 @@ impl ConduitApp {
             return;
         };
         if self.persistence.error.is_some() {
-            self.updater.fail("无法保存数据，更新已取消".into());
+            self.updater.fail(
+                conduit::i18n::text_static("update.unable_to_save_data_update_cancelled").into(),
+            );
             cx.notify();
             return;
         }
@@ -329,7 +365,8 @@ impl ConduitApp {
             root.clear_stopped_overlays(window, cx);
         });
         self.updater.phase = Phase::Preparing;
-        self.updater.status = "正在准备安装并重启…".into();
+        self.updater.status =
+            conduit::i18n::text_static("update.preparing_to_install_and_restart").into();
         let data = Store::path().parent().unwrap().to_path_buf();
         let (tx, rx) = mpsc::channel();
         self.updater.preparation = Some(rx);
@@ -363,7 +400,7 @@ impl ConduitApp {
         }
         anyhow::ensure!(
             !self.dirty && !self.persistence.busy() && self.persistence.error.is_none(),
-            "等待应用数据保存完成"
+            conduit::i18n::text("update.waiting_for_application_data_to_finish_saving")
         );
         let recovery = Recovery {
             schema: 1,
@@ -426,7 +463,10 @@ impl ConduitApp {
         }
         let result = (|| -> anyhow::Result<()> {
             let recovery: Recovery = serde_json::from_slice(&std::fs::read(&path)?)?;
-            anyhow::ensure!(recovery.schema == 1, "未知的草稿恢复格式");
+            anyhow::ensure!(
+                recovery.schema == 1,
+                conduit::i18n::text("update.unknown_draft_recovery_format")
+            );
             let normalize = |path: PathBuf| path.canonicalize().unwrap_or(path);
             self.drafts = recovery.drafts;
             self.workspace_drafts = recovery
@@ -445,8 +485,12 @@ impl ConduitApp {
                     },
                     ComposerFiles {
                         references,
-                        feedback: (!rejected.is_empty())
-                            .then(|| "部分附件已不可访问，请重新添加".into()),
+                        feedback: (!rejected.is_empty()).then(|| {
+                            conduit::i18n::text_static(
+                                "update.some_attachments_are_inaccessible_attach_them_again",
+                            )
+                            .into()
+                        }),
                     },
                 );
             }
@@ -459,13 +503,15 @@ impl ConduitApp {
                 let path = normalize(path);
                 let input = cx.new(|cx| {
                     TextareaState::new(window, cx)
-                        .placeholder("填写提交说明…")
+                        .placeholder(conduit::i18n::text_static("update.enter_a_commit_message"))
                         .auto_grow(3, 3)
                 });
                 input.update(cx, |input, cx| input.set_value(value, window, cx));
                 let subscription = cx.subscribe(&input, |_, _, _: &InputEvent, cx| cx.notify());
-                let tag = cx
-                    .new(|cx| InputState::new(window, cx).placeholder("Tag（可选，例如 v1.2.3）"));
+                let tag = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder(conduit::i18n::text_static("git_ui.tag_optional_e_g_v1_2_3"))
+                });
                 if let Some(value) = tags.get(&path) {
                     tag.update(cx, |tag, cx| tag.set_value(value.clone(), window, cx));
                 }
@@ -500,7 +546,10 @@ impl ConduitApp {
             Ok(())
         })();
         if let Err(error) = result {
-            self.message = Some(format!("草稿恢复失败，恢复文件已保留：{error:#}"));
+            self.message = Some(conduit::i18n::format(
+                "update.draft_recovery_failed_recovery_file_preserved",
+                &[("error", format!("{:#}", error))],
+            ));
         }
     }
 
@@ -510,15 +559,22 @@ impl ConduitApp {
             self.updater.phase,
             Phase::Checking | Phase::Downloading | Phase::Preparing
         );
-        let mut content = v_flex()
-            .gap_3()
-            .child(div().text_sm().child(self.updater.status.clone()));
+        let mut content = v_flex().gap_3().child(
+            div()
+                .text_sm()
+                .child(conduit::i18n::retained(&self.updater.status).to_string()),
+        );
         if let Some(release) = &self.updater.release {
             content = content
-                .child(div().font_semibold().child(format!(
-                    "版本 {} · {}",
-                    release.manifest.version,
-                    format_release_time(&release.manifest.published_at)
+                .child(div().font_semibold().child(conduit::i18n::format(
+                    "update.version",
+                    &[
+                        ("arg0", release.manifest.version.to_string()),
+                        (
+                            "arg1",
+                            format_release_time(&release.manifest.published_at).to_string(),
+                        ),
+                    ],
                 )))
                 .child(
                     div()
@@ -538,7 +594,7 @@ impl ConduitApp {
             .justify_end()
             .child(
                 Button::new("update-history")
-                    .label("历史版本")
+                    .label(conduit::i18n::text_static("update.previous_releases"))
                     .small()
                     .ghost()
                     .on_click(|_, _, cx| {
@@ -547,7 +603,7 @@ impl ConduitApp {
             )
             .child(
                 Button::new("about-check-update")
-                    .label("检查更新")
+                    .label(conduit::i18n::text_static("settings.cli.check_for_updates"))
                     .small()
                     .secondary()
                     .disabled(busy || self.closing)
@@ -559,7 +615,7 @@ impl ConduitApp {
             let view = view.clone();
             actions = actions.child(
                 Button::new("cancel-update")
-                    .label("取消下载")
+                    .label(conduit::i18n::text_static("update.cancel_download"))
                     .small()
                     .secondary()
                     .on_click(move |_, _, cx| {
@@ -577,7 +633,7 @@ impl ConduitApp {
             let view = view.clone();
             actions = actions.child(
                 Button::new("download-update")
-                    .label("下载更新 / 重试")
+                    .label(conduit::i18n::text_static("update.download_update_retry"))
                     .small()
                     .disabled(self.closing)
                     .on_click(move |_, _, cx| view.update(cx, |app, cx| app.download_update(cx))),
@@ -586,23 +642,44 @@ impl ConduitApp {
         if self.updater.phase == Phase::Ready {
             if self.terminals.active() {
                 let stop_view = view.clone();
-                actions=actions.child(Button::new("update-stop-terminals").label("终止全部终端后安装").small().disabled(self.closing || !self.writable)
-                    .on_click(move|_,window,cx| {
-                        let stop_view=stop_view.clone();
-                        window.open_dialog(cx,move|dialog,_,_| {
-                            let stop_view=stop_view.clone();
-                            dialog.title("终止全部终端后安装？")
-                                .content(|content,_,_|content.child("所有终端及其子进程将被终止，未完成的命令会被中断。清理完成后再安装更新。"))
-                                .on_ok(move|_,_,cx| {stop_view.update(cx,|app,cx| {app.terminals.stop_all();app.updater.install_requested=true;cx.notify();});true})
-                        });
-                    }));
+                actions = actions.child(
+                    Button::new("update-stop-terminals")
+                        .label(conduit::i18n::text_static(
+                            "update.terminate_all_terminals_and_install",
+                        ))
+                        .small()
+                        .disabled(self.closing || !self.writable)
+                        .on_click(move |_, window, cx| {
+                            let stop_view = stop_view.clone();
+                            window.open_dialog(cx, move |dialog, _, _| {
+                                let stop_view = stop_view.clone();
+                                dialog
+                                    .title(conduit::i18n::text_static(
+                                        "update.terminate_all_terminals_and_install_0bfc98",
+                                    ))
+                                    .content(|content, _, _| {
+                                        content.child(conduit::i18n::text_static(
+                                            "update.all_terminals_and_child_processes_will_be",
+                                        ))
+                                    })
+                                    .on_ok(move |_, _, cx| {
+                                        stop_view.update(cx, |app, cx| {
+                                            app.terminals.stop_all();
+                                            app.updater.install_requested = true;
+                                            cx.notify();
+                                        });
+                                        true
+                                    })
+                            });
+                        }),
+                );
             }
             let install_view = view.clone();
             let later_view = view.clone();
             actions = actions
                 .child(
                     Button::new("install-update")
-                        .label("安装并重启")
+                        .label(conduit::i18n::text_static("update.install_and_restart"))
                         .small()
                         .disabled(self.closing || !self.writable)
                         .on_click(move |_, _, cx| {
@@ -614,14 +691,17 @@ impl ConduitApp {
                 )
                 .child(
                     Button::new("later-update")
-                        .label("稍后")
+                        .label(conduit::i18n::text_static("update.later"))
                         .small()
                         .secondary()
                         .on_click(move |_, _, cx| {
                             later_view.update(cx, |app, cx| {
                                 app.updater.install_requested = false;
                                 app.updater.snoozed = true;
-                                app.updater.status = "更新已就绪，可以稍后安装".into();
+                                app.updater.status = conduit::i18n::text_static(
+                                    "update.update_ready_you_can_install_it_later",
+                                )
+                                .into();
                                 cx.notify();
                             })
                         }),
@@ -631,7 +711,7 @@ impl ConduitApp {
             let view = view.clone();
             actions = actions.child(
                 Button::new("skip-update")
-                    .label("跳过此版本")
+                    .label(conduit::i18n::text_static("update.skip_this_version"))
                     .small()
                     .secondary()
                     .on_click(move |_, _, cx| {
@@ -641,7 +721,10 @@ impl ConduitApp {
                                 .release
                                 .as_ref()
                                 .map(|r| r.manifest.version.clone());
-                            app.updater.status = "已跳过此版本，仍可手动下载".into();
+                            app.updater.status = conduit::i18n::text_static(
+                                "update.version_skipped_manual_download_remains_available",
+                            )
+                            .into();
                             app.persist();
                             cx.notify();
                         })
@@ -659,9 +742,21 @@ impl ConduitApp {
             .map(|release| release.manifest.version.to_string())
             .unwrap_or_default();
         let (phase, level, title) = match self.updater.phase {
-            Phase::Available => ("available", NoticeLevel::Info, "发现新版本"),
-            Phase::Ready => ("ready", NoticeLevel::Success, "更新已准备好"),
-            Phase::Failed => ("failed", NoticeLevel::Error, "应用更新失败"),
+            Phase::Available => (
+                "available",
+                NoticeLevel::Info,
+                conduit::i18n::text_static("update.new_version_available_010474"),
+            ),
+            Phase::Ready => (
+                "ready",
+                NoticeLevel::Success,
+                conduit::i18n::text_static("update.update_ready"),
+            ),
+            Phase::Failed => (
+                "failed",
+                NoticeLevel::Error,
+                conduit::i18n::text_static("update.application_update_failed"),
+            ),
             Phase::Checking | Phase::Downloading => {
                 self.notifications.update_state = None;
                 return;
@@ -682,17 +777,21 @@ impl ConduitApp {
                 .as_nanos()
                 .to_string()
         };
-        self.notify_user(
-            Notice::new(
-                NoticeSource::Update,
-                level,
-                title,
-                self.updater.status.clone(),
-            )
-            .target(NoticeTarget::Updates)
-            .key(format!("update/{version}"), event),
-            cx,
-        );
+        let mut notice = Notice::new(
+            NoticeSource::Update,
+            level,
+            title,
+            self.updater.status.clone(),
+        )
+        .target(NoticeTarget::Updates)
+        .key(format!("update/{version}"), event);
+        if self.updater.phase == Phase::Available {
+            notice = notice.localized_message(conduit::i18n::Message::new(
+                "update.new_version_available",
+                &[("arg0", version.to_string())],
+            ));
+        }
+        self.notify_user(notice, cx);
     }
 
     pub(super) fn update_notice(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -714,11 +813,11 @@ impl ConduitApp {
             .child(
                 div()
                     .text_size(ui_text_size(12.))
-                    .child(self.updater.status.clone()),
+                    .child(conduit::i18n::retained(&self.updater.status).to_string()),
             )
             .child(
                 Button::new("show-update")
-                    .label("查看更新")
+                    .label(conduit::i18n::text_static("update.view_update"))
                     .small()
                     .ghost()
                     .on_click(cx.listener(|app, _, window, cx| app.open_about_dialog(window, cx))),
@@ -739,6 +838,7 @@ mod tests {
 
     #[test]
     fn release_time_uses_local_seconds_and_handles_legacy_dates() {
+        let _locale = crate::test_support::chinese();
         use chrono::TimeZone as _;
         // Use a fixed local instant so this test also works outside UTC+8.
         let local = chrono::Local
@@ -763,6 +863,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn terminal_runtime_blocks_auto_install(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         let (app, cx, _) = crate::app::queue::tests::fixture(cx, "terminal-update");
         cx.update(|window, cx| {
             app.update(cx, |app, cx| {
@@ -785,11 +886,13 @@ mod tests {
 
     #[gpui_kit::test]
     fn update_restart_restores_chat_commit_and_attachment_drafts(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         recovery_roundtrip(cx, true);
     }
 
     #[gpui_kit::test]
     fn normal_exit_restores_all_drafts_from_disk_without_dispatching(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         recovery_roundtrip(cx, false);
     }
 
@@ -902,6 +1005,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn newest_recovery_snapshot_wins_without_reviving_removed_attachments(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         let (app, cx, root) = super::super::queue::tests::fixture(cx, "draft-recovery-order");
         std::fs::create_dir_all(Store::path().parent().unwrap()).unwrap();
         let attachment = root.join("removed.txt");
@@ -968,6 +1072,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn normal_exit_draft_write_failure_keeps_input_and_attachments(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         let (app, cx, root) = super::super::queue::tests::fixture(cx, "draft-save-failure");
         let attachment = root.join("keep.txt");
         std::fs::write(&attachment, "keep").unwrap();
@@ -994,6 +1099,7 @@ mod tests {
     fn shell_update_preparation_stops_pending_commands_before_installer_work(
         cx: &mut TestAppContext,
     ) {
+        let _locale = crate::test_support::chinese();
         use crate::app::plugin_ui::shell::tests::{assert_no_overlays, command, fixture, runtime};
         let (app, cx) = fixture(cx);
         command(&app, "example.workspace-overview.overlays", cx);
@@ -1045,6 +1151,7 @@ mod tests {
     fn update_install_waits_for_background_work_and_about_fits_small_window(
         cx: &mut TestAppContext,
     ) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
         let output = slot.clone();

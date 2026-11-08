@@ -42,6 +42,7 @@ fn fixture_with_store(
 
 #[gpui_kit::test]
 fn startup_only_loads_the_selected_body_and_navigation_bounds_the_cache(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _disk) = fixture(cx, 100, true);
     cx.run_until_parked();
     cx.update(|_, cx| {
@@ -80,6 +81,7 @@ fn startup_only_loads_the_selected_body_and_navigation_bounds_the_cache(cx: &mut
 
 #[gpui_kit::test]
 fn running_queued_current_and_unsaved_bodies_survive_eviction(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, disk) = fixture(cx, 12, false);
     cx.update(|_, cx| {
         app.update(cx, |app, _| {
@@ -125,6 +127,7 @@ fn running_queued_current_and_unsaved_bodies_survive_eviction(cx: &mut TestAppCo
 fn load_completion_preserves_metadata_and_never_resurrects_deleted_session(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _disk) = fixture(cx, 3, true);
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
@@ -146,6 +149,7 @@ fn load_completion_preserves_metadata_and_never_resurrects_deleted_session(
 
 #[gpui_kit::test]
 fn missing_body_has_error_retry_and_blocks_send_without_looking_empty(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let disk = Fixture::new();
     disk.store(2).save_to(&disk.state).unwrap();
     let store = Store::load_from(&disk.state).unwrap();
@@ -192,6 +196,7 @@ fn missing_body_has_error_retry_and_blocks_send_without_looking_empty(cx: &mut T
 
 #[gpui_kit::test]
 fn stale_load_cannot_replace_a_new_imported_reference(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, disk) = fixture(cx, 1, true);
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {

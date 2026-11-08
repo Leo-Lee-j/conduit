@@ -242,15 +242,17 @@ impl Render for TurnDiffPreview {
                                 .ghost()
                                 .small()
                                 .icon(IconName::Close)
-                                .accessibility_label("关闭文件 Diff")
+                                .accessibility_label(conduit::i18n::text_static(
+                                    "chat.turn_diff.close_file_diff",
+                                ))
                                 .on_click(|_, window, cx| window.close_dialog(cx)),
                         ),
                 )
                 .child(div().debug_selector(|| "turn-diff-loading".into()).child(
                     if self.pending.is_some() {
-                        "正在加载文件修改…"
+                        conduit::i18n::text_static("chat.turn_diff.loading_file_changes")
                     } else {
-                        "没有可显示的文件修改"
+                        conduit::i18n::text_static("chat.turn_diff.no_file_changes_to_display")
                     },
                 ))
                 .into_any_element();
@@ -272,13 +274,13 @@ impl Render for TurnDiffPreview {
         for (id, label, icon, value) in [
             (
                 "turn-diff-split",
-                "并排",
+                conduit::i18n::text_static("chat.turn_diff.side_by_side"),
                 FullIconName::Columns2,
                 DiffMode::Split,
             ),
             (
                 "turn-diff-unified",
-                "统一",
+                conduit::i18n::text_static("chat.turn_diff.unified"),
                 FullIconName::Rows3,
                 DiffMode::Unified,
             ),
@@ -291,7 +293,10 @@ impl Render for TurnDiffPreview {
                     .label(label)
                     .icon(icon)
                     .selected(mode == value)
-                    .accessibility_label(format!("{label}显示本轮 Diff"))
+                    .accessibility_label(conduit::i18n::format(
+                        "chat.turn_diff.show_changes_from_this_turn",
+                        &[("label", label.to_string())],
+                    ))
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.state.update(cx, |state, cx| state.set_mode(value, cx));
@@ -312,8 +317,10 @@ impl Render for TurnDiffPreview {
                             .small()
                             .compact()
                             .icon(IconName::ChevronLeft)
-                            .tooltip("上一次编辑")
-                            .accessibility_label("上一次编辑")
+                            .tooltip(conduit::i18n::text_static("chat.turn_diff.previous_edit"))
+                            .accessibility_label(conduit::i18n::text_static(
+                                "chat.turn_diff.previous_edit",
+                            ))
                             .disabled(self.selected == 0)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.select_edit(this.selected.saturating_sub(1), window, cx);
@@ -325,7 +332,13 @@ impl Render for TurnDiffPreview {
                         .debug_selector(move || format!("turn-diff-edit-{selected}"))
                         .text_size(px(11.))
                         .text_color(rgb(palette().muted))
-                        .child(format!("编辑 {} / {}", self.selected + 1, self.edits.len())),
+                        .child(conduit::i18n::format(
+                            "chat.turn_diff.edit",
+                            &[
+                                ("arg0", format!("{}", self.selected + 1)),
+                                ("arg1", format!("{}", self.edits.len())),
+                            ],
+                        )),
                 )
                 .when(self.edits.len() > 1, |row| {
                     row.child(
@@ -335,8 +348,10 @@ impl Render for TurnDiffPreview {
                             .small()
                             .compact()
                             .icon(IconName::ChevronRight)
-                            .tooltip("下一次编辑")
-                            .accessibility_label("下一次编辑")
+                            .tooltip(conduit::i18n::text_static("chat.turn_diff.next_edit"))
+                            .accessibility_label(conduit::i18n::text_static(
+                                "chat.turn_diff.next_edit",
+                            ))
                             .disabled(self.selected + 1 == self.edits.len())
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.select_edit(this.selected + 1, window, cx);
@@ -354,11 +369,9 @@ impl Render for TurnDiffPreview {
                 .child(
                     v_flex()
                         .gap_3()
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .child("无法解析差异，显示原始补丁。"),
-                        )
+                        .child(div().text_size(px(12.)).child(conduit::i18n::text_static(
+                            "chat.turn_diff.unable_to_parse_the_diff_showing_the",
+                        )))
                         .child(gpui_kit::base::SelectableText::new(
                             "turn-diff-patch",
                             edit.patch.clone(),
@@ -433,7 +446,9 @@ impl Render for TurnDiffPreview {
                                 div()
                                     .text_size(px(11.))
                                     .text_color(rgb(palette().faint))
-                                    .child("本轮文件修改"),
+                                    .child(conduit::i18n::text_static(
+                                        "chat.turn_diff.file_changes_in_this_turn",
+                                    )),
                             ),
                     )
                     .child(
@@ -443,8 +458,10 @@ impl Render for TurnDiffPreview {
                             .small()
                             .compact()
                             .icon(IconName::Close)
-                            .tooltip("关闭 (Esc)")
-                            .accessibility_label("关闭文件 Diff")
+                            .tooltip(conduit::i18n::text_static("chat.turn_diff.close_esc"))
+                            .accessibility_label(conduit::i18n::text_static(
+                                "chat.turn_diff.close_file_diff",
+                            ))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     ),
             )
@@ -478,7 +495,9 @@ impl Render for TurnDiffPreview {
                             div()
                                 .debug_selector(|| "turn-diff-truncated".into())
                                 .text_color(rgb(palette().warning_text))
-                                .child("记录已截断"),
+                                .child(conduit::i18n::text_static(
+                                    "chat.turn_diff.record_truncated",
+                                )),
                         )
                     }),
             )
@@ -491,8 +510,16 @@ impl Render for TurnDiffPreview {
                         .py_1()
                         .text_size(px(11.))
                         .text_color(rgb(palette().faint))
-                        .child(div().flex_1().child("修改前"))
-                        .child(div().flex_1().child("修改后")),
+                        .child(
+                            div()
+                                .flex_1()
+                                .child(conduit::i18n::text_static("chat.turn_diff.before")),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .child(conduit::i18n::text_static("chat.turn_diff.after")),
+                        ),
                 )
             })
             .child(

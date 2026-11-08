@@ -9,6 +9,7 @@ use crate::{
 
 #[test]
 fn error_retry_clears_errors_and_preserves_partial_output_across_restore() {
+    let _locale = crate::test_support::chinese();
     let mut s = session();
     let user = ChatItem::from(crate::domain::ChatItemData {
         elapsed_ms: None,
@@ -106,6 +107,7 @@ fn error_retry_clears_errors_and_preserves_partial_output_across_restore() {
 
 #[test]
 fn error_retry_only_clears_errors_after_the_last_visible_reply() {
+    let _locale = crate::test_support::chinese();
     let mut s = session();
     s.messages = serde_json::from_value(serde_json::json!([
         {"key": "old-user", "kind": "User", "text": "old question"},
@@ -148,6 +150,7 @@ fn error_retry_only_clears_errors_after_the_last_visible_reply() {
 
 #[test]
 fn error_retry_clears_repeated_failures_before_any_reply() {
+    let _locale = crate::test_support::chinese();
     let mut s = session();
     s.messages = serde_json::from_value(serde_json::json!([
         {"key": "turn-0-user", "kind": "User", "text": "question"},
@@ -169,6 +172,7 @@ fn error_retry_clears_repeated_failures_before_any_reply() {
 
 #[test]
 fn error_retry_only_targets_a_failure_in_the_latest_exchange() {
+    let _locale = crate::test_support::chinese();
     let mut s = session();
     apply_event(
         &mut s,
@@ -193,6 +197,7 @@ fn error_retry_only_targets_a_failure_in_the_latest_exchange() {
 
 #[test]
 fn opencode_diff_content_is_classified_and_bounded_for_the_existing_edit_view() {
+    let _locale = crate::test_support::chinese();
     let mut s = session();
     apply_event(&mut s, "turn-0", Event::Tool {
         key: "edit-1".into(), title: "update configuration".into(), status: "已完成".into(),
@@ -215,6 +220,7 @@ fn opencode_diff_content_is_classified_and_bounded_for_the_existing_edit_view() 
 }
 #[test]
 fn assistant_reply_combines_text_across_tools_within_user_boundaries() {
+    let _locale = crate::test_support::chinese();
     let mut s = session();
     for (key, kind, text) in [
         ("old", ItemKind::Assistant, "导入的早期回复"),
@@ -254,6 +260,7 @@ fn assistant_reply_combines_text_across_tools_within_user_boundaries() {
 
 #[test]
 fn indexed_events_keep_order_inputs_and_stream_snapshots_across_batches() {
+    let _locale = crate::test_support::chinese();
     let mut s = session();
     let mut index = super::MessageIndex::default();
     for ordinal in 0..500 {
@@ -329,6 +336,7 @@ fn indexed_events_keep_order_inputs_and_stream_snapshots_across_batches() {
 }
 #[test]
 fn message_outline_keeps_real_indices_and_keys_amid_tools_and_replies() {
+    let _locale = crate::test_support::chinese();
     let mut s = session();
     for (key, kind, text) in [
         ("user-1", ItemKind::User, "第一轮\n  修复\tbug"),
@@ -369,6 +377,7 @@ fn message_outline_keeps_real_indices_and_keys_amid_tools_and_replies() {
 
 #[test]
 fn message_outline_cache_only_indexes_appends_and_resets_with_session() {
+    let _locale = crate::test_support::chinese();
     let mut session = session();
     let mut cache = super::MessageOutlineCache::default();
     let item = |key: &str, kind| {
@@ -408,6 +417,7 @@ fn message_outline_cache_only_indexes_appends_and_resets_with_session() {
 
 #[test]
 fn tool_text_preserves_literal_logs_code_and_removes_terminal_escapes() {
+    let _locale = crate::test_support::chinese();
     let text = "\u{1b}[31m错误\u{1b}[0m\r\n\tcode();\rretry\n\u{1b}]8;;https://example.test\u{1b}\\label\u{1b}]8;;\u{7}\n<b>literal</b> **text**";
     assert_eq!(
         super::format_tool_text(text),
@@ -428,6 +438,7 @@ fn tool_text_preserves_literal_logs_code_and_removes_terminal_escapes() {
 }
 #[test]
 fn tool_approval_matches_provider_id_and_survives_execution_updates() {
+    let _locale = crate::test_support::chinese();
     let mut s = session();
     for key in ["first", "second"] {
         apply_event(
@@ -462,6 +473,7 @@ fn tool_approval_matches_provider_id_and_survives_execution_updates() {
 }
 #[test]
 fn permission_before_tool_start_merges_and_pending_cancellation_is_scoped() {
+    let _locale = crate::test_support::chinese();
     let mut s = session();
     for prefix in ["turn-0", "turn-1"] {
         s.record_tool_approval(
@@ -497,6 +509,7 @@ fn permission_before_tool_start_merges_and_pending_cancellation_is_scoped() {
 }
 #[test]
 fn claude_approval_without_id_matches_input_and_never_another_turn() {
+    let _locale = crate::test_support::chinese();
     let mut s = session();
     for (prefix, key, query) in [
         ("old", "a", "one"),
@@ -536,6 +549,7 @@ fn claude_approval_without_id_matches_input_and_never_another_turn() {
 }
 #[test]
 fn commit_generation_snapshot_replaces_stream_without_duplicate_text() {
+    let _locale = crate::test_support::chinese();
     let mut parts = vec![];
     super::update_commit_text(&mut parts, "msg".into(), "feat: ".into(), false);
     super::update_commit_text(&mut parts, "msg".into(), "说明".into(), false);
@@ -573,6 +587,7 @@ pub(crate) fn session() -> SessionRecord {
 
 #[test]
 fn composer_defaults_to_medium_and_preserves_explicit_effort_until_model_changes() {
+    let _locale = crate::test_support::chinese();
     for engine in [Provider::Claude, Provider::Codex] {
         let mut selection = super::ComposerSelection::new(engine);
         assert_eq!(selection.effort, super::ReasoningEffort::Medium);
@@ -595,6 +610,7 @@ fn composer_defaults_to_medium_and_preserves_explicit_effort_until_model_changes
 }
 #[test]
 fn contiguous_tool_groups_include_adjacent_completed_activity() {
+    let _locale = crate::test_support::chinese();
     let activity = |key: &str, kind: ItemKind, title: &str, status: &str| {
         ChatItem::from(crate::domain::ChatItemData {
             elapsed_ms: None,
@@ -624,6 +640,7 @@ fn contiguous_tool_groups_include_adjacent_completed_activity() {
 }
 #[test]
 fn empty_stream_blocks_do_not_split_tools_or_count_as_replies() {
+    let _locale = crate::test_support::chinese();
     let mut s = session();
     apply_event(
         &mut s,
@@ -691,6 +708,7 @@ fn empty_stream_blocks_do_not_split_tools_or_count_as_replies() {
 
 #[test]
 fn tool_group_waits_through_completed_tools_until_nonempty_reply_in_same_turn() {
+    let _locale = crate::test_support::chinese();
     let mut s = session();
     for (key, status) in [
         ("a", "运行中"),
@@ -746,6 +764,7 @@ fn tool_group_waits_through_completed_tools_until_nonempty_reply_in_same_turn() 
 
 #[test]
 fn tool_groups_skip_file_edits() {
+    let _locale = crate::test_support::chinese();
     let tool = |key: &str, title: &str, input: &str| {
         ChatItem::from(crate::domain::ChatItemData {
             elapsed_ms: None,
@@ -784,6 +803,7 @@ fn tool_groups_skip_file_edits() {
 
 #[test]
 fn approved_tools_share_normal_activity_layout_without_hiding_unresolved_decisions() {
+    let _locale = crate::test_support::chinese();
     let mut s = session();
     for (key, title, input) in [
         ("search", "WebSearch", r#"{"query":"gpui"}"#),
@@ -829,6 +849,7 @@ fn approved_tools_share_normal_activity_layout_without_hiding_unresolved_decisio
 }
 #[test]
 fn activity_rows_classify_failures_and_summaries() {
+    let _locale = crate::test_support::chinese();
     let item = |kind: ItemKind, title: &str, input: &str, status: &str, detail: &str| {
         ChatItem::from(crate::domain::ChatItemData {
             elapsed_ms: None,
@@ -871,6 +892,7 @@ fn activity_rows_classify_failures_and_summaries() {
 }
 #[test]
 fn edit_diffs_parse_old_new_pairs_and_codex_patches() {
+    let _locale = crate::test_support::chinese();
     let item = |title: &str, input: &str| {
         ChatItem::from(crate::domain::ChatItemData {
             elapsed_ms: None,
@@ -915,6 +937,7 @@ fn edit_diffs_parse_old_new_pairs_and_codex_patches() {
 }
 #[test]
 fn turn_file_stats_merge_repeated_edits_of_the_latest_turn() {
+    let _locale = crate::test_support::chinese();
     let item = |kind: ItemKind, title: &str, input: &str| {
         ChatItem::from(crate::domain::ChatItemData {
             elapsed_ms: None,
@@ -963,6 +986,7 @@ fn turn_file_stats_merge_repeated_edits_of_the_latest_turn() {
 }
 #[test]
 fn plan_steps_follow_either_provider_shape_in_the_latest_turn() {
+    let _locale = crate::test_support::chinese();
     let todo = super::plan_steps_from_input(
         r#"{"todos":[{"content":"Read code","status":"completed"},{"content":"Edit code","status":"in_progress"}]}"#,
     )
@@ -1015,6 +1039,7 @@ fn plan_steps_follow_either_provider_shape_in_the_latest_turn() {
 }
 #[test]
 fn stats_paths_strip_the_workspace_prefix() {
+    let _locale = crate::test_support::chinese();
     assert_eq!(
         super::workspace_relative_path("D:\\m\\conduit\\src\\app.rs", Some("D:\\m\\conduit")),
         "src/app.rs"
@@ -1037,6 +1062,7 @@ fn stats_paths_strip_the_workspace_prefix() {
 }
 #[test]
 fn final_snapshot_replaces_stream_and_turns_keep_distinct_identity() {
+    let _locale = crate::test_support::chinese();
     let mut s = session();
     for part in ["Hello", " world"] {
         apply_event(
@@ -1071,6 +1097,7 @@ fn final_snapshot_replaces_stream_and_turns_keep_distinct_identity() {
 }
 #[test]
 fn command_output_updates_one_card_and_completion_replaces_partial_output() {
+    let _locale = crate::test_support::chinese();
     let mut s = session();
     for (title, detail, status) in [
         ("cargo check", "", "运行中"),
@@ -1096,6 +1123,7 @@ fn command_output_updates_one_card_and_completion_replaces_partial_output() {
 }
 #[test]
 fn cancellation_only_marks_unfinished_tools_from_its_turn() {
+    let _locale = crate::test_support::chinese();
     let mut s = session();
     for (prefix, key, status) in [
         ("turn-0", "old", "运行中"),
@@ -1122,6 +1150,7 @@ fn cancellation_only_marks_unfinished_tools_from_its_turn() {
 }
 #[test]
 fn adjacent_duplicate_completed_blocks_are_collapsed() {
+    let _locale = crate::test_support::chinese();
     let mut s = session();
     for (key, text) in [("a", "duplicate"), ("b", "duplicate"), ("c", "next")] {
         apply_event(
@@ -1139,6 +1168,7 @@ fn adjacent_duplicate_completed_blocks_are_collapsed() {
 }
 #[test]
 fn failure_echoed_as_assistant_text_is_detected() {
+    let _locale = crate::test_support::chinese();
     assert!(same_failure("执行失败：boom", "boom"));
     assert!(same_failure("boom", "执行失败：boom"));
     assert!(same_failure(
@@ -1150,6 +1180,7 @@ fn failure_echoed_as_assistant_text_is_detected() {
 }
 #[test]
 fn latest_naming_excerpt_prefers_recent_turns() {
+    let _locale = crate::test_support::chinese();
     let mut s = session();
     assert_eq!(latest_naming_excerpt(&s), None);
     for (index, (kind, text)) in [
@@ -1195,6 +1226,7 @@ fn latest_naming_excerpt_prefers_recent_turns() {
 }
 #[test]
 fn single_line_title_collapses_line_breaks() {
+    let _locale = crate::test_support::chinese();
     assert_eq!(
         single_line_title("# AGENTS.md\n<INSTRUCTIONS>"),
         "# AGENTS.md <INSTRUCTIONS>"
@@ -1204,6 +1236,7 @@ fn single_line_title_collapses_line_breaks() {
 
 #[test]
 fn error_summary_extracts_json_and_bounds_multiline_diagnostics() {
+    let _locale = crate::test_support::chinese();
     assert_eq!(
         super::failure_summary(r#"执行失败：{"message":"连接已断开"}"#),
         "连接已断开"
@@ -1220,6 +1253,7 @@ fn error_summary_extracts_json_and_bounds_multiline_diagnostics() {
 }
 #[test]
 fn session_search_matches_title_and_message_text() {
+    let _locale = crate::test_support::chinese();
     let mut s = session();
     s.title = "Rust 重构计划".into();
     s.messages.push(ChatItem::from(crate::domain::ChatItemData {
@@ -1251,6 +1285,7 @@ fn session_search_matches_title_and_message_text() {
 }
 #[test]
 fn highlight_ranges_handle_unicode_and_case() {
+    let _locale = crate::test_support::chinese();
     assert_eq!(
         highlight_ranges("Hello hello HELLO", "hello"),
         vec![(0, 5), (6, 11), (12, 17)]
@@ -1267,6 +1302,7 @@ fn highlight_ranges_handle_unicode_and_case() {
 }
 #[test]
 fn search_snippet_keeps_match_visible_for_multibyte_text() {
+    let _locale = crate::test_support::chinese();
     let text = "这是很多中文内容，然后出现 Markdown 关键词，后面继续一些内容。";
     let snippet = search_snippet(text, "markdown");
     assert!(snippet.to_lowercase().contains("markdown"));
@@ -1275,6 +1311,7 @@ fn search_snippet_keeps_match_visible_for_multibyte_text() {
 
 #[test]
 fn historical_reply_timing_prefers_recorded_duration_and_bounds_estimates_to_a_turn() {
+    let _locale = crate::test_support::chinese();
     use super::chat::reply_elapsed_label;
     let mut session = session();
     for (index, (kind, created_at)) in [
@@ -1347,6 +1384,7 @@ fn historical_reply_timing_prefers_recorded_duration_and_bounds_estimates_to_a_t
 
 #[test]
 fn session_activity_survives_restore_and_legacy_messages() {
+    let _locale = crate::test_support::chinese();
     let mut restored = session();
     restored.created_at = 10;
     assert_eq!(restored.last_activity_at(), 10);
@@ -1363,4 +1401,38 @@ fn session_activity_survives_restore_and_legacy_messages() {
     let saved = serde_json::to_string(&restored).unwrap();
     let restored: SessionRecord = serde_json::from_str(&saved).unwrap();
     assert_eq!(restored.last_activity_at(), 100);
+}
+
+#[test]
+fn localized_tool_labels_preserve_edit_detection_and_approval_semantics() {
+    let _locale = crate::test_support::scoped("en");
+    for language in ["en", "zh-CN"] {
+        conduit::i18n::set_locale(&language.to_string().into());
+        let mut item: ChatItem = serde_json::from_value(serde_json::json!({
+            "key":"edit", "kind":"Tool", "text":"修改文件", "status":"运行中",
+            "input": serde_json::json!([{"path":"source.rs", "kind":"added", "diff":"@@ -0,0 +1 @@\n+hello"}]).to_string()
+        })).unwrap();
+        assert!(super::is_tool_edit(&item));
+        assert!(super::tool_running(&item));
+        let diffs = super::edit_tool_diffs(&item).unwrap();
+        assert!(diffs[0].patch.starts_with("--- /dev/null\n"));
+        assert_eq!(item.status.as_str(), "运行中");
+        item.status = crate::message_status::ToolStatus::Failed;
+        assert!(super::tool_failed(&item));
+        assert_eq!(
+            conduit::i18n::source("已允许"),
+            if language == "en" {
+                "Allowed"
+            } else {
+                "已允许"
+            }
+        );
+        assert!(
+            super::failure_guidance("provider not found").contains(if language == "en" {
+                "Settings"
+            } else {
+                "设置"
+            })
+        );
+    }
 }

@@ -77,14 +77,22 @@ impl TerminalView {
         self.error = if self.input_enabled {
             self.runtime.send(bytes).err()
         } else {
-            Some("当前终端不可输入".into())
+            Some(
+                conduit::i18n::text_static(
+                    "terminal.view.the_current_terminal_cannot_accept_input",
+                )
+                .into(),
+            )
         };
         cx.notify();
     }
     fn paste(&mut self, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
             if text.len() > 1024 * 1024 - 12 {
-                self.error = Some("单次粘贴不能超过 1 MiB".into());
+                self.error = Some(
+                    conduit::i18n::text_static("terminal.view.a_single_paste_cannot_exceed_1_mib")
+                        .into(),
+                );
             } else {
                 let text = text
                     .replace('\0', "")
@@ -686,11 +694,14 @@ impl Render for TerminalView {
                             .px_2()
                             .gap_2()
                             .items_center()
-                            .child(format!("粘贴 {lines} 行内容？可能执行多条命令。"))
+                            .child(conduit::i18n::format(
+                                "terminal.view.paste_lines_this_may_execute_multiple_commands",
+                                &[("lines", format!("{}", lines))],
+                            ))
                             .child(
                                 Button::new("terminal-confirm-paste")
                                     .small()
-                                    .label("粘贴")
+                                    .label(conduit::i18n::text_static("terminal.view.paste"))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         if let Some(text) = this.pending_paste.take() {
                                             this.send_paste(text, cx);
@@ -703,7 +714,7 @@ impl Render for TerminalView {
                                 Button::new("terminal-cancel-paste")
                                     .small()
                                     .ghost()
-                                    .label("取消")
+                                    .label(conduit::i18n::text_static("git_branches.cancel"))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.pending_paste = None;
                                         this.focus.focus(window, cx);
@@ -740,6 +751,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn ime_preedit_paste_confirmation_and_readonly_input(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         let (app, cx, root) = crate::app::queue::tests::fixture(cx, "terminal-ime");
         let (runtime, view) = cx.update(|window, cx| {
             app.update(cx, |app, cx| {

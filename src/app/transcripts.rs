@@ -100,9 +100,13 @@ impl ConduitApp {
                             }
                             Err(error) => {
                                 if this.transcripts.renames.remove(&id) {
-                                    this.session_control
-                                        .naming_errors
-                                        .insert(id, format!("无法读取会话内容：{error}"));
+                                    this.session_control.naming_errors.insert(
+                                        id,
+                                        conduit::i18n::format(
+                                            "transcripts.unable_to_read_session_content",
+                                            &[("error", error.to_string())],
+                                        ),
+                                    );
                                 }
                                 this.transcripts.errors.insert(id, error);
                             }

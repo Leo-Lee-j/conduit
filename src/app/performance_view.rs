@@ -7,16 +7,18 @@ impl Render for PerformanceMonitor {
         let memory = |bytes: Option<usize>| {
             bytes
                 .map(|value| format!("{:.1} MiB", value as f64 / 1_048_576.0))
-                .unwrap_or_else(|| "不可用".into())
+                .unwrap_or_else(|| {
+                    conduit::i18n::text_static("performance_view.unavailable").into()
+                })
         };
         let percent = |value: Option<f64>| {
             value
                 .map(|value| format!("{value:.1}%"))
                 .unwrap_or_else(|| {
                     if self.sample_duration.is_zero() {
-                        "采样中…".into()
+                        conduit::i18n::text_static("performance_view.sampling").into()
                     } else {
-                        "不可用".into()
+                        conduit::i18n::text_static("performance_view.unavailable").into()
                     }
                 })
         };
@@ -30,33 +32,82 @@ impl Render for PerformanceMonitor {
                         value.maximum.as_secs_f64() * 1000.0
                     )
                 })
-                .unwrap_or_else(|| "本周期空闲".into())
+                .unwrap_or_else(|| {
+                    conduit::i18n::text_static("performance_view.idle_this_interval").into()
+                })
         };
         let rows = [
-            ("CPU · 整机容量", percent(self.cpu_percent)),
-            ("CPU · 近 60 秒峰值", percent(self.recent_cpu_peak())),
-            ("驻留内存 · 工作集", memory(self.memory_bytes)),
-            ("私有提交内存", memory(self.private_bytes)),
-            ("工作集 · 进程生命周期峰值", memory(self.peak_memory_bytes)),
             (
-                "私有提交 · 窗口内变化",
+                conduit::i18n::text_static("performance_view.cpu_total_system_capacity"),
+                percent(self.cpu_percent),
+            ),
+            (
+                conduit::i18n::text_static("performance_view.cpu_peak_in_last_60_seconds"),
+                percent(self.recent_cpu_peak()),
+            ),
+            (
+                conduit::i18n::text_static("performance_view.resident_memory_working_set"),
+                memory(self.memory_bytes),
+            ),
+            (
+                conduit::i18n::text_static("performance_view.private_committed_memory"),
+                memory(self.private_bytes),
+            ),
+            (
+                conduit::i18n::text_static("performance_view.working_set_process_lifetime_peak"),
+                memory(self.peak_memory_bytes),
+            ),
+            (
+                conduit::i18n::text_static(
+                    "performance_view.private_committed_change_in_sample_window",
+                ),
                 self.private_growth()
                     .map(|bytes| format!("{:+.1} MiB", bytes as f64 / 1_048_576.0))
-                    .unwrap_or_else(|| "等待后续样本".into()),
+                    .unwrap_or_else(|| {
+                        conduit::i18n::text_static("performance_view.waiting_for_more_samples")
+                            .into()
+                    }),
             ),
-            ("主视图构建 · 均值 / 最大", timing(self.render)),
-            ("单条消息构建 · 均值 / 最大", timing(self.message_render)),
             (
-                "最近一帧构建 / 会话消息",
-                format!("{} / {} 条", self.mounted_messages(), self.message_count),
+                conduit::i18n::text_static("performance_view.main_view_build_mean_max"),
+                timing(self.render),
             ),
-            ("本周期主视图构建", format!("{} 次", self.render.count)),
-            ("本周期引擎事件", format!("{} 条", self.event_count)),
             (
-                "运行任务 / 已加载会话",
+                conduit::i18n::text_static("performance_view.message_build_mean_max"),
+                timing(self.message_render),
+            ),
+            (
+                conduit::i18n::text_static("performance_view.latest_frame_build_session_messages"),
+                conduit::i18n::format(
+                    "performance_view.messages",
+                    &[
+                        ("arg0", format!("{}", self.mounted_messages())),
+                        ("arg1", format!("{}", self.message_count)),
+                    ],
+                ),
+            ),
+            (
+                conduit::i18n::text_static("performance_view.main_view_builds_this_interval"),
+                conduit::i18n::format(
+                    "performance_view.times",
+                    &[("arg0", format!("{}", self.render.count))],
+                ),
+            ),
+            (
+                conduit::i18n::text_static("performance_view.engine_events_this_interval"),
+                conduit::i18n::format(
+                    "performance_view.events",
+                    &[("arg0", format!("{}", self.event_count))],
+                ),
+            ),
+            (
+                conduit::i18n::text_static("performance_view.running_tasks_loaded_sessions"),
                 format!("{} / {}", self.active_runs, self.session_count),
             ),
-            ("运行时长", self.uptime()),
+            (
+                conduit::i18n::text_static("performance_view.uptime"),
+                self.uptime(),
+            ),
         ];
         v_flex()
             .id("performance-details")
@@ -76,21 +127,18 @@ impl Render for PerformanceMonitor {
                     .items_center()
                     .gap_2()
                     .child(Icon::new(gpui_kit::assets::IconName::Activity).small())
-                    .child(
-                        div()
-                            .text_size(ui_text_size(13.))
-                            .font_semibold()
-                            .child("性能检测"),
-                    )
+                    .child(div().text_size(ui_text_size(13.)).font_semibold().child(
+                        conduit::i18n::text_static("performance_view.performance_monitor"),
+                    ))
                     .child(div().flex_1())
                     .child(
                         div()
                             .text_size(ui_text_size(11.))
                             .text_color(rgb(palette().muted))
                             .child(if cfg!(debug_assertions) {
-                                "开发构建"
+                                conduit::i18n::text_static("performance_view.development_build")
                             } else {
-                                "发布构建"
+                                conduit::i18n::text_static("performance_view.release_build")
                             }),
                     ),
             )
@@ -98,10 +146,12 @@ impl Render for PerformanceMonitor {
                 div()
                     .text_size(ui_text_size(11.))
                     .text_color(rgb(palette().muted))
-                    .child(format!(
-                        "Conduit · PID {} · {} 逻辑处理器",
-                        std::process::id(),
-                        self.logical_cpus
+                    .child(conduit::i18n::format(
+                        "performance_view.conduit_pid_logical_processors",
+                        &[
+                            ("arg0", format!("{}", std::process::id())),
+                            ("arg1", format!("{}", self.logical_cpus)),
+                        ],
                     )),
             )
             .child(
@@ -126,11 +176,21 @@ impl Render for PerformanceMonitor {
                     .gap_1()
                     .text_size(ui_text_size(11.))
                     .text_color(rgb(palette().muted))
-                    .child("仅统计 Conduit 主进程，CLI / Git 子进程不计入")
-                    .child("工作集含共享页；私有提交不等于实际驻留内存")
-                    .child("构建耗时不含布局、GPU 绘制，不代表帧率")
-                    .child("约每 2 秒采样，保留最近 60 秒内最多 30 条")
-                    .child("点击图标可固定展开；窗口变化按已有样本计算"),
+                    .child(conduit::i18n::text_static(
+                        "performance_view.conduit_main_process_only_excludes_cli_and",
+                    ))
+                    .child(conduit::i18n::text_static(
+                        "performance_view.working_set_includes_shared_pages_private_commit",
+                    ))
+                    .child(conduit::i18n::text_static(
+                        "performance_view.build_time_excludes_layout_and_gpu_rendering",
+                    ))
+                    .child(conduit::i18n::text_static(
+                        "performance_view.samples_about_every_2_seconds_keeps_up",
+                    ))
+                    .child(conduit::i18n::text_static(
+                        "performance_view.click_the_icon_to_pin_this_panel",
+                    )),
             )
     }
 }

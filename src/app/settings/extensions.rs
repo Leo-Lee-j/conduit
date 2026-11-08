@@ -75,9 +75,13 @@ impl ConduitApp {
                 .detection_queue
                 .retain(|queued| queued.id() != entry.id());
             self.extensions_ui.tool_reports.remove(&entry.id());
-            self.extensions_ui
-                .connection_results
-                .insert(entry.id(), "正在初始化并读取工具列表…".into());
+            self.extensions_ui.connection_results.insert(
+                entry.id(),
+                conduit::i18n::text_static(
+                    "settings.extensions.initializing_and_reading_the_tool_list",
+                )
+                .into(),
+            );
             self.extensions_ui.connection_probe = Some(
                 extensions::connection::ConnectionProbe::start(entry, context),
             );
@@ -109,20 +113,20 @@ impl ConduitApp {
                     .small()
                     .icon(FullIconName::Plus)
                     .accessibility_label(if kind == Kind::Mcp {
-                        "添加 MCP 服务"
+                        conduit::i18n::text_static("settings.config_editor.add_mcp_service")
                     } else {
-                        "创建 Skill"
+                        conduit::i18n::text_static("settings.config_editor.create_skill")
                     })
                     .tooltip(if kind == Kind::Mcp {
-                        "添加 MCP 服务"
+                        conduit::i18n::text_static("settings.config_editor.add_mcp_service")
                     } else {
-                        "创建 Skill"
+                        conduit::i18n::text_static("settings.config_editor.create_skill")
                     })
                     .when(!narrow, |button| {
                         button.label(if kind == Kind::Mcp {
-                            "添加 MCP 服务"
+                            conduit::i18n::text_static("settings.config_editor.add_mcp_service")
                         } else {
-                            "创建 Skill"
+                            conduit::i18n::text_static("settings.config_editor.create_skill")
                         })
                     })
                     .disabled(disabled)
@@ -142,17 +146,19 @@ impl ConduitApp {
                         .outline()
                         .small()
                         .icon(FullIconName::FolderOpen)
-                        .accessibility_label("从文件夹导入")
+                        .accessibility_label(conduit::i18n::text_static(
+                            "settings.extensions.import_from_folder",
+                        ))
                         .tooltip(if self.extensions_ui.importing {
-                            "导入中…"
+                            conduit::i18n::text_static("settings.extensions.importing")
                         } else {
-                            "从文件夹导入"
+                            conduit::i18n::text_static("settings.extensions.import_from_folder")
                         })
                         .when(!narrow, |button| {
                             button.label(if self.extensions_ui.importing {
-                                "导入中…"
+                                conduit::i18n::text_static("settings.extensions.importing")
                             } else {
-                                "从文件夹导入"
+                                conduit::i18n::text_static("settings.extensions.import_from_folder")
                             })
                         })
                         .disabled(disabled)
@@ -177,7 +183,12 @@ impl ConduitApp {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("选择含 SKILL.md 的技能文件夹".into()),
+            prompt: Some(
+                conduit::i18n::text_static(
+                    "settings.extensions.select_a_skill_folder_containing_skill_md",
+                )
+                .into(),
+            ),
         });
         self.extensions_ui.importing = true;
         cx.notify();
@@ -188,17 +199,17 @@ impl ConduitApp {
                     Some(cx.background_executor().spawn(async move { extensions::edit::import_skill(&source, &destination) }).await)
                 }
                 Ok(Ok(_)) => None,
-                _ => Some(Err(anyhow::anyhow!("无法打开文件夹选择窗口"))),
+                _ => Some(Err(anyhow::anyhow!(conduit::i18n::text("settings.extensions.unable_to_open_folder_picker")))),
             };
             let _ = this.update_in(cx, |app, window, cx| {
                 app.extensions_ui.importing = false;
                 if let Some(result) = result {
                     let level = if result.is_ok() { NoticeLevel::Success } else { NoticeLevel::Error };
                     let message = match result {
-                        Ok(path) => format!("已导入 {}；下次启动会话时加载。", path.display()),
+                        Ok(path) => conduit::i18n::format("settings.extensions.imported_loaded_when_the_next_session_starts", &[("arg0", format!("{}", path.display()))]),
                         Err(error) => error.to_string(),
                     };
-                    app.notify_user(Notice::new(NoticeSource::Settings, level, "Skill 导入结果", message.clone())
+                    app.notify_user(Notice::new(NoticeSource::Settings, level, conduit::i18n::text_static("settings.extensions.skill_import_result"), message.clone())
                         .target(NoticeTarget::Settings).presentation(NoticePresentation::History), cx);
                     app.extensions_ui.feedback = Some(message);
                     app.extensions_ui.invalidate();
@@ -279,9 +290,13 @@ impl ConduitApp {
             .as_ref()
             .and_then(|probe| match probe.events.try_recv() {
                 Ok(result) => Some((probe.id.clone(), result)),
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    Some((probe.id.clone(), Err("测试线程已退出，请重试".into())))
-                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some((
+                    probe.id.clone(),
+                    Err(conduit::i18n::text_static(
+                        "settings.extensions.test_thread_exited_please_retry",
+                    )
+                    .into()),
+                )),
                 Err(std::sync::mpsc::TryRecvError::Empty) => None,
             });
         if let Some((id, result)) = connection {
@@ -299,14 +314,17 @@ impl ConduitApp {
                 }
                 Err(error) => {
                     self.extensions_ui.tool_reports.remove(&id);
-                    format!("连接未完成：{error}")
+                    conduit::i18n::format(
+                        "settings.extensions.connection_incomplete",
+                        &[("error", error.to_string())],
+                    )
                 }
             };
             self.notify_user(
                 Notice::new(
                     NoticeSource::Settings,
                     level,
-                    "MCP 连接测试",
+                    conduit::i18n::text_static("settings.extensions.mcp_connection_test"),
                     message.clone(),
                 )
                 .target(NoticeTarget::Settings)
@@ -326,7 +344,12 @@ impl ConduitApp {
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => Some((
                     p.context.clone(),
                     Catalog {
-                        errors: vec!["扫描线程已结束，请刷新重试。".into()],
+                        errors: vec![
+                            conduit::i18n::text_static(
+                                "settings.extensions.scan_thread_exited_refresh_to_retry",
+                            )
+                            .into(),
+                        ],
                         ..Default::default()
                     },
                 )),
@@ -370,9 +393,11 @@ impl ConduitApp {
             self.extensions_ui.tool_reports.clear();
             self.extensions_ui.connection_results.clear();
             for entry in &self.extensions_ui.detection_queue {
-                self.extensions_ui
-                    .connection_results
-                    .insert(entry.id(), "等待检测工具…".into());
+                self.extensions_ui.connection_results.insert(
+                    entry.id(),
+                    conduit::i18n::text_static("settings.extensions.waiting_to_detect_tools")
+                        .into(),
+                );
             }
             self.extensions_ui.lists = new_lists();
             cx.notify();
@@ -395,7 +420,10 @@ impl ConduitApp {
         let compact = narrow || f32::from(window.viewport_size().height) < 650.;
         let engine = self.extensions_ui.engine;
         let mut controls = h_flex().w_full().min_w_0().gap_2().flex_wrap();
-        let mut choices = vec![(None, "全局".to_owned())];
+        let mut choices = vec![(
+            None,
+            conduit::i18n::text_static("settings.extensions.global").to_owned(),
+        )];
         choices.extend(
             self.store
                 .workspaces
@@ -408,16 +436,22 @@ impl ConduitApp {
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "全局".into());
+            .unwrap_or_else(|| conduit::i18n::text_static("settings.extensions.global").into());
         let scope_view = view.clone();
         controls = controls.child(
             Button::new("extensions-scope")
                 .debug_selector(|| "extensions-scope".into())
                 .small()
                 .ghost()
-                .accessibility_label(format!("范围：{current}"))
+                .accessibility_label(conduit::i18n::format(
+                    "settings.extensions.scope",
+                    &[("current", current.to_string())],
+                ))
                 .max_w(px(if narrow { 110. } else { 150. }))
-                .child(div().truncate().child(format!("范围：{current}")))
+                .child(div().truncate().child(conduit::i18n::format(
+                    "settings.extensions.scope",
+                    &[("current", current.to_string())],
+                )))
                 .icon(FullIconName::ChevronDown)
                 .dropdown_menu(move |mut menu, _, _| {
                     for (path, name) in &choices {
@@ -475,7 +509,10 @@ impl ConduitApp {
             }
             if self.extensions_ui.sources_expanded {
                 rows.push(ExtensionRow::Message(
-                    "扫描范围（文件不存在时跳过；插件缓存不代表当前加载版本）".into(),
+                    conduit::i18n::text_static(
+                        "settings.extensions.scan_scope_missing_files_are_skipped_plugin",
+                    )
+                    .into(),
                     false,
                 ));
                 let mut sources = catalog.sources.clone();
@@ -484,20 +521,30 @@ impl ConduitApp {
                 for source in sources {
                     rows.push(ExtensionRow::Source(source));
                 }
-                rows.push(ExtensionRow::Message("扫描不合并配置优先级，不验证项目受信任状态；环境内联配置、托管配置、远程目录和运行时插件加载未解析。".into(), false));
+                rows.push(ExtensionRow::Message(
+                    conduit::i18n::text_static(
+                        "settings.extensions.scanning_does_not_resolve_configuration_priority_or",
+                    )
+                    .into(),
+                    false,
+                ));
             }
         }
         if count == 0 {
             rows.push(ExtensionRow::Empty(
                 kind,
                 if probing {
-                    "正在读取本机定义…"
+                    conduit::i18n::text_static("settings.extensions.reading_local_definitions")
                 } else if !query.is_empty() || filter != Filter::All {
-                    "没有匹配的条目。"
+                    conduit::i18n::text_static("settings.extensions.no_matching_entries")
                 } else if catalog.is_none() {
-                    "尚未读取或读取已取消，请刷新。"
+                    conduit::i18n::text_static(
+                        "settings.extensions.not_loaded_or_reading_cancelled_refresh_to",
+                    )
                 } else {
-                    "已扫描的来源中没有发现条目。"
+                    conduit::i18n::text_static(
+                        "settings.extensions.no_entries_found_in_the_scanned_sources",
+                    )
                 }
                 .into(),
             ));
@@ -524,12 +571,27 @@ impl ConduitApp {
         let info = catalog
             .and_then(|c| c.updated)
             .map(|time| {
-                format!(
-                    "{count} / {total} 项 · 刷新于 {}",
-                    DateTime::<Local>::from(time).format("%H:%M:%S")
+                conduit::i18n::format(
+                    "settings.extensions.entries_refreshed_at",
+                    &[
+                        ("count", format!("{}", count)),
+                        ("total", format!("{}", total)),
+                        (
+                            "arg0",
+                            format!("{}", DateTime::<Local>::from(time).format("%H:%M:%S")),
+                        ),
+                    ],
                 )
             })
-            .unwrap_or_else(|| format!("{count} / {total} 项"));
+            .unwrap_or_else(|| {
+                conduit::i18n::format(
+                    "settings.extensions.entries",
+                    &[
+                        ("count", format!("{}", count)),
+                        ("total", format!("{}", total)),
+                    ],
+                )
+            });
         let sources_button = || {
             let sources_view = sources_view.clone();
             Button::new("extensions-sources")
@@ -540,13 +602,13 @@ impl ConduitApp {
                 } else {
                     FullIconName::ChevronDown
                 })
-                .accessibility_label("扫描范围")
-                .tooltip("扫描范围")
+                .accessibility_label(conduit::i18n::text_static("settings.extensions.scan_scope"))
+                .tooltip(conduit::i18n::text_static("settings.extensions.scan_scope"))
                 .when(!narrow, |button| {
                     button.label(if sources_expanded {
-                        "收起扫描范围"
+                        conduit::i18n::text_static("settings.extensions.hide_scan_scope")
                     } else {
-                        "扫描范围"
+                        conduit::i18n::text_static("settings.extensions.scan_scope")
                     })
                 })
                 .on_click(move |_, _, cx| {
@@ -565,7 +627,9 @@ impl ConduitApp {
                     .small()
                     .prefix(FullIconName::Search)
                     .cleanable(true)
-                    .aria_label("搜索扩展名称、说明或来源"),
+                    .aria_label(conduit::i18n::text_static(
+                        "settings.extensions.search_extension_names_descriptions_or_sources",
+                    )),
             )
         };
         let toolbar = controls
@@ -599,10 +663,22 @@ impl ConduitApp {
                     .small()
                     .outline()
                     .icon(FullIconName::RefreshCw)
-                    .accessibility_label(if probing { "读取中…" } else { "刷新" })
-                    .tooltip(if probing { "读取中…" } else { "刷新" })
+                    .accessibility_label(if probing {
+                        conduit::i18n::text_static("settings.connections.reading")
+                    } else {
+                        conduit::i18n::text_static("model_picker.refresh")
+                    })
+                    .tooltip(if probing {
+                        conduit::i18n::text_static("settings.connections.reading")
+                    } else {
+                        conduit::i18n::text_static("model_picker.refresh")
+                    })
                     .when(!narrow, |button| {
-                        button.label(if probing { "读取中…" } else { "刷新" })
+                        button.label(if probing {
+                            conduit::i18n::text_static("settings.connections.reading")
+                        } else {
+                            conduit::i18n::text_static("model_picker.refresh")
+                        })
                     })
                     .disabled(probing || self.closing)
                     .on_click(move |_, window, cx| {
@@ -615,7 +691,7 @@ impl ConduitApp {
                     Button::new("extensions-cancel")
                         .small()
                         .ghost()
-                        .label("取消")
+                        .label(conduit::i18n::text_static("git_branches.cancel"))
                         .on_click(move |_, _, cx| {
                             cancel.update(cx, |app, cx| {
                                 app.extensions_ui.probe = None;
@@ -659,9 +735,9 @@ impl ConduitApp {
                                 .text_size(ui_text_size(12.))
                                 .text_color(rgb(palette().muted))
                                 .child(if self.extensions_ui.workspace.is_some() {
-                                    "当前工作区及继承的全局定义 · 加载状态以会话为准"
+                                    conduit::i18n::text_static("settings.extensions.current_workspace_and_inherited_global_definitions_see")
                                 } else {
-                                    "全局定义 · 加载状态以会话为准"
+                                    conduit::i18n::text_static("settings.extensions.global_definitions_see_session_for_actual_loading")
                                 }),
                         )
                     })
@@ -712,17 +788,17 @@ impl ConduitApp {
                                         format!(
                                             "{} · {count} / {total}",
                                             if mcp {
-                                                "服务 / 连接地址"
+                                                conduit::i18n::text_static("settings.extensions.service_connection_address")
                                             } else {
-                                                "技能 / 说明"
+                                                conduit::i18n::text_static("settings.extensions.skill_description")
                                             }
                                         )
                                     } else if mcp {
-                                        "服务 / 连接地址".to_owned()
+                                        conduit::i18n::text_static("settings.extensions.service_connection_address").to_owned()
                                     } else {
-                                        "技能 / 说明".to_owned()
+                                        conduit::i18n::text_static("settings.extensions.skill_description").to_owned()
                                     })
-                                    .child("状态与操作"),
+                                    .child(conduit::i18n::text_static("settings.extensions.status_and_actions")),
                             )
                             .child(
                                 div()
@@ -798,34 +874,43 @@ fn render_extension_row(
             let entry_status = if !mcp || entry.disabled {
                 entry.status()
             } else if report.is_some() {
-                "连接正常"
+                conduit::i18n::text_static("settings.extensions.connected")
             } else if this_probe {
-                "检测中"
+                conduit::i18n::text_static("settings.extensions.detecting")
             } else if queued {
-                "等待检测"
+                conduit::i18n::text_static("settings.extensions.awaiting_detection")
             } else if connection_result.is_some() {
-                "检测未完成"
+                conduit::i18n::text_static("settings.extensions.detection_incomplete")
             } else {
                 entry.status()
             };
             let tool_label = if entry.disabled {
-                "0 个可用工具".to_string()
+                conduit::i18n::text_static("settings.extensions.no_tools_available").to_string()
             } else if let Some(report) = &report {
-                format!("{} 个可用工具", report.count())
+                conduit::i18n::format(
+                    "settings.extensions.available_tools",
+                    &[("arg0", format!("{}", report.count()))],
+                )
             } else if this_probe {
-                "正在检测工具…".to_string()
+                conduit::i18n::text_static("settings.extensions.detecting_tools").to_string()
             } else if queued {
-                "等待检测工具…".to_string()
+                conduit::i18n::text_static("settings.extensions.waiting_to_detect_tools")
+                    .to_string()
             } else if connection_result.is_some() {
-                "重新检测工具".to_string()
+                conduit::i18n::text_static("settings.extensions.detect_tools_again").to_string()
             } else {
-                "检测工具数量".to_string()
+                conduit::i18n::text_static("settings.extensions.detect_tool_count").to_string()
             };
             let tool_hint = report
                 .as_ref()
                 .map(|report| report.summary())
                 .or_else(|| connection_result.clone())
-                .unwrap_or_else(|| "初始化连接并读取完整工具列表；不会调用工具。".into());
+                .unwrap_or_else(|| {
+                    conduit::i18n::text_static(
+                        "settings.extensions.initialize_the_connection_and_read_the_full",
+                    )
+                    .into()
+                });
             let tool_count = mcp.then(|| {
                 Button::new(("mcp-tool-count", index))
                     .debug_selector(move || format!("mcp-tool-count-{index}"))
@@ -896,8 +981,8 @@ fn render_extension_row(
                                         )
                                         .when(!narrow, |row| row
                                             .child(management_badge(entry_status, !entry.disabled))
-                                            .child(management_badge(entry.scope.clone(), false))
-                                            .when(*duplicate, |row| row.child(management_badge("同名定义", false)))),
+                                            .child(management_badge(conduit::i18n::source(&entry.scope).to_string(), false))
+                                            .when(*duplicate, |row| row.child(management_badge(conduit::i18n::text_static("settings.extensions.duplicate_name"), false)))),
                                 )
                                 .child(
                                     div()
@@ -910,23 +995,23 @@ fn render_extension_row(
                                 .when(narrow, |body| body.child(
                                     h_flex().gap_1().flex_wrap()
                                         .child(management_badge(entry_status, !entry.disabled))
-                                        .child(management_badge(entry.scope.clone(), false))
-                                        .when(*duplicate, |row| row.child(management_badge("同名定义", false)))
+                                        .child(management_badge(conduit::i18n::source(&entry.scope).to_string(), false))
+                                        .when(*duplicate, |row| row.child(management_badge(conduit::i18n::text_static("settings.extensions.duplicate_name"), false)))
                                 )),
                         )
                 .child(h_flex().gap_2().flex_wrap()
-                    .child(Button::new(("extension-quick-edit", index)).small().ghost().icon(FullIconName::Pencil).accessibility_label(if managed { "插件托管" } else { "编辑" }).when(!narrow, |button| button.label(if managed { "插件托管" } else { "编辑" })).disabled(disabled || managed).tooltip(if managed { "由插件安装包管理，请在对应 CLI 中调整" } else { "编辑此条目的来源文件" })
+                    .child(Button::new(("extension-quick-edit", index)).small().ghost().icon(FullIconName::Pencil).accessibility_label(if managed { conduit::i18n::text_static("settings.extensions.plugin_managed") } else { conduit::i18n::text_static("settings.extensions.edit") }).when(!narrow, |button| button.label(if managed { conduit::i18n::text_static("settings.extensions.plugin_managed") } else { conduit::i18n::text_static("settings.extensions.edit") })).disabled(disabled || managed).tooltip(if managed { conduit::i18n::text_static("settings.extensions.managed_by_the_plugin_package_adjust_in") } else { conduit::i18n::text_static("settings.extensions.edit_this_entry_s_source_file") })
                         .on_click(move |_, window, cx| quick_edit.update(cx, |app, cx| app.open_native_config(quick_path.clone(), kind, false, window, cx))))
                     .when(!managed && toggle_supported, |row| row.child(Button::new(("extension-toggle", index)).small().ghost()
-                        .label(if entry.disabled { "恢复" } else { "停用" }).disabled(disabled || view.read(cx).extensions_ui.changing)
+                        .label(if entry.disabled { conduit::i18n::text_static("settings.extensions.restore") } else { conduit::i18n::text_static("settings.extensions.disable") }).disabled(disabled || view.read(cx).extensions_ui.changing)
                         .on_click(move |_, window, cx| state_view.update(cx, |app, cx| app.open_extension_toggle(state_entry.clone(), window, cx)))))
-                    .when(!managed && !toggle_supported, |row| row.child(Button::new(("extension-native-toggle", index)).small().ghost().label("原生管理").disabled(true).tooltip("此引擎的启停请编辑来源配置"))))
+                    .when(!managed && !toggle_supported, |row| row.child(Button::new(("extension-native-toggle", index)).small().ghost().label(conduit::i18n::text_static("settings.extensions.native_management")).disabled(true).tooltip(conduit::i18n::text_static("settings.extensions.edit_the_source_configuration_to_enable_or")))))
                         .child(
                             Button::new(("extension-detail", index))
                                 .debug_selector(move || format!("extension-detail-{index}"))
                                 .small()
                                 .ghost()
-                                .label(if expanded { "收起" } else { "详情" })
+                                .label(if expanded { conduit::i18n::text_static("chat.collapse") } else { conduit::i18n::text_static("settings.extensions.details") })
                                 .on_click(move |_, _, cx| {
                                     toggle_view.update(cx, |app, cx| {
                                         if !app.extensions_ui.expanded.remove(&toggle_id) {
@@ -964,29 +1049,29 @@ fn render_extension_row(
                                         }
                                     })
                                     .text_color(rgb(palette().muted))
-                                    .child(format!("来源：{}", entry.path.display())),
+                                    .child(conduit::i18n::format("settings.extensions.source", &[("arg0", format!("{}", entry.path.display()))])),
                             )
-                            .when(mcp, |details| details.child("测试会启动此定义中的命令或连接远程服务，仅初始化并读取工具列表。"))
+                            .when(mcp, |details| details.child(conduit::i18n::text_static("settings.extensions.testing_starts_the_command_or_connects_to")))
                             .when(mcp, |details| details.child(h_flex().gap_2()
-                                .child(Button::new(("mcp-test", index)).small().outline().label(if this_probe { "测试中…" } else { "测试连接" })
+                                .child(Button::new(("mcp-test", index)).small().outline().label(if this_probe { conduit::i18n::text_static("settings.extensions.testing") } else { conduit::i18n::text_static("settings.extensions.test_connection") })
                                     .disabled(probing || entry.disabled || view.read(cx).closing)
                                     .on_click(move |_, _, cx| test_view.update(cx, |app, cx| app.test_mcp_connection(test_entry.clone(), cx))))
-                                .when(this_probe, |row| row.child(Button::new(("mcp-cancel", index)).small().ghost().label("取消")
+                                .when(this_probe, |row| row.child(Button::new(("mcp-cancel", index)).small().ghost().label(conduit::i18n::text_static("git_branches.cancel"))
                                     .on_click(move |_, _, cx| cancel_view.update(cx, |app, cx| {
-                                        if let Some(probe) = app.extensions_ui.connection_probe.take() { app.extensions_ui.connection_results.insert(probe.id.clone(), "测试已取消".into()); }
+                                        if let Some(probe) = app.extensions_ui.connection_probe.take() { app.extensions_ui.connection_results.insert(probe.id.clone(), conduit::i18n::text_static("settings.extensions.test_cancelled").into()); }
                                         app.extensions_ui.lists = new_lists(); cx.notify();
                                     }))))))
                             .when_some(connection_result, |details, message| details.child(div().text_size(ui_text_size(12.)).child(message)))
                             .child(h_flex().gap_2().flex_wrap()
-                                .child(Button::new(("extension-edit", index)).small().outline().label("编辑来源文件").disabled(disabled || managed)
-                                    .tooltip(if managed { "插件文件由安装包管理，请在对应 CLI 中管理插件" } else { "校验格式并备份后保存" })
+                                .child(Button::new(("extension-edit", index)).small().outline().label(conduit::i18n::text_static("settings.extensions.edit_source_file")).disabled(disabled || managed)
+                                    .tooltip(if managed { conduit::i18n::text_static("settings.extensions.plugin_files_are_package_managed_manage_the") } else { conduit::i18n::text_static("settings.extensions.validate_back_up_and_save") })
                                     .on_click(move |_, window, cx| edit_view.update(cx, |app, cx| app.open_native_config(edit_path.clone(), kind, false, window, cx))))
-                                .child(Button::new(("extension-reveal", index)).small().ghost().label("在文件夹中显示").on_click(move |_, _, cx| cx.reveal_path(&reveal_path))))
+                                .child(Button::new(("extension-reveal", index)).small().ghost().label(conduit::i18n::text_static("settings.extensions.show_in_folder")).on_click(move |_, _, cx| cx.reveal_path(&reveal_path))))
                             .child(
                                 Button::new(("extension-copy-path", index))
                                     .small()
                                     .ghost()
-                                    .label("复制来源路径")
+                                    .label(conduit::i18n::text_static("settings.extensions.copy_source_path"))
                                     .on_click(move |_, _, cx| {
                                         cx.write_to_clipboard(ClipboardItem::new_string(
                                             copy_path.clone(),
@@ -1061,7 +1146,7 @@ fn render_extension_row(
                     Button::new(("extensions-source-copy", index))
                         .small()
                         .ghost()
-                        .label("复制路径")
+                        .label(conduit::i18n::text_static("settings.extensions.copy_path"))
                         .on_click(move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
                         }),
@@ -1084,6 +1169,7 @@ mod tests {
     fn settings_mcp_automatically_checks_once_per_visit_and_continues_after_failure(
         cx: &mut TestAppContext,
     ) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
         let output = slot.clone();

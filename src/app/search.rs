@@ -101,7 +101,7 @@ impl ConduitApp {
             let sessions = sessions.clone();
             dialog
                 .w(px(560.))
-                .title("最近会话")
+                .title(conduit::i18n::text_static("search.recent_sessions"))
                 .content(move |content, _, _| {
                     let mut body = v_flex().w_full().gap_1();
                     for (workspace, id, workspace_name, title) in &sessions {
@@ -216,7 +216,7 @@ impl ConduitApp {
             dialog
                 .w(px(640.))
                 .margin_top(px(margin_top))
-                .title("搜索会话")
+                .title(conduit::i18n::text_static("localization.search_sessions"))
                 .content(move |content, _, cx| {
                     let this = view.read(cx);
                     let input = this.search.clone();
@@ -235,9 +235,9 @@ impl ConduitApp {
                             div()
                                 .text_size(ui_text_size(12.))
                                 .text_color(rgb(palette().warning_text))
-                                .child(format!(
-                                    "{} 个会话的正文无法读取，搜索结果可能不完整；打开会话可重试。",
-                                    this.search_ui.errors
+                                .child(conduit::i18n::format(
+                                    "search.unable_to_read_messages_from_sessions_search",
+                                    &[("arg0", format!("{}", this.search_ui.errors))],
                                 )),
                         );
                     }
@@ -248,9 +248,11 @@ impl ConduitApp {
                                 .text_size(ui_text_size(12.))
                                 .text_color(rgb(palette().faint))
                                 .child(if query.is_empty() {
-                                    "输入会话标题或消息内容开始搜索"
+                                    conduit::i18n::text_static(
+                                        "search.enter_a_session_title_or_message_text",
+                                    )
                                 } else {
-                                    "没有匹配的会话"
+                                    conduit::i18n::text_static("search.no_matching_sessions")
                                 }),
                         );
                     } else {
@@ -309,7 +311,9 @@ impl ConduitApp {
                                                     div()
                                                         .text_size(ui_text_size(9.))
                                                         .text_color(rgb(palette().faint))
-                                                        .child("已归档"),
+                                                        .child(conduit::i18n::text_static(
+                                                            "search.archived",
+                                                        )),
                                                 )
                                             })
                                             .child(

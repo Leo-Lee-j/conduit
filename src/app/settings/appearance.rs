@@ -155,22 +155,22 @@ fn theme_options(selected: AppearanceMode, view: Entity<ConduitApp>, disabled: b
         .gap_3()
         .child(div().flex_1().min_w_0().child(theme_option(
             AppearanceMode::System,
-            "跟随系统",
-            "自动匹配系统外观",
+            conduit::i18n::text_static("settings.appearance.system"),
+            conduit::i18n::text_static("settings.appearance.match_system_appearance_automatically"),
             gpui_kit::assets::IconName::Monitor,
             "appearance-theme-system",
         )))
         .child(div().flex_1().min_w_0().child(theme_option(
             AppearanceMode::Light,
-            "浅色",
-            "明亮、清晰",
+            conduit::i18n::text_static("settings.appearance.light"),
+            conduit::i18n::text_static("settings.appearance.bright_and_clear"),
             gpui_kit::assets::IconName::Sun,
             "appearance-theme-light",
         )))
         .child(div().flex_1().min_w_0().child(theme_option(
             AppearanceMode::Dark,
-            "深色",
-            "柔和的深色背景",
+            conduit::i18n::text_static("settings.appearance.dark"),
+            conduit::i18n::text_static("settings.appearance.soft_dark_background"),
             gpui_kit::assets::IconName::Moon,
             "appearance-theme-dark",
         )))
@@ -192,13 +192,21 @@ fn font_select_field(
     SettingField::render(move |_, _, cx| {
         let app = view.read(cx);
         let (select, selector, label) = match target {
-            FontTarget::Interface => (&app.ui_font_select, "appearance-ui-font", "应用界面字体"),
+            FontTarget::Interface => (
+                &app.ui_font_select,
+                "appearance-ui-font",
+                conduit::i18n::text_static("settings.appearance.application_interface_font"),
+            ),
             FontTarget::Chat => (
                 &app.chat_font_select,
                 "appearance-chat-font",
-                "聊天正文字体",
+                conduit::i18n::text_static("settings.appearance.chat_body_font"),
             ),
-            FontTarget::Code => (&app.code_font_select, "appearance-code-font", "代码字体"),
+            FontTarget::Code => (
+                &app.code_font_select,
+                "appearance-code-font",
+                conduit::i18n::text_static("settings.appearance.code_font"),
+            ),
         };
         div()
             .debug_selector(move || selector.into())
@@ -210,7 +218,9 @@ fn font_select_field(
                     .w_full()
                     .menu_width(px(260.))
                     .menu_max_h(px(320.))
-                    .search_placeholder("搜索字体")
+                    .search_placeholder(conduit::i18n::text_static(
+                        "settings.appearance.search_fonts",
+                    ))
                     .accessibility_label(label)
                     .disabled(disabled),
             )
@@ -409,7 +419,9 @@ impl ConduitApp {
             let view = ui_reset_view.clone();
             Button::new("appearance-ui-reset")
                 .debug_selector(|| "appearance-ui-reset".into())
-                .label("恢复默认")
+                .label(conduit::i18n::text_static(
+                    "settings.appearance.restore_defaults",
+                ))
                 .small()
                 .ghost()
                 .disabled(disabled)
@@ -447,7 +459,9 @@ impl ConduitApp {
         let reset = SettingField::render(move |_, _window, _| {
             let reset_view = reset_view.clone();
             Button::new("appearance-typography-reset")
-                .label("恢复默认")
+                .label(conduit::i18n::text_static(
+                    "settings.appearance.restore_defaults",
+                ))
                 .small()
                 .ghost()
                 .disabled(disabled)
@@ -473,76 +487,76 @@ impl ConduitApp {
             |app| app.store.ui.code_syntax_highlight,
             |app, value| app.store.ui.code_syntax_highlight = value,
         );
-        settings_page("外观", FullIconName::Palette).groups(vec![
-            settings_section("主题")
+        settings_page(conduit::i18n::text_static("settings.appearance.appearance"), FullIconName::Palette).groups(vec![
+            settings_section(conduit::i18n::text_static("settings.appearance.theme"))
                 .item(
                     SettingItem::render(move |_, _, _| {
                         theme_options(selected, theme_view.clone(), disabled)
                     })
-                    .keywords(["主题", "浅色", "深色", "跟随系统"]),
+                    .keywords([conduit::i18n::text_static("settings.appearance.theme"), conduit::i18n::text_static("settings.appearance.light"), conduit::i18n::text_static("settings.appearance.dark"), conduit::i18n::text_static("settings.appearance.system")]),
                 )
-                .footer(|_, _| "选择后立即应用；跟随系统时自动同步 Windows 外观。"),
-            settings_section("应用界面")
+                .footer(|_, _| conduit::i18n::text_static("settings.appearance.applies_immediately_system_mode_follows_windows_appearance")),
+            settings_section(conduit::i18n::text_static("settings.appearance.application_interface"))
                 .item(
-                    SettingItem::new("界面字体", ui_font)
-                        .description("用于侧栏、标签页、菜单、按钮与设置，默认使用系统字体")
-                        .keywords(["应用", "界面", "UI", "字体", "font"])
+                    SettingItem::new(conduit::i18n::text_static("settings.appearance.interface_font"), ui_font)
+                        .description(conduit::i18n::text_static("settings.appearance.used_for_the_sidebar_tabs_menus_buttons"))
+                        .keywords([conduit::i18n::text_static("settings.appearance.application"), conduit::i18n::text_static("settings.appearance.interface"), "UI", conduit::i18n::text_static("settings.appearance.font"), "font"])
                         .disabled(disabled),
                 )
                 .item(
-                    SettingItem::new("界面字号", ui_size)
-                        .description("12–20 px；默认 16，按比例调整界面文字大小")
-                        .keywords(["应用", "界面", "字号", "大小", "font", "size"])
+                    SettingItem::new(conduit::i18n::text_static("settings.appearance.interface_font_size"), ui_size)
+                        .description(conduit::i18n::text_static("settings.appearance.12_20_px_default_16_scales_interface"))
+                        .keywords([conduit::i18n::text_static("settings.appearance.application"), conduit::i18n::text_static("settings.appearance.interface"), conduit::i18n::text_static("settings.appearance.font_size"), conduit::i18n::text_static("settings.appearance.size"), "font", "size"])
                         .disabled(disabled),
                 )
                 .item(
-                    SettingItem::new("恢复默认", ui_reset)
-                        .description("仅恢复界面字体与字号，保留聊天和代码设置")
+                    SettingItem::new(conduit::i18n::text_static("settings.appearance.restore_defaults"), ui_reset)
+                        .description(conduit::i18n::text_static("settings.appearance.reset_only_the_interface_font_and_size"))
                         .disabled(disabled),
                 )
-                .footer(|_, _| "选择后立即生效并自动保存；聊天正文、输入框与代码字体单独设置。"),
-            settings_section("聊天文字").items(vec![
-                SettingItem::new("正文字体", chat_font)
-                    .description("用于消息与输入框，默认使用系统字体")
+                .footer(|_, _| conduit::i18n::text_static("settings.appearance.changes_apply_immediately_and_are_saved_automatically")),
+            settings_section(conduit::i18n::text_static("settings.appearance.chat_text")).items(vec![
+                SettingItem::new(conduit::i18n::text_static("settings.appearance.body_font"), chat_font)
+                    .description(conduit::i18n::text_static("settings.appearance.used_for_messages_and_input_defaults_to"))
                     .disabled(disabled),
-                SettingItem::new("字号", chat_size)
-                    .description("12–20 px；默认 15")
+                SettingItem::new(conduit::i18n::text_static("settings.appearance.font_size"), chat_size)
+                    .description(conduit::i18n::text_static("settings.appearance.12_20_px_default_15"))
                     .disabled(disabled),
-                SettingItem::new("行高", chat_line_height)
-                    .description("1.2–2.0；默认 1.5")
+                SettingItem::new(conduit::i18n::text_static("settings.appearance.line_height"), chat_line_height)
+                    .description(conduit::i18n::text_static("settings.appearance.1_2_2_0_default_1_5"))
                     .disabled(disabled),
             ]),
-            settings_section("代码块").items(vec![
-                SettingItem::new("代码字体", code_font)
-                    .description("用于代码块与工具输出，默认使用系统等宽字体")
+            settings_section(conduit::i18n::text_static("settings.appearance.code_blocks")).items(vec![
+                SettingItem::new(conduit::i18n::text_static("settings.appearance.code_font"), code_font)
+                    .description(conduit::i18n::text_static("settings.appearance.used_for_code_blocks_and_tool_output"))
                     .disabled(disabled),
-                SettingItem::new("代码字号", code_size)
-                    .description("10–18 px；默认 13")
+                SettingItem::new(conduit::i18n::text_static("settings.appearance.code_font_size"), code_size)
+                    .description(conduit::i18n::text_static("settings.appearance.10_18_px_default_13"))
                     .disabled(disabled),
-                SettingItem::new("复制按钮", code_copy)
-                    .description("在每个代码块右上角显示复制按钮")
+                SettingItem::new(conduit::i18n::text_static("settings.appearance.copy_button"), code_copy)
+                    .description(conduit::i18n::text_static("settings.appearance.show_a_copy_button_in_the_upper"))
                     .disabled(disabled),
-                SettingItem::new("行号", code_line_numbers)
-                    .description("在代码块左侧显示行号；不随复制内容带出")
+                SettingItem::new(conduit::i18n::text_static("settings.appearance.line_numbers"), code_line_numbers)
+                    .description(conduit::i18n::text_static("settings.appearance.show_line_numbers_beside_code_blocks_excluded"))
                     .disabled(disabled),
-                SettingItem::new("语法高亮", code_syntax)
-                    .description("按语言着色；关闭后保持等宽单色")
+                SettingItem::new(conduit::i18n::text_static("settings.appearance.syntax_highlighting"), code_syntax)
+                    .description(conduit::i18n::text_static("settings.appearance.color_code_by_language_when_disabled_use"))
                     .disabled(disabled),
             ]),
-            settings_section("聊天预览").items(vec![
+            settings_section(conduit::i18n::text_static("settings.appearance.chat_preview")).items(vec![
                 SettingItem::render(move |_, _, cx| {
                     let app = preview_view.read(cx);
                     chat_markdown_view(
                         "appearance-chat-preview".into(),
-                        "调整上方选项可即时预览聊天正文。\n\n```rust\nfn main() {\n    println!(\"hello, conduit\");\n}\n```\n\n行内 `code` 与代码块都会跟随等宽字体设置。",
+                        conduit::i18n::text_static("settings.appearance.change_the_options_above_to_preview_chat"),
                         &app.chat_typography(),
                         "appearance-preview-code",
                         false,
                     )
                 })
-                .keywords(["预览", "聊天预览"]),
-                SettingItem::new("恢复默认", reset)
-                    .description("聊天字体、字号、行高与代码块选项一起恢复默认。")
+                .keywords([conduit::i18n::text_static("mermaid.preview"), conduit::i18n::text_static("settings.appearance.chat_preview")]),
+                SettingItem::new(conduit::i18n::text_static("settings.appearance.restore_defaults"), reset)
+                    .description(conduit::i18n::text_static("settings.appearance.reset_chat_font_size_line_height_and"))
                     .disabled(disabled),
             ]),
         ])

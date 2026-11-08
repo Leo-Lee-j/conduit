@@ -23,11 +23,19 @@ pub struct UpdateInfo {
 impl UpdateInfo {
     pub fn summary(&self) -> String {
         let status = match self.status {
-            UpdateStatus::Available => "发现可用更新",
-            UpdateStatus::Current => "已是最新版本",
-            UpdateStatus::Ahead => "当前版本高于官方稳定版",
+            UpdateStatus::Available => conduit::i18n::text_static("cli.updates.update_available"),
+            UpdateStatus::Current => conduit::i18n::text_static("cli.updates.up_to_date"),
+            UpdateStatus::Ahead => conduit::i18n::text_static(
+                "cli.updates.installed_version_is_newer_than_the_official",
+            ),
         };
-        format!("官方最新版本 {} · {status}", self.latest_version)
+        conduit::i18n::format(
+            "cli.updates.latest_official_version",
+            &[
+                ("arg0", self.latest_version.to_string()),
+                ("status", status.to_string()),
+            ],
+        )
     }
 }
 
@@ -55,10 +63,12 @@ struct Release {
 }
 
 fn compare_release(provider: Provider, installed: &str, bytes: &[u8]) -> Result<UpdateInfo> {
-    let release: Release = serde_json::from_slice(bytes).context("无法解析官方版本信息")?;
+    let release: Release = serde_json::from_slice(bytes).context(conduit::i18n::text_static(
+        "cli.updates.unable_to_parse_official_version_information",
+    ))?;
     anyhow::ensure!(
         !release.draft && !release.prerelease,
-        "更新服务返回了非稳定版"
+        conduit::i18n::text("cli.updates.update_service_returned_a_non_stable_version")
     );
     let tag = release.tag_name.trim();
     let tag = if provider == Provider::Codex {
@@ -66,10 +76,16 @@ fn compare_release(provider: Provider, installed: &str, bytes: &[u8]) -> Result<
     } else {
         tag
     };
-    let latest =
-        Version::parse(tag.strip_prefix('v').unwrap_or(tag)).context("官方版本号格式无法识别")?;
-    anyhow::ensure!(latest.pre.is_empty(), "更新服务返回了预发布版本");
-    let current = Version::parse(installed).context("当前 CLI 版本号无法比较")?;
+    let latest = Version::parse(tag.strip_prefix('v').unwrap_or(tag)).context(
+        conduit::i18n::text_static("cli.updates.unrecognized_official_version_format"),
+    )?;
+    anyhow::ensure!(
+        latest.pre.is_empty(),
+        conduit::i18n::text("cli.updates.update_service_returned_a_prerelease_version")
+    );
+    let current = Version::parse(installed).context(conduit::i18n::text_static(
+        "cli.updates.unable_to_compare_the_current_cli_version",
+    ))?;
     let status = match current.cmp_precedence(&latest) {
         std::cmp::Ordering::Less => UpdateStatus::Available,
         std::cmp::Ordering::Equal => UpdateStatus::Current,
@@ -86,7 +102,10 @@ pub(super) fn check(
     installed: &str,
     cancelled: &AtomicBool,
 ) -> Result<UpdateInfo> {
-    anyhow::ensure!(!cancelled.load(Ordering::Acquire), "检测已取消");
+    anyhow::ensure!(
+        !cancelled.load(Ordering::Acquire),
+        conduit::i18n::text("settings.cli.detection_cancelled")
+    );
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .https_only(true)
         .max_redirects(0)
@@ -101,23 +120,39 @@ pub(super) fn check(
         .call()
         .map_err(|error| match error {
             ureq::Error::StatusCode(403 | 429) => {
-                anyhow::anyhow!("官方更新服务暂时限制访问，请稍后重试")
+                anyhow::anyhow!(conduit::i18n::text(
+                    "cli.updates.official_update_service_rate_limit_reached_try"
+                ))
             }
-            other => anyhow::anyhow!("无法访问官方更新服务，请检查网络后重试：{other}"),
+            other => anyhow::anyhow!(conduit::i18n::format(
+                "cli.updates.unable_to_reach_the_official_update_service",
+                &[("other", format!("{}", other))]
+            )),
         })?;
-    anyhow::ensure!(response.status().is_success(), "官方更新服务返回了异常响应");
-    anyhow::ensure!(!cancelled.load(Ordering::Acquire), "检测已取消");
+    anyhow::ensure!(
+        response.status().is_success(),
+        conduit::i18n::text("cli.updates.official_update_service_returned_an_unexpected_response")
+    );
+    anyhow::ensure!(
+        !cancelled.load(Ordering::Acquire),
+        conduit::i18n::text("settings.cli.detection_cancelled")
+    );
     let mut bytes = Vec::new();
     response
         .body_mut()
         .as_reader()
         .take(MAX_RELEASE_BYTES + 1)
         .read_to_end(&mut bytes)
-        .context("读取官方版本信息失败")?;
-    anyhow::ensure!(!cancelled.load(Ordering::Acquire), "检测已取消");
+        .context(conduit::i18n::text_static(
+            "cli.updates.failed_to_read_official_version_information",
+        ))?;
+    anyhow::ensure!(
+        !cancelled.load(Ordering::Acquire),
+        conduit::i18n::text("settings.cli.detection_cancelled")
+    );
     anyhow::ensure!(
         bytes.len() as u64 <= MAX_RELEASE_BYTES,
-        "官方版本信息超出大小限制"
+        conduit::i18n::text("cli.updates.official_version_information_exceeds_the_size_limit")
     );
     compare_release(provider, installed, &bytes)
 }
@@ -135,6 +170,7 @@ mod tests {
 
     #[test]
     fn official_cli_updates_compare_numeric_versions_and_all_release_tag_formats() {
+        let _locale = crate::test_support::chinese();
         for (provider, installed, tag) in [
             (Provider::Claude, "2.1.9", "v2.1.10"),
             (Provider::Codex, "0.9.0", "rust-v0.10.0"),
@@ -163,6 +199,7 @@ mod tests {
 
     #[test]
     fn official_cli_updates_reject_invalid_or_unstable_metadata_and_support_cancellation() {
+        let _locale = crate::test_support::chinese();
         for bytes in [
             br#"{}"#.as_slice(),
             br#"not json"#,
@@ -181,6 +218,7 @@ mod tests {
     #[test]
     #[ignore = "requires installed CLIs and network; reads --version and official release metadata only"]
     fn installed_cli_updates_report_official_versions() {
+        let _locale = crate::test_support::chinese();
         let mut checked = 0;
         for provider in Provider::ALL {
             let Ok(resolved) = resolve(provider, &CliSettings::default()) else {

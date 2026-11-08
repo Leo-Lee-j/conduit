@@ -34,6 +34,7 @@ impl Drop for Released {
 
 #[test]
 fn bounded_lru_preserves_visible_views_and_releases_hidden_state() {
+    let _locale = crate::test_support::chinese();
     let registry = builtins::register(true).unwrap().registry;
     let mut tracker = ContextTracker::default();
     let mut cache = InstanceCache::<Released>::default();
@@ -74,6 +75,7 @@ fn bounded_lru_preserves_visible_views_and_releases_hidden_state() {
 
 #[test]
 fn full_visible_budget_rejects_creation_without_dropping_visible_resources() {
+    let _locale = crate::test_support::chinese();
     let registry = builtins::register(true).unwrap().registry;
     let mut tracker = ContextTracker::default();
     let cx = tracker.update(input(0)).unwrap();
@@ -91,6 +93,7 @@ fn full_visible_budget_rejects_creation_without_dropping_visible_resources() {
 
 #[test]
 fn hidden_and_replaced_requests_cancel_and_completion_is_single_use() {
+    let _locale = crate::test_support::chinese();
     let registry = builtins::register(true).unwrap().registry;
     let mut tracker = ContextTracker::default();
     let cx = tracker.update(input(0)).unwrap();
@@ -120,6 +123,7 @@ fn hidden_and_replaced_requests_cancel_and_completion_is_single_use() {
 
 #[test]
 fn route_readonly_and_closing_versions_reject_results_even_before_reconcile() {
+    let _locale = crate::test_support::chinese();
     let registry = builtins::register(true).unwrap().registry;
     for change in 0..5 {
         let mut tracker = ContextTracker::default();
@@ -163,6 +167,7 @@ fn route_readonly_and_closing_versions_reject_results_even_before_reconcile() {
 
 #[test]
 fn revocation_rebind_eviction_and_cache_identity_never_revive_tickets() {
+    let _locale = crate::test_support::chinese();
     let mut registry = builtins::register(true).unwrap().registry;
     let mut tracker = ContextTracker::default();
     let cx = tracker.update(input(0)).unwrap().clone();
@@ -208,6 +213,7 @@ fn revocation_rebind_eviction_and_cache_identity_never_revive_tickets() {
 
 #[test]
 fn two_owners_session_scope_removal_readonly_and_drop_release_resources() {
+    let _locale = crate::test_support::chinese();
     let mut sets = vec![];
     let mut catalog = HostCatalog::default();
     for owner in ["test.alpha", "test.beta"] {

@@ -158,6 +158,7 @@ fn finished(runtime: &ChatRuntime, decide: bool) -> (Option<String>, bool, Vec<S
 
 #[test]
 fn independent_adapter_streams_and_routes_approval_responses_through_generic_runtime() {
+    let _locale = crate::test_support::chinese();
     let (adapter, released) = fixture(
         r#"
         $hello = [Console]::ReadLine() | ConvertFrom-Json
@@ -179,6 +180,7 @@ fn independent_adapter_streams_and_routes_approval_responses_through_generic_run
 
 #[test]
 fn adapter_stays_unlaunched_until_save_and_handles_cancel_or_failed_save() {
+    let _locale = crate::test_support::chinese();
     for cancel in [false, true] {
         let (adapter, released) = fixture("exit 99");
         let started = adapter.started.clone();
@@ -214,6 +216,7 @@ fn adapter_stays_unlaunched_until_save_and_handles_cancel_or_failed_save() {
 
 #[test]
 fn adapter_resources_are_released_after_child_cleanup_on_cancel_and_panic() {
+    let _locale = crate::test_support::chinese();
     for panic_on_ready in [false, true] {
         let (mut adapter, released) = fixture(
             r#"
@@ -247,6 +250,7 @@ fn adapter_resources_are_released_after_child_cleanup_on_cancel_and_panic() {
 
 #[test]
 fn text_input_eof_and_successful_exit_are_explicit_adapter_policies() {
+    let _locale = crate::test_support::chinese();
     for success_on_exit in [true, false] {
         let (mut adapter, released) = fixture(
             r#"

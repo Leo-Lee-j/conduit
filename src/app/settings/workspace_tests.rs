@@ -38,6 +38,7 @@ fn draw(cx: &mut VisualTestContext) {
 fn settings_engine_management_is_readonly_and_disabled_launches_preserve_history(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     use crate::domain::Provider;
     let (app, cx) = fixture(cx);
     cx.update(|window, cx| {
@@ -80,6 +81,7 @@ fn settings_engine_management_is_readonly_and_disabled_launches_preserve_history
 fn settings_extension_filters_keep_the_list_visible_at_small_and_large_sizes(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     use crate::{
         domain::Provider,
         extensions::{Catalog, Context, Entry, Kind, management::Filter},
@@ -147,6 +149,7 @@ fn settings_extension_filters_keep_the_list_visible_at_small_and_large_sizes(
 fn settings_keyboard_search_reveals_deep_section_and_escape_clears_before_leaving(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     cx.simulate_keystrokes("ctrl-f");
     draw(cx);
@@ -201,6 +204,7 @@ fn settings_keyboard_search_reveals_deep_section_and_escape_clears_before_leavin
 
 #[gpui_kit::test]
 fn settings_child_dialog_escape_preserves_workspace_and_navigation(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
@@ -224,6 +228,7 @@ fn settings_child_dialog_escape_preserves_workspace_and_navigation(cx: &mut Test
 fn settings_management_actions_fit_and_model_search_can_return_to_full_page(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     use crate::domain::Provider;
     use gpui_kit::component::{Theme, ThemeMode};
     let (app, cx) = fixture(cx);
@@ -312,6 +317,7 @@ fn settings_management_actions_fit_and_model_search_can_return_to_full_page(
 
 #[gpui_kit::test]
 fn settings_extensions_receive_scan_results_in_workspace_without_dialog(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{
         domain::Provider,
         extensions::{Catalog, Context, Probe},
@@ -366,6 +372,7 @@ fn settings_extensions_receive_scan_results_in_workspace_without_dialog(cx: &mut
 
 #[gpui_kit::test]
 fn settings_tab_preserves_workspace_sidebar_and_detail_dock(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use conduit::plugins::{builtins, ids::ViewId};
     let (app, cx) = fixture(cx);
     cx.simulate_resize(size(px(1600.), px(900.)));
@@ -412,6 +419,7 @@ fn settings_tab_preserves_workspace_sidebar_and_detail_dock(cx: &mut TestAppCont
 
 #[gpui_kit::test]
 fn settings_cli_updates_report_versions_errors_and_discard_changed_paths(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{
         cli::{
             self, VersionInfo, VersionProbe,
@@ -542,6 +550,7 @@ fn settings_cli_updates_report_versions_errors_and_discard_changed_paths(cx: &mu
 
 #[gpui_kit::test]
 fn settings_cli_updates_cancel_and_keep_controls_inside_the_tab(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::{
         cli::{self, VersionProbe},
         domain::Provider,
@@ -590,6 +599,7 @@ fn settings_cli_updates_cancel_and_keep_controls_inside_the_tab(cx: &mut TestApp
 
 #[gpui_kit::test]
 fn settings_cli_install_progress_results_and_task_interlocks(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::cli::{
         self, VersionInfo, VersionProbe,
         updates::{UpdateInfo, UpdateStatus},
@@ -669,6 +679,7 @@ fn settings_cli_install_progress_results_and_task_interlocks(cx: &mut TestAppCon
 fn settings_cli_install_button_fits_tabs_and_cancels_without_false_success(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     use crate::{
         cli::{self, VersionProbe},
         domain::Provider,
@@ -720,6 +731,7 @@ fn settings_cli_install_button_fits_tabs_and_cancels_without_false_success(
 fn settings_cli_single_update_action_tracks_results_and_resets_latest_feedback(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     use super::cli_settings::CliUpdateAction;
     use crate::{
         cli::{
@@ -816,6 +828,7 @@ fn settings_cli_single_update_action_tracks_results_and_resets_latest_feedback(
 fn settings_mcp_tool_counts_are_visible_without_expanding_and_clear_on_refresh(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     use crate::{
         domain::Provider,
         extensions::{Catalog, Context, Entry, Kind, connection::ToolReport},

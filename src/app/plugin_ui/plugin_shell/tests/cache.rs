@@ -9,6 +9,7 @@ fn metrics(app: &Entity<ConduitApp>, cx: &mut VisualTestContext) -> (u64, u64) {
 
 #[gpui_kit::test]
 fn desktop_plugin_cache_reuses_host_input_frames(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     command(&app, "example.workspace-overview.increment", cx);
     cx.update(|window, cx| {
@@ -49,6 +50,7 @@ fn desktop_plugin_cache_reuses_host_input_frames(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn desktop_plugin_cache_invalidates_for_metadata_theme_and_bounds(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     command(&app, "example.workspace-overview.increment", cx);
     draw(cx);
@@ -97,6 +99,7 @@ fn desktop_plugin_cache_invalidates_for_metadata_theme_and_bounds(cx: &mut TestA
 
 #[gpui_kit::test]
 fn desktop_plugin_cache_keeps_native_input_interactive(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     command(&app, "example.workspace-overview.increment", cx);
     let group = cx.element_bounds("plugin-summary-input").unwrap();

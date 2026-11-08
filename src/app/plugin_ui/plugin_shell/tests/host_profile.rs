@@ -49,6 +49,7 @@ fn stage(
 #[gpui_kit::test]
 #[ignore = "host attribution; run the archived host-profile runner"]
 fn desktop_host_profile_probe(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let scenario = std::env::var("CONDUIT_PERF_SCENARIO").unwrap();
     assert!(matches!(
         scenario.as_str(),
@@ -220,6 +221,7 @@ fn host_counters() -> bool {
 
 #[gpui_kit::test]
 fn desktop_dock_header_cache_skips_draft_and_script_updates(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     command(&app, "example.workspace-overview.increment", cx);
     cx.update(|window, cx| {
@@ -270,6 +272,7 @@ fn desktop_dock_header_cache_skips_draft_and_script_updates(cx: &mut TestAppCont
 
 #[gpui_kit::test]
 fn desktop_dock_header_cache_tracks_context_theme_bounds_and_revocation(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use crate::app::plugin_ui::tests::click_labeled;
     use gpui_kit::Role;
     let (app, cx) = fixture(cx);
@@ -339,6 +342,7 @@ fn desktop_dock_header_cache_tracks_context_theme_bounds_and_revocation(cx: &mut
 
 #[gpui_kit::test]
 fn desktop_dock_header_cache_rebinds_identical_registry(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     command(&app, "example.workspace-overview.increment", cx);
     draw_frame(cx);

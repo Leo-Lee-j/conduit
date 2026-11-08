@@ -170,7 +170,9 @@ pub(super) fn metadata(git: &Path, workspace: &Path, cancel: &AtomicBool) -> Res
         .map(str::to_string)
         .collect();
     if self::context(git, workspace, cancel)? != context {
-        bail!("读取期间分支或 HEAD 已变化，请刷新后重试");
+        bail!(conduit::i18n::text(
+            "git.branches.branch_or_head_changed_while_reading_refresh"
+        ));
     }
     Ok((context, info, integration, conflicts, remotes))
 }
@@ -212,7 +214,9 @@ pub(super) fn integration_state(
 
 fn validate_name(git: &Path, workspace: &Path, name: &str, cancel: &AtomicBool) -> Result<()> {
     if name.is_empty() || name.starts_with('-') || name.trim() != name {
-        bail!("请填写有效的分支名");
+        bail!(conduit::i18n::text(
+            "git.branches.enter_a_valid_branch_name"
+        ));
     }
     run_git(
         git,
@@ -220,7 +224,9 @@ fn validate_name(git: &Path, workspace: &Path, name: &str, cancel: &AtomicBool) 
         &["check-ref-format", &format!("refs/heads/{name}")],
         cancel,
     )
-    .context("分支名无效")?;
+    .context(conduit::i18n::text_static(
+        "git.branches.invalid_branch_name",
+    ))?;
     Ok(())
 }
 
@@ -234,13 +240,17 @@ fn ensure_clean(git: &Path, workspace: &Path, cancel: &AtomicBool) -> Result<()>
                 cancel,
             )
         })
-        .context("存在未提交的已跟踪文件修改，请先提交或自行暂存到 stash 后重试")?;
+        .context(conduit::i18n::text_static(
+            "git.branches.tracked_files_have_uncommitted_changes_commit_or",
+        ))?;
     Ok(())
 }
 
 fn local(branch: &BranchInfo) -> Result<()> {
     if branch.remote {
-        bail!("此操作只适用于本地分支");
+        bail!(conduit::i18n::text(
+            "git.branches.this_operation_applies_to_local_branches_only"
+        ));
     }
     Ok(())
 }
@@ -250,7 +260,10 @@ fn ensure_unoccupied(branch: &BranchInfo, workspace: &Path, allow_current: bool)
         let current = fs::canonicalize(worktree_root(workspace)).ok();
         let occupied = fs::canonicalize(path).ok();
         if !allow_current || current.is_none() || current != occupied {
-            bail!("分支正在工作区 {} 中使用", path.display());
+            bail!(conduit::i18n::format(
+                "git.branches.branch_is_in_use_by_workspace",
+                &[("arg0", format!("{}", path.display()))]
+            ));
         }
     }
     Ok(())
@@ -321,7 +334,9 @@ fn remote_for_ref(
             }
         }
     }
-    bail!("找不到该远程引用对应的 fetch 配置，请先检查 remote 配置")
+    bail!(conduit::i18n::text(
+        "git.branches.no_fetch_configuration_found_for_this_remote"
+    ))
 }
 
 pub(super) fn operate_branch(
@@ -332,10 +347,13 @@ pub(super) fn operate_branch(
     let mut progress = String::new();
     let mut created = None;
     let result = (|| -> Result<String> {
-        let git = resolve_git().ok_or_else(|| anyhow!("未找到 git.exe"))?;
+        let git = resolve_git()
+            .ok_or_else(|| anyhow!(conduit::i18n::text("git.branches.git_exe_not_found")))?;
         let (actual, branches, state, _, remotes) = metadata(&git, workspace, cancel)?;
         if actual != request.expected {
-            bail!("分支或 HEAD 已变化，请刷新后重试");
+            bail!(conduit::i18n::text(
+                "git.branches.branch_or_head_changed_refresh_and_retry"
+            ));
         }
         let recovery = matches!(
             request.action,
@@ -344,30 +362,51 @@ pub(super) fn operate_branch(
         if let Some(state) = state
             && !recovery
         {
-            bail!("仓库存在进行中的 {}，请先继续或中止", state.label());
+            bail!(conduit::i18n::format(
+                "git.branches.repository_has_an_ongoing_continue_or_abort",
+                &[("arg0", state.label().to_string())]
+            ));
         }
         let selected = request.selected.as_ref();
         if let Some(expected) = selected {
             let actual = branches
                 .iter()
                 .find(|b| b.full_ref == expected.full_ref)
-                .ok_or_else(|| anyhow!("所选分支已不存在，请刷新"))?;
+                .ok_or_else(|| {
+                    anyhow!(conduit::i18n::text(
+                        "git.branches.selected_branch_no_longer_exists_refresh_to"
+                    ))
+                })?;
             if actual != expected {
-                bail!("所选分支、上游或 worktree 占用已变化，请刷新后重试");
+                bail!(conduit::i18n::text(
+                    "git.branches.selected_branch_upstream_or_worktree_usage_changed"
+                ));
             }
         }
-        let selected = || selected.ok_or_else(|| anyhow!("请选择一个已有提交的分支"));
+        let selected = || {
+            selected.ok_or_else(|| {
+                anyhow!(conduit::i18n::text(
+                    "git.branches.select_a_branch_that_has_commits"
+                ))
+            })
+        };
         let run = |args: &[&str]| {
             run_git_with_timeout(&git, workspace, args, cancel, Duration::from_secs(120))
         };
         match request.action {
             BranchAction::Fetch => {
                 run(&["fetch", "--all", "--prune"])?;
-                Ok("已获取所有远程仓库并清理失效的远程分支记录".into())
+                Ok(conduit::i18n::text_static(
+                    "git.branches.fetched_all_remotes_and_pruned_stale_remote",
+                )
+                .into())
             }
             BranchAction::Checkout => {
                 let name = checkout(&git, workspace, selected()?, cancel)?;
-                Ok(format!("已切换到 {name}"))
+                Ok(conduit::i18n::format(
+                    "git.branches.switched_to",
+                    &[("name", name.to_string())],
+                ))
             }
             BranchAction::Create {
                 name,
@@ -379,15 +418,30 @@ pub(super) fn operate_branch(
                     .as_ref()
                     .map(|b| b.oid.as_str())
                     .or(actual.head.as_deref())
-                    .ok_or_else(|| anyhow!("当前仓库尚无提交"))?;
+                    .ok_or_else(|| {
+                        anyhow!(conduit::i18n::text(
+                            "git.branches.this_repository_has_no_commits_yet"
+                        ))
+                    })?;
                 if switch {
                     run(&["switch", "-c", &name, source])?;
                 } else {
                     run(&["branch", "--no-track", &name, source])?;
                 }
-                Ok(format!(
-                    "已创建分支 {name}{}",
-                    if switch { " 并切换" } else { "" }
+                Ok(conduit::i18n::format(
+                    "git.branches.created_branch",
+                    &[
+                        ("name", name.to_string()),
+                        (
+                            "arg0",
+                            (if switch {
+                                conduit::i18n::text_static("git.branches.and_switched_to_it")
+                            } else {
+                                ""
+                            })
+                            .to_string(),
+                        ),
+                    ],
                 ))
             }
             BranchAction::Rename(name) => {
@@ -396,9 +450,12 @@ pub(super) fn operate_branch(
                 ensure_unoccupied(branch, workspace, true)?;
                 validate_name(&git, workspace, &name, cancel)?;
                 run(&["branch", "-m", &branch.name, &name])?;
-                Ok(format!(
-                    "已将 {} 重命名为 {name}（远程分支名不变）",
-                    branch.name
+                Ok(conduit::i18n::format(
+                    "git.branches.renamed_to_remote_branch_unchanged",
+                    &[
+                        ("arg0", branch.name.to_string()),
+                        ("name", name.to_string()),
+                    ],
                 ))
             }
             BranchAction::Delete => {
@@ -406,10 +463,15 @@ pub(super) fn operate_branch(
                 local(branch)?;
                 ensure_unoccupied(branch, workspace, false)?;
                 if actual.current_ref.as_ref() == Some(&branch.full_ref) {
-                    bail!("不能删除当前分支");
+                    bail!(conduit::i18n::text(
+                        "git.branches.cannot_delete_the_current_branch"
+                    ));
                 }
                 run(&["branch", "-d", "--", &branch.name])?;
-                Ok(format!("已删除本地分支 {}", branch.name))
+                Ok(conduit::i18n::format(
+                    "git.branches.deleted_local_branch",
+                    &[("arg0", branch.name.to_string())],
+                ))
             }
             BranchAction::Track(upstream) => {
                 let branch = selected()?;
@@ -417,7 +479,9 @@ pub(super) fn operate_branch(
                 ensure_unoccupied(branch, workspace, true)?;
                 if let Some(upstream) = upstream {
                     if !branches.iter().any(|b| b.remote && b.full_ref == upstream) {
-                        bail!("上游引用已不存在，请刷新");
+                        bail!(conduit::i18n::text(
+                            "git.branches.upstream_reference_no_longer_exists_refresh_to"
+                        ));
                     }
                     run(&[
                         "branch",
@@ -428,7 +492,10 @@ pub(super) fn operate_branch(
                 } else if branch.upstream.is_some() {
                     run(&["branch", "--unset-upstream", "--", &branch.name])?;
                 }
-                Ok(format!("已更新 {} 的上游配置", branch.name))
+                Ok(conduit::i18n::format(
+                    "git.branches.updated_upstream_configuration_for",
+                    &[("arg0", branch.name.to_string())],
+                ))
             }
             BranchAction::Push {
                 remote,
@@ -438,7 +505,9 @@ pub(super) fn operate_branch(
                 let branch = selected()?;
                 local(branch)?;
                 if remote != "." && !remotes.contains(&remote) {
-                    bail!("远程仓库不存在，请刷新");
+                    bail!(conduit::i18n::text(
+                        "git.branches.remote_no_longer_exists_refresh_to_continue"
+                    ));
                 }
                 validate_name(&git, workspace, &destination, cancel)?;
                 let refspec = format!("{}:refs/heads/{destination}", branch.full_ref);
@@ -454,18 +523,33 @@ pub(super) fn operate_branch(
                 }
                 args.extend(["--", &remote, &refspec]);
                 run(&args)?;
-                Ok(format!("已推送 {} → {remote}/{destination}", branch.name))
+                Ok(conduit::i18n::format(
+                    "git.branches.pushed",
+                    &[
+                        ("arg0", branch.name.to_string()),
+                        ("remote", remote.to_string()),
+                        ("destination", destination.to_string()),
+                    ],
+                ))
             }
             BranchAction::Worktree { path, new_branch } => {
                 let path = crate::child::normalized_dir(&path);
                 let branch = selected()?;
                 if !path.is_absolute() {
-                    bail!("请选择 worktree 的绝对路径");
+                    bail!(conduit::i18n::text(
+                        "git.branches.select_an_absolute_path_for_the_worktree"
+                    ));
                 }
                 if path.exists() && (!path.is_dir() || fs::read_dir(&path)?.next().is_some()) {
-                    bail!("Worktree 目标必须是不存在的目录或空目录");
+                    bail!(conduit::i18n::text(
+                        "git.branches.worktree_target_must_be_a_nonexistent_or"
+                    ));
                 }
-                let path_text = path.to_str().ok_or_else(|| anyhow!("目录路径无法编码"))?;
+                let path_text = path.to_str().ok_or_else(|| {
+                    anyhow!(conduit::i18n::text(
+                        "git.branches.unable_to_encode_directory_path"
+                    ))
+                })?;
                 if let Some(name) = &new_branch {
                     validate_name(&git, workspace, name, cancel)?;
                     run(&["worktree", "add", "-b", name, "--", path_text, &branch.oid])?;
@@ -475,53 +559,81 @@ pub(super) fn operate_branch(
                     run(&["worktree", "add", "--", path_text, &branch.name])?;
                 }
                 created = Some(fs::canonicalize(&path).unwrap_or(path));
-                Ok("Worktree 已创建，已加入工作区列表".into())
+                Ok(conduit::i18n::text_static(
+                    "git.branches.worktree_created_and_added_to_the_workspace",
+                )
+                .into())
             }
             BranchAction::Merge | BranchAction::Rebase => {
                 if actual.current_ref.is_none() {
-                    bail!("请先切回本地分支");
+                    bail!(conduit::i18n::text(
+                        "git.branches.switch_back_to_a_local_branch_first"
+                    ));
                 }
                 ensure_clean(&git, workspace, cancel)?;
                 let branch = selected()?;
                 if matches!(request.action, BranchAction::Merge) {
                     run(&["merge", "--no-edit", &branch.oid])?;
-                    Ok(format!("已将 {} 合并到当前分支", branch.name))
+                    Ok(conduit::i18n::format(
+                        "git.branches.merged_into_the_current_branch",
+                        &[("arg0", branch.name.to_string())],
+                    ))
                 } else {
                     run(&["rebase", &branch.oid])?;
-                    Ok(format!("已将当前分支 Rebase 到 {}", branch.name))
+                    Ok(conduit::i18n::format(
+                        "git.branches.rebased_the_current_branch_onto",
+                        &[("arg0", branch.name.to_string())],
+                    ))
                 }
             }
             BranchAction::CheckoutRebase => {
                 ensure_clean(&git, workspace, cancel)?;
-                let head = actual
-                    .head
-                    .as_deref()
-                    .ok_or_else(|| anyhow!("当前分支尚无提交"))?;
+                let head = actual.head.as_deref().ok_or_else(|| {
+                    anyhow!(conduit::i18n::text(
+                        "git.branches.current_branch_has_no_commits_yet"
+                    ))
+                })?;
                 let name = checkout(&git, workspace, selected()?, cancel)?;
-                progress = format!("已切换到 {name}；后续 Rebase 未完成");
+                progress = conduit::i18n::format(
+                    "git.branches.switched_to_subsequent_rebase_incomplete",
+                    &[("name", name.to_string())],
+                );
                 run(&["rebase", head])?;
-                Ok(format!("已切换到 {name} 并 Rebase 到原分支"))
+                Ok(conduit::i18n::format(
+                    "git.branches.switched_to_and_rebased_onto_the_original",
+                    &[("name", name.to_string())],
+                ))
             }
             BranchAction::Update { rebase } | BranchAction::CheckoutUpdate { rebase } => {
                 let branch = selected()?;
                 let name = if matches!(request.action, BranchAction::CheckoutUpdate { .. }) {
                     ensure_clean(&git, workspace, cancel)?;
                     let name = checkout(&git, workspace, branch, cancel)?;
-                    progress = format!("已切换到 {name}；后续 Update 未完成");
+                    progress = conduit::i18n::format(
+                        "git.branches.switched_to_subsequent_update_incomplete",
+                        &[("name", name.to_string())],
+                    );
                     name
                 } else {
                     local(branch)?;
                     branch.name.clone()
                 };
                 update(&git, workspace, &name, rebase, cancel)?;
-                Ok(format!("已更新分支 {name}"))
+                Ok(conduit::i18n::format(
+                    "git.branches.updated_branch",
+                    &[("name", name.to_string())],
+                ))
             }
             BranchAction::Continue(expected) | BranchAction::Abort(expected) => {
                 if state != Some(expected) {
-                    bail!("进行中的 Git 操作已变化，请刷新");
+                    bail!(conduit::i18n::text(
+                        "git.branches.the_ongoing_git_operation_changed_refresh_to"
+                    ));
                 }
                 if !matches!(expected, IntegrationState::Merge | IntegrationState::Rebase) {
-                    bail!("请在终端处理该操作");
+                    bail!(conduit::i18n::text(
+                        "git.branches.handle_this_operation_in_the_terminal"
+                    ));
                 }
                 let command = if expected == IntegrationState::Merge {
                     "merge"
@@ -534,14 +646,20 @@ pub(super) fn operate_branch(
                     "--abort"
                 };
                 run(&[command, mode])?;
-                Ok(format!(
-                    "{} 已{}",
-                    expected.label(),
-                    if mode == "--continue" {
-                        "继续完成"
-                    } else {
-                        "中止"
-                    }
+                Ok(conduit::i18n::format(
+                    "git.branches.label",
+                    &[
+                        ("arg0", expected.label().to_string()),
+                        (
+                            "arg1",
+                            (if mode == "--continue" {
+                                conduit::i18n::text_static("git.branches.continued_to_completion")
+                            } else {
+                                conduit::i18n::text_static("git.branches.aborted")
+                            })
+                            .to_string(),
+                        ),
+                    ],
                 ))
             }
         }
@@ -560,7 +678,10 @@ pub(super) fn operate_branch(
             retry_tag: None,
             committed: false,
             message: if progress.is_empty() {
-                "Git 操作未完成，请检查仓库状态".into()
+                conduit::i18n::text_static(
+                    "git.branches.git_operation_incomplete_check_repository_status",
+                )
+                .into()
             } else {
                 progress
             },
@@ -581,19 +702,22 @@ fn update(
     let branch = branches
         .iter()
         .find(|b| !b.remote && b.name == name)
-        .ok_or_else(|| anyhow!("分支已不存在"))?;
-    let remote = branch
-        .upstream_remote
-        .as_deref()
-        .ok_or_else(|| anyhow!("分支未设置有效上游"))?;
-    let upstream_ref = branch
-        .upstream_ref
-        .as_deref()
-        .ok_or_else(|| anyhow!("上游配置不完整"))?;
-    let upstream = branch
-        .upstream
-        .as_deref()
-        .ok_or_else(|| anyhow!("上游配置不完整"))?;
+        .ok_or_else(|| anyhow!(conduit::i18n::text("git.branches.branch_no_longer_exists")))?;
+    let remote = branch.upstream_remote.as_deref().ok_or_else(|| {
+        anyhow!(conduit::i18n::text(
+            "git.branches.branch_has_no_valid_upstream"
+        ))
+    })?;
+    let upstream_ref = branch.upstream_ref.as_deref().ok_or_else(|| {
+        anyhow!(conduit::i18n::text(
+            "git.branches.incomplete_upstream_configuration"
+        ))
+    })?;
+    let upstream = branch.upstream.as_deref().ok_or_else(|| {
+        anyhow!(conduit::i18n::text(
+            "git.branches.incomplete_upstream_configuration"
+        ))
+    })?;
     let current = context.current_ref.as_ref() == Some(&branch.full_ref);
     ensure_unoccupied(branch, workspace, current)?;
     if current {
@@ -623,13 +747,17 @@ fn update(
     // Fetch may have run hooks or overlapped an external command. Check before mutation.
     let (after_context, after_branches, after_state, _, _) = metadata(git, workspace, cancel)?;
     if after_context != context || after_state.is_some() {
-        bail!("Fetch 已完成，但 HEAD 已变化；请刷新后重试");
+        bail!(conduit::i18n::text(
+            "git.branches.fetch_completed_but_head_changed_refresh_and"
+        ));
     }
     let after_branch = after_branches
         .iter()
         .find(|candidate| candidate.full_ref == branch.full_ref);
     if after_branch != Some(branch) {
-        bail!("Fetch 已完成，但分支、上游或 Worktree 占用已变化；请刷新后重试");
+        bail!(conduit::i18n::text(
+            "git.branches.fetch_completed_but_the_branch_upstream_or"
+        ));
     }
     if current {
         ensure_clean(git, workspace, cancel)?;
@@ -641,7 +769,9 @@ fn update(
         cancel,
     )?;
     if actual_oid.trim() != branch.oid {
-        bail!("Fetch 已完成，但所选分支已变化；请刷新后重试");
+        bail!(conduit::i18n::text(
+            "git.branches.fetch_completed_but_the_selected_branch_changed"
+        ));
     }
     if current {
         if rebase {
@@ -667,7 +797,9 @@ fn update(
             &["merge-base", "--is-ancestor", &branch.oid, destination],
             cancel,
         )
-        .context("该分支与上游已分叉。请先切换到该分支，再选择 Merge 或 Rebase 更新")?;
+        .context(conduit::i18n::text_static(
+            "git.branches.this_branch_has_diverged_from_its_upstream",
+        ))?;
         run(&[
             "update-ref",
             "-m",

@@ -14,9 +14,13 @@ impl ConduitApp {
             match self.generation_request(super::generation::GenerationKind::Naming, Some(id)) {
                 Ok(selection) => selection,
                 Err(error) => {
-                    self.session_control
-                        .naming_errors
-                        .insert(id, format!("命名 Provider 不可用：{error:#}"));
+                    self.session_control.naming_errors.insert(
+                        id,
+                        conduit::i18n::format(
+                            "naming.naming_provider_unavailable",
+                            &[("error", format!("{:#}", error))],
+                        ),
+                    );
                     cx.notify();
                     return;
                 }
@@ -24,9 +28,13 @@ impl ConduitApp {
         let executable = match cli::resolve_for_launch(provider, &self.store.cli) {
             Ok(cli) => cli.path,
             Err(error) => {
-                self.session_control
-                    .naming_errors
-                    .insert(id, format!("无法启动命名引擎：{error:#}"));
+                self.session_control.naming_errors.insert(
+                    id,
+                    conduit::i18n::format(
+                        "naming.unable_to_start_naming_engine",
+                        &[("error", format!("{:#}", error))],
+                    ),
+                );
                 cx.notify();
                 return;
             }
@@ -39,8 +47,9 @@ impl ConduitApp {
             .map(|w| w.path.clone())
             .unwrap_or_else(std::env::temp_dir);
         let snippet: String = content.chars().take(1200).collect();
-        let naming_prompt = format!(
-            "请根据以下对话内容为这段对话起一个简短的标题（不超过 12 个字，与内容使用相同语言，不带标点、引号或换行）。只返回标题本身。\n\n<content>\n{snippet}\n</content>"
+        let naming_prompt = conduit::i18n::format(
+            "naming.give_this_conversation_a_short_title_up",
+            &[("snippet", snippet.to_string())],
         );
         self.session_control.namings.insert(
             id,
@@ -79,9 +88,11 @@ impl ConduitApp {
             return;
         }
         let Some(excerpt) = self.session(id).and_then(latest_naming_excerpt) else {
-            self.session_control
-                .naming_errors
-                .insert(id, "会话没有可用于重命名的内容".into());
+            self.session_control.naming_errors.insert(
+                id,
+                conduit::i18n::text_static("naming.no_conversation_content_available_for_renaming")
+                    .into(),
+            );
             cx.notify();
             return;
         };
@@ -100,7 +111,8 @@ impl ConduitApp {
         let mut finished = vec![];
         for (id, naming) in &mut self.session_control.namings {
             if naming.started.elapsed() > Duration::from_secs(60) && naming.error.is_none() {
-                naming.error = Some("命名超时（60 秒）".into());
+                naming.error =
+                    Some(conduit::i18n::text_static("naming.naming_timed_out_60_seconds").into());
                 naming.runtime.cancel();
                 cx.notify();
             }
@@ -114,11 +126,21 @@ impl ConduitApp {
                     }
                     Ok(Event::Approval(approval)) => {
                         naming.runtime.decide(approval.id, false);
-                        naming.error = Some("命名模型请求权限确认，已取消".into());
+                        naming.error = Some(
+                            conduit::i18n::text_static(
+                                "naming.naming_model_requested_permission_cancelled",
+                            )
+                            .into(),
+                        );
                         naming.runtime.cancel();
                     }
                     Ok(Event::Tool { .. }) | Ok(Event::ToolInput { .. }) => {
-                        naming.error = Some("命名模型尝试调用工具，已取消".into());
+                        naming.error = Some(
+                            conduit::i18n::text_static(
+                                "naming.naming_model_attempted_to_call_a_tool",
+                            )
+                            .into(),
+                        );
                         naming.runtime.cancel();
                     }
                     Ok(Event::ErrorBanner(error)) => {
@@ -138,9 +160,12 @@ impl ConduitApp {
                     }
                     Ok(Event::Finished { error, cancelled }) => {
                         if naming.error.is_none() {
-                            naming.error = error
-                                .map(|error| naming_failure_text(&error))
-                                .or_else(|| cancelled.then(|| "命名已取消".into()));
+                            naming.error =
+                                error.map(|error| naming_failure_text(&error)).or_else(|| {
+                                    cancelled.then(|| {
+                                        conduit::i18n::text_static("naming.naming_cancelled").into()
+                                    })
+                                });
                         }
                         finished.push(*id);
                         break;
@@ -149,7 +174,12 @@ impl ConduitApp {
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                         if naming.error.is_none() {
-                            naming.error = Some("命名进程意外退出".into());
+                            naming.error = Some(
+                                conduit::i18n::text_static(
+                                    "naming.naming_process_exited_unexpectedly",
+                                )
+                                .into(),
+                            );
                         }
                         finished.push(*id);
                         break;
@@ -191,9 +221,10 @@ impl ConduitApp {
                 .take(30)
                 .collect::<String>();
             if title.is_empty() {
-                self.session_control
-                    .naming_errors
-                    .insert(id, "模型未返回有效标题".into());
+                self.session_control.naming_errors.insert(
+                    id,
+                    conduit::i18n::text_static("naming.the_model_returned_no_valid_title").into(),
+                );
                 cx.notify();
                 continue;
             }

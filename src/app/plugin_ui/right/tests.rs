@@ -78,6 +78,7 @@ fn copied(cx: &mut VisualTestContext) -> String {
 
 #[gpui_kit::test]
 fn tool_entry_tabs_copy_close_and_notification_focus(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, tool_store(), PluginUi::new());
     cx.simulate_resize(size(px(1400.), px(900.)));
     cx.update(|window, cx| {
@@ -142,6 +143,7 @@ fn tool_entry_tabs_copy_close_and_notification_focus(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn tool_state_isolated_across_sessions_workspaces_and_stale_clicks(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, tool_store(), PluginUi::new());
     choose_tool(&app, cx, 1);
     let scroll = cx.update(|_, cx| {
@@ -264,6 +266,7 @@ fn plugins() -> PluginUi {
 
 #[gpui_kit::test]
 fn generic_tabs_route_two_owners_and_reject_unbound_stale_revoked_views(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, tool_store(), plugins());
     open(&app, cx, builtins::TOOL_DETAILS);
     click_labeled(cx, Role::Tab, "View missing");
@@ -324,6 +327,7 @@ fn generic_tabs_route_two_owners_and_reject_unbound_stale_revoked_views(cx: &mut
 
 #[gpui_kit::test]
 fn scope_removal_closes_dock_even_when_host_selects_another_session(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, tool_store(), plugins());
     choose_tool(&app, cx, 1);
     let session = cx.update(|_, cx| app.read(cx).plugins.session_key().unwrap());
@@ -364,6 +368,7 @@ fn scope_removal_closes_dock_even_when_host_selects_another_session(cx: &mut Tes
 
 #[gpui_kit::test]
 fn host_placeholders_cover_empty_loading_failure_and_missing_adapter(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, tool_store(), PluginUi::new());
     open(&app, cx, builtins::TOOL_DETAILS);
     assert!(cx.element_bounds("detail-empty").is_some());
@@ -411,6 +416,7 @@ fn host_placeholders_cover_empty_loading_failure_and_missing_adapter(cx: &mut Te
 
 #[gpui_kit::test]
 fn background_tool_and_notification_events_preserve_active_view_and_focus(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, tool_store(), PluginUi::new());
     choose_tool(&app, cx, 1);
     open(&app, cx, builtins::NOTIFICATIONS);
@@ -485,6 +491,7 @@ fn background_tool_and_notification_events_preserve_active_view_and_focus(cx: &m
 
 #[gpui_kit::test]
 fn right_width_drag_and_view_switch_preserve_layout(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, tool_store(), PluginUi::new());
     cx.simulate_resize(size(px(1600.), px(900.)));
     choose_tool(&app, cx, 1);
@@ -539,6 +546,7 @@ fn right_width_drag_and_view_switch_preserve_layout(cx: &mut TestAppContext) {
 fn branch_navigation_only_offers_visible_views_and_rejects_hidden_requests(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, tool_store(), PluginUi::new());
     choose_tool(&app, cx, 1);
     let request = cx.update(|_, cx| {

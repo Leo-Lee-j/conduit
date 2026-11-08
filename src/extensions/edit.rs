@@ -35,31 +35,38 @@ pub fn skill_path(folder: &Path, name: &str) -> Result<PathBuf> {
             && name
                 .bytes()
                 .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
-        "名称只允许小写字母、数字和连字符（最多 80 字符）"
+        conduit::i18n::text("extensions.edit.names_may_contain_lowercase_letters_digits_and")
     );
     ensure!(
         !matches!(name, "con" | "prn" | "aux" | "nul")
             && !(name.len() == 4
                 && (name.starts_with("com") || name.starts_with("lpt"))
                 && name.ends_with(|c: char| c.is_ascii_digit())),
-        "此名称被 Windows 保留，请使用其他名称"
+        conduit::i18n::text("extensions.edit.this_name_is_reserved_by_windows_choose")
     );
     Ok(folder.join(name).join("SKILL.md"))
 }
 
 pub fn import_skill(source: &Path, destination: &Path) -> Result<PathBuf> {
-    let name = source
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| anyhow::anyhow!("无效的技能目录"))?;
+    let name = source.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
+        anyhow::anyhow!(conduit::i18n::text(
+            "extensions.edit.invalid_skill_directory"
+        ))
+    })?;
     let target = skill_path(destination, name)?
         .parent()
         .unwrap()
         .to_path_buf();
-    let text = read(&source.join("SKILL.md"))?
-        .ok_or_else(|| anyhow::anyhow!("所选文件夹中没有 SKILL.md"))?;
+    let text = read(&source.join("SKILL.md"))?.ok_or_else(|| {
+        anyhow::anyhow!(conduit::i18n::text(
+            "extensions.edit.selected_folder_does_not_contain_skill_md"
+        ))
+    })?;
     validate(Path::new("SKILL.md"), &text)?;
-    ensure!(!target.exists(), "同名技能已存在，请更改文件夹名称后重试");
+    ensure!(
+        !target.exists(),
+        conduit::i18n::text("extensions.edit.a_skill_with_this_name_already_exists")
+    );
     // Inventory first: do not recursively walk our own temporary copy if the
     // destination happens to be below the chosen source.
     let mut files = vec![];
@@ -68,18 +75,21 @@ pub fn import_skill(source: &Path, destination: &Path) -> Result<PathBuf> {
     let mut visited = 0;
     while let Some(path) = pending.pop() {
         visited += 1;
-        ensure!(visited <= 2000, "技能超过 2000 个文件或目录，无法导入");
+        ensure!(
+            visited <= 2000,
+            conduit::i18n::text("extensions.edit.skill_exceeds_2_000_files_or_directories")
+        );
         let meta = fs::symlink_metadata(&path)?;
         ensure!(
             !meta.file_type().is_symlink(),
-            "技能包含符号链接，请使用普通文件后导入"
+            conduit::i18n::text("extensions.edit.skill_contains_symbolic_links_replace_them_with")
         );
         #[cfg(windows)]
         {
             use std::os::windows::fs::MetadataExt;
             ensure!(
                 meta.file_attributes() & 0x400 == 0,
-                "技能包含链接或重解析点，无法导入"
+                conduit::i18n::text("extensions.edit.skill_contains_links_or_reparse_points_and")
             );
         }
         if meta.is_dir() {
@@ -87,9 +97,15 @@ pub fn import_skill(source: &Path, destination: &Path) -> Result<PathBuf> {
                 pending.push(entry?.path());
             }
         } else {
-            ensure!(meta.is_file(), "技能包含不支持的文件类型");
+            ensure!(
+                meta.is_file(),
+                conduit::i18n::text("extensions.edit.skill_contains_an_unsupported_file_type")
+            );
             total += meta.len();
-            ensure!(total <= 20 * 1024 * 1024, "技能超过 20 MiB，无法导入");
+            ensure!(
+                total <= 20 * 1024 * 1024,
+                conduit::i18n::text("extensions.edit.skill_exceeds_20_mib_and_cannot_be")
+            );
             files.push(path);
         }
     }
@@ -109,7 +125,10 @@ pub fn import_skill(source: &Path, destination: &Path) -> Result<PathBuf> {
             fs::create_dir_all(out.parent().unwrap())?;
             fs::copy(path, out)?;
         }
-        ensure!(!target.exists(), "同名技能已存在");
+        ensure!(
+            !target.exists(),
+            conduit::i18n::text("extensions.edit.a_skill_with_this_name_already_exists_be36aa")
+        );
         fs::rename(&temp, &target)?;
         Ok(())
     })();
@@ -127,19 +146,24 @@ pub fn read(path: &Path) -> Result<Option<String>> {
             file.take(FILE_LIMIT + 1).read_to_end(&mut bytes)?;
             ensure!(
                 bytes.len() as u64 <= FILE_LIMIT,
-                "文件超过 2 MiB，请使用外部编辑器"
+                conduit::i18n::text("extensions.edit.file_exceeds_2_mib_use_an_external")
             );
-            Ok(Some(
-                String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("文件不是 UTF-8"))?,
-            ))
+            Ok(Some(String::from_utf8(bytes).map_err(|_| {
+                anyhow::anyhow!(conduit::i18n::text("extensions.edit.file_is_not_utf_8"))
+            })?))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(_) => bail!("无法读取配置文件"),
+        Err(_) => bail!(conduit::i18n::text(
+            "extensions.edit.unable_to_read_configuration_file"
+        )),
     }
 }
 
 pub fn validate(path: &Path, text: &str) -> Result<()> {
-    ensure!(text.len() as u64 <= FILE_LIMIT, "内容超过 2 MiB");
+    ensure!(
+        text.len() as u64 <= FILE_LIMIT,
+        conduit::i18n::text("extensions.edit.content_exceeds_2_mib")
+    );
     if path
         .file_name()
         .is_some_and(|n| n == "SKILL.md" || n == management::DISABLED_SKILL)
@@ -148,17 +172,17 @@ pub fn validate(path: &Path, text: &str) -> Result<()> {
         ensure!(
             name.as_ref().is_some_and(|name| !name.trim().is_empty())
                 && !description.trim().is_empty(),
-            "SKILL.md 需要 YAML 头部中的 name 和 description"
+            conduit::i18n::text("extensions.edit.skill_md_requires_name_and_description_in")
         );
     } else if path.extension().is_some_and(|e| e == "toml") {
         ensure!(
             toml::from_str::<toml::Table>(text).is_ok(),
-            "TOML 格式无效，请检查引号和表定义"
+            conduit::i18n::text("extensions.edit.invalid_toml_format_check_quotes_and_table")
         );
     } else {
         ensure!(
             jsonc(text).is_some_and(|v| v.is_object()),
-            "配置必须是有效的 JSON / JSONC 对象"
+            conduit::i18n::text("extensions.edit.configuration_must_be_a_valid_json_jsonc")
         );
     }
     Ok(())
@@ -171,18 +195,20 @@ pub fn save(path: &Path, original: Option<&str>, text: &str) -> Result<()> {
     if let Ok(metadata) = fs::symlink_metadata(path) {
         ensure!(
             !metadata.file_type().is_symlink(),
-            "此文件是链接，请在原始文件位置编辑"
+            conduit::i18n::text("extensions.edit.this_file_is_a_link_edit_it")
         );
         #[cfg(windows)]
         {
             use std::os::windows::fs::MetadataExt;
             ensure!(
                 metadata.file_attributes() & 0x400 == 0,
-                "此文件是重解析点，请在原始文件位置编辑"
+                conduit::i18n::text("extensions.edit.this_file_is_a_reparse_point_edit")
             );
         }
     }
-    let parent = path.parent().ok_or_else(|| anyhow::anyhow!("无效路径"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!(conduit::i18n::text("extensions.edit.invalid_path")))?;
     fs::create_dir_all(parent)?;
     let lock_source = if path
         .file_name()
@@ -197,11 +223,15 @@ pub fn save(path: &Path, original: Option<&str>, text: &str) -> Result<()> {
         .write(true)
         .create_new(true)
         .open(&temp)
-        .map_err(|_| anyhow::anyhow!("该文件正在编辑或有未清理的保存文件，请稍后重试"))?;
+        .map_err(|_| {
+            anyhow::anyhow!(conduit::i18n::text(
+                "extensions.edit.this_file_is_being_edited_or_has"
+            ))
+        })?;
     let result = (|| -> Result<()> {
         ensure!(
             read(path)?.as_deref() == original,
-            "文件已被外部修改，请关闭并重新打开，避免覆盖其他修改"
+            conduit::i18n::text("extensions.edit.file_changed_externally_close_and_reopen_it")
         );
         file.write_all(text.as_bytes())?;
         file.sync_all()?;
@@ -210,7 +240,7 @@ pub fn save(path: &Path, original: Option<&str>, text: &str) -> Result<()> {
         }
         ensure!(
             read(path)?.as_deref() == original,
-            "文件在保存期间被修改，请重新打开后重试"
+            conduit::i18n::text("extensions.edit.file_changed_while_saving_reopen_it_and")
         );
         Ok(())
     })();
@@ -245,7 +275,11 @@ pub fn save(path: &Path, original: Option<&str>, text: &str) -> Result<()> {
     if moved.is_err() {
         let _ = fs::remove_file(&temp);
     }
-    moved.map_err(|_| anyhow::anyhow!("无法替换配置文件；原文件仍保留"))
+    moved.map_err(|_| {
+        anyhow::anyhow!(conduit::i18n::text(
+            "extensions.edit.unable_to_replace_configuration_file_original_preserved"
+        ))
+    })
 }
 
 fn companion_path(path: &Path, suffix: &str) -> PathBuf {
@@ -256,12 +290,14 @@ fn companion_path(path: &Path, suffix: &str) -> PathBuf {
 
 pub fn template(engine: Provider, kind: Kind) -> &'static str {
     if kind == Kind::Skill {
-        return "---\nname: my-skill\ndescription: 描述使用场景\n---\n\n在这里编写技能指令。\n";
+        return conduit::i18n::text_static(
+            "extensions.edit.name_my_skill_description_describe_when_to",
+        );
     }
     match engine {
-        Provider::Codex => {
-            "# 修改命令与参数后保存\n[mcp_servers.my_server]\ncommand = \"my-server\"\nargs = []\nenabled = false\n"
-        }
+        Provider::Codex => conduit::i18n::text_static(
+            "extensions.edit.edit_the_command_and_arguments_before_saving",
+        ),
         Provider::Claude => {
             "{\n  \"mcpServers\": {\n    \"my_server\": {\n      \"command\": \"my-server\",\n      \"args\": []\n    }\n  }\n}\n"
         }
@@ -276,6 +312,7 @@ mod tests {
     use super::*;
     #[test]
     fn editing_preserves_original_and_rejects_stale_or_invalid_writes() {
+        let _locale = crate::test_support::chinese();
         let dir = std::env::temp_dir().join(format!(
             "conduit-config-edit-{}-{}",
             std::process::id(),
@@ -300,6 +337,7 @@ mod tests {
     }
     #[test]
     fn templates_validate_and_skill_names_cannot_escape_directory() {
+        let _locale = crate::test_support::chinese();
         for engine in Provider::ALL {
             let name = if engine == Provider::Codex {
                 "config.toml"

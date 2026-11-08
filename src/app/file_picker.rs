@@ -98,7 +98,11 @@ impl FilePicker {
             ),
             KeyBinding::new("escape", DismissFileSearch, Some("ConduitFileSearch")),
         ]);
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索文件名或路径…"));
+        let input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(conduit::i18n::text_static(
+                "file_picker.search_filenames_or_paths",
+            ))
+        });
         let subscription = cx.subscribe(&input, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 this.refresh(cx);
@@ -242,16 +246,18 @@ impl Render for FilePicker {
             );
         if self.searching {
             body = body.child(div().py_2().child(if self.index.is_none() {
-                "正在扫描工作区文件…"
+                conduit::i18n::text_static("file_picker.scanning_workspace_files")
             } else {
-                "正在搜索…"
+                conduit::i18n::text_static("file_picker.searching")
             }));
         } else if self.results.is_empty() {
             let note = self
                 .index
                 .as_ref()
                 .and_then(|index| index.error.clone())
-                .unwrap_or_else(|| "没有匹配的文件".into());
+                .unwrap_or_else(|| {
+                    conduit::i18n::text_static("file_picker.no_matching_files").into()
+                });
             body = body.child(div().py_2().child(note));
         } else {
             let mut list = v_flex()
@@ -294,14 +300,18 @@ impl Render for FilePicker {
                 div()
                     .text_size(ui_text_size(11.))
                     .text_color(rgb(palette().faint))
-                    .child("工作区较大或部分目录无法读取，仅显示已扫描的文件"),
+                    .child(conduit::i18n::text_static(
+                        "file_picker.the_workspace_is_large_or_some_directories",
+                    )),
             );
         }
         body.child(
             div()
                 .text_size(ui_text_size(11.))
                 .text_color(rgb(palette().faint))
-                .child("↑ / ↓ 选择 · Enter 打开 · Esc 关闭"),
+                .child(conduit::i18n::text_static(
+                    "file_picker.select_enter_open_esc_close",
+                )),
         )
     }
 }
@@ -316,7 +326,12 @@ impl ConduitApp {
             .and_then(|index| self.store.workspaces.get(index))
             .map(|w| w.path.clone())
         else {
-            self.message = Some("请先选择工作区，再搜索文件".into());
+            self.message = Some(
+                conduit::i18n::text_static(
+                    "file_picker.select_a_workspace_before_searching_for_files",
+                )
+                .into(),
+            );
             cx.notify();
             return;
         };
@@ -333,7 +348,10 @@ impl ConduitApp {
                     .focus(window, cx);
             }
             let width = (f32::from(window.viewport_size().width) - 48.).clamp(240., 640.);
-            dialog.title("搜索文件").w(px(width)).child(picker.clone())
+            dialog
+                .title(conduit::i18n::text_static("file_picker.search_files"))
+                .w(px(width))
+                .child(picker.clone())
         });
     }
 }
@@ -354,6 +372,7 @@ mod tests {
 
     #[test]
     fn double_shift_requires_two_complete_taps() {
+        let _locale = crate::test_support::chinese();
         let now = Instant::now();
         let mut state = DoubleShift::default();
         assert!(!tap(&mut state, now));
@@ -366,6 +385,7 @@ mod tests {
 
     #[test]
     fn double_shift_ignores_repeats_holds_and_slow_taps() {
+        let _locale = crate::test_support::chinese();
         let now = Instant::now();
         let mut state = DoubleShift::default();
         assert!(!state.update(shift(), now));
@@ -378,6 +398,7 @@ mod tests {
 
     #[test]
     fn double_shift_cancels_on_typing_and_other_modifiers() {
+        let _locale = crate::test_support::chinese();
         let now = Instant::now();
         let mut state = DoubleShift::default();
         assert!(!tap(&mut state, now));

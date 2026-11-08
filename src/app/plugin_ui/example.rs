@@ -61,11 +61,19 @@ pub(super) fn bind(ui: &mut PluginUi) {
     ui.bind_status(builtins::EXAMPLE_STATUS, None, |app, scope| {
         let workspace = app.overview_workspace(scope);
         StatusValue {
-            text: format!(
-                "概览 · {} 个会话",
-                workspace.map_or(0, |w| w.sessions.len())
+            text: conduit::i18n::format(
+                "plugin_ui.example.overview_sessions",
+                &[(
+                    "arg0",
+                    format!("{}", workspace.map_or(0, |w| w.sessions.len())),
+                )],
             ),
-            tooltip: workspace.map(|w| format!("查看工作区摘要：{}", display_path(&w.path))),
+            tooltip: workspace.map(|w| {
+                conduit::i18n::format(
+                    "plugin_ui.example.view_workspace_summary",
+                    &[("arg0", display_path(&w.path).to_string())],
+                )
+            }),
         }
     });
 }
@@ -80,7 +88,11 @@ impl ConduitApp {
 
     fn render_overview_navigation(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let Some(key) = self.plugins.state.navigation_key().cloned() else {
-            return div().child("请选择工作区").into_any_element();
+            return div()
+                .child(conduit::i18n::text_static(
+                    "plugin_ui.example.select_a_workspace",
+                ))
+                .into_any_element();
         };
         self.render_overview(&key, false, cx)
     }
@@ -92,7 +104,12 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Some(data) = self.overview_data(key) else {
-            return div().p_3().child("工作区已关闭").into_any_element();
+            return div()
+                .p_3()
+                .child(conduit::i18n::text_static(
+                    "plugin_ui.example.workspace_closed",
+                ))
+                .into_any_element();
         };
         let Ok(request) = self
             .plugins
@@ -128,7 +145,11 @@ impl ConduitApp {
             },
         );
         let Ok(instance) = instance else {
-            return div().child("视图缓存已满").into_any_element();
+            return div()
+                .child(conduit::i18n::text_static(
+                    "plugin_ui.example.view_cache_full",
+                ))
+                .into_any_element();
         };
         let view = instance.view.clone();
         self.refresh_overview(key, cx);
@@ -262,9 +283,9 @@ impl Render for OverviewView {
                     .text_size(ui_text_size(14.))
                     .font_semibold()
                     .child(if summary {
-                        "工作区摘要"
+                        conduit::i18n::text_static("plugin_ui.example.workspace_summary")
                     } else {
-                        "工作区概览"
+                        conduit::i18n::text_static("plugin_ui.example.workspace_overview")
                     }),
             )
             .child(
@@ -284,16 +305,27 @@ impl Render for OverviewView {
                         path.clone(),
                     )),
             )
-            .child(div().text_size(ui_text_size(12.)).child(format!(
-                "{total} 个会话 · {archived} 个已归档 · {running} 个运行中"
-            )));
+            .child(
+                div()
+                    .text_size(ui_text_size(12.))
+                    .child(conduit::i18n::format(
+                        "plugin_ui.example.sessions_archived_running",
+                        &[
+                            ("total", format!("{}", total)),
+                            ("archived", format!("{}", archived)),
+                            ("running", format!("{}", running)),
+                        ],
+                    )),
+            );
         if !summary {
             let request = self.command.clone();
             content = content.child(
                 Button::new("overview-show-summary")
                     .debug_selector(|| "overview-show-summary".into())
                     .small()
-                    .label("在右侧查看摘要")
+                    .label(conduit::i18n::text_static(
+                        "plugin_ui.example.view_summary_on_the_right",
+                    ))
                     .disabled(request.is_none())
                     .on_click(cx.listener(move |view, _, window, cx| {
                         if let Some(request) = &request {
@@ -305,11 +337,9 @@ impl Render for OverviewView {
             );
         }
         if sessions.is_empty() {
-            content = content.child(
-                div()
-                    .text_color(rgb(palette().muted))
-                    .child("此工作区还没有会话"),
-            );
+            content = content.child(div().text_color(rgb(palette().muted)).child(
+                conduit::i18n::text_static("plugin_ui.example.no_sessions_in_this_workspace_yet"),
+            ));
         }
         for super::summary::SessionSummary {
             id,
@@ -339,7 +369,11 @@ impl Render for OverviewView {
                             .text_color(rgb(palette().muted))
                             .child(format!(
                                 "{provider} · #{id}{}",
-                                if *archived { " · 已归档" } else { "" }
+                                if *archived {
+                                    conduit::i18n::text_static("plugin_ui.example.archived")
+                                } else {
+                                    ""
+                                }
                             )),
                     ),
             );
@@ -349,7 +383,9 @@ impl Render for OverviewView {
                 div()
                     .text_size(ui_text_size(11.))
                     .text_color(rgb(palette().muted))
-                    .child("展示前 100 个会话"),
+                    .child(conduit::i18n::text_static(
+                        "plugin_ui.example.showing_the_first_100_sessions",
+                    )),
             );
         }
         div()
@@ -357,9 +393,9 @@ impl Render for OverviewView {
             .test_support()
             .role(Role::Group)
             .aria_label(if summary {
-                "工作区摘要"
+                conduit::i18n::text_static("plugin_ui.example.workspace_summary")
             } else {
-                "工作区概览"
+                conduit::i18n::text_static("plugin_ui.example.workspace_overview")
             })
             .debug_selector(move || format!("workspace-overview-{location}"))
             .relative()

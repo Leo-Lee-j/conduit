@@ -157,8 +157,8 @@ impl PluginUi {
     pub(in crate::app) fn right_title(&self) -> String {
         self.registry
             .view(self.right())
-            .map(|v| v.title.clone())
-            .unwrap_or_else(|| "侧边栏".into())
+            .map(|v| super::contribution_title(v.id.as_str(), &v.title))
+            .unwrap_or_else(|| conduit::i18n::text_static("plugin_ui.right.sidebar").into())
     }
     pub(in crate::app) fn right_choices(&self, branches: bool) -> Vec<RightChoice> {
         self.registry
@@ -175,7 +175,7 @@ impl PluginUi {
             })
             .map(|v| RightChoice {
                 id: v.id.clone(),
-                title: v.title.clone(),
+                title: super::contribution_title(v.id.as_str(), &v.title),
                 icon: self
                     .right_renderers
                     .get(&v.renderer)

@@ -412,7 +412,7 @@ fn hit(session: &SessionRecord, workspace_name: &str, snippet: String) -> Search
         provider: session.provider,
         workspace_name: workspace_name.to_owned(),
         title: if session.title.is_empty() {
-            "新会话".into()
+            conduit::i18n::text_static("files.new_session").into()
         } else {
             session.title.clone()
         },
@@ -427,6 +427,7 @@ mod tests {
 
     #[test]
     fn saved_search_matches_and_cache_survive_load_unload_and_reload() {
+        let _locale = crate::test_support::chinese();
         let fixture = crate::transcript::tests::Fixture::new();
         fixture.store(1).save_to(&fixture.state).unwrap();
         let mut store = crate::store::Store::load_from(&fixture.state).unwrap();
@@ -472,6 +473,7 @@ mod tests {
 
     #[test]
     fn first_save_during_search_requests_retry_without_accepting_stale_content() {
+        let _locale = crate::test_support::chinese();
         let fixture = crate::transcript::tests::Fixture::new();
         let mut store = fixture.store(1);
         let mut results = collect(&store.workspaces, "original reply");
@@ -498,6 +500,7 @@ mod tests {
     fn poll_retries_residency_invalidation_without_a_new_content_revision(
         cx: &mut gpui_kit::TestAppContext,
     ) {
+        let _locale = crate::test_support::chinese();
         let (app, cx, _) = crate::app::queue::tests::fixture(cx, "search-residency-retry");
         cx.update(|window, cx| {
             app.update(cx, |app, cx| {
@@ -529,6 +532,7 @@ mod tests {
 
     #[test]
     fn streaming_rescans_only_changed_session_and_publishes_stable_cold_matches() {
+        let _locale = crate::test_support::chinese();
         let fixture = crate::transcript::tests::Fixture::new();
         fixture.store(65).save_to(&fixture.state).unwrap();
         let mut store = crate::store::Store::load_from(&fixture.state).unwrap();
@@ -570,6 +574,7 @@ mod tests {
     }
     #[test]
     fn matching_preserves_unicode_expansion_and_bounds_snippet_allocations() {
+        let _locale = crate::test_support::chinese();
         assert_eq!(Matcher::new("i").first("İ"), Some(0..2));
         assert_eq!(Matcher::new("中").first("a中文"), Some(1..4));
         let text = format!("{}needle{}", "前".repeat(100_000), "后".repeat(100_000));
@@ -580,6 +585,7 @@ mod tests {
     }
     #[test]
     fn cold_search_is_complete_beyond_snippet_limit_without_warming_sessions() {
+        let _locale = crate::test_support::chinese();
         let fixture = crate::transcript::tests::Fixture::new();
         fixture.store(65).save_to(&fixture.state).unwrap();
         let store = crate::store::Store::load_from(&fixture.state).unwrap();

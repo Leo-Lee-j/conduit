@@ -115,9 +115,9 @@ pub enum ChangeKind {
 impl ChangeKind {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Added => "新增",
-            Self::Modified => "修改",
-            Self::Deleted => "删除",
+            Self::Added => conduit::i18n::text_static("git_state.added"),
+            Self::Modified => conduit::i18n::text_static("git_state.modified"),
+            Self::Deleted => conduit::i18n::text_static("git_state.deleted"),
         }
     }
 }
@@ -212,9 +212,9 @@ pub enum FileDiffScope {
 impl FileDiffScope {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Staged => "已暂存（待提交）",
-            Self::Unstaged => "未暂存",
-            Self::All => "全部修改",
+            Self::Staged => conduit::i18n::text_static("git.staged_to_commit"),
+            Self::Unstaged => conduit::i18n::text_static("git.unstaged"),
+            Self::All => conduit::i18n::text_static("git.all_changes"),
         }
     }
 }
@@ -417,7 +417,7 @@ impl<T> Drop for Probe<T> {
 /// Lightweight branch metadata, also read while the changes drawer is closed.
 pub fn load_repository(workspace: &Path, cancel: &AtomicBool) -> Result<Repository> {
     let git = resolve_git()
-        .ok_or_else(|| anyhow!("未找到 git.exe；请安装 Git 或将其加入 PATH 后重试"))?;
+        .ok_or_else(|| anyhow!(conduit::i18n::text("git.git_exe_not_found_install_git_or")))?;
     let inside = run_git(
         &git,
         workspace,
@@ -425,7 +425,9 @@ pub fn load_repository(workspace: &Path, cancel: &AtomicBool) -> Result<Reposito
         cancel,
     )?;
     if inside.trim() != "true" {
-        bail!("该工作区不是 Git 仓库");
+        bail!(conduit::i18n::text(
+            "git.this_workspace_is_not_a_git_repository"
+        ));
     }
     let expected_context = branches::context(&git, workspace, cancel)?;
     // symbolic-ref preserves the branch name even before the first commit.
@@ -513,7 +515,9 @@ pub fn load_repository(workspace: &Path, cancel: &AtomicBool) -> Result<Reposito
     let (context, branch_info, integration, conflicts, remotes) =
         branches::metadata(&git, workspace, cancel)?;
     if context != expected_context {
-        bail!("读取期间分支或 HEAD 已变化，请刷新后重试");
+        bail!(conduit::i18n::text(
+            "git.branches.branch_or_head_changed_while_reading_refresh"
+        ));
     }
     Ok(Repository {
         current,
@@ -581,10 +585,13 @@ fn load_with_tags(
     cached_tags: Option<Vec<String>>,
 ) -> Result<Snapshot> {
     if !workspace.is_dir() {
-        bail!("工作目录不存在：{}", workspace.display());
+        bail!(conduit::i18n::format(
+            "git.working_directory_does_not_exist",
+            &[("arg0", format!("{}", workspace.display()))]
+        ));
     }
     let git = resolve_git()
-        .ok_or_else(|| anyhow!("未找到 git.exe；请安装 Git 或将其加入 PATH 后重试"))?;
+        .ok_or_else(|| anyhow!(conduit::i18n::text("git.git_exe_not_found_install_git_or")))?;
     let inside = match run_git(
         &git,
         workspace,
@@ -594,14 +601,21 @@ fn load_with_tags(
         Ok(output) => output,
         Err(error) => {
             let text = format!("{error:#}");
-            if text.contains("超时") || text.contains("取消") || text.contains("未找到") {
+            if (text.contains("超时") || text.to_ascii_lowercase().contains("timed out"))
+                || (text.contains("取消") || text.to_ascii_lowercase().contains("cancelled"))
+                || (text.contains("未找到") || text.to_ascii_lowercase().contains("not found"))
+            {
                 return Err(error);
             }
-            bail!("该工作区不是 Git 仓库");
+            bail!(conduit::i18n::text(
+                "git.this_workspace_is_not_a_git_repository"
+            ));
         }
     };
     if inside.trim() != "true" {
-        bail!("该工作区不是 Git 仓库");
+        bail!(conduit::i18n::text(
+            "git.this_workspace_is_not_a_git_repository"
+        ));
     }
     let branch = run_git(
         &git,
@@ -616,7 +630,7 @@ fn load_with_tags(
     .map(|output| output.trim().to_string())
     .ok()
     .filter(|branch| !branch.is_empty())
-    .unwrap_or_else(|| "（尚无提交）".into());
+    .unwrap_or_else(|| conduit::i18n::text_static("git.no_commits_yet").into());
 
     let target = commit_target(&git, workspace, cancel)?;
 
@@ -635,11 +649,14 @@ fn load_with_tags(
     let mut files = parse_status(status_output.as_bytes());
     let mut notes = vec![];
     if status_output.len() >= MAX_COMMAND_BYTES {
-        notes.push("Git 状态输出过大，文件列表可能不完整".into());
+        notes.push(conduit::i18n::text_static("git.git_status_output_is_too_large_the").into());
     }
     if files.len() > MAX_FILES {
         files.truncate(MAX_FILES);
-        notes.push(format!("变更文件过多，仅显示前 {MAX_FILES} 项"));
+        notes.push(conduit::i18n::format(
+            "git.too_many_changed_files_showing_the_first",
+            &[("MAX_FILES", format!("{}", MAX_FILES))],
+        ));
     }
 
     let staged_diff = run_git(
@@ -662,10 +679,14 @@ fn load_with_tags(
     )?;
     let staged_diff = truncate_diff(staged_diff, &mut notes);
     if files.iter().any(|file| file.untracked()) {
-        notes.push("未跟踪文件按新增文件展示".into());
+        notes.push(
+            conduit::i18n::text_static("git.untracked_files_are_shown_as_added_files").into(),
+        );
     }
     if commit_target(&git, workspace, cancel)? != target {
-        bail!("读取期间分支或暂存区发生变化，请刷新后重试");
+        bail!(conduit::i18n::text(
+            "git.branch_or_staging_area_changed_while_reading"
+        ));
     }
     let tags = match cached_tags {
         Some(tags) => tags,
@@ -689,7 +710,7 @@ fn list_tags(git: &Path, workspace: &Path, cancel: &AtomicBool) -> Result<Vec<St
         cancel,
     )?;
     if output.len() >= MAX_COMMAND_BYTES {
-        bail!("标签列表过长，无法安全生成版本号");
+        bail!(conduit::i18n::text("git.tag_list_is_too_long_to_generate"));
     }
     let mut tags: Vec<String> = output.lines().map(str::to_owned).collect();
     sort_tags(&mut tags);
@@ -718,7 +739,11 @@ pub fn next_tag(
     let step = u64::try_from(step)
         .ok()
         .filter(|step| *step > 0)
-        .ok_or_else(|| anyhow!("步长必须为正整数"))?;
+        .ok_or_else(|| {
+            anyhow!(conduit::i18n::text(
+                "git.increment_must_be_a_positive_integer"
+            ))
+        })?;
     use crate::store::TagIncrement;
     let Some(mut version) = tags.iter().filter_map(|tag| stable_tag(tag)).max() else {
         return Ok("v0.1.0".into());
@@ -726,23 +751,20 @@ pub fn next_tag(
     loop {
         match increment {
             TagIncrement::Patch => {
-                version.patch = version
-                    .patch
-                    .checked_add(step)
-                    .ok_or_else(|| anyhow!("版本号超出范围"))?
+                version.patch = version.patch.checked_add(step).ok_or_else(|| {
+                    anyhow!(conduit::i18n::text("git.version_number_out_of_range"))
+                })?
             }
             TagIncrement::Minor => {
-                version.minor = version
-                    .minor
-                    .checked_add(step)
-                    .ok_or_else(|| anyhow!("版本号超出范围"))?;
+                version.minor = version.minor.checked_add(step).ok_or_else(|| {
+                    anyhow!(conduit::i18n::text("git.version_number_out_of_range"))
+                })?;
                 version.patch = 0;
             }
             TagIncrement::Major => {
-                version.major = version
-                    .major
-                    .checked_add(step)
-                    .ok_or_else(|| anyhow!("版本号超出范围"))?;
+                version.major = version.major.checked_add(step).ok_or_else(|| {
+                    anyhow!(conduit::i18n::text("git.version_number_out_of_range"))
+                })?;
                 version.minor = 0;
                 version.patch = 0;
             }
@@ -756,11 +778,15 @@ pub fn next_tag(
 
 fn validate_tag(git: &Path, workspace: &Path, tag: &str, cancel: &AtomicBool) -> Result<()> {
     if tag.is_empty() || tag.trim() != tag || tag.starts_with('-') {
-        bail!("标签名称无效");
+        bail!(conduit::i18n::text("git.invalid_tag_name"));
     }
     let reference = format!("refs/tags/{tag}");
-    run_git(git, workspace, &["check-ref-format", &reference], cancel)
-        .map_err(|_| anyhow!("标签名称无效：{tag}"))?;
+    run_git(git, workspace, &["check-ref-format", &reference], cancel).map_err(|_| {
+        anyhow!(conduit::i18n::format(
+            "git.invalid_tag_name_fa4f16",
+            &[("tag", tag.to_string())]
+        ))
+    })?;
     if run_git(
         git,
         workspace,
@@ -769,7 +795,10 @@ fn validate_tag(git: &Path, workspace: &Path, tag: &str, cancel: &AtomicBool) ->
     )
     .is_ok()
     {
-        bail!("标签 {tag} 已存在，请选择新的标签");
+        bail!(conduit::i18n::format(
+            "git.tag_already_exists_choose_a_new_tag",
+            &[("tag", tag.to_string())]
+        ));
     }
     Ok(())
 }
@@ -793,28 +822,44 @@ fn validate_conduit_release(
     {
         return Ok(());
     }
-    let version =
-        stable_tag(tag).ok_or_else(|| anyhow!("Conduit 发布标签必须采用稳定版 vX.Y.Z 格式"))?;
+    let version = stable_tag(tag).ok_or_else(|| {
+        anyhow!(conduit::i18n::text(
+            "git.conduit_release_tags_must_use_stable_vx"
+        ))
+    })?;
     let cargo = run_git(
         git,
         workspace,
         &["show", &format!("{tree}:Cargo.toml")],
         cancel,
     )?;
-    let value: toml::Value = toml::from_str(&cargo).context("无法解析暂存区 Cargo.toml")?;
+    let value: toml::Value = toml::from_str(&cargo).context(conduit::i18n::text_static(
+        "git.unable_to_parse_staged_cargo_toml",
+    ))?;
     let package = value
         .get("package")
         .and_then(|p| p.as_table())
-        .ok_or_else(|| anyhow!("暂存区 Cargo.toml 缺少 package"))?;
+        .ok_or_else(|| {
+            anyhow!(conduit::i18n::text(
+                "git.staged_cargo_toml_is_missing_package"
+            ))
+        })?;
     if package.get("name").and_then(|x| x.as_str()) != Some("conduit") {
         return Ok(());
     }
     let actual = package
         .get("version")
         .and_then(|x| x.as_str())
-        .ok_or_else(|| anyhow!("暂存区 Cargo.toml 缺少版本号"))?;
+        .ok_or_else(|| {
+            anyhow!(conduit::i18n::text(
+                "git.staged_cargo_toml_is_missing_version"
+            ))
+        })?;
     if version.to_string() != actual {
-        bail!("发布标签 {tag} 与暂存区 Cargo.toml 版本 {actual} 不一致，请先更新并暂存版本号");
+        bail!(conduit::i18n::format(
+            "git.release_tag_does_not_match_staged_cargo",
+            &[("tag", tag.to_string()), ("actual", actual.to_string())]
+        ));
     }
     Ok(())
 }
@@ -837,12 +882,16 @@ pub fn load_file_diff_scoped(
     cancel: &AtomicBool,
 ) -> Result<FileDiff> {
     if !workspace.is_dir() {
-        bail!("工作目录不存在：{}", workspace.display());
+        bail!(conduit::i18n::format(
+            "git.working_directory_does_not_exist",
+            &[("arg0", format!("{}", workspace.display()))]
+        ));
     }
     let git = resolve_git()
-        .ok_or_else(|| anyhow!("未找到 git.exe；请安装 Git 或将其加入 PATH 后重试"))?;
-    let root = run_git(&git, workspace, &["rev-parse", "--show-toplevel"], cancel)
-        .context("该工作区不是 Git 仓库")?;
+        .ok_or_else(|| anyhow!(conduit::i18n::text("git.git_exe_not_found_install_git_or")))?;
+    let root = run_git(&git, workspace, &["rev-parse", "--show-toplevel"], cancel).context(
+        conduit::i18n::text_static("git.this_workspace_is_not_a_git_repository"),
+    )?;
     let root = PathBuf::from(root.trim());
     let mut notes = vec![];
     let patch = if file.untracked() && scope == FileDiffScope::Staged {
@@ -850,9 +899,9 @@ pub fn load_file_diff_scoped(
     } else if file.untracked() {
         let content = read_file_content(&root, &file.path)?;
         if content.truncated {
-            notes.push(format!(
-                "文件超过 {} MiB，仅显示前部分内容",
-                MAX_FILE_DIFF_BYTES / (1024 * 1024)
+            notes.push(conduit::i18n::format(
+                "git.file_exceeds_mib_showing_the_beginning_only",
+                &[("arg0", format!("{}", MAX_FILE_DIFF_BYTES / (1024 * 1024)))],
             ));
         }
         added_file_patch(&file.path, content.text.as_deref())
@@ -860,14 +909,17 @@ pub fn load_file_diff_scoped(
         && run_git(&git, &root, &["rev-parse", "--verify", "HEAD"], cancel).is_err()
     {
         if file.kind() != ChangeKind::Added {
-            bail!("仓库尚无提交，无法对比该文件");
+            bail!(conduit::i18n::text(
+                "git.repository_has_no_commits_unable_to_compare"
+            ));
         }
-        notes.push("仓库尚无提交，按新增文件展示".into());
+        notes
+            .push(conduit::i18n::text_static("git.repository_has_no_commits_showing_as_an").into());
         let content = read_file_content(&root, &file.path)?;
         if content.truncated {
-            notes.push(format!(
-                "文件超过 {} MiB，仅显示前部分内容",
-                MAX_FILE_DIFF_BYTES / (1024 * 1024)
+            notes.push(conduit::i18n::format(
+                "git.file_exceeds_mib_showing_the_beginning_only",
+                &[("arg0", format!("{}", MAX_FILE_DIFF_BYTES / (1024 * 1024)))],
             ));
         }
         added_file_patch(&file.path, content.text.as_deref())
@@ -904,10 +956,10 @@ pub fn load_file_diff_scoped(
             true,
         )?;
         if output.truncated {
-            bail!(
-                "文件差异超过 {} MiB，无法在此窗口完整显示",
-                MAX_FILE_DIFF_BYTES / (1024 * 1024)
-            );
+            bail!(conduit::i18n::format(
+                "git.file_diff_exceeds_mib_and_cannot_be",
+                &[("arg0", format!("{}", MAX_FILE_DIFF_BYTES / (1024 * 1024)))]
+            ));
         }
         output.text
     };
@@ -921,7 +973,9 @@ struct FileContent {
 
 fn read_file_content(root: &Path, path: &str) -> Result<FileContent> {
     if path.chars().any(char::is_control) {
-        bail!("Git 文件路径包含不支持的控制字符");
+        bail!(conduit::i18n::text(
+            "git.git_file_path_contains_unsupported_control_characters"
+        ));
     }
     let relative = Path::new(path);
     if relative.is_absolute()
@@ -932,13 +986,18 @@ fn read_file_content(root: &Path, path: &str) -> Result<FileContent> {
             )
         })
     {
-        bail!("Git 文件路径超出仓库范围");
+        bail!(conduit::i18n::text(
+            "git.git_file_path_is_outside_the_repository"
+        ));
     }
     let canonical_root = fs::canonicalize(root)?;
-    let absolute =
-        fs::canonicalize(root.join(relative)).with_context(|| format!("无法读取文件：{path}"))?;
+    let absolute = fs::canonicalize(root.join(relative)).with_context(|| {
+        conduit::i18n::format("git.unable_to_read_file", &[("path", path.to_string())])
+    })?;
     if !absolute.starts_with(&canonical_root) {
-        bail!("Git 文件路径超出仓库范围");
+        bail!(conduit::i18n::text(
+            "git.git_file_path_is_outside_the_repository"
+        ));
     }
     let mut file = File::open(&absolute)?;
     let mut bytes = Vec::new();
@@ -1024,7 +1083,9 @@ fn commit_target(git: &Path, workspace: &Path, cancel: &AtomicBool) -> Result<Co
         cancel,
     )?;
     if staged.len() >= MAX_COMMAND_BYTES {
-        bail!("暂存文件列表超过限制，请分批提交");
+        bail!(conduit::i18n::text(
+            "git.selected.staged_file_list_exceeds_the_limit_commit"
+        ));
     }
     Ok(CommitTarget {
         branch,
@@ -1049,10 +1110,12 @@ fn update_index(
     cancel: &AtomicBool,
 ) -> Result<()> {
     if files.is_empty() {
-        bail!("请选择需要操作的文件");
+        bail!(conduit::i18n::text("git.select_files_to_operate_on"));
     }
     if commit_target(git, workspace, cancel)? != *target {
-        bail!("分支、HEAD 或暂存区已变化，请刷新后重试");
+        bail!(conduit::i18n::text(
+            "git.branch_head_or_staging_area_changed_refresh"
+        ));
     }
     for path in files {
         if path.is_empty()
@@ -1065,7 +1128,10 @@ fn update_index(
                 .split(['/', '\\'])
                 .any(|c| c == ".." || c == "." || c.is_empty())
         {
-            bail!("暂存路径必须是仓库内的文件：{path}");
+            bail!(conduit::i18n::format(
+                "git.staging_path_must_be_a_file_inside",
+                &[("path", path.to_string())]
+            ));
         }
     }
     let root = run_git(git, workspace, &["rev-parse", "--show-toplevel"], cancel)?;
@@ -1115,25 +1181,36 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
     let mut committed = false;
     let mut retry_tag = None;
     let mut retry_completed = false;
-    let mut failure_stage = "提交已成功，推送失败";
+    let mut pushing = false;
+    let mut failure_stage = conduit::i18n::text_static("git.commit_succeeded_push_failed");
     let result = (|| -> Result<String> {
-        let git = resolve_git().ok_or_else(|| anyhow!("未找到 git.exe"))?;
+        let git = resolve_git()
+            .ok_or_else(|| anyhow!(conduit::i18n::text("git.branches.git_exe_not_found")))?;
         if !matches!(
             &operation,
             Operation::Stage { .. } | Operation::Unstage { .. }
         ) && let Some(state) = branches::integration_state(&git, workspace, cancel)?
         {
-            bail!("仓库存在进行中的 {}，请先继续或中止", state.label());
+            bail!(conduit::i18n::format(
+                "git.branches.repository_has_an_ongoing_continue_or_abort",
+                &[("arg0", state.label().to_string())]
+            ));
         }
         match operation {
             Operation::Branch(_) => unreachable!(),
             Operation::Discard { file, target } => {
                 discard::discard_file(&git, workspace, &file, &target, cancel)?;
-                Ok(format!("已回滚 {} 的修改", file.path))
+                Ok(conduit::i18n::format(
+                    "git.discarded_changes_to",
+                    &[("arg0", file.path.to_string())],
+                ))
             }
             Operation::Stage { files, target } => {
                 update_index(&git, workspace, &files, &target, IndexAction::Stage, cancel)?;
-                Ok(format!("已暂存 {} 个文件", files.len()))
+                Ok(conduit::i18n::format(
+                    "git.staged_files",
+                    &[("arg0", format!("{}", files.len()))],
+                ))
             }
             Operation::StageTracked { files, target } => {
                 let conflicts = run_git(
@@ -1143,7 +1220,9 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                     cancel,
                 )?;
                 if !conflicts.is_empty() {
-                    bail!("存在未解决的冲突，已暂停自动暂存");
+                    bail!(conduit::i18n::text(
+                        "git.unresolved_conflicts_found_automatic_staging_paused"
+                    ));
                 }
                 update_index(
                     &git,
@@ -1153,7 +1232,10 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                     IndexAction::StageTracked,
                     cancel,
                 )?;
-                Ok(format!("已自动暂存 {} 个已跟踪文件", files.len()))
+                Ok(conduit::i18n::format(
+                    "git.automatically_staged_tracked_files",
+                    &[("arg0", format!("{}", files.len()))],
+                ))
             }
             Operation::Unstage { files, target } => {
                 update_index(
@@ -1164,7 +1246,10 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                     IndexAction::Unstage,
                     cancel,
                 )?;
-                Ok(format!("已将 {} 个文件移出暂存区", files.len()))
+                Ok(conduit::i18n::format(
+                    "git.unstaged_files",
+                    &[("arg0", format!("{}", files.len()))],
+                ))
             }
             Operation::Commit {
                 files,
@@ -1174,19 +1259,27 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                 tag,
             } => {
                 if message.trim().is_empty() {
-                    bail!("请填写提交说明");
+                    bail!(conduit::i18n::text("git.enter_a_commit_message"));
                 }
                 if message.len() > 16 * 1024 {
-                    bail!("提交说明最多 16 KiB");
+                    bail!(conduit::i18n::text(
+                        "git.commit_message_may_be_no_larger_than"
+                    ));
                 }
                 if target.branch.is_none() {
-                    bail!("分离 HEAD 状态下不能从此面板提交，请先切回分支");
+                    bail!(conduit::i18n::text(
+                        "git.cannot_commit_from_this_panel_with_detached"
+                    ));
                 }
                 if target.staged.is_empty() {
-                    bail!("没有已暂存变更，请先在 Git 中暂存文件再刷新");
+                    bail!(conduit::i18n::text(
+                        "git.no_staged_changes_stage_files_in_git"
+                    ));
                 }
                 if commit_target(&git, workspace, cancel)? != target {
-                    bail!("分支、HEAD 或暂存区已变化，请刷新变更后重新提交");
+                    bail!(conduit::i18n::text(
+                        "git.selected.branch_head_or_staging_area_changed_refresh"
+                    ));
                 }
                 if let Some(tag) = tag.as_deref() {
                     validate_tag(&git, workspace, tag, cancel)?;
@@ -1216,14 +1309,19 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                     )?;
                 }
                 committed = true;
-                failure_stage = "提交已成功，无法确认提交对象";
+                failure_stage = conduit::i18n::text_static(
+                    "git.commit_succeeded_unable_to_confirm_commit_object",
+                );
                 let oid = run_git(&git, workspace, &["rev-parse", "--verify", "HEAD"], cancel)?;
                 if let Some(tag) = tag.as_deref() {
                     if push {
-                        failure_stage = "提交已成功，发布版本校验失败";
+                        failure_stage = conduit::i18n::text_static(
+                            "git.commit_succeeded_release_version_validation_failed",
+                        );
                         validate_conduit_release(&git, workspace, tag, oid.trim(), cancel)?;
                     }
-                    failure_stage = "提交已成功，创建标签失败";
+                    failure_stage =
+                        conduit::i18n::text_static("git.commit_succeeded_tag_creation_failed");
                     run_git(
                         &git,
                         workspace,
@@ -1232,9 +1330,9 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                     )?;
                 }
                 failure_stage = if tag.is_some() {
-                    "提交和本地标签已创建，推送失败"
+                    conduit::i18n::text_static("git.commit_and_local_tag_created_push_failed")
                 } else {
-                    "提交已成功，推送失败"
+                    conduit::i18n::text_static("git.commit_succeeded_push_failed")
                 };
                 if push {
                     let destination = resolve_push_destination(
@@ -1262,6 +1360,7 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                         }
                         retry_tag = Some(pending);
                     }
+                    pushing = true;
                     push_branch(
                         &git,
                         workspace,
@@ -1272,16 +1371,16 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                     )?;
                     retry_tag = None;
                     Ok(if tag.is_some() {
-                        "提交、标签及推送成功"
+                        conduit::i18n::text_static("git.commit_tag_and_push_succeeded")
                     } else {
-                        "提交并推送成功"
+                        conduit::i18n::text_static("git.commit_and_push_succeeded")
                     }
                     .into())
                 } else {
                     Ok(if tag.is_some() {
-                        "提交及本地标签创建成功"
+                        conduit::i18n::text_static("git.commit_and_local_tag_created")
                     } else {
-                        "提交成功"
+                        conduit::i18n::text_static("git.commit_succeeded")
                     }
                     .into())
                 }
@@ -1291,7 +1390,7 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                 retry_tag_push(&git, workspace, &retry, cancel)?;
                 retry_tag = None;
                 retry_completed = true;
-                Ok("标签已推送（分支未在此操作中推送）".into())
+                Ok(conduit::i18n::text_static("git.tag_pushed_branch_was_not_pushed_in").into())
             }
         }
     })();
@@ -1310,16 +1409,22 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
             worktree_created: None,
             committed,
             message: if committed {
-                if failure_stage.contains("推送失败")
-                    && (format!("{error:#}").contains("超时")
-                        || format!("{error:#}").contains("取消"))
-                {
-                    format!("{failure_stage}；远端状态可能未知，请检查远端后再重试")
+                if pushing && {
+                    let detail = format!("{error:#}").to_ascii_lowercase();
+                    detail.contains("超时")
+                        || detail.contains("取消")
+                        || detail.contains("timed out")
+                        || detail.contains("cancelled")
+                } {
+                    conduit::i18n::format(
+                        "git.remote_state_may_be_unknown_check_the",
+                        &[("failure_stage", failure_stage.to_string())],
+                    )
                 } else {
                     failure_stage.into()
                 }
             } else {
-                "Git 操作失败".into()
+                conduit::i18n::text_static("git_ui.git_operation_failed").into()
             },
             error: Some(format!("{error:#}")),
         },
@@ -1345,7 +1450,9 @@ fn resolve_push_destination(
         cancel,
     )?;
     if current.trim() != branch {
-        bail!("当前分支已变化，请刷新后重试推送");
+        bail!(conduit::i18n::text(
+            "git.current_branch_changed_refresh_before_retrying_the"
+        ));
     }
     // A missing key has an empty default; command failures must still propagate.
     let config = |key: &str| -> Result<String> {
@@ -1361,7 +1468,9 @@ fn resolve_push_destination(
     let merge = config(&format!("branch.{branch}.merge"))?;
     if !merge.is_empty() {
         if configured_remote.is_empty() || !merge.starts_with("refs/heads/") {
-            bail!("上游配置不完整，请在分支菜单中选择 Push 并设置上游");
+            bail!(conduit::i18n::text(
+                "git.incomplete_upstream_configuration_choose_push_in_the"
+            ));
         }
         // The tracking ref may be missing locally; keep the configured destination.
         return Ok(PushDestination {
@@ -1388,14 +1497,21 @@ fn resolve_push_destination(
         } else if remotes.len() == 1 {
             remotes[0]
         } else if remotes.is_empty() {
-            bail!("尚未配置远程仓库，无法推送新分支");
+            bail!(conduit::i18n::text(
+                "git.no_remote_configured_unable_to_push_a"
+            ));
         } else {
-            bail!("存在多个远程仓库且未指定默认推送目标，请在分支菜单中选择 Push 和目标远程");
+            bail!(conduit::i18n::text(
+                "git.multiple_remotes_and_no_default_push_target"
+            ));
         }
         .to_owned();
     }
     if remote != "." && !remotes.contains(&remote.as_str()) {
-        bail!("推送远程 {remote} 不存在，请在分支菜单中选择 Push 和目标远程");
+        bail!(conduit::i18n::format(
+            "git.push_remote_does_not_exist_choose_push",
+            &[("remote", remote.to_string())]
+        ));
     }
     Ok(PushDestination {
         remote,
@@ -1418,7 +1534,9 @@ fn resolve_upstream(
         cancel,
     )?;
     if current.trim() != branch {
-        bail!("当前分支已变化，请刷新后重试推送");
+        bail!(conduit::i18n::text(
+            "git.current_branch_changed_refresh_before_retrying_the"
+        ));
     }
     let upstream = run_git(
         git,
@@ -1431,9 +1549,15 @@ fn resolve_upstream(
         ],
         cancel,
     )
-    .map_err(|_| anyhow!("当前分支未设置有效上游，请先在分支菜单中选择 Push 并设置上游"))?;
+    .map_err(|_| {
+        anyhow!(conduit::i18n::text(
+            "git.current_branch_has_no_valid_upstream_choose"
+        ))
+    })?;
     if expected.is_some_and(|expected| expected != upstream.trim()) {
-        bail!("上游分支已变化，请刷新后重试推送");
+        bail!(conduit::i18n::text(
+            "git.upstream_branch_changed_refresh_before_retrying_the"
+        ));
     }
     // Resolve the configured upstream explicitly; never force or push unrelated refs.
     let remote = run_git(
@@ -1451,7 +1575,9 @@ fn resolve_upstream(
     let remote = remote.trim().to_owned();
     let merge = merge.trim().to_owned();
     if remote.is_empty() || !merge.starts_with("refs/heads/") {
-        bail!("上游配置不完整，请检查 Git 分支配置");
+        bail!(conduit::i18n::text(
+            "git.incomplete_upstream_configuration_check_git_branch_settings"
+        ));
     }
     Ok((remote, merge))
 }
@@ -1472,15 +1598,18 @@ fn single_push_url(
     let url = urls
         .next()
         .filter(|url| !url.is_empty())
-        .ok_or_else(|| anyhow!("远程推送地址为空"))?;
+        .ok_or_else(|| anyhow!(conduit::i18n::text("git.remote_push_url_is_empty")))?;
     if urls.next().is_some() {
-        bail!("远程配置了多个推送地址，无法保证标签和分支原子推送");
+        bail!(conduit::i18n::text(
+            "git.remote_has_multiple_push_urls_atomic_branch"
+        ));
     }
     Ok(url.to_owned())
 }
 
 fn load_remote_tags(workspace: &Path, cancel: &AtomicBool) -> Result<RemoteTags> {
-    let git = resolve_git().ok_or_else(|| anyhow!("未找到 git.exe"))?;
+    let git = resolve_git()
+        .ok_or_else(|| anyhow!(conduit::i18n::text("git.branches.git_exe_not_found")))?;
     let branch = run_git(
         &git,
         workspace,
@@ -1505,7 +1634,11 @@ fn load_remote_tags(workspace: &Path, cancel: &AtomicBool) -> Result<RemoteTags>
         .filter(|remote| remotes.contains(remote))
         .or_else(|| remotes.iter().copied().find(|remote| *remote == "origin"))
         .or_else(|| (remotes.len() == 1).then(|| remotes[0]))
-        .ok_or_else(|| anyhow!("未找到可查询的远程仓库，请配置 origin 或当前分支的远程"))?
+        .ok_or_else(|| {
+            anyhow!(conduit::i18n::text(
+                "git.no_queryable_remote_found_configure_origin_or"
+            ))
+        })?
         .to_owned();
     let push_url = single_push_url(&git, workspace, &remote, cancel)?;
     let output = run_git_with_timeout(
@@ -1524,13 +1657,15 @@ fn load_remote_tags(workspace: &Path, cancel: &AtomicBool) -> Result<RemoteTags>
         Duration::from_secs(120),
     )?;
     if output.len() >= MAX_COMMAND_BYTES {
-        bail!("远程标签列表过长，请缩小范围后重试");
+        bail!(conduit::i18n::text(
+            "git.remote_tag_list_is_too_long_narrow"
+        ));
     }
     let mut names = Vec::new();
     for line in output.lines() {
         let (_, reference) = line
             .split_once('\t')
-            .ok_or_else(|| anyhow!("远程标签响应无效"))?;
+            .ok_or_else(|| anyhow!(conduit::i18n::text("git.invalid_remote_tag_response")))?;
         if let Some(name) = reference.strip_prefix("refs/tags/") {
             names.push(name.to_owned());
         }
@@ -1555,11 +1690,15 @@ fn retry_tag_push(
     if !retry.remote.is_empty()
         && (remote != retry.remote || merge != retry.merge || url != retry.remote_url)
     {
-        bail!("上游或远程地址已变化，请检查后重新操作");
+        bail!(conduit::i18n::text(
+            "git.upstream_or_remote_url_changed_check_before"
+        ));
     }
     let head = run_git(git, workspace, &["rev-parse", "--verify", "HEAD"], cancel)?;
     if head.trim() != retry.oid {
-        bail!("HEAD 已变化，请检查后重新操作");
+        bail!(conduit::i18n::text(
+            "git.head_changed_check_before_retrying"
+        ));
     }
     let reference = format!("refs/tags/{}", retry.tag);
     let local = run_git(
@@ -1569,7 +1708,9 @@ fn retry_tag_push(
         cancel,
     )?;
     if local.trim() != retry.oid {
-        bail!("本地标签指向已变化，请检查后重新操作");
+        bail!(conduit::i18n::text(
+            "git.local_tag_target_changed_check_before_retrying"
+        ));
     }
     // Query the push endpoint: a remote may have a separate fetch URL.
     let output = run_git_with_timeout(
@@ -1589,24 +1730,30 @@ fn retry_tag_push(
         Duration::from_secs(120),
     )?;
     if output.len() >= MAX_COMMAND_BYTES {
-        bail!("远程引用结果过大");
+        bail!(conduit::i18n::text(
+            "git.remote_reference_result_is_too_large"
+        ));
     }
     let mut branch_oid = None;
     for line in output.lines() {
         let (oid, name) = line
             .split_once('\t')
-            .ok_or_else(|| anyhow!("远程引用响应无效"))?;
+            .ok_or_else(|| anyhow!(conduit::i18n::text("git.invalid_remote_reference_response")))?;
         if name == reference {
             if oid == retry.oid {
                 return Ok(());
             }
-            bail!("远程已存在指向其他提交的同名标签");
+            bail!(conduit::i18n::text("git.remote_has_a_tag_with_this_name"));
         }
         if name == merge {
             branch_oid = Some(oid);
         }
     }
-    let remote_head = branch_oid.ok_or_else(|| anyhow!("远程上游分支不存在，请先推送分支"))?;
+    let remote_head = branch_oid.ok_or_else(|| {
+        anyhow!(conduit::i18n::text(
+            "git.remote_upstream_branch_does_not_exist_push"
+        ))
+    })?;
     if remote_head != retry.oid
         && run_git(
             git,
@@ -1616,7 +1763,9 @@ fn retry_tag_push(
         )
         .is_err()
     {
-        bail!("远程上游分支尚未包含该提交，或本地缺少远程提交；请先推送或刷新分支");
+        bail!(conduit::i18n::text(
+            "git.remote_upstream_does_not_contain_this_commit"
+        ));
     }
     let refspec = format!("{}:{}", retry.oid, reference);
     run_git_with_timeout(
@@ -1655,7 +1804,9 @@ fn push_branch(
         single_push_url(git, workspace, remote, cancel)?;
         let head = run_git(git, workspace, &["rev-parse", "--verify", "HEAD"], cancel)?;
         if head.trim() != oid {
-            bail!("提交后 HEAD 已变化，请检查分支和标签再推送");
+            bail!(conduit::i18n::text(
+                "git.head_changed_after_committing_check_the_branch"
+            ));
         }
     }
     let local_ref = format!("refs/heads/{branch}");
@@ -1693,7 +1844,9 @@ fn push_branch(
                 ],
                 cancel,
             )
-            .context("分支和标签已推送，但保存上游配置失败")?;
+            .context(conduit::i18n::text_static(
+                "git.branch_and_tag_pushed_but_saving_upstream",
+            ))?;
         }
     }
     Ok(())
@@ -1737,12 +1890,12 @@ fn truncate_diff(diff: String, notes: &mut Vec<String>) -> String {
     while end > 0 && !diff.is_char_boundary(end) {
         end -= 1;
     }
-    notes.push(format!(
-        "暂存 diff 已截断，仅保留前 {} KiB",
-        MAX_DIFF_BYTES / 1024
+    notes.push(conduit::i18n::format(
+        "git.staged_diff_truncated_to_the_first_kib",
+        &[("arg0", format!("{}", MAX_DIFF_BYTES / 1024))],
     ));
     let mut truncated = diff[..end].to_string();
-    truncated.push_str("\n…（已截断）\n");
+    truncated.push_str(conduit::i18n::text_static("git.truncated"));
     truncated
 }
 
@@ -1845,7 +1998,7 @@ fn run_git_with_environment(
         stop_when_full,
     } = limits;
     if cancel.load(Ordering::Acquire) {
-        bail!("Git 读取已取消");
+        bail!(conduit::i18n::text("git.git_read_cancelled"));
     }
     let args: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
     let mut environment = std::collections::BTreeMap::from([
@@ -1861,7 +2014,12 @@ fn run_git_with_environment(
         );
     }
     let (child, mut pipes) = Child::spawn_with_env(git, &args, workspace, &environment)
-        .with_context(|| format!("启动 {} 失败", git.display()))?;
+        .with_context(|| {
+            conduit::i18n::format(
+                "git.failed_to_start",
+                &[("arg0", format!("{}", git.display()))],
+            )
+        })?;
     drop(pipes.stdin);
     let result = (|| {
         let started = Instant::now();
@@ -1870,10 +2028,12 @@ fn run_git_with_environment(
         let mut truncated = false;
         loop {
             if cancel.load(Ordering::Acquire) {
-                bail!("Git 读取已取消");
+                bail!(conduit::i18n::text("git.git_read_cancelled"));
             }
             if started.elapsed() > timeout {
-                bail!("Git 命令超时，已停止进程树");
+                bail!(conduit::i18n::text(
+                    "git.git_command_timed_out_process_tree_stopped"
+                ));
             }
             let mut progressed = false;
             progressed |=
@@ -1899,11 +2059,14 @@ fn run_git_with_environment(
                 {
                     let stderr = String::from_utf8_lossy(&stderr);
                     let stdout = String::from_utf8_lossy(&stdout);
-                    bail!(
-                        "Git 命令失败（退出码 {code}）：{}\n{}",
-                        stderr.trim(),
-                        stdout.trim()
-                    );
+                    bail!(conduit::i18n::format(
+                        "git.git_command_failed_exit_code",
+                        &[
+                            ("code", format!("{}", code)),
+                            ("arg0", stderr.trim().to_string()),
+                            ("arg1", stdout.trim().to_string())
+                        ]
+                    ));
                 }
                 return Ok(CommandOutput {
                     text: String::from_utf8_lossy(&stdout).into_owned(),
@@ -1930,6 +2093,7 @@ mod tests {
 
     #[test]
     fn worktree_scope_groups_subdirectories_and_separates_linked_worktrees() {
+        let _locale = crate::test_support::chinese();
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -1954,6 +2118,7 @@ mod tests {
 
     #[test]
     fn index_operations_treat_selected_paths_literally() {
+        let _locale = crate::test_support::chinese();
         let repo = TestRepository::new().expect("Git required for index regression");
         for name in ["file[1].txt", "file1.txt"] {
             std::fs::write(repo.path.join(name), "before\n").unwrap();
@@ -2016,6 +2181,7 @@ mod tests {
 
     #[test]
     fn selected_commit_preserves_unchecked_index_and_unstaged_content() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -2043,6 +2209,7 @@ mod tests {
 
     #[test]
     fn selected_release_validates_the_selected_tree_before_creating_commit() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -2088,6 +2255,7 @@ mod tests {
 
     #[test]
     fn selected_initial_commit_and_literal_paths() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -2107,6 +2275,7 @@ mod tests {
 
     #[test]
     fn selected_commit_renames_deletes_and_failure_keep_index() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -2145,6 +2314,7 @@ mod tests {
 
     #[test]
     fn selected_generation_patch_uses_exact_names_and_handles_git_quoting() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -2265,6 +2435,7 @@ mod tests {
 
     #[test]
     fn discard_restores_only_the_selected_file_and_handles_renames_and_deletions() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -2325,6 +2496,7 @@ mod tests {
 
     #[test]
     fn discard_removes_only_selected_new_files_even_before_the_first_commit() {
+        let _locale = crate::test_support::chinese();
         for initial_commit in [false, true] {
             let Some(repo) = TestRepository::new() else {
                 return;
@@ -2358,6 +2530,7 @@ mod tests {
 
     #[test]
     fn discard_rejects_stale_state_unsafe_paths_and_directories() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -2413,6 +2586,7 @@ mod tests {
 
     #[test]
     fn cached_tags_survive_status_refresh_until_explicitly_reloaded() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -2439,6 +2613,7 @@ mod tests {
 
     #[test]
     fn auto_stage_tracked_updates_modifications_deletions_and_manually_added_files() {
+        let _locale = crate::test_support::chinese();
         let repo = TestRepository::new().expect("Git required for automatic staging");
         repo.stage("initial\n");
         for name in [
@@ -2497,6 +2672,7 @@ mod tests {
 
     #[test]
     fn auto_stage_tracked_rejects_stale_index_and_preserves_unresolved_conflicts() {
+        let _locale = crate::test_support::chinese();
         let repo = TestRepository::new().expect("Git required for automatic staging");
         repo.stage("initial\n");
         repo.run(&["commit", "-qm", "initial"]);
@@ -2547,6 +2723,7 @@ mod tests {
 
     #[test]
     fn stage_selected_files_is_literal_supports_batches_and_preserves_other_changes() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -2594,6 +2771,7 @@ mod tests {
 
     #[test]
     fn unstage_selected_files_preserves_worktree_and_other_staged_files() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -2624,6 +2802,7 @@ mod tests {
     }
     #[test]
     fn staging_rejects_stale_index_and_paths_outside_the_repository() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -2661,6 +2840,7 @@ mod tests {
 
     #[test]
     fn tag_generation_uses_stable_numeric_versions() {
+        let _locale = crate::test_support::chinese();
         use crate::store::TagIncrement::*;
         let tags = ["v0.1.9", "v0.1.10", "v9.0.0-rc.1", "other"]
             .into_iter()
@@ -2674,6 +2854,7 @@ mod tests {
 
     #[test]
     fn tagged_commit_pushes_only_requested_tag_and_rejects_conflicts() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -2738,6 +2919,7 @@ mod tests {
 
     #[test]
     fn invalid_tag_is_rejected_and_locked_tag_reports_partial_commit() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -2781,6 +2963,7 @@ mod tests {
 
     #[test]
     fn conduit_release_checks_staged_cargo_version_before_commit() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -2824,6 +3007,7 @@ mod tests {
 
     #[test]
     fn custom_tag_steps_and_bounds() {
+        let _locale = crate::test_support::chinese();
         use crate::store::TagIncrement::*;
         let tags = vec!["v0.1.1".into()];
         assert_eq!(next_tag(&tags, Patch, 10).unwrap(), "v0.1.11");
@@ -2835,6 +3019,7 @@ mod tests {
 
     #[test]
     fn remote_tag_refresh_does_not_modify_local_refs_and_observes_deletion() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -2876,6 +3061,7 @@ mod tests {
 
     #[test]
     fn tag_retry_can_use_an_upstream_configured_after_commit() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -2914,6 +3100,7 @@ mod tests {
 
     #[test]
     fn tag_retry_requires_branch_push_and_refuses_changed_refs() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -2984,6 +3171,7 @@ mod tests {
 
     #[test]
     fn atomic_tag_conflict_leaves_remote_branch_unchanged() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -3029,6 +3217,7 @@ mod tests {
 
     #[test]
     fn commit_only_includes_index_and_preserves_unstaged_and_untracked_files() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -3055,6 +3244,7 @@ mod tests {
 
     #[test]
     fn commit_rejects_changed_index_branch_and_invalid_requests() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -3117,6 +3307,7 @@ mod tests {
 
     #[test]
     fn push_counts_follow_upstream_and_commit_and_push_clears_pending() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -3168,6 +3359,7 @@ mod tests {
 
     #[test]
     fn failed_push_keeps_successful_commit_and_pending_count() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -3200,6 +3392,7 @@ mod tests {
 
     #[test]
     fn branches_preserve_slashes_unicode_and_skip_remote_head_aliases() {
+        let _locale = crate::test_support::chinese();
         let branches = parse_branches(
             "refs/heads/feature/界面\0\nrefs/heads/main\0\nrefs/remotes/origin/HEAD\0refs/remotes/origin/main\nrefs/remotes/origin/main\0\n",
         );
@@ -3224,6 +3417,7 @@ mod tests {
 
     #[test]
     fn status_parser_handles_tracked_untracked_renames_and_kinds() {
+        let _locale = crate::test_support::chinese();
         let files = parse_status(
             b" M src/main.rs\0?? notes.md\0R  src/new.rs\0src/old.rs\0A  staged.txt\0 D gone.txt\0",
         );
@@ -3244,6 +3438,7 @@ mod tests {
 
     #[test]
     fn diff_truncation_keeps_utf8_and_notes_the_cut() {
+        let _locale = crate::test_support::chinese();
         let mut notes = vec![];
         let diff = "汉".repeat(MAX_DIFF_BYTES);
         let truncated = truncate_diff(diff, &mut notes);
@@ -3258,6 +3453,7 @@ mod tests {
 
     #[test]
     fn snapshot_counts_distinguish_staged_and_worktree_changes() {
+        let _locale = crate::test_support::chinese();
         let snapshot = Snapshot {
             branch: "main".into(),
             tags: vec![],
@@ -3283,6 +3479,7 @@ mod tests {
 
     #[test]
     fn real_snapshot_is_read_only_and_sees_worktree_changes() {
+        let _locale = crate::test_support::chinese();
         let Some(git) = resolve_git() else {
             return;
         };
@@ -3419,6 +3616,7 @@ mod tests {
 
     #[test]
     fn file_diff_compares_working_tree_with_head() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -3455,6 +3653,7 @@ mod tests {
 
     #[test]
     fn file_diff_scopes_keep_index_separate_from_worktree_and_other_files() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -3485,6 +3684,7 @@ mod tests {
 
     #[test]
     fn file_diff_scopes_handle_unborn_index_deleted_and_untracked_files() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -3529,6 +3729,7 @@ mod tests {
 
     #[test]
     fn file_diff_treats_untracked_and_added_files_as_new() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -3568,6 +3769,7 @@ mod tests {
 
     #[test]
     fn file_diff_shows_deletions_and_binary_markers() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -3604,6 +3806,7 @@ mod tests {
 
     #[test]
     fn file_diff_rejects_oversized_patches() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -3628,6 +3831,7 @@ mod tests {
 
     #[test]
     fn file_diff_resolves_paths_from_a_workspace_subdirectory() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };
@@ -3648,6 +3852,7 @@ mod tests {
 
     #[test]
     fn file_diff_rejects_paths_outside_the_repository() {
+        let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
         };

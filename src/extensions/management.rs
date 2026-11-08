@@ -23,11 +23,11 @@ impl Filter {
     ];
     pub fn label(self) -> &'static str {
         match self {
-            Self::All => "全部",
-            Self::Active => "未禁用",
-            Self::Disabled => "已停用",
-            Self::Managed => "插件托管",
-            Self::Duplicates => "同名定义",
+            Self::All => conduit::i18n::text_static("notifications.all"),
+            Self::Active => conduit::i18n::text_static("extensions.management.not_disabled"),
+            Self::Disabled => conduit::i18n::text_static("extensions.management.disabled"),
+            Self::Managed => conduit::i18n::text_static("settings.extensions.plugin_managed"),
+            Self::Duplicates => conduit::i18n::text_static("settings.extensions.duplicate_name"),
         }
     }
     pub fn matches(self, entry: &Entry, duplicates: &HashSet<String>, query: &str) -> bool {
@@ -71,27 +71,35 @@ pub fn toggle_skill(path: &Path, original: &str) -> Result<PathBuf> {
     let filename = path.file_name().and_then(|name| name.to_str());
     ensure!(
         matches!(filename, Some("SKILL.md" | DISABLED_SKILL)),
-        "不是可管理的 Skill 文件"
+        conduit::i18n::text("extensions.management.not_a_manageable_skill_file")
     );
     for item in [
         path,
-        path.parent().ok_or_else(|| anyhow::anyhow!("无效路径"))?,
+        path.parent()
+            .ok_or_else(|| anyhow::anyhow!(conduit::i18n::text("extensions.edit.invalid_path")))?,
     ] {
         let metadata = fs::symlink_metadata(item)?;
         ensure!(
             !metadata.file_type().is_symlink(),
-            "链接 Skill 请在原始位置管理"
+            conduit::i18n::text(
+                "extensions.management.manage_linked_skills_at_their_original_location"
+            )
         );
         #[cfg(windows)]
         {
             use std::os::windows::fs::MetadataExt;
             ensure!(
                 metadata.file_attributes() & 0x400 == 0,
-                "链接 Skill 请在原始位置管理"
+                conduit::i18n::text(
+                    "extensions.management.manage_linked_skills_at_their_original_location"
+                )
             );
         }
     }
-    ensure!(fs::metadata(path)?.is_file(), "Skill 来源不是普通文件");
+    ensure!(
+        fs::metadata(path)?.is_file(),
+        conduit::i18n::text("extensions.management.skill_source_is_not_a_regular_file")
+    );
     let active = path.with_file_name("SKILL.md");
     let target = path.with_file_name(if filename == Some("SKILL.md") {
         DISABLED_SKILL
@@ -103,15 +111,21 @@ pub fn toggle_skill(path: &Path, original: &str) -> Result<PathBuf> {
         .write(true)
         .create_new(true)
         .open(&lock)
-        .map_err(|_| anyhow::anyhow!("此 Skill 正在编辑，请稍后重试"))?;
+        .map_err(|_| {
+            anyhow::anyhow!(conduit::i18n::text(
+                "extensions.management.this_skill_is_being_edited_try_again"
+            ))
+        })?;
     let result = (|| -> Result<()> {
         ensure!(
             edit::read(path)?.as_deref() == Some(original),
-            "Skill 已被外部修改，请刷新后重试"
+            conduit::i18n::text("extensions.management.skill_changed_externally_refresh_and_retry")
         );
         ensure!(
             fs::symlink_metadata(&target).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound),
-            "目标文件已存在或不可访问，不能覆盖"
+            conduit::i18n::text(
+                "extensions.management.target_exists_or_is_inaccessible_and_cannot"
+            )
         );
         #[cfg(windows)]
         {
@@ -142,6 +156,7 @@ mod tests {
     use super::*;
     #[test]
     fn skill_disable_restore_rejects_conflicts_and_stale_content() {
+        let _locale = crate::test_support::chinese();
         let folder = std::env::temp_dir().join(format!(
             "conduit-skill-toggle-{}-{}",
             std::process::id(),
@@ -177,6 +192,7 @@ mod tests {
     }
     #[test]
     fn filters_search_paths_and_keep_same_named_sources() {
+        let _locale = crate::test_support::chinese();
         let entry = Entry {
             name: "same".into(),
             description: "Test Skill".into(),

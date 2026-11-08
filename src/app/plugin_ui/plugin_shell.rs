@@ -199,7 +199,7 @@ impl ConduitApp {
                     name: {
                         let name = status::bounded_text(&workspace.name(), 160);
                         if name.trim().is_empty() {
-                            "工作区".into()
+                            conduit::i18n::text_static("git_compare.workspace").into()
                         } else {
                             name
                         }
@@ -394,7 +394,13 @@ impl ConduitApp {
             .navigation_key()
             .cloned()
             .map(|key| self.render_shell_view(&key, cx))
-            .unwrap_or_else(|| div().child("请选择工作区").into_any_element())
+            .unwrap_or_else(|| {
+                div()
+                    .child(conduit::i18n::text_static(
+                        "plugin_ui.example.select_a_workspace",
+                    ))
+                    .into_any_element()
+            })
     }
 
     fn render_shell_view(&mut self, key: &ViewInstanceKey, cx: &mut Context<Self>) -> AnyElement {
@@ -419,16 +425,18 @@ impl ConduitApp {
                         .debug_selector(move || stop_selector.clone())
                         .small()
                         .ghost()
-                        .label("停止开发插件")
+                        .label(conduit::i18n::text_static(
+                            "plugin_ui.plugin_shell.stop_development_plugin",
+                        ))
                         .on_click(cx.listener(|app, _, window, cx| app.disable_shell(window, cx))),
                 ),
             )
-            .children(
-                shell
-                    .error
-                    .as_ref()
-                    .map(|error| div().p_2().child(format!("插件错误：{error}"))),
-            )
+            .children(shell.error.as_ref().map(|error| {
+                div().p_2().child(conduit::i18n::format(
+                    "plugin_ui.plugin_shell.plugin_error",
+                    &[("error", format!("{}", error))],
+                ))
+            }))
             .child(match content {
                 Some(view) => div()
                     .flex_1()
@@ -445,7 +453,9 @@ impl ConduitApp {
                     .child(
                         Button::new(SharedString::from(reopen_selector.clone()))
                             .debug_selector(move || reopen_selector.clone())
-                            .label("打开插件视图")
+                            .label(conduit::i18n::text_static(
+                                "plugin_ui.plugin_shell.open_plugin_view",
+                            ))
                             .disabled(!self.plugins.snapshot.writable())
                             .on_click(cx.listener(move |app, _, window, cx| {
                                 app.open_shell_view(&id, window, cx);

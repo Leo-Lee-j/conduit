@@ -38,7 +38,7 @@ impl WorkspaceSummary {
                     id: s.id,
                     title: super::status::bounded_text(
                         if s.title.is_empty() {
-                            "未命名会话"
+                            conduit::i18n::text_static("plugin_ui.summary.untitled_session")
                         } else {
                             &s.title
                         },
@@ -59,6 +59,7 @@ mod tests {
 
     #[test]
     fn summary_is_bounded_sendable_metadata_independent_of_transcript_content() {
+        let _locale = crate::test_support::chinese();
         fn pure_data<T: Send + Sync>() {}
         pure_data::<WorkspaceSummary>();
         let control = SessionController::default();

@@ -11,52 +11,71 @@ pub fn set_enabled_preview(
 ) -> Result<String> {
     ensure!(
         engine.descriptor().capabilities.mcp_toggle,
-        "此引擎需要在来源配置中管理 MCP 启停"
+        conduit::i18n::text("extensions.mcp.manage_mcp_enablement_for_this_engine_in")
     );
     if engine == Provider::Codex {
-        let mut document = original
-            .parse::<toml_edit::DocumentMut>()
-            .map_err(|_| anyhow::anyhow!("原配置 TOML 无效，请先修复"))?;
+        let mut document = original.parse::<toml_edit::DocumentMut>().map_err(|_| {
+            anyhow::anyhow!(conduit::i18n::text(
+                "extensions.mcp.original_toml_is_invalid_fix_it_first"
+            ))
+        })?;
         let server = document
             .get_mut("mcp_servers")
             .and_then(|servers| servers.get_mut(name))
             .and_then(toml_edit::Item::as_table_like_mut)
-            .ok_or_else(|| anyhow::anyhow!("MCP 服务已移动或定义不是表，请刷新后重试"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(conduit::i18n::text(
+                    "extensions.mcp.mcp_service_moved_or_its_definition_is"
+                ))
+            })?;
         ensure!(
             server.get("disabled").and_then(|v| v.as_bool()) != Some(true),
-            "此定义还有 disabled 字段，请编辑来源文件"
+            conduit::i18n::text("extensions.mcp.this_definition_also_has_a_disabled_field")
         );
         let mut value = toml_edit::Value::from(enabled);
         if let Some(previous) = server.get("enabled").and_then(|v| v.as_value()) {
             ensure!(
                 previous.as_bool().is_some(),
-                "enabled 必须是布尔值，请先修复配置"
+                conduit::i18n::text("extensions.mcp.enabled_must_be_a_boolean_fix_the")
             );
             *value.decor_mut() = previous.decor().clone();
         }
         server.insert("enabled", toml_edit::Item::Value(value));
         return Ok(document.to_string());
     }
-    let mut expected =
-        jsonc(original).ok_or_else(|| anyhow::anyhow!("原配置 JSON / JSONC 无效"))?;
+    let mut expected = jsonc(original).ok_or_else(|| {
+        anyhow::anyhow!(conduit::i18n::text(
+            "extensions.mcp.original_json_jsonc_is_invalid"
+        ))
+    })?;
     let server = expected
         .get_mut("mcp")
         .and_then(|v| v.get_mut(name))
         .and_then(Value::as_object_mut)
-        .ok_or_else(|| anyhow::anyhow!("MCP 服务已移动，请刷新后重试"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(conduit::i18n::text(
+                "extensions.mcp.mcp_service_moved_refresh_and_retry"
+            ))
+        })?;
     ensure!(
         server.get("disabled") != Some(&Value::Bool(true)),
-        "此定义还有 disabled 字段，请编辑来源文件"
+        conduit::i18n::text("extensions.mcp.this_definition_also_has_a_disabled_field")
     );
     ensure!(
         server.get("enabled").is_none_or(Value::is_boolean),
-        "enabled 必须是布尔值，请先修复配置"
+        conduit::i18n::text("extensions.mcp.enabled_must_be_a_boolean_fix_the")
     );
     server.insert("enabled".into(), Value::Bool(enabled));
-    let (root, end) =
-        object_range(original, Some("mcp")).ok_or_else(|| anyhow::anyhow!("无法定位 MCP 对象"))?;
-    let (start, finish) = object_range(&original[root..=end], Some(name))
-        .ok_or_else(|| anyhow::anyhow!("无法定位 MCP 服务"))?;
+    let (root, end) = object_range(original, Some("mcp")).ok_or_else(|| {
+        anyhow::anyhow!(conduit::i18n::text(
+            "extensions.mcp.unable_to_locate_mcp_object"
+        ))
+    })?;
+    let (start, finish) = object_range(&original[root..=end], Some(name)).ok_or_else(|| {
+        anyhow::anyhow!(conduit::i18n::text(
+            "extensions.mcp.unable_to_locate_mcp_service"
+        ))
+    })?;
     let (start, finish) = (root + start, root + finish);
     let items = tokens(&original[start..=finish]);
     let mut depth = 0;
@@ -66,9 +85,9 @@ pub fn set_enabled_preview(
             && serde_json::from_str::<String>(token).ok().as_deref() == Some("enabled")
             && items.get(index + 1).is_some_and(|t| t.2 == ":")
         {
-            let value = items
-                .get(index + 2)
-                .ok_or_else(|| anyhow::anyhow!("缺少 enabled 值"))?;
+            let value = items.get(index + 2).ok_or_else(|| {
+                anyhow::anyhow!(conduit::i18n::text("extensions.mcp.enabled_value_missing"))
+            })?;
             replacement = Some((start + value.0, start + value.1));
             break;
         }
@@ -94,7 +113,7 @@ pub fn set_enabled_preview(
     }
     ensure!(
         jsonc(&result).as_ref() == Some(&expected),
-        "无法安全修改此定义，请编辑来源文件"
+        conduit::i18n::text("extensions.mcp.unable_to_safely_modify_this_definition_edit")
     );
     Ok(result)
 }
@@ -113,11 +132,11 @@ pub fn add_preview(
             && name
                 .bytes()
                 .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-'),
-        "服务名称只允许字母、数字、下划线和连字符"
+        conduit::i18n::text("extensions.mcp.service_names_may_contain_letters_digits_underscores")
     );
     ensure!(
         !target.trim().is_empty() && !target.contains(['\0', '\n', '\r']),
-        "请输入有效的命令或 URL"
+        conduit::i18n::text("extensions.mcp.enter_a_valid_command_or_url")
     );
     let args = arguments
         .lines()
@@ -127,13 +146,14 @@ pub fn add_preview(
         .collect::<Vec<_>>();
     let mut server = serde_json::Map::new();
     if remote {
-        let url = url::Url::parse(target).map_err(|_| anyhow::anyhow!("URL 无效"))?;
+        let url = url::Url::parse(target)
+            .map_err(|_| anyhow::anyhow!(conduit::i18n::text("extensions.mcp.invalid_url")))?;
         ensure!(
             matches!(url.scheme(), "http" | "https")
                 && url.host_str().is_some()
                 && url.username().is_empty()
                 && url.password().is_none(),
-            "URL 必须是 HTTP(S) 地址，不能包含账号或密码"
+            conduit::i18n::text("extensions.mcp.url_must_use_http_s_and_contain")
         );
         server.insert("url".into(), Value::String(target.into()));
         if engine != Provider::Codex {
@@ -164,13 +184,16 @@ pub fn add_preview(
     }
     if engine == Provider::Codex {
         let original = original.unwrap_or("");
-        let value: toml::Table =
-            toml::from_str(original).map_err(|_| anyhow::anyhow!("原配置 TOML 无效，请先修复"))?;
+        let value: toml::Table = toml::from_str(original).map_err(|_| {
+            anyhow::anyhow!(conduit::i18n::text(
+                "extensions.mcp.original_toml_is_invalid_fix_it_first"
+            ))
+        })?;
         ensure!(
             value
                 .get("mcp_servers")
                 .is_none_or(|v| v.get(name).is_none()),
-            "同名 MCP 服务已存在，请编辑原服务"
+            conduit::i18n::text("extensions.mcp.an_mcp_service_with_this_name_already")
         );
         let server: toml::Table = serde_json::from_value(Value::Object(server))?;
         return Ok(format!(
@@ -184,26 +207,37 @@ pub fn add_preview(
         "mcp"
     };
     let original = original.unwrap_or("{\n}\n");
-    let value = jsonc(original)
-        .filter(Value::is_object)
-        .ok_or_else(|| anyhow::anyhow!("原配置 JSON / JSONC 无效，请先修复"))?;
+    let value = jsonc(original).filter(Value::is_object).ok_or_else(|| {
+        anyhow::anyhow!(conduit::i18n::text(
+            "extensions.mcp.original_json_jsonc_is_invalid_fix_it"
+        ))
+    })?;
     let server = serde_json::to_string_pretty(&Value::Object(server))?;
     let (start, end, contents) = if let Some(existing) = value.get(key) {
-        ensure!(existing.is_object(), "MCP 配置不是对象，请编辑原文件");
+        ensure!(
+            existing.is_object(),
+            conduit::i18n::text("extensions.mcp.mcp_configuration_is_not_an_object_edit")
+        );
         ensure!(
             existing.get(name).is_none(),
-            "同名 MCP 服务已存在，请编辑原服务"
+            conduit::i18n::text("extensions.mcp.an_mcp_service_with_this_name_already")
         );
-        let (start, end) = object_range(original, Some(key))
-            .ok_or_else(|| anyhow::anyhow!("无法定位 MCP 配置，请编辑原文件"))?;
+        let (start, end) = object_range(original, Some(key)).ok_or_else(|| {
+            anyhow::anyhow!(conduit::i18n::text(
+                "extensions.mcp.unable_to_locate_mcp_configuration_edit_the"
+            ))
+        })?;
         (
             start,
             end,
             format!("{}: {server}", serde_json::to_string(name)?),
         )
     } else {
-        let (start, end) =
-            object_range(original, None).ok_or_else(|| anyhow::anyhow!("无法定位配置对象"))?;
+        let (start, end) = object_range(original, None).ok_or_else(|| {
+            anyhow::anyhow!(conduit::i18n::text(
+                "extensions.mcp.unable_to_locate_configuration_object"
+            ))
+        })?;
         (
             start,
             end,
@@ -225,7 +259,10 @@ pub fn add_preview(
         &original[..end],
         &original[end..]
     );
-    ensure!(jsonc(&result).is_some(), "无法合并配置，请编辑原文件");
+    ensure!(
+        jsonc(&result).is_some(),
+        conduit::i18n::text("extensions.mcp.unable_to_merge_configuration_edit_the_original")
+    );
     Ok(result)
 }
 
@@ -324,6 +361,7 @@ mod tests {
     use super::*;
     #[test]
     fn toggles_preserve_jsonc_comments_nested_values_and_other_servers() {
+        let _locale = crate::test_support::chinese();
         for original in [
             "{\"mcp\":{\"中文\":{\"command\":[\"node\",\"{enabled}\"],//keep\n},\"other\":{\"enabled\":true}},\"theme\":\"dark\"}",
             "{\"mcp\":{\"中文\":{\"env\":{\"enabled\":\"secret\"},\"enabled\":true /*keep*/}}}",
@@ -341,6 +379,7 @@ mod tests {
     }
     #[test]
     fn toggles_preserve_toml_comments_inline_tables_and_literal_names() {
+        let _locale = crate::test_support::chinese();
         for original in [
             "# keep\nmodel='default'\n[mcp_servers.'a.b']\ncommand='node'\nenabled=true # keep enabled\n[mcp_servers.'a.b'.env]\nTOKEN='secret'\n",
             "mcp_servers = { 'a.b' = { command = 'node' } } # keep\n",
@@ -357,6 +396,7 @@ mod tests {
     }
     #[test]
     fn previews_preserve_comments_other_fields_and_reject_duplicate_names() {
+        let _locale = crate::test_support::chinese();
         for original in [
             "{\n// 注释\n\"theme\":\"dark\"\n}",
             "{\"mcp\":{\"old\":{\"url\":\"https://a.invalid\"},}, /* 保留 */ \"name\":\"中文\"}",

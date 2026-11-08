@@ -43,9 +43,9 @@ impl PermissionLevel {
     #[allow(dead_code)]
     pub fn label(self) -> &'static str {
         match self {
-            Self::ReadOnly => "仅可查看",
-            Self::WorkspaceWrite => "工作区内修改",
-            Self::FullAccess => "完全权限",
+            Self::ReadOnly => conduit::i18n::text_static("domain.read_only"),
+            Self::WorkspaceWrite => conduit::i18n::text_static("domain.workspace_write"),
+            Self::FullAccess => conduit::i18n::text_static("domain.full_access"),
         }
     }
 
@@ -438,6 +438,7 @@ mod snapshot_tests {
     use super::*;
     #[test]
     fn old_sessions_default_to_unpinned() {
+        let _locale = crate::test_support::chinese();
         let session: SessionRecord =
             serde_json::from_str(r#"{"id":1,"provider":"Claude","created_at":0,"exit_code":null}"#)
                 .unwrap();
@@ -446,6 +447,7 @@ mod snapshot_tests {
 
     #[test]
     fn message_snapshots_share_history_and_copy_only_an_edited_message() {
+        let _locale = crate::test_support::chinese();
         let mut item: ChatItem =
             serde_json::from_str(r#"{"key":"one","kind":"Assistant","text":"before"}"#).unwrap();
         let snapshot = item.clone();
@@ -463,6 +465,7 @@ mod usage_tests {
 
     #[test]
     fn speed_counts_only_output_not_input_cache_or_history() {
+        let _locale = crate::test_support::chinese();
         let usage = Usage {
             input_tokens: 100_000,
             cached_input_tokens: 95_000,
@@ -478,6 +481,7 @@ mod usage_tests {
 
     #[test]
     fn imported_history_or_reset_does_not_manufacture_a_speed() {
+        let _locale = crate::test_support::chinese();
         let usage = Usage {
             output_tokens: 900_000,
             ..Default::default()
@@ -494,6 +498,7 @@ mod usage_tests {
 
     #[test]
     fn provider_turn_output_wins_over_cumulative_baseline() {
+        let _locale = crate::test_support::chinese();
         let usage = Usage {
             output_tokens: 20_000,
             turn_output_tokens: Some(500),
@@ -508,6 +513,7 @@ mod usage_tests {
 
     #[test]
     fn session_speed_is_weighted_across_turns_and_replaces_stream_updates() {
+        let _locale = crate::test_support::chinese();
         let first = Usage {
             turn_output_tokens: Some(100),
             ..Default::default()
@@ -549,6 +555,7 @@ mod usage_tests {
 
     #[test]
     fn known_zero_output_turn_counts_time_but_unknown_and_zero_time_do_not() {
+        let _locale = crate::test_support::chinese();
         let base = Usage {
             session_output_tokens: 100,
             session_elapsed_ms: 1_000,
@@ -576,6 +583,7 @@ mod usage_tests {
 
     #[test]
     fn context_uses_latest_request_and_can_shrink_independently_of_totals() {
+        let _locale = crate::test_support::chinese();
         let mut usage = Usage {
             total_tokens: 300_000,
             context_tokens: Some(40_000),
@@ -592,6 +600,7 @@ mod usage_tests {
 
     #[test]
     fn legacy_usage_does_not_treat_total_as_context() {
+        let _locale = crate::test_support::chinese();
         let usage: Usage = serde_json::from_str(
             r#"{
             "input_tokens":200000,"cached_input_tokens":100000,

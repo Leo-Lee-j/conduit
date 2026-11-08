@@ -86,6 +86,7 @@ fn grants() -> BTreeSet<Capability> {
 
 #[test]
 fn reserved_owner_cannot_be_obtained_from_an_external_identifier() {
+    let _locale = crate::test_support::chinese();
     assert!(Owner::external(PluginId::new("conduit.core").unwrap()).is_err());
     assert!(Owner::external(PluginId::new("example.valid-name").unwrap()).is_ok());
     for invalid in [
@@ -97,6 +98,7 @@ fn reserved_owner_cannot_be_obtained_from_an_external_identifier() {
 
 #[test]
 fn registration_is_atomic_across_kinds_and_references() {
+    let _locale = crate::test_support::chinese();
     let source = external("example.alpha");
     let mut registry = Registry::new(catalog(&[&source]));
     let mut duplicate = source.clone();
@@ -115,6 +117,7 @@ fn registration_is_atomic_across_kinds_and_references() {
 
 #[test]
 fn owner_renderer_scope_icon_and_navigation_references_are_checked() {
+    let _locale = crate::test_support::chinese();
     let source = external("example.alpha");
     let other = external("example.beta");
     let mut registry = Registry::new(catalog(&[&source, &other]));
@@ -154,6 +157,7 @@ fn owner_renderer_scope_icon_and_navigation_references_are_checked() {
 
 #[test]
 fn activities_cannot_directly_open_right_views() {
+    let _locale = crate::test_support::chinese();
     let mut set = external("example.alpha");
     set.views[0].location = Location::Right;
     let mut registry = Registry::new(catalog(&[&set]));
@@ -163,6 +167,7 @@ fn activities_cannot_directly_open_right_views() {
 
 #[test]
 fn conditions_are_restricted_and_do_not_grant_execution() {
+    let _locale = crate::test_support::chinese();
     for invalid in [
         "",
         "workspace.unknown",
@@ -199,6 +204,7 @@ fn conditions_are_restricted_and_do_not_grant_execution() {
 
 #[test]
 fn activity_and_status_order_is_deterministic() {
+    let _locale = crate::test_support::chinese();
     let a = external("example.alpha");
     let mut z = external("example.zeta");
     let mut registry = Registry::new(catalog(&[&a, &z]));
@@ -232,6 +238,7 @@ fn activity_and_status_order_is_deterministic() {
 
 #[test]
 fn foreign_owner_and_foreign_registry_cannot_dispatch_or_revoke() {
+    let _locale = crate::test_support::chinese();
     let a = external("example.alpha");
     let z = external("example.zeta");
     let mut registry = Registry::new(catalog(&[&a, &z]));
@@ -268,6 +275,7 @@ fn foreign_owner_and_foreign_registry_cannot_dispatch_or_revoke() {
 
 #[test]
 fn unregister_invalidates_saved_actions_even_after_reregistration() {
+    let _locale = crate::test_support::chinese();
     let set = external("example.alpha");
     let mut registry = Registry::new(catalog(&[&set]));
     let first = registry.register(set.clone(), grants()).unwrap();
@@ -290,6 +298,7 @@ fn unregister_invalidates_saved_actions_even_after_reregistration() {
 
 #[test]
 fn context_versions_follow_identity_not_workspace_order_or_summary_refresh() {
+    let _locale = crate::test_support::chinese();
     let mut tracker = ContextTracker::default();
     let a = context(&mut tracker, "a");
     let same = context(&mut tracker, "a");
@@ -315,6 +324,7 @@ fn context_versions_follow_identity_not_workspace_order_or_summary_refresh() {
 
 #[test]
 fn foreign_session_is_removed_from_context() {
+    let _locale = crate::test_support::chinese();
     let mut value = input("a");
     value.session = Some(SessionKey {
         workspace: workspace("b"),
@@ -328,6 +338,7 @@ fn foreign_session_is_removed_from_context() {
 
 #[test]
 fn late_commands_and_view_requests_cannot_cross_context_or_readonly() {
+    let _locale = crate::test_support::chinese();
     let set = external("example.alpha");
     let mut registry = Registry::new(catalog(&[&set]));
     registry.register(set.clone(), grants()).unwrap();
@@ -358,6 +369,7 @@ fn late_commands_and_view_requests_cannot_cross_context_or_readonly() {
 
 #[test]
 fn command_arguments_and_mutation_policy_are_bounded() {
+    let _locale = crate::test_support::chinese();
     let mut set = external("example.alpha");
     set.commands[0].arguments = ArgumentPolicy::Object {
         max_bytes: 64,
@@ -384,6 +396,7 @@ fn command_arguments_and_mutation_policy_are_bounded() {
 
 #[test]
 fn display_text_limits_reject_control_characters_and_large_payloads() {
+    let _locale = crate::test_support::chinese();
     let set = external("example.alpha");
     let mut registry = Registry::new(catalog(&[&set]));
     for value in ["x".repeat(257), "line\nbreak".into()] {
@@ -400,6 +413,7 @@ fn display_text_limits_reject_control_characters_and_large_payloads() {
 
 #[test]
 fn example_is_opt_in_and_all_three_contributions_share_one_owner() {
+    let _locale = crate::test_support::chinese();
     let normal = b::register(false).unwrap();
     assert_eq!(normal.registry.owner_count(), 1);
     assert!(normal.example.is_none());
@@ -430,6 +444,7 @@ fn example_is_opt_in_and_all_three_contributions_share_one_owner() {
 
 #[test]
 fn unregister_restores_valid_fallbacks_and_preserves_collapse() {
+    let _locale = crate::test_support::chinese();
     let mut demo = b::register(true).unwrap();
     let cx = context(&mut ContextTracker::default(), "a");
     let mut state = WorkbenchState::new(
@@ -473,6 +488,7 @@ fn unregister_restores_valid_fallbacks_and_preserves_collapse() {
 
 #[test]
 fn close_preserves_selection_and_scope_changes_use_distinct_instance_keys() {
+    let _locale = crate::test_support::chinese();
     let demo = b::register(true).unwrap();
     let mut tracker = ContextTracker::default();
     let cx = context(&mut tracker, "a");
@@ -508,6 +524,7 @@ fn close_preserves_selection_and_scope_changes_use_distinct_instance_keys() {
 
 #[test]
 fn actions_without_payloads_reject_commands_requiring_arguments() {
+    let _locale = crate::test_support::chinese();
     let mut set = external("example.alpha");
     set.commands[0].arguments = ArgumentPolicy::Object {
         max_bytes: 64,
@@ -523,6 +540,7 @@ fn actions_without_payloads_reject_commands_requiring_arguments() {
 
 #[test]
 fn exact_json_budget_accepts_small_payload_and_rejects_escaped_overflow() {
+    let _locale = crate::test_support::chinese();
     let mut set = external("example.alpha");
     set.commands[0].arguments = ArgumentPolicy::Object {
         max_bytes: 7,

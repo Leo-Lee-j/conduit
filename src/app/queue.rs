@@ -8,17 +8,23 @@ impl ConduitApp {
     /// Keyboard and mouse share the same capacity and concurrency rules.
     pub(super) fn composer_send_blocked(&self) -> Option<&'static str> {
         if self.composer_save_pending() {
-            return Some("正在保存消息，请稍候；草稿会保留到保存成功。");
+            return Some(conduit::i18n::text_static(
+                "queue.saving_message_please_wait_your_draft_will",
+            ));
         }
         if let Some(id) = self.send_target(true) {
             if self.queued_messages.contains_key(&id) {
-                return Some("已有 1 条待发送消息，请先发送或撤回；当前草稿会保留。");
+                return Some(conduit::i18n::text_static(
+                    "queue.one_message_is_already_queued_send_or",
+                ));
             }
             if let Some(run) = self.session_control.runs.get(&id) {
                 if !run.runtime.is_cancelled() {
                     return None;
                 }
-                return Some("正在停止当前回复，请稍后发送。");
+                return Some(conduit::i18n::text_static(
+                    "queue.stopping_the_current_response_try_sending_again",
+                ));
             }
         }
         self.send_blocked(true)
@@ -44,7 +50,9 @@ impl ConduitApp {
         }
         let prompt = file_ref::compose_prompt(&text, &references);
         if prompt.trim().is_empty() || prompt.len() > 256 * 1024 {
-            self.message = Some("消息不能为空，且最多 256 KiB。".into());
+            self.message = Some(
+                conduit::i18n::text_static("queue.messages_must_be_nonempty_and_no_larger").into(),
+            );
             cx.notify();
             return false;
         }
@@ -64,8 +72,11 @@ impl ConduitApp {
                 let mut notice = Notice::new(
                     NoticeSource::Session,
                     NoticeLevel::Error,
-                    "消息未加入队列",
-                    format!("保存失败：{error}。草稿已保留。"),
+                    conduit::i18n::text_static("queue.message_not_queued"),
+                    conduit::i18n::format(
+                        "queue.save_failed_your_draft_has_been_preserved",
+                        &[("error", error.to_string())],
+                    ),
                 );
                 if let Some(target) = self.session_notice_target(id) {
                     notice = notice.target(target);
@@ -115,7 +126,10 @@ impl ConduitApp {
             .iter()
             .position(|workspace| workspace.sessions.iter().any(|session| session.id == id))
         else {
-            self.pause_queued_message(id, "会话已不存在，请取回待发送消息。");
+            self.pause_queued_message(
+                id,
+                conduit::i18n::text_static("queue.the_session_no_longer_exists_retrieve_the"),
+            );
             cx.notify();
             return;
         };
@@ -128,9 +142,9 @@ impl ConduitApp {
         if !rejected.is_empty() {
             self.pause_queued_message(
                 id,
-                &format!(
-                    "附件已不可引用，请取回编辑：{}",
-                    rejection_summary(&rejected)
+                &conduit::i18n::format(
+                    "queue.attachments_are_no_longer_available_retrieve_the",
+                    &[("arg0", rejection_summary(&rejected).to_string())],
                 ),
             );
             cx.notify();
@@ -161,7 +175,7 @@ impl ConduitApp {
                         Notice::new(
                             NoticeSource::Session,
                             NoticeLevel::Error,
-                            "待发送消息已暂停",
+                            conduit::i18n::text_static("queue.queued_message_paused"),
                             error.clone(),
                         )
                         .target(target)
@@ -216,7 +230,10 @@ impl ConduitApp {
                 .current_files()
                 .is_some_and(|files| !files.references.is_empty())
         {
-            self.message = Some("请先处理输入框中的草稿，再取回待发送消息。".into());
+            self.message = Some(
+                conduit::i18n::text_static("queue.handle_the_current_draft_before_retrieving_the")
+                    .into(),
+            );
             cx.notify();
             return;
         }
@@ -253,7 +270,7 @@ impl ConduitApp {
         let message = self.queued_messages.get(&id)?;
         let paused = message.paused.is_some();
         let summary = if message.text.trim().is_empty() {
-            "仅附件消息".into()
+            conduit::i18n::text_static("queue.attachments_only").into()
         } else {
             message
                 .text
@@ -292,11 +309,11 @@ impl ConduitApp {
                                 .text_size(px(12.))
                                 .text_color(rgb(palette().text))
                                 .child(if saving {
-                                    "正在保存…"
+                                    conduit::i18n::text_static("queue.saving")
                                 } else if paused {
-                                    "待发送 · 已暂停"
+                                    conduit::i18n::text_static("queue.queued_paused")
                                 } else {
-                                    "排队中"
+                                    conduit::i18n::text_static("queue.queued")
                                 }),
                         )
                         .child(
@@ -317,7 +334,10 @@ impl ConduitApp {
                                     .flex_shrink_0()
                                     .text_size(px(11.))
                                     .text_color(rgb(palette().muted))
-                                    .child(format!("{} 个附件", message.references.len())),
+                                    .child(conduit::i18n::format(
+                                        "queue.attachments",
+                                        &[("arg0", format!("{}", message.references.len()))],
+                                    )),
                             )
                         })
                         .when(paused, |row| {
@@ -327,7 +347,7 @@ impl ConduitApp {
                                     .ghost()
                                     .small()
                                     .compact()
-                                    .label("发送")
+                                    .label(conduit::i18n::text_static("queue.send"))
                                     .disabled(!can_send)
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         cx.stop_propagation();
@@ -342,12 +362,18 @@ impl ConduitApp {
                                 .small()
                                 .compact()
                                 .icon(FullIconName::Pencil)
-                                .accessibility_label("取回编辑")
+                                .accessibility_label(conduit::i18n::text_static(
+                                    "queue.retrieve_to_edit",
+                                ))
                                 .disabled(!can_take_back)
                                 .tooltip(if can_take_back {
-                                    "撤回队列并放回输入框"
+                                    conduit::i18n::text_static(
+                                        "queue.remove_from_queue_and_return_to_input",
+                                    )
                                 } else {
-                                    "请先处理输入框中的草稿"
+                                    conduit::i18n::text_static(
+                                        "queue.handle_the_current_draft_first",
+                                    )
                                 })
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     cx.stop_propagation();
@@ -361,8 +387,10 @@ impl ConduitApp {
                                 .small()
                                 .compact()
                                 .icon(FullIconName::X)
-                                .tooltip("移除待发送消息")
-                                .accessibility_label("移除待发送消息")
+                                .tooltip(conduit::i18n::text_static("queue.remove_queued_message"))
+                                .accessibility_label(conduit::i18n::text_static(
+                                    "queue.remove_queued_message",
+                                ))
                                 .disabled(!enabled || saving)
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     cx.stop_propagation();

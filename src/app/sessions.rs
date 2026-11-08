@@ -37,8 +37,8 @@ pub(super) fn latest_naming_excerpt(session: &SessionRecord) -> Option<String> {
 
 pub(super) fn naming_mode_label(mode: NamingMode) -> &'static str {
     match mode {
-        NamingMode::Latest => "根据最新内容",
-        NamingMode::FirstMessage => "根据第一条消息",
+        NamingMode::Latest => conduit::i18n::text_static("sessions.from_latest_content"),
+        NamingMode::FirstMessage => conduit::i18n::text_static("sessions.from_first_message"),
     }
 }
 
@@ -49,7 +49,7 @@ pub(super) fn naming_failure_text(error: &str) -> String {
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
-        .unwrap_or("未知错误");
+        .unwrap_or(conduit::i18n::text_static("sessions.unknown_error"));
     if line.chars().count() > 120 {
         format!("{}…", line.chars().take(120).collect::<String>())
     } else {
@@ -183,7 +183,7 @@ impl ConduitApp {
             dialog
                 .w(px(420.))
                 .margin_top(px(120.))
-                .title("重命名会话")
+                .title(conduit::i18n::text_static("sessions.rename_session"))
                 .content(move |content, _, cx| {
                     let Some(input) = view.read(cx).rename_input.clone() else {
                         return content;
@@ -197,7 +197,7 @@ impl ConduitApp {
                                 .gap_2()
                                 .child(
                                     Button::new("rename-cancel")
-                                        .label("取消")
+                                        .label(conduit::i18n::text_static("git_branches.cancel"))
                                         .small()
                                         .ghost()
                                         .cursor_pointer()
@@ -212,7 +212,7 @@ impl ConduitApp {
                                 )
                                 .child(
                                     Button::new("rename-confirm")
-                                        .label("保存")
+                                        .label(conduit::i18n::text_static("git_branches.save"))
                                         .small()
                                         .primary()
                                         .cursor_pointer()
@@ -242,7 +242,8 @@ impl ConduitApp {
         self.rename_input = None;
         let title = title.trim().to_string();
         if title.is_empty() {
-            self.message = Some("会话名不能为空。".into());
+            self.message =
+                Some(conduit::i18n::text_static("sessions.session_name_cannot_be_empty").into());
             cx.notify();
             return;
         }
@@ -277,7 +278,7 @@ impl ConduitApp {
             .session(id)
             .map(|session| {
                 if session.title.is_empty() {
-                    "未命名会话".to_string()
+                    conduit::i18n::text_static("plugin_ui.summary.untitled_session").to_string()
                 } else {
                     single_line_title(&session.title)
                 }
@@ -314,13 +315,16 @@ impl ConduitApp {
                         div()
                             .text_size(ui_text_size(13.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("删除会话？"),
+                            .child(conduit::i18n::text_static("sessions.delete_session")),
                     )
                     .child(
                         div()
                             .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().muted))
-                            .child(format!("将永久删除「{title}」及其消息记录，无法恢复。")),
+                            .child(conduit::i18n::format(
+                                "sessions.permanently_delete_and_its_messages_this_cannot",
+                                &[("title", title.to_string())],
+                            )),
                     )
                     .child(
                         h_flex()
@@ -329,7 +333,7 @@ impl ConduitApp {
                             .child(
                                 Button::new("delete-cancel")
                                     .debug_selector(|| "delete-cancel".into())
-                                    .label("取消")
+                                    .label(conduit::i18n::text_static("git_branches.cancel"))
                                     .small()
                                     .ghost()
                                     .cursor_pointer()
@@ -347,7 +351,7 @@ impl ConduitApp {
                             .child(
                                 Button::new("delete-confirm")
                                     .debug_selector(|| "delete-confirm".into())
-                                    .label("删除")
+                                    .label(conduit::i18n::text_static("git_state.deleted"))
                                     .small()
                                     .danger()
                                     .cursor_pointer()
@@ -387,7 +391,8 @@ impl ConduitApp {
             || self.session_control.queue_saves.contains_key(&id)
             || self.session_draft_save_pending(id)
         {
-            self.message = Some("该会话仍有任务运行，请先取消后再删除。".into());
+            self.message =
+                Some(conduit::i18n::text_static("sessions.a_task_is_still_running_in_this").into());
             self.delete_target = None;
             cx.notify();
             return;
@@ -529,16 +534,24 @@ impl ConduitApp {
         };
         let mut parts: Vec<AnyElement> = vec![];
         let speed_label = tokens_per_second
-            .map(|speed| format!("均速 {speed} tok/s"))
-            .unwrap_or_else(|| "均速 —".into());
+            .map(|speed| {
+                conduit::i18n::format("sessions.avg_tok_s", &[("speed", format!("{}", speed))])
+            })
+            .unwrap_or_else(|| conduit::i18n::text_static("sessions.avg").into());
         let speed_tooltip = if usage.session_elapsed_ms > 0 {
-            format!(
-                "会话平均输出速度：{} 输出 token / {:.2} 秒。按有效轮次总输出 / 总耗时计算，包含启动、工具及审批等待，不含轮次之间的空闲时间；缺少可靠统计的轮次不计入。",
-                usage.session_output_tokens,
-                usage.session_elapsed_ms as f64 / 1_000.0
+            conduit::i18n::format(
+                "sessions.average_session_output_speed_output_tokens_seconds",
+                &[
+                    ("arg0", format!("{}", usage.session_output_tokens)),
+                    (
+                        "arg1",
+                        format!("{:.2}", usage.session_elapsed_ms as f64 / 1_000.0),
+                    ),
+                ],
             )
         } else {
-            "此会话尚无可靠的输出速度统计；不使用输入、缓存或历史累计 token 估算速度。".into()
+            conduit::i18n::text_static("sessions.no_reliable_output_speed_measurements_for_this")
+                .into()
         };
         parts.push(
             h_flex()
@@ -589,10 +602,23 @@ impl ConduitApp {
                 h_flex()
                     .id("usage-context")
                     .tooltip(move |window, cx| {
-                        let label = format!(
-                            "最近一次 CLI 报告的上下文：{} / {} token{}。不是会话累计消耗，也不预测下一次请求的新增内容。",
-                            usage.context_tokens.unwrap_or(0), usage.context_window,
-                            if estimated { "（窗口来自本轮模型目录估计）" } else { "" }
+                        let label = conduit::i18n::format(
+                            "sessions.latest_cli_reported_context_tokens_this_is",
+                            &[
+                                ("arg0", format!("{}", usage.context_tokens.unwrap_or(0))),
+                                ("arg1", format!("{}", usage.context_window)),
+                                (
+                                    "arg2",
+                                    (if estimated {
+                                        conduit::i18n::text_static(
+                                            "sessions.window_estimated_from_this_turn_s_model",
+                                        )
+                                    } else {
+                                        ""
+                                    })
+                                    .to_string(),
+                                ),
+                            ],
                         );
                         gpui_kit::component::tooltip::Tooltip::new(label).build(window, cx)
                     })
@@ -605,9 +631,9 @@ impl ConduitApp {
                             .xsmall()
                             .w(px(40.))
                             .flex_shrink_0()
-                            .accessibility_label(format!(
-                                "上下文使用 {:.0}%",
-                                context_percent
+                            .accessibility_label(conduit::i18n::format(
+                                "sessions.context_usage",
+                                &[("arg0", format!("{:.0}", context_percent))],
                             )),
                     )
                     .child(
@@ -652,7 +678,7 @@ impl ConduitApp {
             dialog
                 .w(px(440.))
                 .margin_top(px(120.))
-                .title("移除工作区")
+                .title(conduit::i18n::text_static("sessions.remove_workspace"))
                 .content(move |content, _, _| {
                     let confirm = view.clone();
                     let cancel = view.clone();
@@ -664,8 +690,9 @@ impl ConduitApp {
                                     .text_size(ui_text_size(13.))
                                     .line_height(relative(1.5))
                                     .text_color(rgb(palette().muted))
-                                    .child(format!(
-                                        "从 Conduit 移除「{name}」？磁盘上的文件与 CLI 自带历史不会被删除；应用内该工作区的会话记录将不再显示。"
+                                    .child(conduit::i18n::format(
+                                        "sessions.remove_from_conduit_files_on_disk_and",
+                                        &[("name", name.to_string())],
                                     )),
                             )
                             .child(
@@ -674,7 +701,9 @@ impl ConduitApp {
                                     .gap_2()
                                     .child(
                                         Button::new("remove-workspace-cancel")
-                                            .label("取消")
+                                            .label(conduit::i18n::text_static(
+                                                "git_branches.cancel",
+                                            ))
                                             .small()
                                             .ghost()
                                             .cursor_pointer()
@@ -688,7 +717,7 @@ impl ConduitApp {
                                     )
                                     .child(
                                         Button::new("remove-workspace-confirm")
-                                            .label("移除")
+                                            .label(conduit::i18n::text_static("sessions.remove"))
                                             .small()
                                             .primary()
                                             .cursor_pointer()
@@ -715,7 +744,10 @@ impl ConduitApp {
             return;
         }
         if self.workspace_busy(index) {
-            self.message = Some("该工作区仍有任务或终端运行，请先停止后再移除。".into());
+            self.message = Some(
+                conduit::i18n::text_static("sessions.tasks_or_terminals_are_still_running_in")
+                    .into(),
+            );
             cx.notify();
             return;
         }
@@ -785,7 +817,7 @@ impl ConduitApp {
                 let remove_popover = popover.clone();
                 let clear = session_menu_button(
                     ("workspace-clear-selection", index as u64),
-                    "取消选择工作区",
+                    conduit::i18n::text_static("sessions.deselect_workspace"),
                     IconName::CircleX,
                 )
                 .on_click(move |_, window, cx| {
@@ -796,7 +828,7 @@ impl ConduitApp {
                 });
                 let remove = session_menu_button(
                     ("workspace-remove", index as u64),
-                    "移除工作区",
+                    conduit::i18n::text_static("sessions.remove_workspace"),
                     IconName::Delete,
                 )
                 .on_click(move |_, window, cx| {
@@ -828,14 +860,14 @@ impl ConduitApp {
             .cursor_pointer()
             .selected(open)
             .tooltip(if open {
-                "隐藏侧边栏"
+                conduit::i18n::text_static("sessions.hide_sidebar")
             } else {
-                "显示侧边栏"
+                conduit::i18n::text_static("sessions.show_sidebar")
             })
             .accessibility_label(if open {
-                "隐藏侧边栏"
+                conduit::i18n::text_static("sessions.hide_sidebar")
             } else {
-                "显示侧边栏"
+                conduit::i18n::text_static("sessions.show_sidebar")
             })
             .on_click(cx.listener(|this, _, window, cx| {
                 if this.plugins.right_visible(this.branch_navigation_open()) {
@@ -903,7 +935,10 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) {
         if session.is_some_and(|id| self.pending_new_session(id)) {
-            self.message = Some("正在保存新会话，请稍候；草稿会保留到保存成功。".into());
+            self.message = Some(
+                conduit::i18n::text_static("sessions.saving_new_session_please_wait_your_draft")
+                    .into(),
+            );
             cx.notify();
             return;
         }
@@ -989,7 +1024,10 @@ impl ConduitApp {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("选择你信任的工作区目录".into()),
+            prompt: Some(
+                conduit::i18n::text_static("sessions.select_a_workspace_directory_you_trust")
+                    .into(),
+            ),
         });
         cx.spawn_in(window, async move |this, cx| match paths.await {
             Ok(Ok(Some(paths))) => {
@@ -1018,7 +1056,14 @@ impl ConduitApp {
                                 this.persist();
                                 this.start_history_import(index, window, cx);
                             }
-                            _ => this.message = Some("目录不存在或不可访问".into()),
+                            _ => {
+                                this.message = Some(
+                                    conduit::i18n::text_static(
+                                        "sessions.directory_does_not_exist_or_is_inaccessible",
+                                    )
+                                    .into(),
+                                )
+                            }
                         }
                         cx.notify();
                     });
@@ -1027,7 +1072,10 @@ impl ConduitApp {
             Ok(Ok(None)) => {}
             other => {
                 let _ = this.update(cx, |this, cx| {
-                    this.message = Some(format!("打开目录失败：{other:?}"));
+                    this.message = Some(conduit::i18n::format(
+                        "sessions.failed_to_open_directory",
+                        &[("other", format!("{:?}", other))],
+                    ));
                     cx.notify();
                 });
             }
@@ -1411,7 +1459,7 @@ impl ConduitApp {
                 .unwrap_or_default()
                 .as_secs(),
             exit_code: None,
-            title: "新会话".into(),
+            title: conduit::i18n::text_static("files.new_session").into(),
             archived: false,
             pinned: false,
             native_id: None,
@@ -1522,12 +1570,18 @@ impl ConduitApp {
                 let index = week * 7 + weekday;
                 let count = counts[index];
                 let day = start_day + chrono::Duration::days(index as i64);
-                let label: SharedString =
-                    format!("{} · {} 次会话", day.format("%Y-%m-%d"), count).into();
+                let label: SharedString = conduit::i18n::format(
+                    "sessions.sessions",
+                    &[
+                        ("arg0", format!("{}", day.format("%Y-%m-%d"))),
+                        ("arg1", format!("{}", count)),
+                    ],
+                )
+                .into();
                 column = column.child(
                     div()
                         .id(("heatmap-cell", index))
-                        .w(px(12.))
+                        .w(px(24.))
                         .h(px(12.))
                         .rounded(px(3.))
                         .bg(rgb(Self::heatmap_cell_color(count, max)))
@@ -1550,7 +1604,7 @@ impl ConduitApp {
                     .h(px(12.))
                     .text_size(ui_text_size(9.))
                     .text_color(rgb(palette().faint))
-                    .child(weekday),
+                    .child(conduit::i18n::source(weekday)),
             );
         }
 
@@ -1565,7 +1619,9 @@ impl ConduitApp {
                     .text_size(ui_text_size(30.))
                     .font_semibold()
                     .text_color(rgb(palette().text))
-                    .child("连接一个本地工作区"),
+                    .child(conduit::i18n::text_static(
+                        "sessions.connect_a_local_workspace",
+                    )),
             )
             .child(
                 h_flex()
@@ -1573,14 +1629,14 @@ impl ConduitApp {
                     .flex_wrap()
                     .child(
                         Button::new("welcome-add-workspace")
-                            .label("添加工作区")
+                            .label(conduit::i18n::text_static("sessions.add_workspace"))
                             .primary()
                             .disabled(!self.writable || self.closing)
                             .on_click(cx.listener(Self::add_workspace)),
                     )
                     .child(
                         Button::new("welcome-engine-settings")
-                            .label("检查 AI 引擎")
+                            .label(conduit::i18n::text_static("sessions.check_ai_engines"))
                             .secondary()
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.open_engine_settings(window, cx)
@@ -1595,7 +1651,13 @@ impl ConduitApp {
                         div()
                             .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().muted))
-                            .child(format!("近 {weeks} 周共 {total} 次会话")),
+                            .child(conduit::i18n::format(
+                                "sessions.sessions_in_the_last_weeks",
+                                &[
+                                    ("weeks", format!("{}", weeks)),
+                                    ("total", format!("{}", total)),
+                                ],
+                            )),
                     )
                     .child(h_flex().gap_2().child(weekday_labels).child(grid)),
             )
@@ -1603,7 +1665,9 @@ impl ConduitApp {
                 div()
                     .text_size(ui_text_size(11.))
                     .text_color(rgb(palette().faint))
-                    .child("所选目录作为任务的工作目录；文件访问范围取决于权限设置。"),
+                    .child(conduit::i18n::text_static(
+                        "sessions.the_selected_directory_is_used_as_the",
+                    )),
             )
             .into_any_element()
     }

@@ -87,7 +87,12 @@ impl Iterator for Lines {
             Ok(length) => {
                 self.read += length as u64;
                 if length > MAX_LINE {
-                    self.error = Some("历史单行超过 8 MiB，已保留现有对话".into());
+                    self.error = Some(
+                        conduit::i18n::text_static(
+                            "history.scan.a_history_line_exceeds_8_mib_existing",
+                        )
+                        .into(),
+                    );
                     return None;
                 }
                 self.terminated = bytes.last() == Some(&b'\n');
@@ -101,13 +106,19 @@ impl Iterator for Lines {
                 match String::from_utf8(bytes) {
                     Ok(line) => Some(line),
                     Err(_) => {
-                        self.error = Some("历史文件不是 UTF-8".into());
+                        self.error = Some(
+                            conduit::i18n::text_static("history.scan.history_file_is_not_utf_8")
+                                .into(),
+                        );
                         None
                     }
                 }
             }
             Err(error) => {
-                self.error = Some(format!("无法读取历史：{error}"));
+                self.error = Some(conduit::i18n::format(
+                    "history.scan.unable_to_read_history",
+                    &[("error", format!("{}", error))],
+                ));
                 None
             }
         }
@@ -176,7 +187,10 @@ impl Scanner {
         let index = match Index::open(index_path) {
             Ok(index) => Some(index),
             Err(error) => {
-                warnings.push(format!("历史索引不可用，将直接读取日志：{error}"));
+                warnings.push(conduit::i18n::format(
+                    "history.scan.history_index_unavailable_reading_logs_directly",
+                    &[("error", error.to_string())],
+                ));
                 None
             }
         };
@@ -295,9 +309,9 @@ impl Scanner {
                 }
                 Ok(Loaded::Changed) => {
                     if batch.warnings.len() < 8 {
-                        batch.warnings.push(format!(
-                            "{}：日志持续变化，已保留现有对话；下次导入会重试",
-                            candidate.path.display()
+                        batch.warnings.push(conduit::i18n::format(
+                            "history.scan.log_keeps_changing_existing_conversation_preserved_the",
+                            &[("arg0", format!("{}", candidate.path.display()))],
                         ));
                     }
                 }
@@ -405,7 +419,9 @@ impl Scanner {
             let mut buffer = [0; 64 * 1024];
             while reader.limit() > 0 {
                 if cancel.load(Ordering::Acquire) {
-                    return Err("历史读取已取消".into());
+                    return Err(
+                        conduit::i18n::text_static("history.scan.history_read_cancelled").into(),
+                    );
                 }
                 if batch_exhausted(batch, started) {
                     self.pending = Some(Pending::Verify {
@@ -467,7 +483,7 @@ impl Scanner {
             return Err(error);
         }
         if cancel.load(Ordering::Acquire) {
-            return Err("历史读取已取消".into());
+            return Err(conduit::i18n::text_static("history.scan.history_read_cancelled").into());
         }
         if Stamp::read(path)? != stamp {
             return Ok(Loaded::Changed);
@@ -492,7 +508,10 @@ impl Scanner {
             && let Err(error) = index.save(path, &metadata, &parser)
             && batch.warnings.len() < 8
         {
-            batch.warnings.push(format!("历史索引写入失败：{error}"));
+            batch.warnings.push(conduit::i18n::format(
+                "history.scan.failed_to_write_history_index",
+                &[("error", error.to_string())],
+            ));
         }
         Ok(Loaded::Complete(parser.finish()))
     }

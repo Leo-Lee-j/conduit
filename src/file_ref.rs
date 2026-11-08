@@ -30,10 +30,16 @@ pub enum Rejection {
 impl Rejection {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Missing => "文件不存在或不可读",
-            Self::Directory => "目录暂不支持引用",
-            Self::TooLarge => "超过 8 MiB",
-            Self::Binary => "暂不支持图片以外的二进制文件",
+            Self::Missing => {
+                conduit::i18n::text_static("file_ref.file_does_not_exist_or_is_unreadable")
+            }
+            Self::Directory => {
+                conduit::i18n::text_static("file_ref.directory_references_are_not_supported_yet")
+            }
+            Self::TooLarge => conduit::i18n::text_static("file_ref.exceeds_8_mib"),
+            Self::Binary => {
+                conduit::i18n::text_static("file_ref.binary_files_other_than_images_are_not")
+            }
         }
     }
 }
@@ -121,12 +127,14 @@ pub fn save_clipboard_image(image: &gpui_kit::Image, directory: &Path) -> anyhow
     use std::io::Write;
 
     if image.bytes.is_empty() {
-        bail!("剪贴板图片为空");
+        bail!(conduit::i18n::text("file_ref.clipboard_image_is_empty"));
     }
     if image.bytes.len() as u64 > MAX_REFERENCED_BYTES {
-        bail!("图片超过 8 MiB");
+        bail!(conduit::i18n::text("file_ref.image_exceeds_8_mib"));
     }
-    std::fs::create_dir_all(directory).context("无法创建图片附件目录")?;
+    std::fs::create_dir_all(directory).context(conduit::i18n::text_static(
+        "file_ref.unable_to_create_image_attachment_directory",
+    ))?;
     let path = directory.join(format!(
         "clipboard-{:016x}.{}",
         image.id(),
@@ -137,15 +145,26 @@ pub fn save_clipboard_image(image: &gpui_kit::Image, directory: &Path) -> anyhow
             if let Err(error) = file.write_all(&image.bytes).and_then(|()| file.sync_all()) {
                 drop(file);
                 let _ = std::fs::remove_file(&path);
-                return Err(error).context("无法保存剪贴板图片");
+                return Err(error).context(conduit::i18n::text_static(
+                    "file_ref.unable_to_save_clipboard_image",
+                ));
             }
         }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            if std::fs::read(&path).context("无法读取已保存的图片")? != image.bytes {
-                bail!("图片附件名称冲突，请重试");
+            if std::fs::read(&path).context(conduit::i18n::text_static(
+                "file_ref.unable_to_read_saved_image",
+            ))? != image.bytes
+            {
+                bail!(conduit::i18n::text(
+                    "file_ref.image_attachment_name_collision_please_retry"
+                ));
             }
         }
-        Err(error) => return Err(error).context("无法保存剪贴板图片"),
+        Err(error) => {
+            return Err(error).context(conduit::i18n::text_static(
+                "file_ref.unable_to_save_clipboard_image",
+            ));
+        }
     }
     Ok(path)
 }
@@ -158,10 +177,16 @@ pub fn prune_clipboard_images(directory: &Path, referenced: &[PathBuf]) -> anyho
     let metadata = match directory.symlink_metadata() {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(error) => return Err(error).context("无法访问图片附件目录"),
+        Err(error) => {
+            return Err(error).context(conduit::i18n::text_static(
+                "file_ref.unable_to_access_image_attachment_directory",
+            ));
+        }
     };
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        bail!("图片附件目录不是普通目录");
+        bail!(conduit::i18n::text(
+            "file_ref.image_attachment_directory_is_not_a_regular"
+        ));
     }
     let root = directory.canonicalize()?;
     let referenced: HashSet<_> = referenced
@@ -198,7 +223,11 @@ pub fn prune_clipboard_images(directory: &Path, referenced: &[PathBuf]) -> anyho
         match std::fs::remove_file(&path) {
             Ok(()) => removed += 1,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error).context("无法删除无引用的图片附件"),
+            Err(error) => {
+                return Err(error).context(conduit::i18n::text_static(
+                    "file_ref.unable_to_remove_unreferenced_image_attachment",
+                ));
+            }
         }
     }
     Ok(removed)
@@ -322,6 +351,7 @@ mod tests {
 
     #[test]
     fn image_files_are_references_and_clipboard_images_are_persistent_and_deduplicated() {
+        let _locale = crate::test_support::chinese();
         let bytes = include_bytes!("../assets/app-icons/Square44x44Logo.png");
         let directory = workspace_root().join("clipboard-images");
         let image = gpui_kit::Image::from_bytes(gpui_kit::ImageFormat::Png, bytes.to_vec());
@@ -355,6 +385,7 @@ mod tests {
 
     #[test]
     fn clipboard_cleanup_removes_only_unreferenced_managed_files() {
+        let _locale = crate::test_support::chinese();
         let directory = workspace_root().join("clipboard-gc");
         let image = gpui_kit::Image::from_bytes(
             gpui_kit::ImageFormat::Png,
@@ -387,6 +418,7 @@ mod tests {
 
     #[test]
     fn resolves_paths_inside_the_workspace_to_forward_slash_mentions() {
+        let _locale = crate::test_support::chinese();
         let text = write("src/main.rs", b"fn main() {}");
         let (references, rejected) = resolve(std::slice::from_ref(&text), &workspace_root());
         assert_eq!(rejected, vec![]);
@@ -396,6 +428,7 @@ mod tests {
 
     #[test]
     fn rejects_directory_missing_and_binary_paths() {
+        let _locale = crate::test_support::chinese();
         let binary = write("assets/logo.bin", &[0x89, b'P', 0, 0, 0]);
         let (references, rejected) = resolve(
             &[
@@ -422,6 +455,7 @@ mod tests {
     /// 工作区外的文件也必须能引用：相对形式无从谈起，就用绝对路径。
     #[test]
     fn resolves_paths_outside_the_workspace_to_absolute_mentions() {
+        let _locale = crate::test_support::chinese();
         let outside = std::env::temp_dir().join(format!(
             "conduit-file-ref-outside-{}.rs",
             std::process::id()
@@ -456,6 +490,7 @@ mod tests {
 
     #[test]
     fn dedupes_the_same_file_referenced_twice() {
+        let _locale = crate::test_support::chinese();
         let text = write("README.md", b"# conduit");
         let (references, rejected) = resolve(&[text.clone(), text], &workspace_root());
         assert_eq!(rejected, vec![]);
@@ -464,6 +499,7 @@ mod tests {
 
     #[test]
     fn accumulated_selections_dedupe_by_path_and_preserve_order() {
+        let _locale = crate::test_support::chinese();
         let a = FileReference {
             path: "a.rs".into(),
             mention: "a.rs".into(),
@@ -484,6 +520,7 @@ mod tests {
 
     #[test]
     fn composes_text_and_file_only_prompts_without_modifying_prose() {
+        let _locale = crate::test_support::chinese();
         let file = FileReference {
             path: "folder/a b.rs".into(),
             mention: "folder/a b.rs".into(),
@@ -503,6 +540,7 @@ mod tests {
 
     #[test]
     fn message_display_splits_only_a_complete_trailing_reference_block() {
+        let _locale = crate::test_support::chinese();
         let references = vec![
             FileReference {
                 path: "docs/a b.md".into(),
@@ -535,6 +573,7 @@ mod tests {
 
     #[test]
     fn detects_deleted_and_oversized_files_on_revalidation() {
+        let _locale = crate::test_support::chinese();
         let path = write("send-validation/removed.rs", b"fn main() {}");
         let (references, rejected) = resolve(std::slice::from_ref(&path), &workspace_root());
         assert!(rejected.is_empty());
@@ -555,6 +594,7 @@ mod tests {
 
     #[test]
     fn reference_block_lists_every_mention() {
+        let _locale = crate::test_support::chinese();
         let block = reference_block(&[
             FileReference {
                 path: PathBuf::from("a"),
@@ -570,6 +610,7 @@ mod tests {
 
     #[test]
     fn icon_for_maps_extensions_and_dotfiles() {
+        let _locale = crate::test_support::chinese();
         assert_eq!(icon_for(Path::new("src/app.rs")), IconName::FileCode);
         assert_eq!(icon_for(Path::new("Cargo.lock")), IconName::FileLock);
         assert_eq!(icon_for(Path::new("docs/a.md")), IconName::FileText);

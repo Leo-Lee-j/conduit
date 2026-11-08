@@ -156,7 +156,11 @@ impl FilePreview {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("查找当前文件…"));
+        let input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(conduit::i18n::text_static(
+                "file_preview.find_in_current_file",
+            ))
+        });
         let subscription = cx.subscribe(&input, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 this.search(cx);
@@ -454,9 +458,9 @@ impl FilePreview {
     fn find_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let query = self.input.read(cx).value();
         let label = if query.chars().count() > search::MAX_QUERY_CHARS {
-            Some("最多 256 字符".to_owned())
+            Some(conduit::i18n::text_static("file_preview.up_to_256_characters").to_owned())
         } else if self.searching {
-            Some("搜索中…".to_owned())
+            Some(conduit::i18n::text_static("file_preview.searching").to_owned())
         } else if query.trim().is_empty() {
             None
         } else {
@@ -477,13 +481,17 @@ impl FilePreview {
             .xsmall()
             .compact()
             .icon(FullIconName::ListFilter)
-            .accessibility_label("模糊匹配")
+            .accessibility_label(conduit::i18n::text_static("file_preview.fuzzy_matching"))
             .selected(self.fuzzy)
             .toggled(self.fuzzy)
             .tooltip(if self.fuzzy {
-                "模糊匹配已开启 · 点击切换为精确匹配"
+                conduit::i18n::text_static(
+                    "file_preview.fuzzy_matching_on_click_for_exact_matching",
+                )
             } else {
-                "模糊匹配已关闭 · 点击按顺序匹配字符"
+                conduit::i18n::text_static(
+                    "file_preview.fuzzy_matching_off_click_to_match_characters",
+                )
             })
             .on_click(cx.listener(|this, _, window, cx| {
                 this.fuzzy = !this.fuzzy;
@@ -532,7 +540,9 @@ impl FilePreview {
                     .small()
                     .compact()
                     .icon(FullIconName::ChevronUp)
-                    .tooltip("上一个 · Shift+Enter / Shift+F3")
+                    .tooltip(conduit::i18n::text_static(
+                        "file_preview.previous_shift_enter_shift_f3",
+                    ))
                     .disabled(self.hits.is_empty())
                     .on_click(cx.listener(|this, _, window, cx| this.navigate(true, window, cx))),
             )
@@ -542,7 +552,7 @@ impl FilePreview {
                     .small()
                     .compact()
                     .icon(FullIconName::ChevronDown)
-                    .tooltip("下一个 · Enter / F3")
+                    .tooltip(conduit::i18n::text_static("file_preview.next_enter_f3"))
                     .disabled(self.hits.is_empty())
                     .on_click(cx.listener(|this, _, window, cx| this.navigate(false, window, cx))),
             )
@@ -552,9 +562,9 @@ impl FilePreview {
                     .small()
                     .compact()
                     .icon(FullIconName::X)
-                    .tooltip(format!(
-                        "关闭查找 · {} / Esc",
-                        shortcuts::hint("file_find", cx)
+                    .tooltip(conduit::i18n::format(
+                        "file_preview.close_find_esc",
+                        &[("arg0", shortcuts::hint("file_find", cx).to_string())],
                     ))
                     .on_click(cx.listener(|this, _, window, cx| this.close_find(window, cx))),
             )
@@ -707,3 +717,16 @@ impl Render for FilePreview {
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests;
+
+impl FilePreview {
+    pub(super) fn refresh_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.update(cx, |input, cx| {
+            input.set_placeholder(
+                conduit::i18n::text_static("file_preview.find_in_current_file"),
+                window,
+                cx,
+            )
+        });
+        cx.notify();
+    }
+}

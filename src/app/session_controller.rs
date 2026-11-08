@@ -83,6 +83,7 @@ mod tests {
     use super::*;
     #[test]
     fn import_generation_detects_completed_turns_and_new_sessions() {
+        let _locale = crate::test_support::chinese();
         let mut controller = SessionController::default();
         let versions = HashMap::from([(7, controller.revision(7))]);
         assert!(controller.unchanged(&versions, 7));

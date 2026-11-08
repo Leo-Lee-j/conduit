@@ -114,30 +114,40 @@ impl ConduitApp {
     /// Shared by keyboard sends and the composer button.
     pub(super) fn send_blocked(&self, append_user: bool) -> Option<&'static str> {
         if self.cli_installing() {
-            return Some("CLI 正在更新，请等待更新完成后发送。");
+            return Some(conduit::i18n::text_static(
+                "runtime.cli_update_in_progress_wait_for_it",
+            ));
         }
         if self.composer_save_pending() {
-            return Some("正在保存消息，请稍候；草稿会保留到保存成功。");
+            return Some(conduit::i18n::text_static(
+                "queue.saving_message_please_wait_your_draft_will",
+            ));
         }
         if self
             .send_target(append_user)
             .and_then(|id| self.session(id))
             .is_some_and(|session| !session.transcript.loaded)
         {
-            return Some("会话正文尚未加载，请等待加载完成或重试。");
+            return Some(conduit::i18n::text_static(
+                "runtime.session_messages_have_not_loaded_wait_or",
+            ));
         }
         if self
             .send_target(append_user)
             .is_some_and(|id| self.session_busy(id))
         {
-            return Some("该会话已有任务运行，请等待完成或取消后发送。");
+            return Some(conduit::i18n::text_static(
+                "runtime.a_task_is_already_running_in_this",
+            ));
         }
         if self.git.operation.as_ref().is_some_and(|operation| {
             self.selected_workspace_path().is_some_and(|path| {
                 git::repository_scope(&operation.worktree) == git::repository_scope(&path)
             })
         }) {
-            return Some("该仓库正在执行 Git 操作，请等待完成后发送。");
+            return Some(conduit::i18n::text_static(
+                "runtime.a_git_operation_is_running_in_this",
+            ));
         }
         None
     }
@@ -171,9 +181,9 @@ impl ConduitApp {
                 self.composer_files
                     .entry(target.clone())
                     .or_default()
-                    .feedback = Some(format!(
-                    "文件已不可引用，请移除或重新添加后发送：{}",
-                    rejection_summary(&rejected)
+                    .feedback = Some(conduit::i18n::format(
+                    "runtime.files_are_no_longer_available_remove_or",
+                    &[("arg0", rejection_summary(&rejected).to_string())],
                 ));
                 cx.notify();
                 return;
@@ -212,7 +222,9 @@ impl ConduitApp {
             return false;
         }
         let Some(index) = self.selected_workspace else {
-            self.message = Some("请先在左上角选择工作区。".into());
+            self.message = Some(
+                conduit::i18n::text_static("composer.select_a_workspace_in_the_upper_left").into(),
+            );
             cx.notify();
             return false;
         };
@@ -225,7 +237,9 @@ impl ConduitApp {
             return false;
         }
         if prompt.len() > 256 * 1024 {
-            self.message = Some("单条消息最多 256 KiB。".into());
+            self.message = Some(
+                conduit::i18n::text_static("runtime.each_message_may_be_no_larger_than").into(),
+            );
             cx.notify();
             return false;
         }
@@ -271,7 +285,7 @@ impl ConduitApp {
                     Notice::new(
                         NoticeSource::Session,
                         NoticeLevel::Error,
-                        "会话无法启动",
+                        conduit::i18n::text_static("runtime.unable_to_start_session"),
                         error,
                     )
                     .target(destination),
@@ -294,10 +308,14 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) -> Result<u64, String> {
         if self.closing || !self.writable {
-            return Err("当前无法发送消息。".into());
+            return Err(
+                conduit::i18n::text_static("runtime.unable_to_send_a_message_right_now").into(),
+            );
         }
         if target.is_some_and(|id| self.session_busy(id)) {
-            return Err("该会话已有任务运行，请等待完成或取消后发送。".into());
+            return Err(
+                conduit::i18n::text_static("runtime.a_task_is_already_running_in_this").into(),
+            );
         }
         if target
             .and_then(|id| self.session(id))
@@ -306,50 +324,73 @@ impl ConduitApp {
             if let Some(id) = target {
                 self.request_transcript(id, cx);
             }
-            return Err("会话正文尚未加载，请等待加载完成或重试。".into());
+            return Err(conduit::i18n::text_static(
+                "runtime.session_messages_have_not_loaded_wait_or",
+            )
+            .into());
         }
         let cwd = self
             .store
             .workspaces
             .get(index)
-            .ok_or("工作区已不存在。")?
+            .ok_or(conduit::i18n::text_static(
+                "runtime.the_workspace_no_longer_exists",
+            ))?
             .path
             .clone();
         if self.git.operation.as_ref().is_some_and(|operation| {
             git::repository_scope(&operation.worktree) == git::repository_scope(&cwd)
         }) {
-            return Err("该仓库正在执行 Git 操作，请等待完成后发送。".into());
+            return Err(
+                conduit::i18n::text_static("runtime.a_git_operation_is_running_in_this").into(),
+            );
         }
         if prompt.trim().is_empty() || prompt.len() > 256 * 1024 {
-            return Err("消息不能为空，且最多 256 KiB。".into());
+            return Err(conduit::i18n::text_static(
+                "queue.messages_must_be_nonempty_and_no_larger",
+            )
+            .into());
         }
         let provider = if let Some(id) = target {
-            let session = self.session(id).ok_or("会话已不存在。")?;
+            let session = self.session(id).ok_or(conduit::i18n::text_static(
+                "runtime.the_session_no_longer_exists",
+            ))?;
             if session.native_id.is_none()
                 && session
                     .messages
                     .iter()
                     .any(|m| m.kind == ItemKind::Assistant)
             {
-                return Err("该会话缺少可靠的 CLI 会话标识，请新建会话，避免丢失上下文。".into());
+                return Err(conduit::i18n::text_static(
+                    "runtime.this_session_has_no_reliable_cli_session",
+                )
+                .into());
             }
             session.provider
         } else {
             provider
         };
         if self.cli_installing() {
-            return Err("CLI 正在更新，请等待更新完成后发送。".into());
+            return Err(
+                conduit::i18n::text_static("runtime.cli_update_in_progress_wait_for_it").into(),
+            );
         }
         let executable = cli::resolve_for_launch(provider, &self.store.cli)
             .map_err(|error| {
-                format!(
-                    "{}：{error:#}。请打开「设置 → AI 引擎」检查启用状态与启动路径。",
-                    provider.label()
+                conduit::i18n::format(
+                    "runtime.open_settings_ai_engines_to_check_the",
+                    &[
+                        ("arg0", provider.label().to_string()),
+                        ("error", format!("{:#}", error)),
+                    ],
                 )
             })?
             .path;
         if !cwd.is_dir() {
-            return Err("工作区目录已移动或不可访问。".into());
+            return Err(conduit::i18n::text_static(
+                "runtime.the_workspace_directory_has_moved_or_is",
+            )
+            .into());
         }
         let worktree = git::worktree_root(&cwd);
         let prepared = target.is_none().then(|| self.prepare_session(provider));
@@ -357,14 +398,23 @@ impl ConduitApp {
         let mut route = if let Some(session) = &prepared {
             let mut route = self
                 .channel_route(provider, &session.channel)
-                .map_err(|error| format!("无法使用所选 Provider：{error:#}"))?;
+                .map_err(|error| {
+                    conduit::i18n::format(
+                        "runtime.unable_to_use_the_selected_provider",
+                        &[("error", format!("{:#}", error))],
+                    )
+                })?;
             if session.channel == ModelChannel::Cli {
                 route.opencode_variant = session.opencode.variant.clone();
             }
             route
         } else {
-            self.session_route(target.unwrap())
-                .map_err(|error| format!("无法使用所选 Provider：{error:#}"))?
+            self.session_route(target.unwrap()).map_err(|error| {
+                conduit::i18n::format(
+                    "runtime.unable_to_use_the_selected_provider",
+                    &[("error", format!("{:#}", error))],
+                )
+            })?
         };
         let before = target.and_then(|id| self.session(id).cloned());
         let id = if let Some(session) = prepared {
@@ -395,7 +445,7 @@ impl ConduitApp {
                 session.title = prompt
                     .lines()
                     .next()
-                    .unwrap_or("新会话")
+                    .unwrap_or(conduit::i18n::text_static("files.new_session"))
                     .trim()
                     .chars()
                     .take(26)
@@ -463,7 +513,7 @@ impl ConduitApp {
             ActiveRun::new(runtime, worktree, prefix, usage, model, effort),
         );
         if let Some(run) = self.session_control.runs.get_mut(&id) {
-            run.status = "正在保存消息…".into();
+            run.status = conduit::i18n::text_static("runtime.saving_message").into();
             run.activity = run.status.clone();
             run.pending_save = Some(PendingTurn {
                 receipt,
@@ -557,8 +607,10 @@ impl ConduitApp {
             return;
         };
         if session.native_id.is_none() {
-            self.message =
-                Some("该会话缺少可靠的 CLI 会话标识，请新建会话，避免丢失上下文。".into());
+            self.message = Some(
+                conduit::i18n::text_static("runtime.this_session_has_no_reliable_cli_session")
+                    .into(),
+            );
             cx.notify();
             return;
         }
@@ -640,13 +692,20 @@ impl ConduitApp {
             if self.startup.as_ref().is_some_and(|s| !s.imports_done) {
                 self.session_control.cancel_imports();
                 self.history_loading.clear();
-                self.message = Some("历史读取超时，已保留现有对话；可重新导入。".into());
+                self.message = Some(
+                    conduit::i18n::text_static(
+                        "runtime.history_reading_timed_out_existing_conversations_were",
+                    )
+                    .into(),
+                );
                 self.notify_user(
                     Notice::new(
                         NoticeSource::App,
                         NoticeLevel::Warning,
-                        "历史读取超时",
-                        "已保留现有对话，可在工作区重新导入历史。",
+                        conduit::i18n::text_static("runtime.history_reading_timed_out"),
+                        conduit::i18n::text_static(
+                            "runtime.existing_conversations_were_preserved_import_history_again",
+                        ),
                     ),
                     cx,
                 );
@@ -715,8 +774,9 @@ impl ConduitApp {
                 }
                 Err(error) => {
                     self.closing = false;
-                    self.message = Some(format!(
-                        "草稿保存失败，已取消退出；请保留输入并重试：{error:#}"
+                    self.message = Some(conduit::i18n::format(
+                        "runtime.draft_save_failed_exit_cancelled_keep_your",
+                        &[("error", format!("{:#}", error))],
                     ));
                     cx.notify();
                 }
@@ -782,10 +842,13 @@ impl ConduitApp {
         }
         let sent = run.runtime.try_decide(request.to_owned(), allow);
         if sent {
-            run.status = "正在提交审批…".into();
+            run.status = conduit::i18n::text_static("runtime.submitting_approval").into();
         } else {
             run.approvals.remove(request);
-            run.status = "审批提交失败，运行连接已关闭；请查看会话。".into();
+            run.status = conduit::i18n::text_static(
+                "runtime.approval_submission_failed_the_runtime_connection_closed",
+            )
+            .into();
             self.finish_notification_approval(
                 session,
                 request,

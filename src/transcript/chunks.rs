@@ -198,9 +198,17 @@ pub(super) fn prepare(
 fn checked(directory: &Path, hash: &str, extension: &str) -> Result<Vec<u8>> {
     validate_hash(hash)?;
     let path = directory.join(format!("{hash}.{extension}"));
-    let bytes = fs::read(&path).with_context(|| format!("无法读取会话正文 {}", path.display()))?;
+    let bytes = fs::read(&path).with_context(|| {
+        conduit::i18n::format(
+            "transcript.chunks.unable_to_read_session_messages",
+            &[("arg0", format!("{}", path.display()))],
+        )
+    })?;
     if format!("{:x}", Sha256::digest(&bytes)) != hash {
-        bail!("会话正文校验失败：{}", path.display());
+        bail!(conduit::i18n::format(
+            "transcript.chunks.session_message_validation_failed",
+            &[("arg0", format!("{}", path.display()))]
+        ));
     }
     Ok(bytes)
 }
@@ -210,7 +218,9 @@ fn read_text(directory: &Path, text: &Text) -> Result<String> {
         Text::Inline(text) => Ok(text.clone()),
         Text::Chunks { bytes, hashes } => {
             if hashes.len() != bytes.div_ceil(CHUNK_BYTES) {
-                bail!("会话正文分块数量不一致");
+                bail!(conduit::i18n::text(
+                    "transcript.chunks.session_message_chunk_count_mismatch"
+                ));
             }
             let mut output = Vec::new();
             for (index, hash) in hashes.iter().enumerate() {
@@ -221,11 +231,17 @@ fn read_text(directory: &Path, text: &Text) -> Result<String> {
                     CHUNK_BYTES
                 };
                 if chunk.len() != expected {
-                    bail!("会话正文分块长度不一致");
+                    bail!(conduit::i18n::text(
+                        "transcript.chunks.session_message_chunk_length_mismatch"
+                    ));
                 }
                 output.extend_from_slice(&chunk);
             }
-            Ok(String::from_utf8(output).context("会话正文字符编码损坏")?)
+            Ok(
+                String::from_utf8(output).context(conduit::i18n::text_static(
+                    "transcript.chunks.session_message_character_encoding_is_corrupt",
+                ))?,
+            )
         }
     }
 }
@@ -242,7 +258,9 @@ pub(super) fn read(reference: &Reference) -> Result<Loaded> {
     if bytes.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'[') {
         let messages: Vec<ChatItem> = serde_json::from_slice(&bytes)?;
         if messages.len() != reference.message_count {
-            bail!("会话正文与摘要不一致");
+            bail!(conduit::i18n::text(
+                "transcript.chunks.session_messages_do_not_match_the_summary"
+            ));
         }
         return Ok(Loaded {
             messages,
@@ -256,13 +274,17 @@ pub(super) fn read(reference: &Reference) -> Result<Loaded> {
         Body::Pages { pages } => {
             page_hashes = pages.clone();
             if pages.len() != reference.message_count.div_ceil(PAGE_MESSAGES) {
-                bail!("会话正文分页数量不一致");
+                bail!(conduit::i18n::text(
+                    "transcript.chunks.session_message_page_count_mismatch"
+                ));
             }
             let mut parts = Vec::new();
             for (index, hash) in pages.iter().enumerate() {
                 let bytes = checked(&reference.directory, hash, "json")?;
                 let Body::Messages { messages } = serde_json::from_slice(&bytes)? else {
-                    bail!("会话正文分页类型无效");
+                    bail!(conduit::i18n::text(
+                        "transcript.chunks.invalid_session_message_page_type"
+                    ));
                 };
                 let expected = if index + 1 == pages.len() {
                     reference.message_count - index * PAGE_MESSAGES
@@ -270,7 +292,9 @@ pub(super) fn read(reference: &Reference) -> Result<Loaded> {
                     PAGE_MESSAGES
                 };
                 if messages.len() != expected {
-                    bail!("会话正文分页长度不一致");
+                    bail!(conduit::i18n::text(
+                        "transcript.chunks.session_message_page_length_mismatch"
+                    ));
                 }
                 parts.extend(messages);
             }
@@ -278,7 +302,9 @@ pub(super) fn read(reference: &Reference) -> Result<Loaded> {
         }
     };
     if parts.len() != reference.message_count {
-        bail!("会话正文与摘要不一致");
+        bail!(conduit::i18n::text(
+            "transcript.chunks.session_messages_do_not_match_the_summary"
+        ));
     }
     let messages = parts
         .iter()
@@ -309,10 +335,12 @@ pub(super) fn reachable(
         if !marked.insert(path.clone()) || path.extension().is_some_and(|e| e == "chunk") {
             continue;
         }
-        let hash = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .context("无效正文路径")?;
+        let hash =
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .context(conduit::i18n::text_static(
+                    "transcript.chunks.invalid_message_path",
+                ))?;
         let bytes = checked(directory, hash, "json")?;
         if bytes.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'[') {
             continue;

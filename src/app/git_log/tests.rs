@@ -124,6 +124,7 @@ fn scroll(cx: &mut VisualTestContext, selector: &'static str, delta: f32) {
 
 #[gpui_kit::test]
 fn expanded_git_lists_keep_row_heights_scroll_and_show_loading(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     cx.update(gpui_kit::init);
     let repo = Repo::new("list layout");
     repo.git(&["remote", "add", "origin", repo.0.to_str().unwrap()]);
@@ -322,6 +323,7 @@ fn expanded_git_lists_keep_row_heights_scroll_and_show_loading(cx: &mut TestAppC
 fn branch_manager_navigation_filters_favorites_commit_diff_and_workspace_isolation(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     cx.update(gpui_kit::init);
     let repo = Repo::new("first workspace");
     let other = Repo::new("second workspace");

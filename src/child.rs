@@ -32,7 +32,7 @@ fn checked(ok: i32) -> io::Result<()> {
 fn wide(s: &OsStr) -> Result<Vec<u16>> {
     let mut value: Vec<_> = s.encode_wide().collect();
     if value.contains(&0) {
-        bail!("路径或参数包含 NUL");
+        bail!(conduit::i18n::text("child.path_or_argument_contains_nul"));
     }
     value.push(0);
     Ok(value)
@@ -169,7 +169,9 @@ impl Child {
                 .collect();
         for (key, value) in overrides {
             if key.is_empty() || key.contains(['=', '\0']) || value.contains('\0') {
-                bail!("Provider 环境变量格式无效");
+                bail!(conduit::i18n::text(
+                    "child.invalid_provider_environment_variable_format"
+                ));
             }
             environment.insert(key.to_uppercase(), (key.clone(), value.clone()));
         }
@@ -243,7 +245,12 @@ impl Child {
                 &startup.StartupInfo,
                 &mut info,
             ))
-            .with_context(|| format!("启动 {}", executable.display()))?;
+            .with_context(|| {
+                conduit::i18n::format(
+                    "child.start",
+                    &[("arg0", format!("{}", executable.display()))],
+                )
+            })?;
             let process = OwnedHandle::from_raw_handle(info.hProcess);
             let thread = OwnedHandle::from_raw_handle(info.hThread);
             if let Err(error) = checked(AssignProcessToJobObject(
@@ -252,7 +259,9 @@ impl Child {
             )) {
                 TerminateProcess(process.as_raw_handle(), 1);
                 WaitForSingleObject(process.as_raw_handle(), 5000);
-                return Err(error).context("绑定进程 Job 失败");
+                return Err(error).context(conduit::i18n::text_static(
+                    "child.failed_to_assign_process_job",
+                ));
             }
             if ResumeThread(thread.as_raw_handle()) == u32::MAX {
                 let error = io::Error::last_os_error();
@@ -340,6 +349,7 @@ mod tests {
     }
     #[test]
     fn structured_stdio_preserves_unicode_paths_and_argument_boundaries() {
+        let _locale = crate::test_support::chinese();
         let directory = std::env::temp_dir().join(format!("conduit 参数 {}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let script = directory.join("echo args.ps1");
@@ -374,6 +384,7 @@ mod tests {
     }
     #[test]
     fn explicit_stop_and_drop_kill_descendants() {
+        let _locale = crate::test_support::chinese();
         for explicit in [true, false] {
             let args = ["-NoProfile", "-NonInteractive", "-Command", "$nested = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList '-NoProfile -NonInteractive -Command Start-Sleep -Seconds 60' -WindowStyle Hidden -PassThru; [Console]::WriteLine($nested.Id); Start-Sleep -Seconds 60"].map(String::from);
             let (child, mut pipes) =
@@ -402,6 +413,7 @@ mod tests {
 
     #[test]
     fn concurrent_provider_environments_do_not_modify_parent_or_other_children() {
+        let _locale = crate::test_support::chinese();
         let name = "CONDUIT_ROUTE_FIXTURE";
         let before = std::env::var_os(name);
         let args = [

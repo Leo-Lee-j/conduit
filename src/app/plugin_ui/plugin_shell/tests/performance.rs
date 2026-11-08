@@ -50,6 +50,7 @@ pub(super) fn sample(warmup: usize, count: usize, mut action: impl FnMut()) -> V
 #[gpui_kit::test]
 #[ignore = "wall-clock measurements; run verify-desktop.py --phase performance"]
 fn desktop_performance_probe(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let scenario = std::env::var("CONDUIT_PERF_SCENARIO").expect("explicit probe scenario");
     assert!(matches!(
         scenario.as_str(),

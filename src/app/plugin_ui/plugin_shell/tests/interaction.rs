@@ -25,6 +25,7 @@ fn layers(cx: &mut VisualTestContext) -> (bool, usize, bool) {
 
 #[gpui_kit::test]
 fn desktop_composition_survives_plugin_command_and_commits_once(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     open_summary(&app, cx);
     let input = cx.update(|window, cx| {
@@ -71,6 +72,7 @@ fn desktop_composition_survives_plugin_command_and_commits_once(cx: &mut TestApp
 
 #[gpui_kit::test]
 fn desktop_input_editing_and_theme_keep_plugin_state(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     open_summary(&app, cx);
     click(cx, "plugin-summary-input");
@@ -105,6 +107,7 @@ fn desktop_input_editing_and_theme_keep_plugin_state(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn desktop_host_and_script_modals_unwind_one_layer_and_restore_focus(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     open_summary(&app, cx);
     click(cx, "plugin-summary-input");
@@ -163,6 +166,7 @@ fn desktop_host_and_script_modals_unwind_one_layer_and_restore_focus(cx: &mut Te
 
 #[gpui_kit::test]
 fn desktop_settings_and_narrow_dock_preserve_plugin_input(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     open_summary(&app, cx);
     click(cx, "plugin-summary-input");
@@ -210,6 +214,7 @@ fn desktop_settings_and_narrow_dock_preserve_plugin_input(cx: &mut TestAppContex
 
 #[gpui_kit::test]
 fn desktop_settings_does_not_restore_a_stopped_plugin_input(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
     open_summary(&app, cx);
     click(cx, "plugin-summary-input");

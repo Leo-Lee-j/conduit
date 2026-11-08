@@ -19,6 +19,7 @@ fn plugins() -> PluginUi {
 
 #[test]
 fn default_registration_follows_explicit_feature() {
+    let _locale = crate::test_support::chinese();
     let ui = PluginUi::new();
     assert_eq!(
         ui.registry
@@ -30,6 +31,7 @@ fn default_registration_follows_explicit_feature() {
 
 #[gpui_kit::test]
 fn three_surfaces_share_commands_and_keep_independent_workspace_scrolls(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let mut data = store();
     for (i, workspace) in data.workspaces.iter_mut().enumerate() {
         workspace.sessions = (0..40)
@@ -157,6 +159,7 @@ fn three_surfaces_share_commands_and_keep_independent_workspace_scrolls(cx: &mut
 fn unregister_clears_three_surfaces_and_rebinding_cannot_revive_old_clicks(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, store(), plugins());
     click(cx, builtins::EXAMPLE_ACTIVITY);
     click(cx, "overview-show-summary");
@@ -239,6 +242,7 @@ fn settle_summary(cx: &mut VisualTestContext) {
 
 #[gpui_kit::test]
 fn metadata_coalesces_without_chat_token_renders_and_hidden_views_pause(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, store(), plugins());
     cx.simulate_resize(size(px(1600.), px(700.)));
     draw(cx);
@@ -349,6 +353,7 @@ fn metadata_coalesces_without_chat_token_renders_and_hidden_views_pause(cx: &mut
 
 #[gpui_kit::test]
 fn late_results_after_switch_hide_readonly_and_close_cannot_publish(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, store(), plugins());
     click(cx, builtins::EXAMPLE_ACTIVITY);
     // Deliberately invoke saved completions even after cancellation, like a worker
@@ -403,6 +408,7 @@ fn late_results_after_switch_hide_readonly_and_close_cannot_publish(cx: &mut Tes
 
 #[gpui_kit::test]
 fn immediate_rebind_deletion_and_exit_release_entities_and_tasks(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, store(), plugins());
     click(cx, builtins::EXAMPLE_ACTIVITY);
     let (old, ticket, data) = cx.update(|_, cx| {

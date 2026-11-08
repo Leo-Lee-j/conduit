@@ -124,3 +124,7 @@ Detailed guides are currently in Chinese:
 - [Performance](docs/performance.md): measurement methods, bounded work, and caches.
 - [Releases and updates](docs/releasing.md): packaging, signatures, and recovery.
 - [Plugin development](docs/plugins/README.md): supported contributions and experimental runtime work.
+
+## Translations
+
+See the [internationalization guide](docs/internationalization.md) for adding languages and interface text. Register a locale in `assets/languages.json`, translate its catalog in `locales/`, and run `python scripts/check-i18n.py`. Keep message keys and named parameters stable. Verify live switching without losing drafts, and check narrow layouts in both languages.

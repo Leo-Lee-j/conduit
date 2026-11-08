@@ -322,6 +322,7 @@ mod tests {
     }
     #[test]
     fn versions_reuse_completed_tools_and_only_reparse_changed_tool() {
+        let _locale = crate::test_support::chinese();
         let mut cache = Cache::default();
         let first = tool(2);
         let mut second = tool(3);
@@ -337,6 +338,7 @@ mod tests {
     }
     #[test]
     fn large_payload_is_queued_and_preview_counts_every_line() {
+        let _locale = crate::test_support::chinese();
         let item = tool(8000);
         let mut cache = Cache::default();
         assert!(cache.request(&item, false).is_none());
@@ -358,6 +360,7 @@ mod tests {
 
     #[test]
     fn turn_statistics_update_one_contribution_and_reject_removed_versions() {
+        let _locale = crate::test_support::chinese();
         let first = tool(8000);
         let second = tool(20);
         let mut turn = Turn::default();
@@ -391,6 +394,7 @@ mod tests {
     fn assistant_deltas_reuse_stats_and_background_results_finish(
         cx: &mut gpui_kit::TestAppContext,
     ) {
+        let _locale = crate::test_support::chinese();
         use crate::app::{ConduitApp, Store, Workspace};
         cx.update(gpui_kit::init);
         let mut session = crate::app::tests::session();

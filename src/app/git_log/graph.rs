@@ -117,6 +117,7 @@ mod tests {
     use super::{git, layout};
     #[test]
     fn merge_lanes_rejoin_and_disconnected_roots_start_without_incoming_edges() {
+        let _locale = crate::test_support::chinese();
         let commit = |oid: &str, parents: &[&str]| git::LogCommit {
             oid: oid.into(),
             parents: parents.iter().map(|p| p.to_string()).collect(),

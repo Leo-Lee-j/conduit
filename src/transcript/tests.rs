@@ -75,6 +75,7 @@ pub(crate) fn message(key: &str, text: &str, created_at: u64) -> ChatItem {
 
 #[test]
 fn migration_backs_up_legacy_state_and_starts_with_summaries() {
+    let _locale = crate::test_support::chinese();
     for version in [1, 2] {
         let fixture = Fixture::new();
         let mut original = fixture.store(3);
@@ -111,6 +112,7 @@ fn migration_backs_up_legacy_state_and_starts_with_summaries() {
 
 #[test]
 fn unloaded_save_preserves_body_and_attachment_reachability() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     let mut original = fixture.store(1);
     let attachment = fixture.root.join("image.png");
@@ -150,6 +152,7 @@ fn unloaded_save_preserves_body_and_attachment_reachability() {
 
 #[test]
 fn old_writer_receipt_cannot_evict_a_modified_body() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     let mut current = fixture.store(1);
     let pending = current.clone();
@@ -166,6 +169,7 @@ fn old_writer_receipt_cannot_evict_a_modified_body() {
 
 #[test]
 fn missing_or_corrupt_body_is_reported_without_replacing_the_manifest() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     fixture.store(1).save_to(&fixture.state).unwrap();
     let mut state = Store::load_from(&fixture.state).unwrap();
@@ -203,6 +207,7 @@ fn missing_or_corrupt_body_is_reported_without_replacing_the_manifest() {
 
 #[test]
 fn failed_manifest_write_keeps_previous_state_and_new_durable_body() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     let mut state = fixture.store(1);
     state.save_to(&fixture.state).unwrap();
@@ -227,6 +232,7 @@ fn failed_manifest_write_keeps_previous_state_and_new_durable_body() {
 
 #[test]
 fn streaming_large_message_writes_only_new_blocks_and_small_roots() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     let mut state = fixture.store(1);
     let body: String = (0..128)
@@ -287,6 +293,7 @@ fn streaming_large_message_writes_only_new_blocks_and_small_roots() {
 
 #[test]
 fn pages_reuse_unchanged_messages_and_legacy_v3_roots_still_load() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     let mut state = fixture.store(1);
     let session = &mut state.workspaces[0].sessions[0];
@@ -330,6 +337,7 @@ fn pages_reuse_unchanged_messages_and_legacy_v3_roots_still_load() {
 
 #[test]
 fn collection_keeps_inflight_reads_and_reclaims_obsolete_versions() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     let mut state = fixture.store(1);
     state.save_to(&fixture.state).unwrap();
@@ -358,6 +366,7 @@ fn collection_keeps_inflight_reads_and_reclaims_obsolete_versions() {
 
 #[test]
 fn cold_history_merge_preserves_local_messages_and_remains_cold() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     let mut state = fixture.store(1);
     state.workspaces[0].sessions[0].messages[1].elapsed_ms = Some(4321);
@@ -402,6 +411,7 @@ fn cold_history_merge_preserves_local_messages_and_remains_cold() {
 
 #[test]
 fn corrupt_reference_cannot_escape_the_transcript_directory() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     let mut value = serde_json::to_value(fixture.store(1)).unwrap();
     value["version"] = 3.into();

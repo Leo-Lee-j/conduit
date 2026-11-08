@@ -58,6 +58,7 @@ mod tests {
     }
     #[test]
     fn duplicate_clicks_cancellation_and_order_are_scoped_to_exact_ticket() {
+        let _locale = crate::test_support::chinese();
         let mut q = ApprovalQueue::default();
         q.push(request("one"));
         q.push(request("two"));

@@ -131,7 +131,7 @@ pub(super) fn apply_event_indexed(
                     key,
                     created_at: 0,
                     kind: ItemKind::Tool,
-                    text: "工具调用".into(),
+                    text: conduit::i18n::text_static("events.tool_call").into(),
                     input,
                     detail: String::new(),
                     status: "运行中".into(),
@@ -180,7 +180,7 @@ pub(super) fn apply_event_indexed(
             detail,
             status,
         } => {
-            let delta = status == "输出中";
+            let delta = crate::message_status::ToolStatus::Output == status;
             (key, ItemKind::Tool, title, detail, status, delta)
         }
         Event::Notice(text) => (

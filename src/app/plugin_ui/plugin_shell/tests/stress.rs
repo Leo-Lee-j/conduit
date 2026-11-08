@@ -175,6 +175,7 @@ fn fault(app: &Entity<ConduitApp>, cx: &mut VisualTestContext) -> Value {
 #[gpui_kit::test]
 #[ignore = "stress and intentional watchdog fault; use verify-desktop.py --phase stress"]
 fn desktop_stress_probe(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let scenario = std::env::var("CONDUIT_PERF_SCENARIO").unwrap();
     assert!(matches!(
         scenario.as_str(),

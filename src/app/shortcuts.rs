@@ -27,12 +27,12 @@ pub(super) enum Scope {
 impl Scope {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Global => "全局",
-            Self::Settings => "设置页",
-            Self::Composer => "输入区",
-            Self::File => "文件预览",
+            Self::Global => conduit::i18n::text_static("settings.extensions.global"),
+            Self::Settings => conduit::i18n::text_static("shortcuts.settings"),
+            Self::Composer => conduit::i18n::text_static("shortcuts.message_input"),
+            Self::File => conduit::i18n::text_static("shortcuts.file_preview"),
             Self::Diff => "Diff",
-            Self::Terminal => "终端",
+            Self::Terminal => conduit::i18n::text_static("shortcuts.terminal"),
         }
     }
     fn overlaps(self, other: Self) -> bool {
@@ -201,9 +201,13 @@ pub(super) fn normalize(raw: &str) -> Result<String, String> {
         return Ok(raw);
     }
     if raw.is_empty() || raw.split_whitespace().count() != 1 {
-        return Err("请录制一个组合键，或点击取消绑定。".into());
+        return Err(
+            conduit::i18n::text_static("shortcuts.record_a_key_combination_or_remove_the").into(),
+        );
     }
-    let key = Keystroke::parse(&raw).map_err(|_| "无法识别此按键，请重新录制组合键。")?;
+    let key = Keystroke::parse(&raw).map_err(|_| {
+        conduit::i18n::text_static("shortcuts.key_not_recognized_record_the_combination_again")
+    })?;
     let supported = key.key.chars().count() == 1
         || matches!(
             key.key.as_str(),
@@ -229,14 +233,19 @@ pub(super) fn normalize(raw: &str) -> Result<String, String> {
             .and_then(|n| n.parse::<u8>().ok())
             .is_some_and(|n| (1..=24).contains(&n));
     if !supported {
-        return Err("请按下字母、数字、功能键或导航键，不能只使用修饰键。".into());
+        return Err(
+            conduit::i18n::text_static("shortcuts.press_a_letter_number_function_key_or").into(),
+        );
     }
     if key.key.chars().count() == 1
         && !key.modifiers.control
         && !key.modifiers.alt
         && !key.modifiers.platform
     {
-        return Err("字母和数字需要搭配 Ctrl、Alt 或 Win，避免影响正常输入。".into());
+        return Err(conduit::i18n::text_static(
+            "shortcuts.letters_and_numbers_require_ctrl_alt_or",
+        )
+        .into());
     }
     Ok(key.unparse())
 }
@@ -250,10 +259,15 @@ pub(super) fn validate(
     for key in keys {
         let normalized = normalize(key)?;
         if normalized == DOUBLE_SHIFT && shortcut.id != "search_files" {
-            return Err("双击 Shift 仅用于文件名搜索，请选择普通组合键。".into());
+            return Err(conduit::i18n::text_static(
+                "shortcuts.double_shift_is_reserved_for_filename_search",
+            )
+            .into());
         }
         if !seen.insert(normalized.clone()) {
-            return Err("同一操作不能重复绑定相同按键。".into());
+            return Err(
+                conduit::i18n::text_static("shortcuts.an_action_cannot_bind_the_same_key").into(),
+            );
         }
         if matches!(
             normalized.as_str(),
@@ -267,13 +281,18 @@ pub(super) fn validate(
                 | "ctrl-shift-v"
                 | "shift-insert"
         ) {
-            return Err("此按键用于复制、粘贴或文本编辑，请选择其他组合键。".into());
+            return Err(conduit::i18n::text_static(
+                "shortcuts.this_key_is_used_for_copying_pasting",
+            )
+            .into());
         }
         if matches!(
             normalized.as_str(),
             "alt-f4" | "ctrl-alt-delete" | "alt-tab" | "alt-shift-tab"
         ) {
-            return Err("此按键由系统使用，请选择其他组合键。".into());
+            return Err(
+                conduit::i18n::text_static("shortcuts.this_key_is_reserved_by_the_system").into(),
+            );
         }
         for other in SHORTCUTS {
             if other.id != shortcut.id
@@ -283,23 +302,31 @@ pub(super) fn validate(
                     .iter()
                     .any(|key| normalize(key).is_ok_and(|key| key == normalized))
             {
-                return Err(format!(
-                    "与「{} · {}」的 {} 冲突，请选择其他按键或先修改该操作。",
-                    other.scope.label(),
-                    other.label,
-                    display_key(&normalized)
+                return Err(conduit::i18n::format(
+                    "shortcuts.conflicts_with_in_choose_another_key_or",
+                    &[
+                        ("arg0", other.scope.label().to_string()),
+                        ("arg1", conduit::i18n::source(other.label).to_string()),
+                        ("arg2", display_key(&normalized).to_string()),
+                    ],
                 ));
             }
         }
         if shortcut.scope == Scope::Settings
             && matches!(normalized.as_str(), "enter" | "tab" | "shift-tab")
         {
-            return Err("与设置搜索结果和表单导航按键冲突，请选择其他按键。".into());
+            return Err(conduit::i18n::text_static(
+                "shortcuts.conflicts_with_settings_search_results_or_form",
+            )
+            .into());
         }
         if shortcut.scope == Scope::Composer
             && matches!(normalized.as_str(), "up" | "down" | "tab" | "escape")
         {
-            return Err("与提示词历史或文件引用菜单按键冲突，请选择其他按键。".into());
+            return Err(conduit::i18n::text_static(
+                "shortcuts.conflicts_with_prompt_history_or_file_reference",
+            )
+            .into());
         }
         // Keep the file preview's navigation controls and form navigation usable.
         if (shortcut.scope == Scope::Global || shortcut.scope == Scope::File)
@@ -308,7 +335,10 @@ pub(super) fn validate(
                 "f3" | "shift-f3" | "escape" | "enter" | "shift-enter"
             )
         {
-            return Err("与文件查找的跳转 / 关闭按键冲突，请选择其他按键。".into());
+            return Err(conduit::i18n::text_static(
+                "shortcuts.conflicts_with_file_search_navigation_or_close",
+            )
+            .into());
         }
         if shortcut.scope == Scope::Global
             && matches!(
@@ -329,7 +359,10 @@ pub(super) fn validate(
                     | "space"
             )
         {
-            return Err("全局绑定会影响输入和界面导航，请为此按键添加修饰键。".into());
+            return Err(conduit::i18n::text_static(
+                "shortcuts.global_bindings_affect_input_and_navigation_add",
+            )
+            .into());
         }
     }
     Ok(())
@@ -419,7 +452,7 @@ pub(super) fn display_key(key: &str) -> String {
 pub(super) fn display(id: &str, overrides: &Overrides) -> String {
     let keys = get(id).keys(overrides);
     if keys.is_empty() {
-        "未绑定".into()
+        conduit::i18n::text_static("settings.shortcuts.unbound").into()
     } else {
         keys.iter()
             .map(|key| display_key(key))
@@ -435,6 +468,7 @@ mod tests {
 
     #[test]
     fn shortcut_conflicts_respect_scope_defaults_and_disabled_actions() {
+        let _locale = crate::test_support::chinese();
         let mut overrides = Overrides::new();
         for shortcut in SHORTCUTS {
             validate(shortcut, &shortcut.keys(&overrides), &overrides).unwrap();
@@ -461,6 +495,7 @@ mod tests {
 
     #[test]
     fn shortcut_configuration_roundtrips_and_rejects_invalid_saved_bindings() {
+        let _locale = crate::test_support::chinese();
         let mut store = Store::default();
         store
             .ui

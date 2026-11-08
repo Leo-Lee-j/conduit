@@ -77,6 +77,7 @@ mod git_diff;
 mod git_log;
 mod git_state;
 mod git_ui;
+mod localization;
 mod mentions;
 mod mermaid;
 mod model_picker;
@@ -396,7 +397,9 @@ impl ConduitApp {
         let code_font_index = font_index(&store.ui.code_font_family);
         let ui_font_select = cx.new(|cx| {
             SelectState::new(
-                SearchableVec::new(font_choices("默认（系统界面）")),
+                SearchableVec::new(font_choices(conduit::i18n::text_static(
+                    "app.default_system_interface",
+                ))),
                 Some(IndexPath::new(ui_font_index)),
                 window,
                 cx,
@@ -405,7 +408,9 @@ impl ConduitApp {
         });
         let chat_font_select = cx.new(|cx| {
             SelectState::new(
-                SearchableVec::new(font_choices("默认（系统正文）")),
+                SearchableVec::new(font_choices(conduit::i18n::text_static(
+                    "app.default_system_body",
+                ))),
                 Some(IndexPath::new(chat_font_index)),
                 window,
                 cx,
@@ -414,7 +419,9 @@ impl ConduitApp {
         });
         let code_font_select = cx.new(|cx| {
             SelectState::new(
-                SearchableVec::new(font_choices("默认（系统等宽）")),
+                SearchableVec::new(font_choices(conduit::i18n::text_static(
+                    "app.default_system_monospace",
+                ))),
                 Some(IndexPath::new(code_font_index)),
                 window,
                 cx,
@@ -497,9 +504,9 @@ impl ConduitApp {
             .unwrap_or(Provider::Claude);
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder(
-                    "描述任务，输入 @ 引用文件…\nEnter 发送（运行中自动排队）· Shift+Enter 换行",
-                )
+                .placeholder(conduit::i18n::text_static(
+                    "localization.describe_a_task_type_to_reference_files",
+                ))
                 .auto_grow(3, 8)
         });
         let input_subscription = cx.subscribe(&input, |_, _, event: &InputEvent, cx| {
@@ -515,7 +522,10 @@ impl ConduitApp {
         let shift_subscription = cx.observe_window_activation(window, |this, _, _| {
             this.double_shift = file_picker::DoubleShift::default();
         });
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索会话"));
+        let search = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(conduit::i18n::text_static("localization.search_sessions"))
+        });
         let search_subscription = cx.subscribe(&search, |this, search, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 this.search_query = search.read(cx).value().to_string();
@@ -523,9 +533,15 @@ impl ConduitApp {
                 cx.notify();
             }
         });
-        let settings_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索设置…"));
-        let model_search =
-            cx.new(|cx| InputState::new(window, cx).placeholder("搜索模型名称、ID 或备注…"));
+        let settings_search = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(conduit::i18n::text_static("localization.search_settings"))
+        });
+        let model_search = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(conduit::i18n::text_static(
+                "localization.search_model_names_ids_or_notes",
+            ))
+        });
         let model_search_subscription =
             cx.subscribe(&model_search, |app, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -535,8 +551,15 @@ impl ConduitApp {
             });
         let settings_search_subscription =
             cx.subscribe(&settings_search, |_, _, _: &InputEvent, cx| cx.notify());
-        let skill_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索名称或简介…"));
-        let mcp_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索 MCP 名称…"));
+        let skill_search = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(conduit::i18n::text_static(
+                "localization.search_names_or_descriptions",
+            ))
+        });
+        let mcp_search = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(conduit::i18n::text_static("localization.search_mcp_names"))
+        });
         let skill_search_subscription =
             cx.subscribe(&skill_search, |app, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -553,7 +576,9 @@ impl ConduitApp {
             });
         let git_prompt_input = cx.new(|cx| {
             let mut state = TextareaState::new(window, cx)
-                .placeholder("填写 Commit Message 生成提示词…")
+                .placeholder(conduit::i18n::text_static(
+                    "localization.enter_the_commit_message_generation_prompt",
+                ))
                 .auto_grow(8, 8);
             state.set_value(store.git.commit_message_prompt.clone(), window, cx);
             state
@@ -744,7 +769,10 @@ impl ConduitApp {
             .collect::<HashSet<_>>();
         app.queued_messages.retain(|id, _| session_ids.contains(id));
         for message in app.queued_messages.values_mut() {
-            message.paused = Some("应用已重新打开；请确认后手动发送。".into());
+            message.paused = Some(
+                conduit::i18n::text_static("app.application_reopened_review_and_send_manually")
+                    .into(),
+            );
         }
         app.sync_plugin_context();
         app.restore_update_drafts(window, cx);
@@ -843,7 +871,7 @@ impl ConduitApp {
                 .persistence
                 .error
                 .as_ref()
-                .map(|e| format!("保存失败：{e}"));
+                .map(|e| conduit::i18n::format("app.save_failed", &[("e", e.to_string())]));
             return false;
         }
         self.dirty = false;
@@ -851,7 +879,7 @@ impl ConduitApp {
     }
     fn persist_confirmed(&mut self) -> Result<crate::persistence::SaveReceipt, String> {
         if !self.writable {
-            return Err("当前无法保存消息。".into());
+            return Err(conduit::i18n::text_static("app.unable_to_save_messages_right_now").into());
         }
         self.last_save = Instant::now();
         self.session_control.global_revision = self.session_control.global_revision.wrapping_add(1);
@@ -875,7 +903,10 @@ impl ConduitApp {
                     .all(|run| run.pending_save.is_none())
                     && self.session_control.queue_saves.is_empty()
                 {
-                    self.message = Some(format!("保存失败：{error}"));
+                    self.message = Some(conduit::i18n::format(
+                        "notifications.save_failed",
+                        &[("error", error.to_string())],
+                    ));
                 }
             }
             cx.notify();

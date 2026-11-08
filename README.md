@@ -28,7 +28,7 @@
 
 Conduit brings **Claude Code, Codex, and OpenCode** into a shared desktop workspace. Keep conversations organized by project, follow tool activity, inspect changes, and commit your work without losing track of the task.
 
-Conduit is under active development and currently supports **Windows x64**. The app interface and detailed documentation are primarily in Chinese.
+Conduit is under active development and currently supports **Windows x64**. The interface supports **English and 简体中文**, switchable in **Settings → General → Language**. New installations default to English; existing installations retain Chinese until you choose another language. Detailed guides are currently in Chinese.
 
 ## Why Conduit?
 

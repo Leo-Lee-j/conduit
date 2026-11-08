@@ -59,7 +59,10 @@ pub struct FileIndex {
 pub fn discover(root: &Path) -> FileIndex {
     let mut index = FileIndex::default();
     if let Err(error) = std::fs::read_dir(root) {
-        index.error = Some(format!("无法读取工作区：{error}"));
+        index.error = Some(conduit::i18n::format(
+            "file_search.unable_to_read_workspace",
+            &[("error", format!("{}", error))],
+        ));
         return index;
     }
     let deadline = Instant::now() + Duration::from_secs(4);
@@ -170,6 +173,7 @@ mod tests {
 
     #[test]
     fn queries_are_caret_local_and_unicode_safe() {
+        let _locale = crate::test_support::chinese();
         for text in [
             "@",
             "检查 @src/app",
@@ -193,6 +197,7 @@ mod tests {
 
     #[test]
     fn ranking_prefers_names_and_supports_paths_and_fuzzy_queries() {
+        let _locale = crate::test_support::chinese();
         let index = FileIndex {
             paths: vec![
                 "src/app.rs",
@@ -214,6 +219,7 @@ mod tests {
 
     #[test]
     fn picker_limit_does_not_change_mention_limit_or_ranking() {
+        let _locale = crate::test_support::chinese();
         let index = FileIndex {
             paths: (0..80).map(|i| format!("src/file{i:02}.rs")).collect(),
             ..Default::default()
@@ -228,6 +234,7 @@ mod tests {
 
     #[test]
     fn discovery_respects_ignores_and_includes_hidden_source_files() {
+        let _locale = crate::test_support::chinese();
         let root =
             std::env::temp_dir().join(format!("conduit-mention-index-{}", std::process::id()));
         std::fs::create_dir_all(root.join(".git")).unwrap();

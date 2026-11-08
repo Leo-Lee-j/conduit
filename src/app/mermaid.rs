@@ -218,7 +218,7 @@ impl MermaidPreview {
                 .spawn(async move {
                     let _guard = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
                     if cancelled.load(Ordering::Acquire) {
-                        return Err("已取消".into());
+                        return Err(conduit::i18n::text_static("events.cancelled").into());
                     }
                     if let Some(result) = CACHE.lock().unwrap().get(&key) {
                         return result;
@@ -275,7 +275,11 @@ impl Render for MermaidPreview {
                             .debug_selector(|| "mermaid-toggle".into())
                             .ghost()
                             .small()
-                            .label(if self.show_source { "预览" } else { "源码" })
+                            .label(if self.show_source {
+                                conduit::i18n::text_static("mermaid.preview")
+                            } else {
+                                conduit::i18n::text_static("mermaid.source")
+                            })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.show_source = !this.show_source;
                                 cx.notify();
@@ -284,7 +288,7 @@ impl Render for MermaidPreview {
                     .child(
                         Clipboard::new("mermaid-copy")
                             .value(source.clone())
-                            .tooltip("复制源码"),
+                            .tooltip(conduit::i18n::text_static("mermaid.copy_source")),
                     ),
             );
         if !self.show_source
@@ -304,9 +308,17 @@ impl Render for MermaidPreview {
             );
         } else {
             let message = match &self.result {
-                Some(Err(error)) => Some(format!("无法预览，已保留源码：{error}")),
-                None if self.closed => Some("正在生成图表…".to_string()),
-                None => Some("等待代码块结束".to_string()),
+                Some(Err(error)) => Some(conduit::i18n::format(
+                    "mermaid.preview_unavailable_source_preserved",
+                    &[("error", error.to_string())],
+                )),
+                None if self.closed => {
+                    Some(conduit::i18n::text_static("mermaid.generating_diagram").to_string())
+                }
+                None => Some(
+                    conduit::i18n::text_static("mermaid.waiting_for_the_code_block_to_finish")
+                        .to_string(),
+                ),
                 _ => None,
             };
             let mut preview = v_flex()
@@ -478,8 +490,8 @@ impl Render for MermaidViewer {
                     .ghost()
                     .small()
                     .icon(FullIconName::Minus)
-                    .tooltip("缩小")
-                    .accessibility_label("缩小图表")
+                    .tooltip(conduit::i18n::text_static("mermaid.zoom_out"))
+                    .accessibility_label(conduit::i18n::text_static("mermaid.zoom_out_diagram"))
                     .disabled(self.zoom <= MIN_ZOOM)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.zoom_at(this.zoom / ZOOM_STEP, this.viewport.center());
@@ -492,7 +504,7 @@ impl Render for MermaidViewer {
                     .ghost()
                     .small()
                     .label(format!("{:.0}%", self.zoom * 100.))
-                    .tooltip("恢复默认比例并居中")
+                    .tooltip(conduit::i18n::text_static("mermaid.reset_zoom_and_center"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.zoom = 1.;
                         this.pan = Point::default();
@@ -506,8 +518,8 @@ impl Render for MermaidViewer {
                     .ghost()
                     .small()
                     .icon(FullIconName::Plus)
-                    .tooltip("放大")
-                    .accessibility_label("放大图表")
+                    .tooltip(conduit::i18n::text_static("mermaid.zoom_in"))
+                    .accessibility_label(conduit::i18n::text_static("mermaid.zoom_in_diagram"))
                     .disabled(self.zoom >= MAX_ZOOM)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.zoom_at(this.zoom * ZOOM_STEP, this.viewport.center());
@@ -627,7 +639,7 @@ fn open_mermaid_popup(diagram: DiagramImage, window: &mut Window, cx: &mut App) 
         let height = (f32::from(window.viewport_size().height) - 150.).max(120.);
         let viewer = viewer.clone();
         dialog
-            .title("Mermaid 图表")
+            .title(conduit::i18n::text_static("mermaid.mermaid_diagram"))
             .w(px(width))
             .content(move |content, _, _| {
                 content.child(div().w_full().h(px(height)).child(viewer.clone()))
@@ -637,7 +649,10 @@ fn open_mermaid_popup(diagram: DiagramImage, window: &mut Window, cx: &mut App) 
 
 fn validate_source(source: &str) -> Result<(), String> {
     if source.len() > MAX_SOURCE || source.lines().count() > 256 {
-        return Err("图表超过预览上限（16 KiB / 256 行）".into());
+        return Err(conduit::i18n::text_static(
+            "mermaid.diagram_exceeds_preview_limits_16_kib_256",
+        )
+        .into());
     }
     Ok(())
 }
@@ -692,7 +707,10 @@ fn validate_flowchart(source: &str) -> Result<(), String> {
                         _ => '{',
                     };
                     if stack.pop() != Some(expected) {
-                        return Err("流程图节点括号不匹配".into());
+                        return Err(conduit::i18n::text_static(
+                            "mermaid.unmatched_brackets_in_flowchart_nodes",
+                        )
+                        .into());
                     }
                 }
                 _ => (),
@@ -700,15 +718,21 @@ fn validate_flowchart(source: &str) -> Result<(), String> {
         }
     }
     if !stack.is_empty() || quoted || edge_label {
-        return Err("流程图节点或标签尚未闭合".into());
+        return Err(
+            conduit::i18n::text_static("mermaid.flowchart_node_or_label_is_not_closed").into(),
+        );
     }
     Ok(())
 }
 
 fn render_native(source: &str, dark: bool) -> PreviewResult {
     // Guard against a malformed diagram panicking inside the third-party renderer.
-    std::panic::catch_unwind(|| render_native_inner(source, dark))
-        .unwrap_or_else(|_| Err("原生渲染器无法处理此图表".into()))
+    std::panic::catch_unwind(|| render_native_inner(source, dark)).unwrap_or_else(|_| {
+        Err(
+            conduit::i18n::text_static("mermaid.the_native_renderer_cannot_process_this_diagram")
+                .into(),
+        )
+    })
 }
 
 fn render_native_inner(source: &str, dark: bool) -> PreviewResult {
@@ -731,13 +755,15 @@ fn render_native_inner(source: &str, dark: bool) -> PreviewResult {
             | DiagramKind::Pie
             | DiagramKind::Mindmap
     ) {
-        return Err("此图表类型尚未开放原生预览".into());
+        return Err(
+            conduit::i18n::text_static("mermaid.native_preview_is_not_available_for_this").into(),
+        );
     }
     if parsed.graph.nodes.len() > 128
         || parsed.graph.edges.len() > 256
         || parsed.graph.subgraphs.len() > 32
     {
-        return Err("图表过于复杂（最多 128 个节点 / 256 条边 / 32 个子图）".into());
+        return Err(conduit::i18n::text_static("mermaid.diagram_is_too_complex_up_to_128").into());
     }
     let mut theme = if dark {
         mermaid_rs_renderer::Theme::dark()
@@ -756,11 +782,14 @@ fn render_native_inner(source: &str, dark: bool) -> PreviewResult {
         || width > 12000.
         || height > 12000.
     {
-        return Err("图表尺寸超过原生预览上限".into());
+        return Err(conduit::i18n::text_static(
+            "mermaid.diagram_dimensions_exceed_the_native_preview_limit",
+        )
+        .into());
     }
     let svg = render_svg(&layout, &theme, &config);
     if svg.len() > 2 * 1024 * 1024 {
-        return Err("图表输出过大".into());
+        return Err(conduit::i18n::text_static("mermaid.diagram_output_is_too_large").into());
     }
     let parsed_svg = RASTERIZER
         .parse_svg(svg.as_bytes())
@@ -792,6 +821,7 @@ mod tests {
 
     #[test]
     fn mermaid_streaming_fences_require_matching_closer() {
+        let _locale = crate::test_support::chinese();
         assert!(is_mermaid(" Mermaid "));
         assert!(!is_mermaid("rust"));
         assert!(!closed_fence("```mermaid\ngraph TD\n A-->B", 0));
@@ -805,6 +835,7 @@ mod tests {
 
     #[test]
     fn mermaid_native_renders_chinese_and_common_diagrams_in_both_themes() {
+        let _locale = crate::test_support::chinese();
         for source in [
             "flowchart TD\n A[聊天内容] --> B{需要图表?}\n B -->|是| C[原生绘制]",
             "sequenceDiagram\n participant A as 用户\n participant B as 助手\n A->>B: 绘制图表\n B-->>A: 完成",
@@ -850,6 +881,7 @@ mod tests {
 
     #[test]
     fn mermaid_native_errors_limits_and_cache_eviction() {
+        let _locale = crate::test_support::chinese();
         assert!(render_native("not a diagram", false).is_err());
         assert!(render_native("flowchart TD\n A[broken", false).is_err());
         assert!(render_native(&"a".repeat(16 * 1024 + 1), false).is_err());
@@ -896,6 +928,7 @@ mod tests {
 
     #[test]
     fn mermaid_images_center_in_preview_and_popup() {
+        let _locale = crate::test_support::chinese();
         let mut diagram = render_native("graph LR; A-->B", false).unwrap();
         let viewport = Bounds::new(point(px(30.), px(50.)), size(px(600.), px(400.)));
         for (width, height) in [(200., 100.), (1400., 1000.), (100., 2000.)] {
@@ -914,6 +947,7 @@ mod tests {
 
     #[test]
     fn mermaid_zoom_keeps_pointer_anchor_and_limits_scale() {
+        let _locale = crate::test_support::chinese();
         use super::{MAX_ZOOM, MIN_ZOOM, MermaidViewer};
         let diagram = render_native("graph LR; A-->B", false).unwrap();
         let mut viewer = MermaidViewer::new(diagram);
@@ -972,6 +1006,7 @@ mod ui_tests {
     }
     #[gpui_kit::test]
     fn mermaid_chat_streaming_line_numbers_and_source_toggle(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
         let output = slot.clone();
@@ -1044,6 +1079,7 @@ mod ui_tests {
 
     #[gpui_kit::test]
     fn mermaid_popup_drags_and_stops_after_release_outside(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         use gpui_kit::{Point, point};
         cx.update(gpui_kit::init);
         let diagram = super::render_native("graph LR; A[开始]-->B[结束]", false).unwrap();
@@ -1076,6 +1112,7 @@ mod ui_tests {
 
     #[gpui_kit::test]
     fn mermaid_zoom_controls_ctrl_wheel_and_inline_drag(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         use gpui_kit::component::WindowExt as _;
         use gpui_kit::{Point, ScrollDelta, ScrollWheelEvent, point};
         cx.update(gpui_kit::init);
@@ -1195,6 +1232,7 @@ mod ui_tests {
 
     #[gpui_kit::test]
     fn mermaid_history_scroll_keeps_message_height_and_anchor(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         use super::super::ConduitApp;
         use crate::{domain::Workspace, store::Store};
         use gpui_kit::{ScrollDelta, ScrollWheelEvent, point};

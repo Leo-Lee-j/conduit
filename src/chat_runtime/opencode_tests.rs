@@ -127,6 +127,7 @@ impl MockModel {
 #[test]
 #[ignore = "runs installed OpenCode against a local mock; no model account is used"]
 fn installed_opencode_user_input_answer_skip_and_cancel() {
+    let _locale = crate::test_support::chinese();
     let root =
         std::env::temp_dir().join(format!("conduit-opencode-questions-{}", std::process::id()));
     assert!(!root.exists());
@@ -331,6 +332,7 @@ fn finish(runtime: &ChatRuntime, decision: Decision) -> (String, String, usize) 
 #[test]
 #[ignore = "runs installed OpenCode against a local mock; no model account is used"]
 fn installed_opencode_local_protocol_smoke() {
+    let _locale = crate::test_support::chinese();
     let root = std::env::temp_dir().join(format!("conduit-opencode-local-{}", std::process::id()));
     assert!(
         !root.exists(),
@@ -496,6 +498,7 @@ fn installed_opencode_local_protocol_smoke() {
 #[test]
 #[ignore = "runs installed OpenCode against a local mock; no model account is used"]
 fn installed_opencode_helper_reports_model_failure_promptly() {
+    let _locale = crate::test_support::chinese();
     let root = std::env::temp_dir().join(format!("conduit-opencode-error-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
     let server = MockModel::start(root.join("unused.txt"));

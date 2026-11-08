@@ -3,14 +3,24 @@
 fn main() {
     let result = std::env::args_os()
         .nth(1)
-        .ok_or_else(|| anyhow::anyhow!("缺少更新交接文件"))
+        .ok_or_else(|| {
+            anyhow::anyhow!(conduit::i18n::text(
+                "bin.conduit-updater.update_handoff_file_missing"
+            ))
+        })
         .and_then(|path| conduit::update::install::run(std::path::Path::new(&path)));
     if let Err(error) = result {
-        let text: Vec<u16> = format!("Conduit 更新未完成：{error:#}")
+        let text: Vec<u16> = conduit::i18n::format(
+            "bin.conduit-updater.conduit_update_incomplete",
+            &[("error", format!("{:#}", error))],
+        )
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+        let title: Vec<u16> = conduit::i18n::text_static("bin.conduit-updater.conduit_update")
             .encode_utf16()
             .chain(Some(0))
             .collect();
-        let title: Vec<u16> = "Conduit 更新".encode_utf16().chain(Some(0)).collect();
         unsafe {
             windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
                 std::ptr::null_mut(),

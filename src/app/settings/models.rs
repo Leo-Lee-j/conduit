@@ -37,10 +37,10 @@ impl ProviderEditor {
             })
             .unwrap_or_default();
         let placeholders = [
-            "例如：我的代理",
+            conduit::i18n::text_static("settings.models.e_g_my_proxy"),
             "https://api.example.com/v1",
-            "例如：MY_PROVIDER_API_KEY（可留空）",
-            "模型 ID，多个用逗号分隔",
+            conduit::i18n::text_static("settings.models.e_g_my_provider_api_key_optional"),
+            conduit::i18n::text_static("settings.models.model_ids_separated_by_commas"),
         ];
         let fields = std::array::from_fn(|i| {
             cx.new(|cx| {
@@ -60,7 +60,9 @@ impl ProviderEditor {
         let key = cx.new(|cx| {
             InputState::new(window, cx)
                 .masked(true)
-                .placeholder("输入 API Key；留空保留已有凭据")
+                .placeholder(conduit::i18n::text_static(
+                    "settings.models.enter_api_key_leave_empty_to_keep",
+                ))
         });
         let subscriptions = fields[..3]
             .iter()
@@ -196,7 +198,10 @@ impl ProviderEditor {
         if saved {
             window.close_dialog(cx);
         } else {
-            self.error = Some("保存失败，请检查存储状态".into());
+            self.error = Some(
+                conduit::i18n::text_static("settings.models.save_failed_check_storage_status")
+                    .into(),
+            );
             cx.notify();
         }
     }
@@ -213,7 +218,10 @@ impl ProviderEditor {
                 Ok(None)
             } else {
                 std::env::var(&name).map(Some).map_err(|_| {
-                    anyhow::anyhow!("未找到环境变量 {name}；也可以切换为直接输入 API Key")
+                    anyhow::anyhow!(conduit::i18n::format(
+                        "settings.models.environment_variable_not_found_you_can_also",
+                        &[("name", name.to_string())]
+                    ))
                 })
             }
         } else if !self.key.read(cx).value().trim().is_empty() {
@@ -270,9 +278,9 @@ impl ProviderEditor {
                         editor.fields[3].update(cx, |field, cx| {
                             field.set_value(merged.join(", "), window, cx)
                         });
-                        editor.feedback = Some(format!(
-                            "目录请求成功，读取 {} 个模型。尚未验证生成能力。",
-                            models.len()
+                        editor.feedback = Some(conduit::i18n::format(
+                            "settings.models.catalog_request_succeeded_read_models_generation_has",
+                            &[("arg0", format!("{}", models.len()))],
                         ));
                     }
                     Err(error) => editor.error = Some(error.to_string()),
@@ -298,7 +306,9 @@ impl Render for ProviderEditor {
                 div()
                     .text_size(ui_text_size(12.))
                     .text_color(rgb(palette().muted))
-                    .child("配置端点与凭据，再读取模型目录。保存后可在“新会话默认”中选择此服务。"),
+                    .child(conduit::i18n::text_static(
+                        "settings.models.configure_the_endpoint_and_credentials_then_read",
+                    )),
             );
         let mut engines = h_flex().gap_2();
         for (i, engine) in [Provider::Codex, Provider::Claude].into_iter().enumerate() {
@@ -317,7 +327,13 @@ impl Render for ProviderEditor {
             );
         }
         form = form.child(engines);
-        for (i, label) in ["服务名称", "Base URL"].into_iter().enumerate() {
+        for (i, label) in [
+            conduit::i18n::text_static("settings.config_editor.service_name"),
+            "Base URL",
+        ]
+        .into_iter()
+        .enumerate()
+        {
             form = form.child(
                 v_flex()
                     .debug_selector(move || format!("provider-editor-field-{i}"))
@@ -355,7 +371,9 @@ impl Render for ProviderEditor {
                             Button::new("auth-env")
                                 .small()
                                 .ghost()
-                                .label("环境变量")
+                                .label(conduit::i18n::text_static(
+                                    "settings.models.environment_variable",
+                                ))
                                 .selected(env_auth)
                                 .disabled(self.probing)
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -368,7 +386,9 @@ impl Render for ProviderEditor {
                 .child(if env_auth {
                     Input::new(&self.fields[2])
                         .disabled(self.probing)
-                        .aria_label("API Key 环境变量名称")
+                        .aria_label(conduit::i18n::text_static(
+                            "settings.models.api_key_environment_variable_name",
+                        ))
                 } else {
                     Input::new(&self.key)
                         .mask_toggle()
@@ -380,11 +400,17 @@ impl Render for ProviderEditor {
                         .text_size(ui_text_size(11.))
                         .text_color(rgb(palette().muted))
                         .child(if env_auth {
-                            "只保存变量名。修改系统环境变量后需要重启应用。"
+                            conduit::i18n::text_static(
+                                "settings.models.only_the_variable_name_is_saved_restart",
+                            )
                         } else if self.protected_key.is_some() {
-                            "已保存凭据。留空保持；新值将替换。由当前 Windows 账户加密保护。"
+                            conduit::i18n::text_static(
+                                "settings.models.credentials_saved_leave_empty_to_keep_them",
+                            )
                         } else {
-                            "凭据由当前 Windows 账户加密保护。无需认证的本地服务可留空。"
+                            conduit::i18n::text_static(
+                                "settings.models.credentials_are_encrypted_for_the_current_windows",
+                            )
                         }),
                 )
                 .when(!env_auth && self.protected_key.is_some(), |body| {
@@ -392,7 +418,9 @@ impl Render for ProviderEditor {
                         Button::new("clear-provider-key")
                             .small()
                             .ghost()
-                            .label("移除已保存凭据")
+                            .label(conduit::i18n::text_static(
+                                "settings.models.remove_saved_credentials",
+                            ))
                             .disabled(self.probing)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.protected_key = None;
@@ -410,15 +438,17 @@ impl Render for ProviderEditor {
                     h_flex()
                         .w_full()
                         .justify_between()
-                        .child("模型 ID（逗号分隔）")
+                        .child(conduit::i18n::text_static(
+                            "settings.models.model_ids_comma_separated",
+                        ))
                         .child(
                             Button::new("provider-discover")
                                 .small()
                                 .outline()
                                 .label(if self.probing {
-                                    "正在请求…"
+                                    conduit::i18n::text_static("settings.models.requesting")
                                 } else {
-                                    "读取模型目录"
+                                    conduit::i18n::text_static("settings.models.read_model_catalog")
                                 })
                                 .disabled(self.probing)
                                 .on_click(
@@ -429,7 +459,7 @@ impl Render for ProviderEditor {
                 .child(
                     Input::new(&self.fields[3])
                         .disabled(self.probing)
-                        .aria_label("模型 ID"),
+                        .aria_label(conduit::i18n::text_static("settings.models.model_id")),
                 ),
         );
         form = form
@@ -454,9 +484,9 @@ impl Render for ProviderEditor {
                         .ghost()
                         .small()
                         .label(if self.confirm_discard {
-                            "继续编辑"
+                            conduit::i18n::text_static("settings.config_editor.continue_editing")
                         } else {
-                            "取消"
+                            conduit::i18n::text_static("git_branches.cancel")
                         })
                         .disabled(self.probing)
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -472,7 +502,9 @@ impl Render for ProviderEditor {
                 .when(self.confirm_discard, |row| {
                     row.child(
                         Button::new("custom-provider-discard")
-                            .label("放弃未保存修改")
+                            .label(conduit::i18n::text_static(
+                                "settings.config_editor.discard_unsaved_changes",
+                            ))
                             .small()
                             .ghost()
                             .on_click(|_, window, cx| window.close_dialog(cx)),
@@ -482,7 +514,7 @@ impl Render for ProviderEditor {
                     Button::new("custom-provider-save")
                         .primary()
                         .small()
-                        .label("保存服务")
+                        .label(conduit::i18n::text_static("settings.models.save_service"))
                         .disabled(self.probing)
                         .on_click(cx.listener(|this, _, w, cx| this.save(w, cx))),
                 ),
@@ -501,9 +533,9 @@ impl ConduitApp {
             return;
         }
         let title = if provider.is_some() {
-            "编辑模型服务"
+            conduit::i18n::text_static("settings.models.edit_model_service")
         } else {
-            "添加模型服务"
+            conduit::i18n::text_static("settings.models.add_model_service")
         };
         let app = cx.entity();
         let editor = cx.new(|cx| ProviderEditor::new(app, provider, window, cx));
@@ -603,15 +635,23 @@ impl ConduitApp {
             h_flex()
                 .w_full()
                 .justify_between()
-                .child(
-                    div()
-                        .text_size(ui_text_size(14.))
-                        .font_semibold()
-                        .child("模型服务"),
-                )
-                .child(management_badge(format!("{service_count} 个服务"), false))
+                .child(div().text_size(ui_text_size(14.)).font_semibold().child(
+                    conduit::i18n::text_static("settings.defaults.model_services"),
+                ))
+                .child(management_badge(
+                    conduit::i18n::format(
+                        "settings.models.services",
+                        &[("service_count", format!("{}", service_count))],
+                    ),
+                    false,
+                ))
         })
-        .keywords(["模型服务", "Provider", "添加", "自定义"]);
+        .keywords([
+            conduit::i18n::text_static("settings.defaults.model_services"),
+            "Provider",
+            conduit::i18n::text_static("settings.models.add"),
+            conduit::i18n::text_static("settings.models.custom"),
+        ]);
         let default_service = self
             .store
             .session_defaults
@@ -630,7 +670,7 @@ impl ConduitApp {
                         .text_size(ui_text_size(12.))
                         .line_height(relative(1.6))
                         .text_color(rgb(palette().muted))
-                        .child("还没有模型服务。添加端点和模型，或从 cc-switch 同步；也可以直接使用下方的 CLI 默认配置。"),
+                        .child(conduit::i18n::text_static("settings.models.no_model_services_yet_add_endpoints_and")),
                 );
             }
             for (index, (provider, imported, in_use, references)) in rows.iter().enumerate() {
@@ -667,9 +707,9 @@ impl ConduitApp {
                                 .child(
                                     h_flex().gap_2().flex_wrap()
                                         .child(div().text_size(ui_text_size(13.)).font_semibold().text_color(rgb(palette().text)).child(provider.name.clone()))
-                                        .child(management_badge(if imported { "CCS" } else { "自定义" }, false))
-                                        .when(is_default, |row| row.child(management_badge("新会话默认", true)))
-                                        .when(in_use, |row| row.child(div().text_size(ui_text_size(11.)).text_color(rgb(palette().muted)).child(format!("{} 处引用", references.len())))),
+                                        .child(management_badge(if imported { "CCS" } else { conduit::i18n::text_static("settings.models.custom") }, false))
+                                        .when(is_default, |row| row.child(management_badge(conduit::i18n::text_static("settings.defaults.new_session_defaults"), true)))
+                                        .when(in_use, |row| row.child(div().text_size(ui_text_size(11.)).text_color(rgb(palette().muted)).child(conduit::i18n::format("settings.models.references", &[("arg0", format!("{}", references.len()))])))),
                                 )
                                 .child(
                                     div()
@@ -683,13 +723,13 @@ impl ConduitApp {
                                         .text_color(rgb(palette().muted))
                                         .child(provider.base_url.clone()),
                                 )
-                                .child(div().text_size(ui_text_size(11.)).text_color(rgb(palette().muted)).child(format!("{} 个模型{}", provider.models.len(), if imported { " · 在 cc-switch 中编辑" } else { "" })))
-                                .when(in_use, |body| body.child(div().text_size(ui_text_size(11.)).text_color(rgb(palette().muted)).child(format!("引用：{}", references.iter().take(3).cloned().collect::<Vec<_>>().join("、"))))),
+                                .child(div().text_size(ui_text_size(11.)).text_color(rgb(palette().muted)).child(conduit::i18n::format("settings.models.models", &[("arg0", format!("{}", provider.models.len())), ("arg1", (if imported { conduit::i18n::text_static("settings.models.edit_in_cc_switch") } else { "" }).to_string())])))
+                                .when(in_use, |body| body.child(div().text_size(ui_text_size(11.)).text_color(rgb(palette().muted)).child(conduit::i18n::format("settings.models.references_6f2d6f", &[("arg0", references.iter().take(3).cloned().collect::<Vec<_>>().join("、").to_string())])))),
                         )
                         )
                         .child(h_flex().flex_shrink_0().justify_end().gap_2().flex_wrap().debug_selector(move || format!("service-actions-{index}"))
-                        .child(Button::new(("provider-use-default", index)).small().outline().label("用于新会话")
-                            .disabled(disabled).tooltip("为此引擎的新会话设置服务和模型")
+                        .child(Button::new(("provider-use-default", index)).small().outline().label(conduit::i18n::text_static("settings.models.use_for_new_sessions"))
+                            .disabled(disabled).tooltip(conduit::i18n::text_static("settings.models.set_the_service_and_model_for_new"))
                             .dropdown_menu(move |mut menu, _, _| {
                                 for model in &use_provider.models {
                                     let model = model.clone();
@@ -704,12 +744,12 @@ impl ConduitApp {
                                 }
                                 menu
                             }))
-                        .when(in_use, |row| row.child(Button::new(("provider-references", index)).small().ghost().label("引用")
+                        .when(in_use, |row| row.child(Button::new(("provider-references", index)).small().ghost().label(conduit::i18n::text_static("settings.models.references_23c0e1"))
                             .on_click(move |_, window, cx| {
                                 let references = all_references.clone();
                                 window.open_dialog(cx, move |dialog, _, _| {
                                     let references = references.clone();
-                                    dialog.title("服务引用位置").content(move |body, _, _| body.child(
+                                    dialog.title(conduit::i18n::text_static("settings.models.service_references")).content(move |body, _, _| body.child(
                                         div().id("provider-references-list").max_h(px(320.)).overflow_y_scroll()
                                             .child(v_flex().gap_2().children(references.iter().map(|r| div().text_size(ui_text_size(12.)).child(r.clone()))))))
                                 });
@@ -718,12 +758,12 @@ impl ConduitApp {
                             Button::new(("edit-custom-provider", index))
                                 .small()
                                 .ghost()
-                                .label("编辑")
+                                .label(conduit::i18n::text_static("settings.extensions.edit"))
                                 .disabled(disabled || imported)
                                 .tooltip(if imported {
-                                    "此 Provider 的配置跟随 CCS 同步，请在 cc-switch 编辑后同步"
+                                    conduit::i18n::text_static("settings.models.this_provider_follows_ccs_sync_edit_it")
                                 } else {
-                                    "编辑 Provider"
+                                    conduit::i18n::text_static("settings.models.edit_provider")
                                 })
                                 .when(!disabled && !imported, |button| button.cursor_pointer())
                                 .on_click(move |_, window, cx| {
@@ -740,17 +780,17 @@ impl ConduitApp {
                             Button::new(("delete-custom-provider", index))
                                 .small()
                                 .ghost()
-                                .label("删除")
+                                .label(conduit::i18n::text_static("git_state.deleted"))
                                 .disabled(disabled || in_use || imported)
                                 .when(!disabled && !in_use && !imported, |button| {
                                     button.cursor_pointer()
                                 })
                                 .tooltip(if imported {
-                                    "此 Provider 的配置由 CCS 同步管理"
+                                    conduit::i18n::text_static("settings.models.this_provider_s_configuration_is_managed_by")
                                 } else if in_use {
-                                    "请先更改使用此 Provider 的会话、命名或 Git 配置"
+                                    conduit::i18n::text_static("settings.models.first_change_the_sessions_naming_settings_or")
                                 } else {
-                                    "删除 Provider"
+                                    conduit::i18n::text_static("settings.models.delete_provider")
                                 })
                                 .on_click(move |_, _, cx| {
                                     delete_view.update(cx, |app, cx| {
@@ -791,18 +831,20 @@ impl ConduitApp {
             .iter()
             .map(|entry| entry.models.len())
             .sum();
-        let ccs_summary = format!(
-            "CCS {} 个 Provider · {} 个模型",
-            self.ccs.providers.len(),
-            ccs_model_count
+        let ccs_summary = conduit::i18n::format(
+            "settings.models.ccs_providers_models",
+            &[
+                ("arg0", format!("{}", self.ccs.providers.len())),
+                ("arg1", format!("{}", ccs_model_count)),
+            ],
         );
         let toggle = SettingItem::render(move |_, _, _| {
             let toggle_view = view.clone();
             Button::new("settings-models-sources")
                 .label(if expanded {
-                    "收起配置来源"
+                    conduit::i18n::text_static("settings.models.hide_configuration_sources")
                 } else {
-                    "查看配置来源"
+                    conduit::i18n::text_static("settings.models.view_configuration_sources")
                 })
                 .small()
                 .ghost()
@@ -814,32 +856,47 @@ impl ConduitApp {
                     });
                 })
         })
-        .keywords(["配置来源", "CCS", "cc-switch"]);
+        .keywords([
+            conduit::i18n::text_static("settings.models.configuration_sources"),
+            "CCS",
+            "cc-switch",
+        ]);
         let mut items = vec![toggle];
         if expanded {
             items.extend(vec![
                 value_item(engine.label(), config_path),
                 value_item("cc-switch", display_path(&self.ccs.database_path)),
-                value_item("已读取", ccs_summary),
+                value_item(
+                    conduit::i18n::text_static("settings.models.loaded"),
+                    ccs_summary,
+                ),
             ]);
         }
         if let Some(error) = self.ccs.error.clone() {
             items.push(
-                SettingItem::new("读取失败", error_field(error))
-                    .layout(Axis::Vertical)
-                    .keywords(["错误"]),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.models.read_failed"),
+                    error_field(error),
+                )
+                .layout(Axis::Vertical)
+                .keywords([conduit::i18n::text_static("settings.models.error")]),
             );
         } else if let Some(note) = self.ccs.note.clone().filter(|_| expanded) {
             items.push(
-                SettingItem::new("说明", paragraph_field(note))
-                    .layout(Axis::Vertical)
-                    .keywords(["说明"]),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.models.description"),
+                    paragraph_field(note),
+                )
+                .layout(Axis::Vertical)
+                .keywords([conduit::i18n::text_static("settings.models.description")]),
             );
         }
         SettingGroup::new()
             .variant(GroupBoxVariant::Normal)
             .items(items)
-            .footer(|_, _| "同步从 CLI 和 cc-switch 读取，不会更改它们的配置或切换默认服务。")
+            .footer(|_, _| {
+                conduit::i18n::text_static("settings.models.sync_reads_from_clis_and_cc_switch")
+            })
     }
 
     pub(super) fn models_provider_group(
@@ -850,7 +907,7 @@ impl ConduitApp {
         let catalog = self.engine_catalog(provider);
         let current = catalog
             .and_then(|catalog| catalog.current.clone())
-            .unwrap_or_else(|| "CLI 默认".into());
+            .unwrap_or_else(|| conduit::i18n::text_static("generation.cli_default").into());
         let config_path = catalog
             .map(|catalog| display_path(&catalog.config_path))
             .unwrap_or_else(|| "—".into());
@@ -872,7 +929,10 @@ impl ConduitApp {
                     div()
                         .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().muted))
-                        .child(format!("{model_count} 个模型定义 · 未验证生成能力")),
+                        .child(conduit::i18n::format(
+                            "settings.models.model_definitions_generation_not_verified",
+                            &[("model_count", format!("{}", model_count))],
+                        )),
                 )
                 .child(
                     h_flex()
@@ -882,7 +942,9 @@ impl ConduitApp {
                                 Button::new("settings-opencode-refresh")
                                     .ghost()
                                     .small()
-                                    .label("刷新模型")
+                                    .label(conduit::i18n::text_static(
+                                        "settings.models.refresh_models",
+                                    ))
                                     .disabled(closing)
                                     .cursor_pointer()
                                     .on_click(move |_, _, cx| {
@@ -897,9 +959,11 @@ impl ConduitApp {
                                 .ghost()
                                 .small()
                                 .label(if expanded {
-                                    "收起模型目录"
+                                    conduit::i18n::text_static("settings.models.hide_model_catalog")
                                 } else {
-                                    "管理模型目录"
+                                    conduit::i18n::text_static(
+                                        "settings.models.manage_model_catalog",
+                                    )
                                 })
                                 .cursor_pointer()
                                 .on_click(move |_, _, cx| {
@@ -911,22 +975,44 @@ impl ConduitApp {
                         ),
                 )
         })
-        .keywords(["模型列表", "默认", "目录"]);
-        let mut items = vec![value_item("CLI 配置的默认模型", current), summary];
+        .keywords([
+            conduit::i18n::text_static("settings.models.model_list"),
+            conduit::i18n::text_static("chat.default"),
+            conduit::i18n::text_static("settings.models.catalog"),
+        ]);
+        let mut items = vec![
+            value_item(
+                conduit::i18n::text_static("settings.models.cli_configured_default_model"),
+                current,
+            ),
+            summary,
+        ];
         if expanded {
-            items.push(value_item("配置文件", config_path));
+            items.push(value_item(
+                conduit::i18n::text_static("settings.general.configuration_file"),
+                config_path,
+            ));
             if let Some(path) = catalog.and_then(|catalog| catalog.catalog_path.as_deref()) {
-                items.push(value_item("模型目录", display_path(path)));
+                items.push(value_item(
+                    conduit::i18n::text_static("settings.models.model_catalog"),
+                    display_path(path),
+                ));
             }
             if let Some(endpoint) = catalog.and_then(|catalog| catalog.endpoint.clone()) {
-                items.push(value_item("接口", endpoint));
+                items.push(value_item(
+                    conduit::i18n::text_static("settings.models.interface"),
+                    endpoint,
+                ));
             }
             if let Some(detail) = catalog.and_then(|catalog| catalog.detail.clone()) {
-                items.push(value_item("附加配置", detail));
+                items.push(value_item(
+                    conduit::i18n::text_static("settings.models.additional_configuration"),
+                    detail,
+                ));
             }
             items.extend(vec![
                 SettingItem::new(
-                    "模型列表",
+                    conduit::i18n::text_static("settings.models.model_list"),
                     self.managed_models_field(provider, view.clone()),
                 )
                 .layout(Axis::Vertical),
@@ -934,15 +1020,18 @@ impl ConduitApp {
         }
         if let Some(error) = error {
             items.push(
-                SettingItem::new("读取失败", error_field(error))
-                    .layout(Axis::Vertical)
-                    .keywords(["错误"]),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.models.read_failed"),
+                    error_field(error),
+                )
+                .layout(Axis::Vertical)
+                .keywords([conduit::i18n::text_static("settings.models.error")]),
             );
         }
         let group = settings_section(if provider == Provider::OpenCode {
-            "OpenCode 原生模型"
+            conduit::i18n::text_static("settings.models.opencode_native_models")
         } else {
-            "CLI 默认配置"
+            conduit::i18n::text_static("settings.models.cli_defaults")
         })
         .variant(GroupBoxVariant::Outline)
         .items(items);
@@ -962,6 +1051,7 @@ mod tests {
     fn provider_editor_tracks_fields_and_credentials_without_persisting_drafts(
         cx: &mut gpui_kit::TestAppContext,
     ) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         cx.add_window_view(|window, cx| {
             let app =
@@ -993,6 +1083,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn provider_editor_renders_all_fields_and_save_actions(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let (_, cx) = cx.add_window_view(|window, cx| {
             let app =

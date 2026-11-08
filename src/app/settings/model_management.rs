@@ -22,7 +22,12 @@ impl ModelEditor {
             match values[3].parse::<u64>() {
                 Ok(value) if value > 0 => Some(value),
                 _ => {
-                    self.error = Some("上下文窗口必须为正整数或留空".into());
+                    self.error = Some(
+                        conduit::i18n::text_static(
+                            "settings.model_management.context_window_must_be_a_positive_integer",
+                        )
+                        .into(),
+                    );
                     cx.notify();
                     return;
                 }
@@ -36,7 +41,10 @@ impl ModelEditor {
         };
         let result = self.app.update(cx, |app, cx| -> Result<(), String> {
             if !app.writable || app.closing {
-                return Err("当前无法保存设置".into());
+                return Err(conduit::i18n::text_static(
+                    "settings.model_management.unable_to_save_settings_right_now",
+                )
+                .into());
             }
             let previous = app.store.cli.clone();
             if let Err(error) = app.store.cli.models_mut(self.engine).save(
@@ -49,7 +57,10 @@ impl ModelEditor {
             }
             if !app.persist() {
                 app.store.cli = previous;
-                return Err("模型保存失败，请检查数据目录后重试".into());
+                return Err(conduit::i18n::text_static(
+                    "settings.model_management.failed_to_save_model_check_the_data",
+                )
+                .into());
             }
             cx.emit(crate::providers::ProviderCatalogChanged);
             cx.notify();
@@ -76,16 +87,16 @@ impl Render for ModelEditor {
                 div()
                     .text_size(ui_text_size(12.))
                     .text_color(rgb(palette().muted))
-                    .child(format!(
-                        "{} · 仅保存应用侧模型信息，实际可用性由 CLI 和服务决定。",
-                        self.engine.label()
+                    .child(conduit::i18n::format(
+                        "settings.model_management.only_app_side_model_information_is_saved",
+                        &[("arg0", self.engine.label().to_string())],
                     )),
             );
         for (index, label) in [
-            "模型 ID",
-            "显示名称（可选）",
-            "备注（可选）",
-            "上下文窗口 / tokens（可选）",
+            conduit::i18n::text_static("settings.models.model_id"),
+            conduit::i18n::text_static("settings.model_management.display_name_optional"),
+            conduit::i18n::text_static("settings.model_management.notes_optional"),
+            conduit::i18n::text_static("settings.model_management.context_window_tokens_optional"),
         ]
         .into_iter()
         .enumerate()
@@ -107,14 +118,16 @@ impl Render for ModelEditor {
                 .justify_end()
                 .child(
                     Button::new("model-editor-cancel")
-                        .label("取消")
+                        .label(conduit::i18n::text_static("git_branches.cancel"))
                         .ghost()
                         .on_click(|_, window, cx| window.close_dialog(cx)),
                 )
                 .child(
                     Button::new("model-editor-save")
                         .debug_selector(|| "model-editor-save".into())
-                        .label("保存模型")
+                        .label(conduit::i18n::text_static(
+                            "settings.model_management.save_model",
+                        ))
                         .primary()
                         .disabled(disabled)
                         .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
@@ -158,7 +171,10 @@ impl ConduitApp {
                 .unwrap_or_else(|| ModelOption {
                     id: id.clone(),
                     label: id.clone(),
-                    note: "新会话默认 · 目录未发现".into(),
+                    note: conduit::i18n::text_static(
+                        "settings.model_management.new_session_default_not_found_in_catalog",
+                    )
+                    .into(),
                     context_window: None,
                 });
             models.push(model);
@@ -200,7 +216,9 @@ impl ConduitApp {
         window.open_dialog(cx, move |dialog, window, _| {
             let editor = editor.clone();
             dialog
-                .title("管理 CLI 模型")
+                .title(conduit::i18n::text_static(
+                    "settings.model_management.manage_cli_models",
+                ))
                 .margin_top(px(32.))
                 .overlay_closable(false)
                 .w((window.viewport_size().width - px(60.)).clamp(px(0.), px(620.)))
@@ -264,14 +282,14 @@ impl ConduitApp {
                         div()
                             .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().muted))
-                            .child("隐藏仅影响候选列表；当前会话和默认值仍可识别。"),
+                            .child(conduit::i18n::text_static("settings.model_management.hiding_only_affects_the_candidate_list_current")),
                     )
                     .child(
                         Button::new("model-add")
                             .debug_selector(|| "model-add".into())
                             .small()
                             .outline()
-                            .label("添加模型")
+                            .label(conduit::i18n::text_static("settings.model_management.add_model"))
                             .disabled(disabled)
                             .on_click(move |_, window, cx| {
                                 add.update(cx, |app, cx| {
@@ -281,36 +299,56 @@ impl ConduitApp {
                     ),
             );
             list = list
-                .child(Input::new(&search).small().aria_label("搜索 CLI 模型"))
+                .child(
+                    Input::new(&search)
+                        .small()
+                        .aria_label(conduit::i18n::text_static(
+                            "settings.model_management.search_cli_models",
+                        )),
+                )
                 .child(
                     div()
                         .text_size(ui_text_size(11.))
                         .text_color(rgb(palette().muted))
-                        .child(format!(
-                            "显示 {} / {} 个匹配模型 · 共 {} 个定义",
-                            matches.len().min(limit),
-                            matches.len(),
-                            rows.len()
+                        .child(conduit::i18n::format(
+                            "settings.model_management.showing_matching_models_definitions_total",
+                            &[
+                                ("arg0", format!("{}", matches.len().min(limit))),
+                                ("arg1", format!("{}", matches.len())),
+                                ("arg2", format!("{}", rows.len())),
+                            ],
                         )),
                 );
             if rows.is_empty() {
-                list = list.child("未发现模型。可添加模型 ID，或在 CLI 配置后刷新。");
+                list = list.child(conduit::i18n::text_static(
+                    "settings.model_management.no_models_found_add_a_model_id",
+                ));
             } else if matches.is_empty() {
-                list = list.child("没有匹配的模型，请调整搜索条件。");
+                list = list.child(conduit::i18n::text_static(
+                    "settings.model_management.no_matching_models_adjust_the_search",
+                ));
             }
             for (index, model) in matches.iter().take(limit).copied().enumerate() {
                 let hidden = preferences.hidden.contains(&model.id);
                 let custom = preferences.custom.iter().any(|m| m.id == model.id);
                 let current = default.as_deref() == Some(&model.id);
-                let mut badges = vec![if custom { "本地定义" } else { "CLI 来源" }];
+                let mut badges = vec![if custom {
+                    conduit::i18n::text_static("settings.model_management.local_definition")
+                } else {
+                    conduit::i18n::text_static("settings.model_management.cli_source")
+                }];
                 if hidden {
-                    badges.push("已隐藏");
+                    badges.push(conduit::i18n::text_static(
+                        "settings.model_management.hidden",
+                    ));
                 }
                 if current {
-                    badges.push("新会话默认");
+                    badges.push(conduit::i18n::text_static(
+                        "settings.defaults.new_session_defaults",
+                    ));
                 }
                 if native_default.as_deref() == Some(&model.id) {
-                    badges.push("CLI 默认");
+                    badges.push(conduit::i18n::text_static("generation.cli_default"));
                 }
                 let edit = view.clone();
                 let edit_model = model.clone();
@@ -363,11 +401,12 @@ impl ConduitApp {
                                             )
                                         })
                                         .when_some(model.context_window, |row, tokens| {
-                                            row.child(
-                                                div()
-                                                    .text_size(ui_text_size(11.))
-                                                    .child(format!("上下文：{tokens} tokens")),
-                                            )
+                                            row.child(div().text_size(ui_text_size(11.)).child(
+                                                conduit::i18n::format(
+                                                    "settings.model_management.context_tokens",
+                                                    &[("tokens", format!("{}", tokens))],
+                                                ),
+                                            ))
                                         }),
                                 ),
                         )
@@ -379,7 +418,9 @@ impl ConduitApp {
                                     Button::new(("model-default", index))
                                         .small()
                                         .outline()
-                                        .label("用于新会话")
+                                        .label(conduit::i18n::text_static(
+                                            "settings.models.use_for_new_sessions",
+                                        ))
                                         .disabled(disabled || current)
                                         .on_click(move |_, _, cx| {
                                             use_view.update(cx, |app, cx| {
@@ -406,7 +447,9 @@ impl ConduitApp {
                                     Button::new(("model-edit", index))
                                         .small()
                                         .ghost()
-                                        .label("编辑")
+                                        .label(conduit::i18n::text_static(
+                                            "settings.extensions.edit",
+                                        ))
                                         .disabled(disabled)
                                         .on_click(move |_, window, cx| {
                                             edit.update(cx, |app, cx| {
@@ -424,7 +467,15 @@ impl ConduitApp {
                                         .debug_selector(move || format!("model-hide-{index}"))
                                         .small()
                                         .ghost()
-                                        .label(if hidden { "恢复显示" } else { "隐藏" })
+                                        .label(if hidden {
+                                            conduit::i18n::text_static(
+                                                "settings.model_management.show_again",
+                                            )
+                                        } else {
+                                            conduit::i18n::text_static(
+                                                "settings.model_management.hide",
+                                            )
+                                        })
                                         .disabled(disabled)
                                         .on_click(move |_, _, cx| {
                                             hide.update(cx, |app, cx| {
@@ -447,7 +498,9 @@ impl ConduitApp {
                                         Button::new(("model-remove", index))
                                             .small()
                                             .ghost()
-                                            .label("移除本地定义")
+                                            .label(conduit::i18n::text_static(
+                                                "settings.model_management.remove_local_definition",
+                                            ))
                                             .disabled(disabled)
                                             .on_click(move |_, _, cx| {
                                                 remove.update(cx, |app, cx| {
@@ -473,7 +526,9 @@ impl ConduitApp {
                     Button::new("models-load-more")
                         .small()
                         .outline()
-                        .label("再显示 50 个模型")
+                        .label(conduit::i18n::text_static(
+                            "settings.model_management.show_50_more_models",
+                        ))
                         .on_click(move |_, _, cx| {
                             more.update(cx, |app, cx| {
                                 app.connection_settings.model_limit += 50;
@@ -497,6 +552,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn settings_model_editor_validates_persists_and_respects_readonly(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let root = std::env::temp_dir().join(format!(
             "conduit-model-management-{}-{}",

@@ -24,6 +24,7 @@ mod tests {
     fn config_editor_requires_explicit_discard_after_edits_and_keeps_failures(
         cx: &mut TestAppContext,
     ) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         cx.add_window_view(|window, cx| {
             let app =
@@ -64,6 +65,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn config_and_mcp_forms_keep_actions_visible_on_short_windows(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
         let output = slot.clone();
@@ -145,19 +147,110 @@ struct McpForm {
 
 impl Render for McpForm {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let form = v_flex().id("mcp-form").debug_selector(|| "mcp-form".into()).gap_3()
-            .max_h((window.viewport_size().height - px(210.)).max(px(160.))).overflow_y_scroll()
-            .child(div().text_size(ui_text_size(12.)).text_color(rgb(palette().muted)).child(format!("{} · {}", self.engine.label(), display_path(&self.path))))
-            .child(v_flex().gap_1().child("服务名称").child(Input::new(&self.fields[0]).aria_label("MCP 服务名称")))
-            .child(h_flex().gap_2()
-                .child(Button::new("mcp-local").small().outline().label("本地命令").selected(!self.remote).on_click(cx.listener(|this, _, _, cx| { this.remote = false; cx.notify(); })))
-                .child(Button::new("mcp-remote").small().outline().label("远程 HTTP").selected(self.remote).on_click(cx.listener(|this, _, _, cx| { this.remote = true; cx.notify(); }))))
-            .child(v_flex().gap_1().child(if self.remote { "服务 URL" } else { "可执行命令（如 npx、uvx 或完整路径）" })
-                .child(Input::new(&self.fields[1]).aria_label("MCP 命令或地址")))
-            .when(!self.remote, |body| body.child(v_flex().gap_1().child("参数（每行一个，无需额外引号）")
-                .child(Textarea::new(&self.arguments).h(px(90.)).aria_label("MCP 命令参数"))))
-            .child(div().text_size(ui_text_size(11.)).text_color(rgb(palette().muted)).child("下一步预览合并后的配置；可继续添加环境变量、认证头等高级选项。保存后由 CLI 在会话中加载。"))
-            .when_some(self.error.clone(), |body, error| body.child(div().text_size(ui_text_size(12.)).text_color(rgb(palette().danger_text)).child(error)));
+        let form = v_flex()
+            .id("mcp-form")
+            .debug_selector(|| "mcp-form".into())
+            .gap_3()
+            .max_h((window.viewport_size().height - px(210.)).max(px(160.)))
+            .overflow_y_scroll()
+            .child(
+                div()
+                    .text_size(ui_text_size(12.))
+                    .text_color(rgb(palette().muted))
+                    .child(format!(
+                        "{} · {}",
+                        self.engine.label(),
+                        display_path(&self.path)
+                    )),
+            )
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(conduit::i18n::text_static(
+                        "settings.config_editor.service_name",
+                    ))
+                    .child(
+                        Input::new(&self.fields[0]).aria_label(conduit::i18n::text_static(
+                            "settings.config_editor.mcp_service_name",
+                        )),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        Button::new("mcp-local")
+                            .small()
+                            .outline()
+                            .label(conduit::i18n::text_static(
+                                "settings.config_editor.local_command",
+                            ))
+                            .selected(!self.remote)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.remote = false;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("mcp-remote")
+                            .small()
+                            .outline()
+                            .label(conduit::i18n::text_static(
+                                "settings.config_editor.remote_http",
+                            ))
+                            .selected(self.remote)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.remote = true;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(if self.remote {
+                        conduit::i18n::text_static("settings.config_editor.service_url")
+                    } else {
+                        conduit::i18n::text_static(
+                            "settings.config_editor.executable_command_e_g_npx_uvx_or",
+                        )
+                    })
+                    .child(
+                        Input::new(&self.fields[1]).aria_label(conduit::i18n::text_static(
+                            "settings.config_editor.mcp_command_or_url",
+                        )),
+                    ),
+            )
+            .when(!self.remote, |body| {
+                body.child(
+                    v_flex()
+                        .gap_1()
+                        .child(conduit::i18n::text_static(
+                            "settings.config_editor.arguments_one_per_line_no_extra_quotes",
+                        ))
+                        .child(Textarea::new(&self.arguments).h(px(90.)).aria_label(
+                            conduit::i18n::text_static(
+                                "settings.config_editor.mcp_command_arguments",
+                            ),
+                        )),
+                )
+            })
+            .child(
+                div()
+                    .text_size(ui_text_size(11.))
+                    .text_color(rgb(palette().muted))
+                    .child(conduit::i18n::text_static(
+                        "settings.config_editor.preview_the_merged_configuration_next_you_can",
+                    )),
+            )
+            .when_some(self.error.clone(), |body, error| {
+                body.child(
+                    div()
+                        .text_size(ui_text_size(12.))
+                        .text_color(rgb(palette().danger_text))
+                        .child(error),
+                )
+            });
         v_flex().gap_3().child(form).child(
             h_flex()
                 .justify_end()
@@ -165,14 +258,16 @@ impl Render for McpForm {
                 .child(
                     Button::new("mcp-form-cancel")
                         .ghost()
-                        .label("取消")
+                        .label(conduit::i18n::text_static("git_branches.cancel"))
                         .on_click(|_, window, cx| window.close_dialog(cx)),
                 )
                 .child(
                     Button::new("mcp-form-preview")
                         .debug_selector(|| "mcp-form-preview".into())
                         .primary()
-                        .label("预览配置")
+                        .label(conduit::i18n::text_static(
+                            "settings.config_editor.preview_configuration",
+                        ))
                         .on_click(cx.listener(|this, _, window, cx| {
                             if !this.app.read(cx).writable || this.app.read(cx).closing {
                                 return;
@@ -243,9 +338,9 @@ pub(super) fn show_editor(
                 (f32::from(window.viewport_size().width) - 60.).clamp(0., 820.)
             ))
             .title(if new_skill {
-                "创建 Skill"
+                conduit::i18n::text_static("settings.config_editor.create_skill")
             } else {
-                "编辑原生配置"
+                conduit::i18n::text_static("settings.config_editor.edit_native_configuration")
             })
             .overlay_closable(false)
             .keyboard(!saving)
@@ -311,9 +406,9 @@ impl ConfigEditor {
                             app.extensions_ui.invalidate();
                             app.extensions_ui.feedback = Some(
                                 if editor.original.is_some() {
-                                    "配置已保存，原文件已备份；下次启动会话时加载。"
+                                    conduit::i18n::text_static("settings.config_editor.configuration_saved_original_backed_up_loaded_when")
                                 } else {
-                                    "配置已创建；下次启动会话时加载。"
+                                    conduit::i18n::text_static("settings.config_editor.configuration_created_loaded_when_the_next_session")
                                 }
                                 .into(),
                             );
@@ -350,11 +445,14 @@ impl Render for ConfigEditor {
             )
             .when_some(self.name.clone(), |body, name| {
                 body.child(
-                    v_flex().gap_1().child("技能文件夹名称").child(
-                        Input::new(&name)
-                            .disabled(self.saving)
-                            .aria_label("技能文件夹名称"),
-                    ),
+                    v_flex()
+                        .gap_1()
+                        .child(conduit::i18n::text_static(
+                            "settings.config_editor.skill_folder_name",
+                        ))
+                        .child(Input::new(&name).disabled(self.saving).aria_label(
+                            conduit::i18n::text_static("settings.config_editor.skill_folder_name"),
+                        )),
                 )
             })
             .child(
@@ -362,14 +460,18 @@ impl Render for ConfigEditor {
                     Textarea::new(&self.text)
                         .disabled(self.saving)
                         .h_full()
-                        .aria_label("配置文件内容"),
+                        .aria_label(conduit::i18n::text_static(
+                            "settings.config_editor.configuration_contents",
+                        )),
                 ),
             )
             .child(
                 div()
                     .text_size(ui_text_size(11.))
                     .text_color(rgb(palette().muted))
-                    .child("保存前校验格式并保留原文件备份。生效范围以文件路径为准。"),
+                    .child(conduit::i18n::text_static(
+                        "settings.config_editor.validate_the_format_and_back_up_the",
+                    )),
             )
             .when_some(self.error.clone(), |body, error| {
                 body.child(
@@ -386,9 +488,9 @@ impl Render for ConfigEditor {
                 .child(
                     Button::new("native-config-cancel")
                         .label(if self.confirm_discard {
-                            "继续编辑"
+                            conduit::i18n::text_static("settings.config_editor.continue_editing")
                         } else {
-                            "取消"
+                            conduit::i18n::text_static("git_branches.cancel")
                         })
                         .ghost()
                         .disabled(self.saving)
@@ -405,7 +507,9 @@ impl Render for ConfigEditor {
                 .when(self.confirm_discard, |row| {
                     row.child(
                         Button::new("native-config-discard")
-                            .label("放弃未保存修改")
+                            .label(conduit::i18n::text_static(
+                                "settings.config_editor.discard_unsaved_changes",
+                            ))
                             .ghost()
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
@@ -414,9 +518,9 @@ impl Render for ConfigEditor {
                     Button::new("native-config-save")
                         .debug_selector(|| "native-config-save".into())
                         .label(if self.saving {
-                            "保存中…"
+                            conduit::i18n::text_static("settings.config_editor.saving")
                         } else {
-                            "保存配置"
+                            conduit::i18n::text_static("settings.config_editor.save_configuration")
                         })
                         .primary()
                         .disabled(self.saving)
@@ -468,7 +572,9 @@ impl ConduitApp {
                 window.open_dialog(cx, move |dialog, window, _| {
                     let form = form.clone();
                     dialog
-                        .title("添加 MCP 服务")
+                        .title(conduit::i18n::text_static(
+                            "settings.config_editor.add_mcp_service",
+                        ))
                         .margin_top(px(32.))
                         .w(px(
                             (f32::from(window.viewport_size().width) - 60.).clamp(0., 620.)

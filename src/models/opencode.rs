@@ -56,8 +56,9 @@ impl OpenCodeModelsProbe {
         thread::spawn(move || {
             let result = load_cached(&settings, &cwd, &cancel, refresh);
             let catalog = result.unwrap_or_else(|error| ModelCatalog {
-                error: Some(format!(
-                    "OpenCode 原生模型目录读取失败：{error:#}；请检查 CLI 配置后刷新"
+                error: Some(conduit::i18n::format(
+                    "models.opencode.failed_to_read_opencode_native_model_catalog",
+                    &[("error", format!("{:#}", error))],
                 )),
                 ..Default::default()
             });
@@ -134,7 +135,11 @@ fn load(settings: &cli::CliSettings, cwd: &Path, cancelled: &AtomicBool) -> Resu
         Duration::from_secs(20),
         16 * 1024 * 1024,
     )
-    .map_err(|_| anyhow::anyhow!("CLI 查询失败、超时或输出超限"))?;
+    .map_err(|_| {
+        anyhow::anyhow!(conduit::i18n::text(
+            "models.opencode.cli_query_failed_timed_out_or_exceeded"
+        ))
+    })?;
     let mut catalog = parse_catalog(&output)?;
     catalog.config_path = executable;
     catalog.fetched_at = Some(SystemTime::now());
@@ -145,13 +150,15 @@ fn parse_catalog(output: &str) -> Result<ModelCatalog> {
     let mut rest = output.trim_start_matches('\u{feff}').trim();
     let mut catalog = ModelCatalog::default();
     while !rest.is_empty() {
-        let (id, tail) = rest
-            .split_once('\n')
-            .context("CLI 模型目录缺少模型元数据")?;
+        let (id, tail) = rest.split_once('\n').context(conduit::i18n::text_static(
+            "models.opencode.cli_model_catalog_is_missing_model_metadata",
+        ))?;
         let id = id.trim();
-        let (provider, model) = id.split_once('/').context("CLI 模型 ID 格式无效")?;
+        let (provider, model) = id.split_once('/').context(conduit::i18n::text_static(
+            "models.opencode.invalid_cli_model_id",
+        ))?;
         if provider.is_empty() || model.is_empty() || id.chars().any(char::is_whitespace) {
-            bail!("CLI 模型 ID 格式无效");
+            bail!(conduit::i18n::text("models.opencode.invalid_cli_model_id"));
         }
         // --verbose emits provider/model followed by a pretty-printed object,
         // not one JSON document. Stream one object and advance by byte offset.
@@ -159,10 +166,16 @@ fn parse_catalog(output: &str) -> Result<ModelCatalog> {
             serde_json::Deserializer::from_str(tail.trim_start()).into_iter::<serde_json::Value>();
         let metadata = objects
             .next()
-            .context("CLI 模型元数据为空")?
-            .context("CLI 模型元数据不是有效 JSON")?;
+            .context(conduit::i18n::text_static(
+                "models.opencode.cli_model_metadata_is_empty",
+            ))?
+            .context(conduit::i18n::text_static(
+                "models.opencode.cli_model_metadata_is_not_valid_json",
+            ))?;
         if !metadata.is_object() {
-            bail!("CLI 模型元数据格式无效");
+            bail!(conduit::i18n::text(
+                "models.opencode.invalid_cli_model_metadata_format"
+            ));
         }
         push_model_with_context(
             &mut catalog.models,
@@ -174,8 +187,12 @@ fn parse_catalog(output: &str) -> Result<ModelCatalog> {
         rest = tail.trim_start()[objects.byte_offset()..].trim_start();
     }
     if catalog.models.is_empty() {
-        catalog.note =
-            Some("OpenCode CLI 未返回可用模型，请先在 OpenCode 配置 Provider 后刷新".into());
+        catalog.note = Some(
+            conduit::i18n::text_static(
+                "models.opencode.opencode_cli_returned_no_available_models_configure",
+            )
+            .into(),
+        );
     }
     Ok(catalog)
 }
@@ -186,6 +203,7 @@ mod tests {
 
     #[test]
     fn native_cache_survives_restart_expires_daily_and_manual_refresh_bypasses_it() {
+        let _locale = crate::test_support::chinese();
         let root =
             std::env::temp_dir().join(format!("conduit-catalog-cache-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
@@ -225,6 +243,7 @@ mod tests {
 
     #[test]
     fn native_catalog_reads_cli_names_contexts_and_discards_credentials() {
+        let _locale = crate::test_support::chinese();
         let output = "opencode/free\r\n{\"name\":\"Free model\",\"limit\":{\"context\":200000},\"options\":{\"apiKey\":\"secret\"}}\r\nproxy/model/with/slash\n{\"name\":\"Custom model\",\"limit\":{\"context\":32000}}\n";
         let catalog = parse_catalog(output).unwrap();
         assert_eq!(catalog.models.len(), 2);
@@ -237,6 +256,7 @@ mod tests {
 
     #[test]
     fn native_catalog_rejects_partial_output_and_reports_empty_results() {
+        let _locale = crate::test_support::chinese();
         for output in [
             "not-a-model\n{}",
             "opencode/test\n{",
@@ -253,6 +273,7 @@ mod tests {
     #[test]
     #[ignore = "reads installed OpenCode native model directory; no model request"]
     fn installed_opencode_native_catalog() {
+        let _locale = crate::test_support::chinese();
         let catalog = load(
             &cli::CliSettings::default(),
             &std::env::current_dir().unwrap(),

@@ -98,6 +98,7 @@ mod tests {
 
     #[test]
     fn small_logos_keep_accent_transparency_and_exact_device_size() {
+        let _locale = crate::test_support::chinese();
         // Title bar at 100/125/150/175/200%, plus About and startup sizes.
         for pixels in [20, 25, 30, 35, 40, 50, 60, 64, 80, 96, 128] {
             let image = rendered_logo(pixels);

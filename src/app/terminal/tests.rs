@@ -30,6 +30,7 @@ fn wait(runtime: &Runtime, active: bool) {
 
 #[gpui_kit::test]
 fn terminal_workspace_tabs_hide_and_cleanup(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, root) = crate::app::queue::tests::fixture(cx, "terminal-workspaces");
     std::fs::create_dir_all(root.join("other")).unwrap();
     let first = cx.update(|window, cx| {
@@ -92,6 +93,7 @@ fn terminal_workspace_tabs_hide_and_cleanup(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn terminal_keys_stay_out_of_chat_and_return_focus(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _) = crate::app::queue::tests::fixture(cx, "terminal-keys");
     let runtime = cx.update(|window, cx| {
         app.update(cx, |app, cx| {
@@ -135,6 +137,7 @@ fn terminal_keys_stay_out_of_chat_and_return_focus(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn terminal_tab_close_requires_second_click_and_small_layout_fits(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _) = crate::app::queue::tests::fixture(cx, "terminal-close");
     let (id, runtime, current_id, current) = cx.update(|window, cx| {
         app.update(cx, |app, cx| {
@@ -231,6 +234,7 @@ fn terminal_tab_close_requires_second_click_and_small_layout_fits(cx: &mut TestA
 
 #[gpui_kit::test]
 fn terminal_capacity_host_command_and_exit_guards(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     use conduit::plugins::builtins;
     use gpui_kit::component::WindowExt;
     let (app, cx, root) = crate::app::queue::tests::fixture(cx, "terminal-guards");

@@ -68,7 +68,9 @@ impl CliAdapter for OpenCodeAdapter {
         if approval.kind == ApprovalKind::OpenCodeUserInput {
             self.questions
                 .as_ref()
-                .context("OpenCode 问答连接不可用")?
+                .context(conduit::i18n::text_static(
+                    "cli_adapter.opencode.opencode_question_connection_unavailable",
+                ))?
                 .respond(approval, response)?;
             Ok(None)
         } else {

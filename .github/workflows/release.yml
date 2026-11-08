@@ -81,6 +81,7 @@ jobs:
         with:
           shared-key: windows-msvc
           cache-on-failure: true
+      - run: python scripts/check-i18n.py
       - run: cargo fmt --all --check
         if: steps.ci.outputs.reused == 'false'
       - run: cargo clippy --locked --all-targets -- -D warnings

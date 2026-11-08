@@ -26,17 +26,20 @@ impl Manifest {
     pub fn validate(&self) -> Result<()> {
         ensure!(
             self.schema == 1 && self.min_updater_version <= 1,
-            "此更新需要更新版本的安装器"
+            conduit::i18n::text("update.manifest.this_update_requires_a_newer_installer")
         );
         let version = semver::Version::parse(&self.version)?;
         ensure!(
             version.pre.is_empty() && version.build.is_empty(),
-            "当前仅支持稳定版本"
+            conduit::i18n::text("update.manifest.only_stable_versions_are_supported")
         );
-        ensure!(self.target == "x86_64-pc-windows-msvc", "更新包平台不匹配");
+        ensure!(
+            self.target == "x86_64-pc-windows-msvc",
+            conduit::i18n::text("update.manifest.update_package_platform_mismatch")
+        );
         ensure!(
             self.filename == format!("Conduit-{}-windows-x64-setup.exe", self.version),
-            "更新文件名不匹配"
+            conduit::i18n::text("update.manifest.update_filename_mismatch")
         );
         ensure!(
             self.url
@@ -46,36 +49,48 @@ impl Manifest {
                     self.version,
                     self.filename
                 ),
-            "更新来源不匹配"
+            conduit::i18n::text("update.manifest.update_source_mismatch")
         );
         ensure!(
             self.size > 0 && self.size <= MAX_PACKAGE_SIZE,
-            "更新大小无效"
+            conduit::i18n::text("update.manifest.invalid_update_size")
         );
         ensure!(
             self.sha256.len() == 64 && self.sha256.bytes().all(|c| c.is_ascii_hexdigit()),
-            "SHA-256 无效"
+            conduit::i18n::text("update.manifest.invalid_sha_256")
         );
-        ensure!(self.notes.len() <= 256 * 1024, "更新说明过长");
+        ensure!(
+            self.notes.len() <= 256 * 1024,
+            conduit::i18n::text("update.manifest.release_notes_are_too_long")
+        );
         Ok(())
     }
 }
 
 pub fn verify_manifest(raw: &[u8], signature: &str, public_key: &str) -> Result<Manifest> {
-    ensure!(raw.len() <= 1024 * 1024, "更新清单过大");
+    ensure!(
+        raw.len() <= 1024 * 1024,
+        conduit::i18n::text("update.manifest.update_manifest_is_too_large")
+    );
     let key: [u8; 32] = STANDARD
         .decode(public_key.trim())
-        .context("更新公钥无效")?
+        .context(conduit::i18n::text_static(
+            "update.manifest.invalid_update_public_key",
+        ))?
         .try_into()
-        .map_err(|_| anyhow::anyhow!("更新公钥长度无效"))?;
-    let signature = Signature::from_slice(
-        &STANDARD
-            .decode(signature.trim())
-            .context("更新签名编码无效")?,
-    )?;
+        .map_err(|_| {
+            anyhow::anyhow!(conduit::i18n::text(
+                "update.manifest.invalid_update_public_key_length"
+            ))
+        })?;
+    let signature = Signature::from_slice(&STANDARD.decode(signature.trim()).context(
+        conduit::i18n::text_static("update.manifest.invalid_update_signature_encoding"),
+    )?)?;
     VerifyingKey::from_bytes(&key)?
         .verify_strict(raw, &signature)
-        .context("更新签名验证失败")?;
+        .context(conduit::i18n::text_static(
+            "update.manifest.update_signature_verification_failed",
+        ))?;
     let manifest: Manifest = serde_json::from_slice(raw)?;
     manifest.validate()?;
     Ok(manifest)
@@ -92,18 +107,24 @@ pub fn hash_file(path: &Path) -> Result<(u64, String)> {
             break;
         }
         size += len as u64;
-        ensure!(size <= MAX_PACKAGE_SIZE, "安装包超出大小限制");
+        ensure!(
+            size <= MAX_PACKAGE_SIZE,
+            conduit::i18n::text("update.manifest.installer_exceeds_the_size_limit")
+        );
         digest.update(&buffer[..len]);
     }
     Ok((size, format!("{:x}", digest.finalize())))
 }
 
 pub fn verify_package(path: &Path, manifest: &Manifest) -> Result<()> {
-    ensure!(path.metadata()?.len() == manifest.size, "安装包大小不匹配");
+    ensure!(
+        path.metadata()?.len() == manifest.size,
+        conduit::i18n::text("update.manifest.installer_size_mismatch")
+    );
     let (_, digest) = hash_file(path)?;
     ensure!(
         digest.eq_ignore_ascii_case(&manifest.sha256),
-        "安装包 SHA-256 不匹配"
+        conduit::i18n::text("update.manifest.installer_sha_256_mismatch")
     );
     Ok(())
 }
@@ -133,6 +154,7 @@ mod tests {
 
     #[test]
     fn authenticity_covers_every_byte_and_key() {
+        let _locale = crate::test_support::chinese();
         let signer = SigningKey::from_bytes(&[7; 32]);
         let key = STANDARD.encode(signer.verifying_key().as_bytes());
         let mut bytes = serde_json::to_vec(&fixture()).unwrap();
@@ -147,6 +169,7 @@ mod tests {
 
     #[test]
     fn incompatible_and_unsafe_manifests_fail_closed() {
+        let _locale = crate::test_support::chinese();
         for mutate in [
             |m: &mut Manifest| m.filename = "../evil.exe".into(),
             |m: &mut Manifest| m.url = "https://example.com/a.exe".into(),
@@ -163,6 +186,7 @@ mod tests {
 
     #[test]
     fn package_verification_rejects_truncated_and_same_size_corruption() {
+        let _locale = crate::test_support::chinese();
         let path =
             std::env::temp_dir().join(format!("conduit-package-test-{}.exe", std::process::id()));
         std::fs::write(&path, b"package").unwrap();

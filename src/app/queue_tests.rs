@@ -93,6 +93,7 @@ fn draw(cx: &mut VisualTestContext) {
 
 #[gpui_kit::test]
 fn stop_shortcut_only_cancels_selected_run_and_retains_queue(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _) = fixture(cx, "stop-shortcut");
     let mut senders = Vec::new();
     cx.update(|window, cx| {
@@ -127,6 +128,7 @@ fn stop_shortcut_only_cancels_selected_run_and_retains_queue(cx: &mut TestAppCon
 
 #[gpui_kit::test]
 fn composer_actions_remain_inside_short_and_narrow_viewports(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _) = fixture(cx, "composer-layout");
     let mut sender = None;
     cx.update(|window, cx| {
@@ -205,6 +207,7 @@ fn settle_saves(
 #[cfg(windows)]
 #[gpui_kit::test]
 fn queue_message_save_isolated_from_another_test_writer(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     // A previous test's detached writer can outlive its test thread, even when
     // the harness uses --test-threads=1. Keep its temporary file open throughout
     // this send so a shared data directory fails deterministically on Windows.
@@ -244,6 +247,7 @@ fn queue_message_save_isolated_from_another_test_writer(cx: &mut TestAppContext)
 
 #[gpui_kit::test]
 fn queue_message_ui_capacity_and_takeback_preserve_drafts(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, root) = fixture(cx, "capacity");
     let file = root.join("reference.txt");
     std::fs::write(&file, "reference").unwrap();
@@ -320,6 +324,7 @@ fn queue_message_ui_capacity_and_takeback_preserve_drafts(cx: &mut TestAppContex
 
 #[gpui_kit::test]
 fn queue_message_background_completion_uses_bound_session_and_keeps_focus(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _) = fixture(cx, "background");
     cx.update(|window, cx| {
         app.update(cx, |this, cx| {
@@ -381,6 +386,7 @@ fn queue_message_background_completion_uses_bound_session_and_keeps_focus(cx: &m
 
 #[gpui_kit::test]
 fn queue_message_failure_cancel_and_manual_send(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _) = fixture(cx, "pause");
     cx.update(|window, cx| {
         app.update(cx, |this, cx| {
@@ -432,6 +438,7 @@ fn queue_message_failure_cancel_and_manual_send(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn queue_message_invalid_attachment_launch_failure_and_close_keep_content(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, root) = fixture(cx, "invalid");
     let file = root.join("vanishing.txt");
     std::fs::write(&file, "temporary").unwrap();
@@ -482,6 +489,7 @@ fn queue_message_invalid_attachment_launch_failure_and_close_keep_content(cx: &m
 
 #[gpui_kit::test]
 fn queue_message_reopen_restores_paused_and_never_auto_sends(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx, _) = fixture(cx, "restore");
     cx.update(|window, cx| {
         app.update(cx, |this, cx| {

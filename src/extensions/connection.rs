@@ -23,11 +23,16 @@ impl ToolReport {
             .take(12)
             .map(|name| clipped(name, 80))
             .collect::<Vec<_>>();
-        format!(
-            "连接成功 · {} 个可用工具{}{}。未调用工具。",
-            self.count(),
-            if names.is_empty() { "" } else { "：" },
-            names.join("、")
+        conduit::i18n::format(
+            "extensions.connection.connected_available_tools_no_tools_were_invoked",
+            &[
+                ("arg0", format!("{}", self.count())),
+                (
+                    "arg1",
+                    (if names.is_empty() { "" } else { "：" }).to_string(),
+                ),
+                ("arg2", names.join("、").to_string()),
+            ],
         )
     }
 }
@@ -87,21 +92,32 @@ impl Drop for TestProcess {
 }
 
 fn config(entry: &Entry) -> Result<Value> {
-    let text =
-        edit::read(&entry.path)?.ok_or_else(|| anyhow::anyhow!("配置文件已不存在，请刷新"))?;
+    let text = edit::read(&entry.path)?.ok_or_else(|| {
+        anyhow::anyhow!(conduit::i18n::text(
+            "extensions.connection.configuration_file_no_longer_exists_refresh_to"
+        ))
+    })?;
     let value: Value = if entry.path.extension().is_some_and(|e| e == "toml") {
-        serde_json::to_value(
-            toml::from_str::<toml::Table>(&text).map_err(|_| anyhow::anyhow!("TOML 格式无效"))?,
-        )?
+        serde_json::to_value(toml::from_str::<toml::Table>(&text).map_err(|_| {
+            anyhow::anyhow!(conduit::i18n::text(
+                "extensions.connection.invalid_toml_format"
+            ))
+        })?)?
     } else {
-        jsonc(&text).ok_or_else(|| anyhow::anyhow!("JSON 配置格式无效"))?
+        jsonc(&text).ok_or_else(|| {
+            anyhow::anyhow!(conduit::i18n::text(
+                "extensions.connection.invalid_json_configuration"
+            ))
+        })?
     };
     for key in ["mcp_servers", "mcpServers", "mcp"] {
         if let Some(server) = value[key].get(&entry.name).filter(|s| s.is_object()) {
             return Ok(server.clone());
         }
     }
-    bail!("此来源需要 CLI 自身解析，请在原生 CLI 中测试连接")
+    bail!(conduit::i18n::text(
+        "extensions.connection.this_source_requires_native_cli_parsing_test"
+    ))
 }
 
 fn initialize() -> Value {
@@ -119,23 +135,32 @@ fn tools_request(id: i64, cursor: Option<&str>) -> Value {
 }
 
 fn result(value: Value, id: i64) -> Result<Value> {
-    ensure!(value["id"] == id, "服务器返回了不匹配的响应");
+    ensure!(
+        value["id"] == id,
+        conduit::i18n::text("extensions.connection.server_returned_a_mismatched_response")
+    );
     if !value["error"].is_null() {
-        bail!(
-            "服务器返回 MCP 错误（代码 {}）；请检查原生 CLI 的配置与认证",
-            value["error"]["code"].as_i64().unwrap_or(0)
-        );
+        bail!(conduit::i18n::format(
+            "extensions.connection.server_returned_an_mcp_error_code_check",
+            &[(
+                "arg0",
+                format!("{}", value["error"]["code"].as_i64().unwrap_or(0))
+            )]
+        ));
     }
-    value
-        .get("result")
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("服务器未返回 MCP 结果"))
+    value.get("result").cloned().ok_or_else(|| {
+        anyhow::anyhow!(conduit::i18n::text(
+            "extensions.connection.server_returned_no_mcp_result"
+        ))
+    })
 }
 fn negotiated(value: &Value) -> Result<&str> {
     let version = value["protocolVersion"].as_str().unwrap_or("");
     ensure!(
         matches!(version, "2025-06-18" | "2025-03-26" | "2024-11-05"),
-        "服务器使用暂不支持的协议版本，请使用 CLI 自身连接"
+        conduit::i18n::text(
+            "extensions.connection.server_uses_an_unsupported_protocol_version_connect"
+        )
     );
     Ok(version)
 }
@@ -146,18 +171,27 @@ fn collect_tools(mut page: impl FnMut(i64, Option<&str>) -> Result<Value>) -> Re
     let mut cursor = None;
     for id in 2..102 {
         let result = page(id, cursor.as_deref())?;
-        let tools = result["tools"]
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("工具列表格式无效"))?;
+        let tools = result["tools"].as_array().ok_or_else(|| {
+            anyhow::anyhow!(conduit::i18n::text(
+                "extensions.connection.invalid_tool_list"
+            ))
+        })?;
         for tool in tools {
             let name = tool["name"]
                 .as_str()
                 .filter(|name| !name.is_empty())
-                .ok_or_else(|| anyhow::anyhow!("工具名称格式无效"))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!(conduit::i18n::text(
+                        "extensions.connection.invalid_tool_name"
+                    ))
+                })?;
             if names.insert(name.to_string()) {
                 report.names.push(name.to_string());
             }
-            ensure!(report.count() <= 10_000, "工具数量超过检测上限");
+            ensure!(
+                report.count() <= 10_000,
+                conduit::i18n::text("extensions.connection.tool_count_exceeds_the_detection_limit")
+            );
         }
         match result.get("nextCursor").filter(|value| !value.is_null()) {
             None => return Ok(report),
@@ -165,24 +199,38 @@ fn collect_tools(mut page: impl FnMut(i64, Option<&str>) -> Result<Value>) -> Re
                 let next = value
                     .as_str()
                     .filter(|cursor| !cursor.is_empty())
-                    .ok_or_else(|| anyhow::anyhow!("工具列表分页游标无效"))?;
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(conduit::i18n::text(
+                            "extensions.connection.invalid_tool_list_pagination_cursor"
+                        ))
+                    })?;
                 ensure!(
                     cursors.insert(next.to_string()),
-                    "工具列表分页游标重复，无法确定完整工具数量"
+                    conduit::i18n::text(
+                        "extensions.connection.repeated_pagination_cursor_unable_to_determine_the"
+                    )
                 );
                 cursor = Some(next.to_string());
             }
         }
     }
-    bail!("工具列表分页超过检测上限，无法确定完整工具数量")
+    bail!(conduit::i18n::text(
+        "extensions.connection.tool_pagination_exceeds_the_detection_limit_unable"
+    ))
 }
 fn check(entry: &Entry, context: &Context, cancel: &AtomicBool) -> Result<ToolReport> {
-    ensure!(!cancel.load(Ordering::Acquire), "测试已取消");
-    ensure!(!entry.disabled, "此定义已禁用，请先在来源配置中启用");
+    ensure!(
+        !cancel.load(Ordering::Acquire),
+        conduit::i18n::text("settings.extensions.test_cancelled")
+    );
+    ensure!(
+        !entry.disabled,
+        conduit::i18n::text("extensions.connection.this_definition_is_disabled_enable_it_in")
+    );
     let server = config(entry)?;
     ensure!(
         server["enabled"] != false && server["disabled"] != true,
-        "配置已禁用，请刷新列表"
+        conduit::i18n::text("extensions.connection.configuration_disabled_refresh_the_list")
     );
     if let Some(url) = server["url"].as_str() {
         http(&server, url, cancel)
@@ -202,7 +250,11 @@ fn stdio(server: &Value, cwd: &Path, cancel: &AtomicBool) -> Result<ToolReport> 
     let command = server["command"]
         .as_str()
         .or_else(|| server["command"][0].as_str())
-        .ok_or_else(|| anyhow::anyhow!("缺少启动命令"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(conduit::i18n::text(
+                "extensions.connection.startup_command_missing"
+            ))
+        })?;
     let args = if server["command"].is_array() {
         strings(&server["command"])
             .into_iter()
@@ -216,12 +268,16 @@ fn stdio(server: &Value, cwd: &Path, cancel: &AtomicBool) -> Result<ToolReport> 
     for key in ["env", "environment"] {
         if let Some(values) = server[key].as_object() {
             for (key, value) in values {
-                let value = value
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("环境变量值必须是字符串"))?;
+                let value = value.as_str().ok_or_else(|| {
+                    anyhow::anyhow!(conduit::i18n::text(
+                        "extensions.connection.environment_variable_values_must_be_strings"
+                    ))
+                })?;
                 ensure!(
                     !value.contains("${") && !value.contains("{env:"),
-                    "动态环境变量需要 CLI 自身解析，请在 CLI 中测试"
+                    conduit::i18n::text(
+                        "extensions.connection.dynamic_environment_variables_require_cli_parsing_test"
+                    )
                 );
                 env.insert(key.clone(), value.to_string());
             }
@@ -230,8 +286,12 @@ fn stdio(server: &Value, cwd: &Path, cancel: &AtomicBool) -> Result<ToolReport> 
     // Some Windows runtimes (notably .NET) fail before initializing when argv[0]
     // uses the extended-length prefix introduced by canonicalization.
     let (exe, args) = crate::cli::command_for(&crate::child::normalized_dir(&path), &args);
-    let (child, mut pipes) = crate::child::Child::spawn_with_env(&exe, &args, cwd, &env)
-        .map_err(|_| anyhow::anyhow!("无法启动 MCP 命令，请检查路径、参数和环境"))?;
+    let (child, mut pipes) =
+        crate::child::Child::spawn_with_env(&exe, &args, cwd, &env).map_err(|_| {
+            anyhow::anyhow!(conduit::i18n::text(
+                "extensions.connection.unable_to_start_mcp_command_check_its"
+            ))
+        })?;
     let _process = TestProcess(child);
     let started = Instant::now();
     let mut buffer = Vec::new();
@@ -275,10 +335,18 @@ fn resolve_command(command: &str, cwd: &Path) -> Result<PathBuf> {
     candidates
         .into_iter()
         .find_map(|p| crate::cli::validate_executable(&p).ok())
-        .ok_or_else(|| anyhow::anyhow!("找不到可执行命令；请安装它或填写完整路径"))
+        .ok_or_else(|| {
+            anyhow::anyhow!(conduit::i18n::text(
+                "extensions.connection.executable_not_found_install_it_or_provide"
+            ))
+        })
 }
 fn send(file: &mut fs::File, value: &Value) -> Result<()> {
-    writeln!(file, "{value}").map_err(|_| anyhow::anyhow!("MCP 进程输入已关闭"))
+    writeln!(file, "{value}").map_err(|_| {
+        anyhow::anyhow!(conduit::i18n::text(
+            "extensions.connection.mcp_process_input_closed"
+        ))
+    })
 }
 fn receive(
     pipes: &mut crate::child::Pipes,
@@ -289,10 +357,13 @@ fn receive(
     cancel: &AtomicBool,
 ) -> Result<Value> {
     loop {
-        ensure!(!cancel.load(Ordering::Acquire), "测试已取消");
+        ensure!(
+            !cancel.load(Ordering::Acquire),
+            conduit::i18n::text("settings.extensions.test_cancelled")
+        );
         ensure!(
             started.elapsed() < Duration::from_secs(15),
-            "连接测试超时（15 秒），已停止测试进程"
+            conduit::i18n::text("extensions.connection.connection_test_timed_out_15_seconds_test")
         );
         while let Some(end) = buffer.iter().position(|b| *b == b'\n') {
             let line: Vec<_> = buffer.drain(..=end).collect();
@@ -310,13 +381,20 @@ fn receive(
                 Ok(count) => count,
                 // stderr is not the protocol channel and can close independently.
                 Err(_) if index == 1 || !buffer.is_empty() => 0,
-                Err(_) => bail!("MCP 进程已退出，未完成连接测试"),
+                Err(_) => bail!(conduit::i18n::text(
+                    "extensions.connection.mcp_process_exited_before_the_connection_test"
+                )),
             };
             if available > 0 {
                 let mut chunk = [0; 4096];
                 let read = file.read(&mut chunk[..available.min(4096) as usize])?;
                 *bytes += read;
-                ensure!(*bytes <= 2 * 1024 * 1024, "MCP 输出超过 2 MiB，已停止测试");
+                ensure!(
+                    *bytes <= 2 * 1024 * 1024,
+                    conduit::i18n::text(
+                        "extensions.connection.mcp_output_exceeded_2_mib_test_stopped"
+                    )
+                );
                 if index == 0 {
                     buffer.extend_from_slice(&chunk[..read]);
                 }
@@ -327,27 +405,33 @@ fn receive(
 }
 
 fn http(server: &Value, address: &str, cancel: &AtomicBool) -> Result<ToolReport> {
-    let url = url::Url::parse(address).map_err(|_| anyhow::anyhow!("MCP URL 无效"))?;
+    let url = url::Url::parse(address).map_err(|_| {
+        anyhow::anyhow!(conduit::i18n::text("extensions.connection.invalid_mcp_url"))
+    })?;
     ensure!(
         matches!(url.scheme(), "http" | "https")
             && url.username().is_empty()
             && url.password().is_none(),
-        "MCP URL 必须是 HTTP(S)，且不含账号密码"
+        conduit::i18n::text("extensions.connection.mcp_url_must_use_http_s_and")
     );
     ensure!(
         server["type"] != "sse",
-        "旧式 SSE 服务请在 CLI 中连接；此处支持 Streamable HTTP"
+        conduit::i18n::text("extensions.connection.connect_to_legacy_sse_services_in_the")
     );
     let mut headers = BTreeMap::new();
     for key in ["headers", "http_headers"] {
         if let Some(values) = server[key].as_object() {
             for (key, value) in values {
-                let value = value
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("认证头格式无效"))?;
+                let value = value.as_str().ok_or_else(|| {
+                    anyhow::anyhow!(conduit::i18n::text(
+                        "extensions.connection.invalid_authentication_headers"
+                    ))
+                })?;
                 ensure!(
                     !value.contains("${") && !value.contains("{env:"),
-                    "动态认证头需要 CLI 自身解析"
+                    conduit::i18n::text(
+                        "extensions.connection.dynamic_authentication_headers_require_native_cli_parsing"
+                    )
                 );
                 headers.insert(key.clone(), value.to_string());
             }
@@ -358,7 +442,11 @@ fn http(server: &Value, address: &str, cancel: &AtomicBool) -> Result<ToolReport
             let value = name
                 .as_str()
                 .and_then(|n| std::env::var(n).ok())
-                .ok_or_else(|| anyhow::anyhow!("认证环境变量不存在"))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!(conduit::i18n::text(
+                        "extensions.connection.authentication_environment_variable_not_found"
+                    ))
+                })?;
             headers.insert(key.clone(), value);
         }
     }
@@ -367,7 +455,9 @@ fn http(server: &Value, address: &str, cancel: &AtomicBool) -> Result<ToolReport
             "Authorization".into(),
             format!(
                 "Bearer {}",
-                std::env::var(name).map_err(|_| anyhow::anyhow!("Bearer Token 环境变量不存在"))?
+                std::env::var(name).map_err(|_| anyhow::anyhow!(conduit::i18n::text(
+                    "extensions.connection.bearer_token_environment_variable_not_found"
+                )))?
             ),
         );
     }
@@ -380,7 +470,10 @@ fn http(server: &Value, address: &str, cancel: &AtomicBool) -> Result<ToolReport
                 session: Option<&str>,
                 version: Option<&str>|
      -> Result<(Value, Option<String>)> {
-        ensure!(!cancel.load(Ordering::Acquire), "测试已取消");
+        ensure!(
+            !cancel.load(Ordering::Acquire),
+            conduit::i18n::text("settings.extensions.test_cancelled")
+        );
         let mut request = agent
             .post(address)
             .header("Accept", "application/json, text/event-stream");
@@ -395,9 +488,14 @@ fn http(server: &Value, address: &str, cancel: &AtomicBool) -> Result<ToolReport
         }
         let mut response = request.send_json(message).map_err(|error| match error {
             ureq::Error::StatusCode(code) => {
-                anyhow::anyhow!("MCP HTTP {code}；请检查认证和地址。OAuth 登录请在 CLI 中完成。")
+                anyhow::anyhow!(conduit::i18n::format(
+                    "extensions.connection.mcp_http_check_authentication_and_url_complete",
+                    &[("code", format!("{}", code))]
+                ))
             }
-            _ => anyhow::anyhow!("MCP HTTP 请求失败或超时，请检查网络和证书"),
+            _ => anyhow::anyhow!(conduit::i18n::text(
+                "extensions.connection.mcp_http_request_failed_or_timed_out"
+            )),
         })?;
         let session = response
             .headers()
@@ -421,7 +519,11 @@ fn http(server: &Value, address: &str, cancel: &AtomicBool) -> Result<ToolReport
                 .with_config()
                 .limit(2 * 1024 * 1024)
                 .read_json()
-                .map_err(|_| anyhow::anyhow!("MCP 响应无效或超过 2 MiB"))?
+                .map_err(|_| {
+                    anyhow::anyhow!(conduit::i18n::text(
+                        "extensions.connection.invalid_mcp_response_or_response_exceeds_2"
+                    ))
+                })?
         };
         Ok((result(value, id)?, session))
     };
@@ -436,7 +538,9 @@ fn http(server: &Value, address: &str, cancel: &AtomicBool) -> Result<ToolReport
         collect_tools(|id, cursor| {
             ensure!(
                 started.elapsed() < Duration::from_secs(15),
-                "工具列表读取超时，请重试"
+                conduit::i18n::text(
+                    "extensions.connection.tool_list_request_timed_out_please_retry"
+                )
             );
             post(
                 &tools_request(id, cursor),
@@ -462,7 +566,11 @@ fn http(server: &Value, address: &str, cancel: &AtomicBool) -> Result<ToolReport
 fn sse_response(reader: impl BufRead, id: i64) -> Result<Value> {
     let mut data = String::new();
     for line in reader.lines() {
-        let line = line.map_err(|_| anyhow::anyhow!("MCP 事件流读取失败或超时"))?;
+        let line = line.map_err(|_| {
+            anyhow::anyhow!(conduit::i18n::text(
+                "extensions.connection.mcp_event_stream_failed_or_timed_out"
+            ))
+        })?;
         if line.is_empty() {
             if let Ok(value) = serde_json::from_str::<Value>(&data)
                 && value["id"] == id
@@ -475,7 +583,9 @@ fn sse_response(reader: impl BufRead, id: i64) -> Result<Value> {
             data.push('\n');
         }
     }
-    bail!("MCP 事件流未包含请求的响应")
+    bail!(conduit::i18n::text(
+        "extensions.connection.mcp_event_stream_did_not_contain_the"
+    ))
 }
 
 #[cfg(test)]
@@ -483,6 +593,7 @@ mod tests {
     use super::*;
     #[test]
     fn tool_counts_follow_all_pages_deduplicate_and_reject_partial_results() {
+        let _locale = crate::test_support::chinese();
         let report = collect_tools(|id, cursor| match id {
             2 => {
                 assert_eq!(cursor, None);
@@ -521,6 +632,7 @@ mod tests {
     }
     #[test]
     fn event_stream_ignores_notifications_and_never_echoes_server_errors() {
+        let _locale = crate::test_support::chinese();
         let stream = b"data: {\"jsonrpc\":\"2.0\",\"method\":\"notification\"}\n\ndata: {\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\"}}\n\n";
         assert_eq!(
             result(sse_response(&stream[..], 1).unwrap(), 1).unwrap()["protocolVersion"],
@@ -537,6 +649,7 @@ mod tests {
 
     #[test]
     fn http_handshake_lists_tools_and_closes_session_without_invoking_tools() {
+        let _locale = crate::test_support::chinese();
         use std::net::TcpListener;
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -624,6 +737,7 @@ mod tests {
 
     #[test]
     fn stdio_handshake_cleans_up_the_test_process() {
+        let _locale = crate::test_support::chinese();
         let directory = std::env::temp_dir().join(format!(
             "conduit-mcp-check-{}-{}",
             std::process::id(),

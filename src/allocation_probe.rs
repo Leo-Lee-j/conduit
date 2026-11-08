@@ -79,6 +79,7 @@ pub(crate) fn sample() -> AllocationSample {
 
 #[test]
 fn counts_follow_zeroed_growth_shrink_and_free() {
+    let _locale = crate::test_support::chinese();
     // Independent counters avoid interference from the test harness allocator.
     let allocator = TrackingAllocator::new();
     unsafe {

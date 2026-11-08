@@ -1,6 +1,7 @@
 use super::*;
 #[test]
 fn download_addresses_reject_untrusted_hosts_and_transport() {
+    let _locale = crate::test_support::chinese();
     for address in [
         "http://github.com/x",
         "https://github.com.evil.test/x",
@@ -14,12 +15,14 @@ fn download_addresses_reject_untrusted_hosts_and_transport() {
 }
 #[test]
 fn preferences_are_backward_compatible() {
+    let _locale = crate::test_support::chinese();
     let p: Preferences = serde_json::from_str("{}").unwrap();
     assert!(p.auto_check && p.auto_download && !p.auto_install);
 }
 
 #[test]
 fn metadata_retries_transient_failures_with_bounded_backoff() {
+    let _locale = crate::test_support::chinese();
     let mut attempts = 0;
     let mut waits = Vec::new();
     let value = retry_metadata(
@@ -41,6 +44,7 @@ fn metadata_retries_transient_failures_with_bounded_backoff() {
 
 #[test]
 fn metadata_stops_after_three_attempts_and_keeps_the_failure() {
+    let _locale = crate::test_support::chinese();
     let mut attempts = 0;
     let error = retry_metadata::<()>(
         || {
@@ -59,6 +63,7 @@ fn metadata_stops_after_three_attempts_and_keeps_the_failure() {
 
 #[test]
 fn permanent_and_security_failures_are_not_retried() {
+    let _locale = crate::test_support::chinese();
     for error in [
         anyhow::Error::new(ureq::Error::StatusCode(404)),
         anyhow::Error::new(ureq::Error::StatusCode(403)),
@@ -152,6 +157,7 @@ fn api_url() -> String {
 
 #[test]
 fn api_outage_uses_official_signed_manifest_and_version_pinned_signature() {
+    let _locale = crate::test_support::chinese();
     let (release, key) = signed_release("0.3.0");
     for error in [
         ureq::Error::StatusCode(403),
@@ -185,6 +191,7 @@ fn api_outage_uses_official_signed_manifest_and_version_pinned_signature() {
 
 #[test]
 fn fallback_rejects_bad_signatures_unsafe_sources_and_non_upgrades() {
+    let _locale = crate::test_support::chinese();
     let (release, key) = signed_release("0.3.0");
     let latest = format!("https://github.com/{REPOSITORY}/releases/latest/download/update.json");
     let signature =
@@ -239,6 +246,7 @@ fn fallback_rejects_bad_signatures_unsafe_sources_and_non_upgrades() {
 
 #[test]
 fn successful_api_check_validates_manifest_and_assets_without_fallback() {
+    let _locale = crate::test_support::chinese();
     let (release, key) = signed_release("0.3.0");
     let api = api_response(&release);
     let found = check_responses(
@@ -269,6 +277,7 @@ fn successful_api_check_validates_manifest_and_assets_without_fallback() {
 
 #[test]
 fn invalid_api_releases_and_signatures_do_not_trigger_fallback() {
+    let _locale = crate::test_support::chinese();
     let (release, key) = signed_release("0.3.0");
     for fault in ["tag", "asset", "signature"] {
         let mut api = api_response(&release);
@@ -327,6 +336,7 @@ fn invalid_api_releases_and_signatures_do_not_trigger_fallback() {
 
 #[test]
 fn absent_releases_remain_no_update_but_failed_fallbacks_remain_errors() {
+    let _locale = crate::test_support::chinese();
     let (_, key) = signed_release("0.3.0");
     assert!(
         check_responses(

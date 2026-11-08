@@ -65,6 +65,7 @@ fn click(cx: &mut VisualTestContext, selector: &str) {
 
 #[gpui_kit::test]
 fn notification_card_keeps_actions_at_corners_and_reveals_hover_controls(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, true);
     let id = cx.update(|window, cx| {
         app.update(cx, |app, cx| {
@@ -153,6 +154,7 @@ fn notification_card_keeps_actions_at_corners_and_reveals_hover_controls(cx: &mu
 
 #[gpui_kit::test]
 fn notification_close_control_preserves_unread_and_active_records(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, false);
     let (unread, active) = cx.update(|window, cx| {
         app.update(cx, |app, cx| {
@@ -195,6 +197,7 @@ fn notification_close_control_preserves_unread_and_active_records(cx: &mut TestA
 
 #[gpui_kit::test]
 fn notification_bell_and_panel_work_without_a_session_in_both_layouts(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, false);
     for (width, branches) in [(1280., false), (850., true)] {
         cx.simulate_resize(size(px(width), px(800.)));
@@ -237,6 +240,7 @@ fn notification_bell_and_panel_work_without_a_session_in_both_layouts(cx: &mut T
 
 #[gpui_kit::test]
 fn toast_body_click_marks_read_and_opens_bound_session(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, true);
     // Slide animations use wall time; the test executor only advances toast timers.
     // Render at the final position so the body click is independent of CPU speed.
@@ -291,6 +295,7 @@ fn toast_body_click_marks_read_and_opens_bound_session(cx: &mut TestAppContext) 
 
 #[gpui_kit::test]
 fn toast_expiry_preserves_history_unread_and_input_focus(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, true);
     cx.simulate_resize(size(px(1280.), px(900.)));
     draw(cx);
@@ -337,6 +342,7 @@ fn toast_expiry_preserves_history_unread_and_input_focus(cx: &mut TestAppContext
 
 #[gpui_kit::test]
 fn notification_navigation_uses_bound_target_and_handles_deletion(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, true);
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
@@ -401,6 +407,7 @@ fn notification_navigation_uses_bound_target_and_handles_deletion(cx: &mut TestA
 fn background_completion_and_approval_publish_once_without_switching_sessions(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, true);
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
@@ -457,6 +464,7 @@ fn background_completion_and_approval_publish_once_without_switching_sessions(
 fn modal_notifications_preserve_dialog_and_late_toast_close_cannot_remove_replacement(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, false);
     cx.simulate_resize(size(px(1280.), px(900.)));
     cx.update(|window, cx| app.update(cx, |app, cx| app.open_about_dialog(window, cx)));
@@ -513,6 +521,7 @@ fn modal_notifications_preserve_dialog_and_late_toast_close_cannot_remove_replac
 fn persistent_errors_are_recorded_once_and_reading_does_not_dismiss_the_banner(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, false);
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
@@ -548,6 +557,7 @@ fn persistent_errors_are_recorded_once_and_reading_does_not_dismiss_the_banner(
 
 #[gpui_kit::test]
 fn git_notices_use_center_with_or_without_git_navigation(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     cx.update(gpui_kit::init);
     let (_, cx) = cx.add_window_view(|window, cx| {
         let app = cx.new(|cx| {

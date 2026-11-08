@@ -99,6 +99,7 @@ fn messages(batch: &Batch) -> Value {
 
 #[test]
 fn persistent_cache_and_append_match_a_fresh_claude_parse() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     let path = fixture.file(Provider::Claude, "native");
     let first = fixture.claude("native", "first");
@@ -127,6 +128,7 @@ fn persistent_cache_and_append_match_a_fresh_claude_parse() {
 
 #[test]
 fn codex_incremental_state_preserves_fallback_dedup_and_turn_timing() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     let path = fixture.file(Provider::Codex, "native");
     let first = fixture.codex_meta() + &[
@@ -157,6 +159,7 @@ fn codex_incremental_state_preserves_fallback_dedup_and_turn_timing() {
 
 #[test]
 fn incomplete_tail_is_replayed_without_duplicates_after_append() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     let path = fixture.file(Provider::Claude, "tail");
     let first = fixture.claude("tail", "first");
@@ -182,6 +185,7 @@ fn incomplete_tail_is_replayed_without_duplicates_after_append() {
 
 #[test]
 fn truncation_growing_rewrite_version_change_and_corrupt_state_rebuild() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     let path = fixture.file(Provider::Claude, "rewrite");
     std::fs::write(&path, fixture.claude("rewrite", "original long text")).unwrap();
@@ -218,6 +222,7 @@ fn truncation_growing_rewrite_version_change_and_corrupt_state_rebuild() {
 
 #[test]
 fn workspace_index_filters_foreign_sessions_but_allows_later_workspace_import() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     let path = fixture.file(Provider::Codex, "foreign");
     let text = fixture.codex_meta()
@@ -248,6 +253,7 @@ fn workspace_index_filters_foreign_sessions_but_allows_later_workspace_import() 
 
 #[test]
 fn batches_resume_until_every_file_is_imported_and_cancellation_is_safe() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     for number in 0..(BATCH_FILES + 4) {
         let name = format!("session-{number}");
@@ -281,6 +287,7 @@ fn batches_resume_until_every_file_is_imported_and_cancellation_is_safe() {
 
 #[test]
 fn large_files_stream_while_oversized_lines_preserve_previous_checkpoint() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     let path = fixture.file(Provider::Claude, "large");
     let mut file = std::io::BufWriter::new(File::create(&path).unwrap());
@@ -322,6 +329,7 @@ fn large_files_stream_while_oversized_lines_preserve_previous_checkpoint() {
 
 #[test]
 fn unavailable_index_falls_back_to_streaming() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     std::fs::write(
         fixture.file(Provider::Claude, "fallback"),
@@ -341,6 +349,7 @@ fn unavailable_index_falls_back_to_streaming() {
 
 #[test]
 fn a_middle_rewrite_followed_by_append_invalidates_the_old_parser() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     let path = fixture.file(Provider::Claude, "middle");
     let padding = format!("{{\"padding\":\"{}\"}}\n", "x".repeat(70 * 1024));
@@ -359,6 +368,7 @@ fn a_middle_rewrite_followed_by_append_invalidates_the_old_parser() {
 
 #[test]
 fn valid_json_without_a_final_newline_is_imported_and_rebuilt_on_append() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     let path = fixture.file(Provider::Claude, "unterminated");
     let initial = fixture
@@ -386,6 +396,7 @@ fn valid_json_without_a_final_newline_is_imported_and_rebuilt_on_append() {
 
 #[test]
 fn cache_state_must_match_the_metadata_from_discovery() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     let path = fixture.file(Provider::Claude, "concurrent");
     std::fs::write(&path, fixture.claude("concurrent", "first")).unwrap();
@@ -410,6 +421,7 @@ fn cache_state_must_match_the_metadata_from_discovery() {
 
 #[test]
 fn a_single_large_file_resumes_verification_and_parsing_between_batches() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     let path = fixture.file(Provider::Claude, "resumable");
     let mut file = std::io::BufWriter::new(File::create(&path).unwrap());
@@ -467,6 +479,7 @@ fn a_single_large_file_resumes_verification_and_parsing_between_batches() {
 
 #[test]
 fn a_file_changed_between_batches_is_retried_without_publishing_partial_messages() {
+    let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
     let path = fixture.file(Provider::Claude, "changing");
     let padding = format!("{{\"padding\":\"{}\"}}\n", "x".repeat(4096));

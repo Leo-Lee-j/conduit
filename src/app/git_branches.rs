@@ -446,7 +446,7 @@ pub(super) fn branch_menu(
                 let label = target
                     .as_deref()
                     .and_then(|s| s.strip_prefix("refs/remotes/"))
-                    .unwrap_or("取消跟踪")
+                    .unwrap_or(conduit::i18n::text_static("git_branches.untrack"))
                     .to_string();
                 let view = upstream_app.clone();
                 let path = path.clone();
@@ -533,15 +533,22 @@ pub(super) fn branch_menu(
         }
     }
     if occupied_elsewhere {
-        menu = menu.item(PopupMenuItem::label(format!(
-            "已被 Worktree 占用：{}",
-            selected.occupied.as_ref().unwrap().display()
+        menu = menu.item(PopupMenuItem::label(conduit::i18n::format(
+            "git_branches.in_use_by_worktree",
+            &[(
+                "arg0",
+                format!("{}", selected.occupied.as_ref().unwrap().display()),
+            )],
         )));
     } else if blocked {
-        menu = menu.item(PopupMenuItem::label("仓库有任务运行，暂不可执行写操作"));
+        menu = menu.item(PopupMenuItem::label(conduit::i18n::text_static(
+            "git_branches.a_task_is_running_in_this_repository",
+        )));
     }
     if in_progress {
-        menu = menu.item(PopupMenuItem::label("请先继续或中止进行中的 Git 操作"));
+        menu = menu.item(PopupMenuItem::label(conduit::i18n::text_static(
+            "git_branches.continue_or_abort_the_git_operation_in",
+        )));
     }
     menu
 }
@@ -553,13 +560,21 @@ fn fs_canonical(path: &Path) -> PathBuf {
 impl ConduitApp {
     fn branch_operation_blocked(&self, path: &Path) -> Option<&'static str> {
         if self.closing || !self.writable {
-            Some("应用当前不可写")
+            Some(conduit::i18n::text_static(
+                "git_branches.the_application_is_currently_read_only",
+            ))
         } else if self.git.operation.is_some() {
-            Some("已有 Git 操作运行，请等待完成")
+            Some(conduit::i18n::text_static(
+                "git_branches.a_git_operation_is_already_running_wait",
+            ))
         } else if self.git.generation.is_some() {
-            Some("请先完成或取消 Commit Message 生成")
+            Some(conduit::i18n::text_static(
+                "git_branches.finish_or_cancel_commit_message_generation_first",
+            ))
         } else if self.worktree_has_runs(path) {
-            Some("该仓库的工作区有 CLI 任务运行，请等待完成后再操作")
+            Some(conduit::i18n::text_static(
+                "git_branches.a_cli_task_is_running_in_this",
+            ))
         } else {
             None
         }
@@ -576,7 +591,14 @@ impl ConduitApp {
             return false;
         }
         if self.selected_workspace_path().as_ref() != Some(&path) {
-            self.git_feedback(path, "工作区已切换，请重新打开分支菜单", true, cx);
+            self.git_feedback(
+                path,
+                conduit::i18n::text_static(
+                    "git_branches.the_workspace_has_changed_reopen_the_branch",
+                ),
+                true,
+                cx,
+            );
             return false;
         }
         if !self.branch_navigation_open() {
@@ -592,7 +614,12 @@ impl ConduitApp {
             commit_push: None,
             automatic_stage: false,
         });
-        self.git_feedback(path, "正在执行 Git 分支操作…", false, cx);
+        self.git_feedback(
+            path,
+            conduit::i18n::text_static("git_branches.running_git_branch_operation"),
+            false,
+            cx,
+        );
         true
     }
 
@@ -613,27 +640,39 @@ impl ConduitApp {
             .bg(rgb(palette().warning_bg))
             .text_size(ui_text_size(12.))
             .text_color(rgb(palette().warning_text))
-            .child(format!(
-                "{} 进行中 · {} 个冲突文件",
-                state.label(),
-                repository.conflicts.len()
+            .child(conduit::i18n::format(
+                "git_branches.in_progress_conflicted_files",
+                &[
+                    ("arg0", state.label().to_string()),
+                    ("arg1", format!("{}", repository.conflicts.len())),
+                ],
             ))
             .child(div().text_size(ui_text_size(11.)).child(if supported {
-                "在外部编辑器解决冲突并 git add 后，点击继续；也可以中止。"
+                conduit::i18n::text_static(
+                    "git_branches.resolve_conflicts_in_an_external_editor_run",
+                )
             } else {
-                "请先在终端完成或中止此操作，然后刷新。"
+                conduit::i18n::text_static("git_branches.finish_or_abort_this_operation_in_the")
             }));
         for conflict in repository.conflicts.iter().take(20) {
             banner = banner.child(div().truncate().child(conflict.clone()));
         }
         if repository.conflicts.len() > 20 {
-            banner = banner.child("更多冲突文件请在终端 git status 查看");
+            banner = banner.child(conduit::i18n::text_static(
+                "git_branches.run_git_status_in_the_terminal_to",
+            ));
         }
         if supported {
             let mut buttons = h_flex().gap_2();
             for (label, action) in [
-                ("继续", git::BranchAction::Continue(state)),
-                ("中止…", git::BranchAction::Abort(state)),
+                (
+                    conduit::i18n::text_static("git_branches.continue"),
+                    git::BranchAction::Continue(state),
+                ),
+                (
+                    conduit::i18n::text_static("git_branches.abort"),
+                    git::BranchAction::Abort(state),
+                ),
             ] {
                 let view = app.clone();
                 let path = path.clone();
@@ -745,15 +784,24 @@ fn make_form(
         .unwrap_or("HEAD");
     let (title, helper, fields, toggle) = match &kind {
         FormKind::Create => (
-            "新建分支",
-            format!("从 {selected} 创建分支。"),
-            vec![("分支名", String::new())],
+            conduit::i18n::text_static("git_branches.new_branch"),
+            conduit::i18n::format(
+                "git_branches.create_a_branch_from",
+                &[("selected", selected.to_string())],
+            ),
+            vec![(
+                conduit::i18n::text_static("git_branches.branch_name"),
+                String::new(),
+            )],
             true,
         ),
         FormKind::Rename => (
-            "重命名分支",
-            "仅重命名本地分支；远程分支名不变。".into(),
-            vec![("分支名", selected.into())],
+            conduit::i18n::text_static("git_branches.rename_branch"),
+            conduit::i18n::text_static("git_branches.only_the_local_branch_will_be_renamed").into(),
+            vec![(
+                conduit::i18n::text_static("git_branches.branch_name"),
+                selected.into(),
+            )],
             false,
         ),
         FormKind::Push => {
@@ -777,12 +825,21 @@ fn make_form(
                 .unwrap_or(selected)
                 .to_string();
             (
-                "推送分支",
-                format!(
-                    "推送 {selected}。可用远程：{}",
-                    repository.remotes.join(", ")
+                conduit::i18n::text_static("git_branches.push_branch"),
+                conduit::i18n::format(
+                    "git_branches.push_available_remotes",
+                    &[
+                        ("selected", selected.to_string()),
+                        ("arg0", repository.remotes.join(", ").to_string()),
+                    ],
                 ),
-                vec![("远程仓库", remote), ("目标分支", destination)],
+                vec![
+                    (conduit::i18n::text_static("git_branches.remote"), remote),
+                    (
+                        conduit::i18n::text_static("git_branches.target_branch"),
+                        destination,
+                    ),
+                ],
                 branch.upstream.is_none(),
             )
         }
@@ -797,26 +854,44 @@ fn make_form(
                 .to_path_buf();
             let path = parent.join(&branch_name);
             (
-                "创建 Worktree",
-                format!(
-                    "从 {selected} 创建独立工作目录，成功后加入左侧工作区。新分支名留空时使用所选本地分支。"
+                conduit::i18n::text_static("git_branches.create_worktree"),
+                conduit::i18n::format(
+                    "git_branches.create_a_separate_working_directory_from_and",
+                    &[("selected", selected.to_string())],
                 ),
                 vec![
-                    ("目标目录（绝对路径）", path.to_string_lossy().into_owned()),
-                    ("新分支名（可选）", branch_name),
+                    (
+                        conduit::i18n::text_static("git_branches.target_directory_absolute_path"),
+                        path.to_string_lossy().into_owned(),
+                    ),
+                    (
+                        conduit::i18n::text_static("git_branches.new_branch_name_optional"),
+                        branch_name,
+                    ),
                 ],
                 false,
             )
         }
         FormKind::Update(checkout) => (
             if *checkout {
-                "切换并更新分支"
+                conduit::i18n::text_static("git_branches.switch_and_update_branch")
             } else {
-                "更新分支"
+                conduit::i18n::text_static("git_branches.update_branch")
             },
-            format!(
-                "{}更新 {selected} 的上游。非当前分支只允许快进；分叉时请先切换。",
-                if *checkout { "先切换，再" } else { "" }
+            conduit::i18n::format(
+                "git_branches.update_the_upstream_of_only_fast_forward",
+                &[
+                    (
+                        "arg0",
+                        (if *checkout {
+                            conduit::i18n::text_static("git_branches.switch_first_then")
+                        } else {
+                            ""
+                        })
+                        .to_string(),
+                    ),
+                    ("selected", selected.to_string()),
+                ],
             ),
             vec![],
             false,
@@ -824,38 +899,53 @@ fn make_form(
         FormKind::Confirm(action) => {
             let (title, helper) = match action {
                 git::BranchAction::Delete => (
-                    "删除本地分支",
-                    format!("删除 {selected}？普通删除会拒绝未合并分支；不会删除远程分支。"),
+                    conduit::i18n::text_static("git_branches.delete_local_branch"),
+                    conduit::i18n::format(
+                        "git_branches.delete_normal_deletion_rejects_unmerged_branches_the",
+                        &[("selected", selected.to_string())],
+                    ),
                 ),
                 git::BranchAction::Merge => (
-                    "合并分支",
-                    format!(
-                        "将 {selected} 合并到 {}。发生冲突时，可在外部解决后继续或中止。",
-                        repository.current
+                    conduit::i18n::text_static("git_branches.merge_branch"),
+                    conduit::i18n::format(
+                        "git_branches.merge_into_if_conflicts_occur_resolve_them",
+                        &[
+                            ("selected", selected.to_string()),
+                            ("arg0", repository.current.to_string()),
+                        ],
                     ),
                 ),
                 git::BranchAction::Rebase => (
-                    "Rebase 当前分支",
-                    format!(
-                        "将 {} Rebase 到 {selected}。这会改写当前分支的提交历史。",
-                        repository.current
+                    conduit::i18n::text_static("git_branches.rebase_current_branch"),
+                    conduit::i18n::format(
+                        "git_branches.rebase_onto_this_rewrites_the_current_branch",
+                        &[
+                            ("arg0", repository.current.to_string()),
+                            ("selected", selected.to_string()),
+                        ],
                     ),
                 ),
                 git::BranchAction::CheckoutRebase => (
-                    "切换并 Rebase",
-                    format!(
-                        "先切换到 {selected}，再将它 Rebase 到 {}。这会改写 {selected} 的提交历史。",
-                        repository.current
+                    conduit::i18n::text_static("git_branches.switch_and_rebase"),
+                    conduit::i18n::format(
+                        "git_branches.switch_to_then_rebase_it_onto_this",
+                        &[
+                            ("selected", selected.to_string()),
+                            ("arg0", repository.current.to_string()),
+                        ],
                     ),
                 ),
                 git::BranchAction::Abort(state) => (
-                    "中止 Git 操作",
-                    format!(
-                        "中止进行中的 {}？Git 将尝试恢复操作前的状态；冲突解决中的修改可能被撤销。",
-                        state.label()
+                    conduit::i18n::text_static("git_branches.abort_git_operation"),
+                    conduit::i18n::format(
+                        "git_branches.abort_the_ongoing_git_will_try_to",
+                        &[("arg0", state.label().to_string())],
                     ),
                 ),
-                _ => ("Git 操作", "确认执行此操作？".into()),
+                _ => (
+                    conduit::i18n::text_static("git_branches.git_operation"),
+                    conduit::i18n::text_static("git_branches.run_this_operation").into(),
+                ),
             };
             (title, helper, vec![], false)
         }
@@ -954,7 +1044,9 @@ impl BranchForm {
         if values.first().is_some_and(|s| s.is_empty())
             || (matches!(self.kind, FormKind::Push) && values[1].is_empty())
         {
-            self.error = Some("请填写必填字段".into());
+            self.error = Some(
+                conduit::i18n::text_static("git_branches.complete_the_required_fields").into(),
+            );
             cx.notify();
             return false;
         }
@@ -969,7 +1061,12 @@ impl BranchForm {
             })
             .unwrap_or(false);
         if !started {
-            self.error = Some("操作未启动，请检查工作区是否已切换或仍有任务运行".into());
+            self.error = Some(
+                conduit::i18n::text_static(
+                    "git_branches.operation_did_not_start_check_whether_the",
+                )
+                .into(),
+            );
             cx.notify();
         }
         started
@@ -1030,7 +1127,9 @@ impl Render for BranchForm {
             if index == 0 && matches!(self.kind, FormKind::Worktree) {
                 body = body.child(
                     Button::new("worktree-browse")
-                        .label("选择父目录…")
+                        .label(conduit::i18n::text_static(
+                            "git_branches.choose_parent_directory",
+                        ))
                         .small()
                         .ghost()
                         .on_click(cx.listener(|_, _, window, cx| {
@@ -1038,7 +1137,12 @@ impl Render for BranchForm {
                                 files: false,
                                 directories: true,
                                 multiple: false,
-                                prompt: Some("选择 Worktree 的父目录".into()),
+                                prompt: Some(
+                                    conduit::i18n::text_static(
+                                        "git_branches.choose_the_parent_directory_for_the_worktree",
+                                    )
+                                    .into(),
+                                ),
                             });
                             cx.spawn_in(window, async move |this, cx| {
                                 if let Ok(Ok(Some(paths))) = chosen.await
@@ -1069,19 +1173,19 @@ impl Render for BranchForm {
         }
         let toggle = match self.kind {
             FormKind::Create => Some(if self.toggle {
-                "✓ 创建后切换"
+                conduit::i18n::text_static("git_branches.switch_after_creation")
             } else {
-                "创建后切换"
+                conduit::i18n::text_static("git_branches.switch_after_creation_77d27c")
             }),
             FormKind::Push => Some(if self.toggle {
-                "✓ 设置为上游"
+                conduit::i18n::text_static("git_branches.set_upstream")
             } else {
-                "设置为上游"
+                conduit::i18n::text_static("git_branches.set_upstream_7cb6a8")
             }),
             FormKind::Update(_) => Some(if self.toggle {
-                "更新方式：Rebase（点击切换为 Merge）"
+                conduit::i18n::text_static("git_branches.update_method_rebase_click_to_use_merge")
             } else {
-                "更新方式：Merge（点击切换为 Rebase）"
+                conduit::i18n::text_static("git_branches.update_method_merge_click_to_use_rebase")
             }),
             _ => None,
         };
@@ -1113,7 +1217,7 @@ impl Render for BranchForm {
                 .child(
                     Button::new("branch-form-cancel")
                         .debug_selector(|| "branch-form-cancel".into())
-                        .label("取消")
+                        .label(conduit::i18n::text_static("git_branches.cancel"))
                         .small()
                         .ghost()
                         .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
@@ -1122,9 +1226,9 @@ impl Render for BranchForm {
                     Button::new("branch-form-submit")
                         .debug_selector(|| "branch-form-submit".into())
                         .label(match self.kind {
-                            FormKind::Create => "创建",
-                            FormKind::Rename => "保存",
-                            _ => "确认执行",
+                            FormKind::Create => conduit::i18n::text_static("git_branches.create"),
+                            FormKind::Rename => conduit::i18n::text_static("git_branches.save"),
+                            _ => conduit::i18n::text_static("git_branches.confirm"),
                         })
                         .small()
                         .primary()

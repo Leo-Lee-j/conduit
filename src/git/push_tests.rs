@@ -1,6 +1,7 @@
 // Included in the real-repository fixture module alongside branch_tests.rs.
 #[test]
 fn new_branch_commit_and_push_publishes_and_tracks_the_same_name() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     let remote = repo.seed_remote();
     let base = repo.run(&["rev-parse", "main"]);
@@ -39,6 +40,7 @@ fn new_branch_commit_and_push_publishes_and_tracks_the_same_name() {
 
 #[test]
 fn first_push_honors_explicit_remotes_before_origin() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     let remote = repo.seed_remote();
     for name in ["fork", "backup"] {
@@ -71,6 +73,7 @@ fn first_push_honors_explicit_remotes_before_origin() {
 
 #[test]
 fn first_push_uses_the_only_remote_without_origin() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     repo.seed_remote();
     repo.run(&["remote", "rename", "origin", "company"]);
@@ -86,6 +89,7 @@ fn first_push_uses_the_only_remote_without_origin() {
 
 #[test]
 fn first_push_reports_ambiguous_or_invalid_remotes_without_setting_upstream() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     let remote = repo.seed_remote();
     repo.run(&["remote", "rename", "origin", "first"]);
@@ -114,6 +118,7 @@ fn first_push_reports_ambiguous_or_invalid_remotes_without_setting_upstream() {
 
 #[test]
 fn commit_push_preserves_configured_destination_when_tracking_ref_is_missing() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     let remote = repo.seed_remote();
     repo.run(&["switch", "--no-track", "-c", "feature/local", "main"]);
@@ -150,6 +155,7 @@ fn commit_push_preserves_configured_destination_when_tracking_ref_is_missing() {
 
 #[test]
 fn rejected_first_push_keeps_commit_without_upstream_or_remote_overwrite() {
+    let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();
     let remote = repo.seed_remote();
     let base = repo.run(&["rev-parse", "main"]);
@@ -186,6 +192,7 @@ fn rejected_first_push_keeps_commit_without_upstream_or_remote_overwrite() {
 
 #[test]
 fn tagged_first_push_sets_upstream_only_after_atomic_success() {
+    let _locale = crate::test_support::chinese();
     for atomic_supported in [true, false] {
         let repo = seeded_branch_repo();
         let remote = repo.seed_remote();

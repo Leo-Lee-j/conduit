@@ -243,8 +243,14 @@ impl ConduitApp {
                         .compact()
                         .icon(FullIconName::Bell)
                         .selected(self.plugins.right_is(builtins::NOTIFICATIONS))
-                        .tooltip(format!("通知 · {unread} 条未读"))
-                        .accessibility_label(format!("通知，{unread} 条未读"))
+                        .tooltip(conduit::i18n::format(
+                            "notifications.notifications_unread",
+                            &[("unread", format!("{}", unread))],
+                        ))
+                        .accessibility_label(conduit::i18n::format(
+                            "notifications.notifications_unread_a9fb74",
+                            &[("unread", format!("{}", unread))],
+                        ))
                         .on_click(
                             cx.listener(|app, _, window, cx| app.toggle_notifications(window, cx)),
                         ),
@@ -311,9 +317,9 @@ impl ConduitApp {
             .id("notification-list")
             .role(Role::List)
             .aria_label(if unread_only {
-                "未读通知"
+                conduit::i18n::text_static("notifications.unread_notifications")
             } else {
-                "通知历史"
+                conduit::i18n::text_static("notifications.notification_history")
             })
             .debug_selector(|| "notification-list".into())
             .flex_1()
@@ -334,16 +340,16 @@ impl ConduitApp {
                             .id("notifications-empty")
                             .role(Role::Label)
                             .aria_value(if unread_only {
-                                "没有未读通知"
+                                conduit::i18n::text_static("notifications.no_unread_notifications")
                             } else {
-                                "暂无通知"
+                                conduit::i18n::text_static("notifications.no_notifications_yet")
                             })
                             .text_sm()
                             .text_color(rgb(palette().muted))
                             .child(if unread_only {
-                                "没有未读通知"
+                                conduit::i18n::text_static("notifications.no_unread_notifications")
                             } else {
-                                "暂无通知"
+                                conduit::i18n::text_static("notifications.no_notifications_yet")
                             }),
                     ),
             );
@@ -364,7 +370,7 @@ impl ConduitApp {
                         Button::new("notifications-all")
                             .small()
                             .ghost()
-                            .label("全部")
+                            .label(conduit::i18n::text_static("notifications.all"))
                             .selected(!unread_only)
                             .on_click(cx.listener(|app, _, _, cx| {
                                 app.notifications.unread_only = false;
@@ -375,7 +381,7 @@ impl ConduitApp {
                         Button::new("notifications-unread")
                             .small()
                             .ghost()
-                            .label("未读")
+                            .label(conduit::i18n::text_static("notifications.unread"))
                             .selected(unread_only)
                             .on_click(cx.listener(|app, _, _, cx| {
                                 app.notifications.unread_only = true;
@@ -387,7 +393,7 @@ impl ConduitApp {
                             .debug_selector(|| "notifications-read-all".into())
                             .small()
                             .ghost()
-                            .label("全部标为已读")
+                            .label(conduit::i18n::text_static("notifications.mark_all_as_read"))
                             .disabled(self.notifications.center.unread() == 0)
                             .on_click(cx.listener(|app, _, window, cx| {
                                 app.notifications.center.mark_all_read(unix_now());
@@ -400,7 +406,7 @@ impl ConduitApp {
                             .debug_selector(|| "notifications-clear-read".into())
                             .small()
                             .ghost()
-                            .label("清除已读")
+                            .label(conduit::i18n::text_static("notifications.clear_read"))
                             .on_click(cx.listener(|app, _, window, cx| {
                                 app.notifications.center.clear_read();
                                 app.dismiss_read_toasts(window, cx);
@@ -448,14 +454,17 @@ impl ConduitApp {
             format!(" · {}", outcome.label())
         } else {
             match record.lifecycle {
-                Lifecycle::Active => " · 待处理",
-                Lifecycle::Resolved => " · 已结束",
+                Lifecycle::Active => conduit::i18n::text_static("notifications.pending"),
+                Lifecycle::Resolved => conduit::i18n::text_static("notifications.ended"),
                 Lifecycle::Recorded => "",
             }
             .into()
         };
         let count = if record.occurrences > 1 {
-            format!(" · {} 次", record.occurrences)
+            conduit::i18n::format(
+                "notifications.times",
+                &[("arg0", format!("{}", record.occurrences))],
+            )
         } else {
             String::new()
         };
@@ -465,8 +474,8 @@ impl ConduitApp {
             .role(Role::ListItem)
             .aria_label(format!(
                 "{} · {}",
-                record.title,
-                if unread { "未读" } else { "已读" }
+                record.display_title(),
+                if unread { conduit::i18n::text_static("notifications.unread") } else { conduit::i18n::text_static("notifications.read") }
             ))
             .debug_selector(move || format!("notification-record-{id}"))
             .w_full()
@@ -502,7 +511,7 @@ impl ConduitApp {
                             .flex_1()
                             .text_sm()
                             .font_semibold()
-                            .child(record.title.clone()),
+                            .child(record.display_title()),
                     )
                     .when(unread, |row| {
                         row.child(
@@ -510,7 +519,7 @@ impl ConduitApp {
                                 .flex_shrink_0()
                                 .text_size(ui_text_size(11.))
                                 .text_color(rgb(palette().text))
-                                .child("未读"),
+                                .child(conduit::i18n::text_static("notifications.unread")),
                         )
                     })
                     .when(!unread && record.lifecycle != Lifecycle::Active, |row| {
@@ -525,8 +534,8 @@ impl ConduitApp {
                                 .opacity(0.)
                                 .group_hover(group.clone(), |style| style.opacity(1.))
                                 .focus_visible(|style| style.opacity(1.))
-                                .tooltip("移除通知")
-                                .accessibility_label("移除通知")
+                                .tooltip(conduit::i18n::text_static("notifications.remove_notification"))
+                                .accessibility_label(conduit::i18n::text_static("notifications.remove_notification"))
                                 .on_click(cx.listener(move |app, _, window, cx| {
                                     app.notifications.center.remove_read(id);
                                     app.dismiss_read_toasts(window, cx);
@@ -539,12 +548,12 @@ impl ConduitApp {
                 div()
                     .id(("notification-message", id))
                     .role(Role::Label)
-                    .aria_value(record.message.clone())
+                    .aria_value(record.display_message())
                     .min_w_0()
                     .overflow_x_hidden()
                     .text_size(ui_text_size(12.))
                     .text_color(rgb(palette().text))
-                    .child(record.message.clone()),
+                    .child(record.display_message()),
             )
             .child(
                 div()
@@ -618,19 +627,19 @@ impl ConduitApp {
                                         .small()
                                         .ghost()
                                         .label(if submitted {
-                                            "提交中…"
+                                            conduit::i18n::text_static("notifications.submitting")
                                         } else {
-                                            "允许本次"
+                                            conduit::i18n::text_static("notifications.allow_once")
                                         })
                                         .accessibility_label(if submitted {
-                                            "审批提交中"
+                                            conduit::i18n::text_static("notifications.submitting_approval")
                                         } else {
-                                            "允许本次审批"
+                                            conduit::i18n::text_static("notifications.allow_this_request")
                                         })
                                         .tooltip(if allow_once {
-                                            "仅允许本次请求"
+                                            conduit::i18n::text_static("notifications.allow_this_request_only")
                                         } else {
-                                            "此请求不支持仅允许本次，请查看会话"
+                                            conduit::i18n::text_static("notifications.this_request_does_not_support_one_time")
                                         })
                                         .disabled(submitted || !allow_once)
                                         .on_click(cx.listener(move |app, _, window, cx| {
@@ -642,8 +651,8 @@ impl ConduitApp {
                                         .debug_selector(move || format!("notification-deny-{id}"))
                                         .small()
                                         .ghost()
-                                        .label("拒绝")
-                                        .accessibility_label("拒绝本次审批")
+                                        .label(conduit::i18n::text_static("notifications.deny"))
+                                        .accessibility_label(conduit::i18n::text_static("notifications.deny_this_request"))
                                         .disabled(submitted)
                                         .on_click(cx.listener(move |app, _, window, cx| {
                                             app.decide_notification(id, false, window, cx);
@@ -656,7 +665,7 @@ impl ConduitApp {
                                         .debug_selector(move || format!("notification-read-{id}"))
                                         .small()
                                         .ghost()
-                                        .label("标为已读")
+                                        .label(conduit::i18n::text_static("notifications.mark_as_read"))
                                         .on_click(cx.listener(move |app, _, window, cx| {
                                             app.read_notification(id, window, cx)
                                         })),
@@ -668,7 +677,7 @@ impl ConduitApp {
                                         .debug_selector(move || format!("notification-open-{id}"))
                                         .small()
                                         .ghost()
-                                        .label("查看")
+                                        .label(conduit::i18n::text_static("notifications.view"))
                                         .on_click(cx.listener(move |app, _, window, cx| {
                                             app.open_notification(id, window, cx)
                                         })),
@@ -739,7 +748,10 @@ impl ConduitApp {
             None => true,
         };
         if !valid {
-            self.notifications.target_error = Some((id, "目标已不存在".into()));
+            self.notifications.target_error = Some((
+                id,
+                conduit::i18n::text_static("notifications.target_no_longer_exists").into(),
+            ));
             self.open_right_view(&ViewId::new(builtins::NOTIFICATIONS).unwrap(), window, cx);
         }
         self.refresh_notifications(cx);
@@ -770,7 +782,7 @@ impl ConduitApp {
         let mut rows = v_flex().w_full().flex_shrink_0();
         for record in self.notifications.banners.values().rev().take(3) {
             let id = record.id;
-            let message = format!("{}：{}", record.title, record.message);
+            let message = format!("{}：{}", record.display_title(), record.display_message());
             let alert = match record.level {
                 Level::Info => Alert::info(("notification-banner", id), message),
                 Level::Success => Alert::success(("notification-banner", id), message),
@@ -794,7 +806,12 @@ impl ConduitApp {
     pub(super) fn poll_notifications(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.expire_notification_approvals();
         let persistence_error = if self.notifications.load_failed {
-            Some("应用数据无法加载，原文件已保留；当前为只读模式。".to_string())
+            Some(
+                conduit::i18n::text_static(
+                    "notifications.application_data_could_not_be_loaded_original",
+                )
+                .to_string(),
+            )
         } else {
             self.persistence.error.clone()
         };
@@ -804,7 +821,7 @@ impl ConduitApp {
                     Notice::new(
                         Source::Persistence,
                         Level::Error,
-                        "数据保存不可用",
+                        conduit::i18n::text_static("notifications.data_saving_unavailable"),
                         error.clone(),
                     )
                     .key(
@@ -825,7 +842,16 @@ impl ConduitApp {
                     .persistence_error
                     .as_ref()
                     .is_some_and(|error| {
-                        self.message.as_deref() == Some(format!("保存失败：{error}").as_str())
+                        self.message.as_ref().is_some_and(|message| {
+                            conduit::i18n::languages().iter().any(|language| {
+                                *message
+                                    == conduit::i18n::format_for(
+                                        &language.id.clone().into(),
+                                        "notifications.save_failed",
+                                        &[("error", error.clone())],
+                                    )
+                            })
+                        })
                     })
                 {
                     self.message = None;
@@ -891,7 +917,7 @@ impl ConduitApp {
             self.notifications.visible.insert(id, revision);
             let view = cx.weak_entity();
             let close_view = view.clone();
-            let mut preview: String = record.message.chars().take(180).collect();
+            let mut preview: String = record.display_message().chars().take(180).collect();
             if preview.len() < record.message.len() {
                 preview.push('…');
             }
@@ -904,7 +930,7 @@ impl ConduitApp {
                 Level::Error => Notification::error(preview),
             }
             .id1::<AppToast>(id)
-            .title(record.title)
+            .title(record.display_title())
             .delivery(NotificationDelivery::InApp)
             .on_click(move |_, window, cx| {
                 // The toast invokes this while its Notification entity is updating.
@@ -926,7 +952,7 @@ impl ConduitApp {
                     let action_view = action_view.clone();
                     Button::new(("notification-action", id))
                         .small()
-                        .label("查看")
+                        .label(conduit::i18n::text_static("notifications.view"))
                         .on_click(move |_, window, cx| {
                             cx.stop_propagation();
                             let action_view = action_view.clone();
@@ -947,16 +973,19 @@ impl ConduitApp {
             let count = self.notifications.center.unread();
             let view = cx.weak_entity();
             window.push_notification(
-                Notification::info(format!("通知中心有 {count} 条未读消息，点击查看"))
-                    .id::<OverflowToast>()
-                    .delivery(NotificationDelivery::InApp)
-                    .on_click(move |_, window, cx| {
-                        let _ = view.update(cx, |app, cx| {
-                            if !(app.plugins.right_is(builtins::NOTIFICATIONS)) {
-                                app.toggle_notifications(window, cx);
-                            }
-                        });
-                    }),
+                Notification::info(conduit::i18n::format(
+                    "notifications.unread_notifications_click_to_view",
+                    &[("count", format!("{}", count))],
+                ))
+                .id::<OverflowToast>()
+                .delivery(NotificationDelivery::InApp)
+                .on_click(move |_, window, cx| {
+                    let _ = view.update(cx, |app, cx| {
+                        if !(app.plugins.right_is(builtins::NOTIFICATIONS)) {
+                            app.toggle_notifications(window, cx);
+                        }
+                    });
+                }),
                 cx,
             );
         }

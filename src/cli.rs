@@ -102,10 +102,10 @@ pub enum PathSource {
 impl PathSource {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Environment => "环境变量",
-            Self::Settings => "应用配置",
+            Self::Environment => conduit::i18n::text_static("settings.models.environment_variable"),
+            Self::Settings => conduit::i18n::text_static("cli.application_configuration"),
             Self::SearchPath => "PATH",
-            Self::CommonLocation => "常见安装位置",
+            Self::CommonLocation => conduit::i18n::text_static("cli.common_install_location"),
         }
     }
 }
@@ -127,7 +127,9 @@ pub fn validate_executable(path: &Path) -> Result<PathBuf> {
 
 fn validate_launcher(path: &Path) -> Result<(PathBuf, Launcher)> {
     if !path.is_absolute() {
-        bail!("请选择绝对路径的 Windows CLI");
+        bail!(conduit::i18n::text(
+            "cli.select_a_windows_cli_using_an_absolute"
+        ));
     }
     let launcher = match path.extension().and_then(|ext| ext.to_str()) {
         Some(ext) if ext.eq_ignore_ascii_case("exe") => Launcher::Native,
@@ -135,11 +137,16 @@ fn validate_launcher(path: &Path) -> Result<(PathBuf, Launcher)> {
             Launcher::Cmd
         }
         _ => {
-            bail!("目前只支持 Windows 原生 .exe 或 npm 全局 .cmd 包装器；不支持 .ps1 或 WSL 启动器")
+            bail!(conduit::i18n::text(
+                "cli.only_native_windows_exe_files_and_global"
+            ))
         }
     };
     if !path.is_file() {
-        bail!("文件不存在或不可访问：{}", path.display());
+        bail!(conduit::i18n::format(
+            "cli.file_does_not_exist_or_is_inaccessible",
+            &[("arg0", format!("{}", path.display()))]
+        ));
     }
     Ok((path.canonicalize()?, launcher))
 }
@@ -179,8 +186,9 @@ fn resolve_candidates(
     if let Some((path, source)) = explicit {
         // An explicit invalid path is an error; do not silently run a different CLI.
         return Ok(ResolvedCli {
-            path: validate_executable(&path)
-                .with_context(|| format!("{}路径无效", source.label()))?,
+            path: validate_executable(&path).with_context(|| {
+                conduit::i18n::format("cli.invalid_path", &[("arg0", source.label().to_string())])
+            })?,
             source,
         });
     }
@@ -189,7 +197,9 @@ fn resolve_candidates(
             return Ok(ResolvedCli { path, source });
         }
     }
-    bail!("未找到 CLI；请在设置中选择已安装的 .exe 或 npm 全局 .cmd 启动器")
+    bail!(conduit::i18n::text(
+        "cli.cli_not_found_select_an_installed_exe"
+    ))
 }
 
 pub fn resolve(provider: Provider, settings: &CliSettings) -> Result<ResolvedCli> {
@@ -238,8 +248,10 @@ pub fn tested_version(provider: Provider) -> &'static str {
 pub fn resolve_for_launch(provider: Provider, settings: &CliSettings) -> Result<ResolvedCli> {
     anyhow::ensure!(
         settings.enabled(provider),
-        "{} 已停用，请在 AI 引擎设置中启用",
-        provider.label()
+        conduit::i18n::format(
+            "cli.is_disabled_enable_it_in_ai_engine",
+            &[("arg0", provider.label().to_string())]
+        )
     );
     resolve(provider, settings)
 }
@@ -254,20 +266,33 @@ pub struct VersionInfo {
 impl VersionInfo {
     pub fn diagnostic(&self) -> String {
         let compatibility = if self.verified_version {
-            "与本项目已验证版本一致"
+            conduit::i18n::text_static("cli.matches_the_version_verified_by_this_project")
         } else {
-            "尚未经过完整回归"
+            conduit::i18n::text_static("cli.not_yet_fully_regression_tested")
         };
         match &self.update {
-            None => format!("版本 {} · {compatibility}", self.version),
-            Some(Ok(update)) => format!(
-                "当前版本 {} · {}\n{compatibility}",
-                self.version,
-                update.summary()
+            None => conduit::i18n::format(
+                "cli.version",
+                &[
+                    ("arg0", self.version.to_string()),
+                    ("compatibility", compatibility.to_string()),
+                ],
             ),
-            Some(Err(error)) => format!(
-                "当前版本 {} · 更新检查失败：{error}\n{compatibility}",
-                self.version
+            Some(Ok(update)) => conduit::i18n::format(
+                "cli.installed_version",
+                &[
+                    ("arg0", self.version.to_string()),
+                    ("arg1", update.summary().to_string()),
+                    ("compatibility", compatibility.to_string()),
+                ],
+            ),
+            Some(Err(error)) => conduit::i18n::format(
+                "cli.installed_version_update_check_failed",
+                &[
+                    ("arg0", self.version.to_string()),
+                    ("error", error.to_string()),
+                    ("compatibility", compatibility.to_string()),
+                ],
             ),
         }
     }
@@ -288,7 +313,12 @@ fn parse_version(provider: Provider, output: &str) -> Result<VersionInfo> {
                 line.contains(signature)
             }
         })
-        .ok_or_else(|| anyhow::anyhow!("未识别到 {} 版本标识，请检查所选程序", provider.label()))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(conduit::i18n::format(
+                "cli.no_version_identifier_found_check_the_selected",
+                &[("arg0", provider.label().to_string())]
+            ))
+        })?;
     let version = line
         .split_whitespace()
         .find(|part| {
@@ -298,7 +328,12 @@ fn parse_version(provider: Provider, output: &str) -> Result<VersionInfo> {
                     .split('.')
                     .all(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
         })
-        .ok_or_else(|| anyhow::anyhow!("CLI 版本格式暂不支持：{}", line))?
+        .ok_or_else(|| {
+            anyhow::anyhow!(conduit::i18n::format(
+                "cli.unsupported_cli_version_format",
+                &[("arg0", line.to_string())]
+            ))
+        })?
         .to_string();
     Ok(VersionInfo {
         verified_version: version == tested_version(provider),
@@ -361,7 +396,10 @@ impl VersionProbe {
                 if checking_updates {
                     let update = updates::check(provider, &info.version, &cancel)
                         .map_err(|error| format!("{error:#}"));
-                    anyhow::ensure!(!cancel.load(Ordering::Acquire), "检测已取消");
+                    anyhow::ensure!(
+                        !cancel.load(Ordering::Acquire),
+                        conduit::i18n::text("settings.cli.detection_cancelled")
+                    );
                     info.update = Some(update);
                 }
                 Ok(info)
@@ -416,7 +454,10 @@ fn read_available(file: &mut File, output: &mut Vec<u8>, limit: usize) -> Result
         let mut buffer = [0; 4096];
         let count = file.read(&mut buffer[..(count as usize).min(4096)])?;
         if output.len() + count > limit {
-            bail!("CLI 输出超过 {} KiB，已停止检测", limit / 1024);
+            bail!(conduit::i18n::format(
+                "cli.cli_output_exceeded_kib_detection_stopped",
+                &[("arg0", format!("{}", limit / 1024))]
+            ));
         }
         output.extend_from_slice(&buffer[..count]);
     }
@@ -462,10 +503,12 @@ pub(crate) fn capture_command(
         let mut stderr = vec![];
         loop {
             if cancel.load(Ordering::Acquire) {
-                bail!("检测已取消");
+                bail!(conduit::i18n::text("settings.cli.detection_cancelled"));
             }
             if started.elapsed() > timeout {
-                bail!("CLI 查询超时，已停止进程树");
+                bail!(conduit::i18n::text(
+                    "cli.cli_query_timed_out_process_tree_stopped"
+                ));
             }
             read_available(&mut pipes.stdout, &mut stdout, limit)?;
             read_available(&mut pipes.stderr, &mut stderr, limit)?;
@@ -478,10 +521,13 @@ pub(crate) fn capture_command(
                     read_available(&mut pipes.stderr, &mut stderr, limit)?;
                 }
                 if code != 0 {
-                    bail!(
-                        "CLI 查询退出码 {code}：{}",
-                        String::from_utf8_lossy(&stderr)
-                    );
+                    bail!(conduit::i18n::format(
+                        "cli.cli_query_exit_code",
+                        &[
+                            ("code", format!("{}", code)),
+                            ("arg0", format!("{}", String::from_utf8_lossy(&stderr)))
+                        ]
+                    ));
                 }
                 return Ok(String::from_utf8_lossy(&stdout).into_owned());
             }
@@ -500,6 +546,7 @@ mod tests {
     use super::*;
     #[test]
     fn legacy_paths_migrate_without_losing_enabled_state_or_model_preferences() {
+        let _locale = crate::test_support::chinese();
         let mut settings: CliSettings = serde_json::from_value(serde_json::json!({
             "claude_path":"C:/old/claude.exe", "codex_path":"C:/old/codex.exe"
         }))
@@ -544,6 +591,7 @@ mod tests {
     }
     #[test]
     fn unknown_versions_are_visible_without_claiming_compatibility() {
+        let _locale = crate::test_support::chinese();
         assert!(
             parse_version(Provider::OpenCode, "1.19.2\r\n")
                 .unwrap()
@@ -572,6 +620,7 @@ mod tests {
     }
     #[test]
     fn explicit_invalid_path_does_not_fall_back_and_scripts_are_rejected() {
+        let _locale = crate::test_support::chinese();
         let fallback = std::env::current_exe().unwrap();
         let missing = std::env::temp_dir().join("conduit-nonexistent-cli.exe");
         assert!(
@@ -612,6 +661,7 @@ mod tests {
     }
     #[test]
     fn version_probe_bounds_output_and_cleans_up_on_timeout_or_cancellation() {
+        let _locale = crate::test_support::chinese();
         let shell = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
             .join("System32/WindowsPowerShell/v1.0/powershell.exe");
         let arguments = |command: &str| {
@@ -673,6 +723,7 @@ mod tests {
     #[test]
     #[ignore = "requires installed CLIs; --version only, no model call"]
     fn installed_clis_report_versions() {
+        let _locale = crate::test_support::chinese();
         for provider in Provider::ALL {
             let resolved = resolve(provider, &CliSettings::default()).unwrap();
             let probe = VersionProbe::start(provider, resolved.path);

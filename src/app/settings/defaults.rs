@@ -16,7 +16,11 @@ impl ConduitApp {
             .into_iter()
             .map(|engine| {
                 let selection = self.default_selection(engine);
-                let mut channels = vec![(ModelChannel::Cli, "CLI 原生配置".to_string())];
+                let mut channels = vec![(
+                    ModelChannel::Cli,
+                    conduit::i18n::text_static("settings.defaults.native_cli_configuration")
+                        .to_string(),
+                )];
                 channels.extend(
                     self.store
                         .providers
@@ -28,7 +32,12 @@ impl ConduitApp {
                     .iter()
                     .find(|(c, _)| *c == selection.channel)
                     .map(|(_, label)| label.clone())
-                    .unwrap_or_else(|| "服务已不可用，请重新选择".into());
+                    .unwrap_or_else(|| {
+                        conduit::i18n::text_static(
+                            "settings.defaults.service_unavailable_select_another_service",
+                        )
+                        .into()
+                    });
                 let route_view = view.clone();
                 let route = SettingField::render(move |_, _, _| {
                     let channels = channels.clone();
@@ -65,10 +74,16 @@ impl ConduitApp {
                             menu
                         })
                 });
-                let mut models = vec![(None, "跟随服务默认模型".to_string())];
+                let mut models = vec![(
+                    None,
+                    conduit::i18n::text_static("settings.defaults.use_service_default_model")
+                        .to_string(),
+                )];
                 let catalog = self.channel_models(engine, &selection.channel).1;
                 models.extend(catalog.into_iter().map(|m| (Some(m.id), m.label)));
-                let label = selection.model.unwrap_or_else(|| "跟随服务默认模型".into());
+                let label = selection.model.unwrap_or_else(|| {
+                    conduit::i18n::text_static("settings.defaults.use_service_default_model").into()
+                });
                 let model_view = view.clone();
                 let model = SettingField::render(move |_, _, _| {
                     let models = models.clone();
@@ -104,12 +119,22 @@ impl ConduitApp {
                         })
                 });
                 settings_section(engine.label()).items(vec![
-                    SettingItem::new("模型服务", route),
-                    SettingItem::new("模型", model),
+                    SettingItem::new(
+                        conduit::i18n::text_static("settings.defaults.model_services"),
+                        route,
+                    ),
+                    SettingItem::new(
+                        conduit::i18n::text_static("model_picker.model_98fd0c"),
+                        model,
+                    ),
                 ])
             })
             .collect::<Vec<_>>();
-        settings_page("新会话默认", FullIconName::Settings).groups(groups)
+        settings_page(
+            conduit::i18n::text_static("settings.defaults.new_session_defaults"),
+            FullIconName::Settings,
+        )
+        .groups(groups)
     }
 
     pub(super) fn provider_references(&self, id: &str) -> Vec<String> {
@@ -117,16 +142,20 @@ impl ConduitApp {
         let mut references = vec![];
         for (engine, defaults) in &self.store.session_defaults {
             if defaults.channel == channel {
-                references.push(format!("{} 新会话默认", engine.label()));
+                references.push(conduit::i18n::format(
+                    "settings.defaults.new_session_defaults_4cc8f4",
+                    &[("arg0", engine.label().to_string())],
+                ));
             }
         }
         if self.generation_uses_provider(id)
             && self.store.ui.naming_channel.as_ref() == Some(&channel)
         {
-            references.push("自动命名".into());
+            references
+                .push(conduit::i18n::text_static("settings.defaults.automatic_naming").into());
         }
         if self.store.git.generation_channel.as_ref() == Some(&channel) {
-            references.push("Git 提交说明".into());
+            references.push(conduit::i18n::text_static("git_ui.git_commit_message").into());
         }
         for workspace in &self.store.workspaces {
             for session in &workspace.sessions {
@@ -148,6 +177,7 @@ mod tests {
     fn new_session_defaults_persist_and_explicit_drafts_win_without_changing_history(
         cx: &mut TestAppContext,
     ) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let directory = std::env::temp_dir().join(format!(
             "conduit-defaults-{}-{}",

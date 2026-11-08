@@ -41,6 +41,7 @@ fn stage(
 #[gpui_kit::test]
 #[ignore = "chat attribution; use verify-desktop.py --phase chat-profile"]
 fn desktop_chat_profile_probe(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let scenario = std::env::var("CONDUIT_PERF_SCENARIO").unwrap();
     assert!(matches!(
         scenario.as_str(),
@@ -185,6 +186,7 @@ fn last_reply_bounds(
 
 #[gpui_kit::test]
 fn desktop_chat_cache_survives_shell_root_input_notifications(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (store, _) = dataset();
     let (app, cx) = fixture_with_frame_counter(cx, Vec::new(), store, None);
     cx.update(|window, cx| {

@@ -45,10 +45,21 @@ pub(crate) fn friendly_failure(error: &str) -> String {
                 brief.to_string()
             };
             match (status, brief.is_empty()) {
-                (Some(code), false) => format!("连接中断（HTTP {code}）：{brief}"),
-                (Some(code), true) => format!("连接中断（HTTP {code}）"),
-                (None, false) => format!("连接中断：{brief}"),
-                (None, true) => "连接中断".to_string(),
+                (Some(code), false) => conduit::i18n::format(
+                    "failure.connection_interrupted_http",
+                    &[("code", format!("{}", code)), ("brief", brief.to_string())],
+                ),
+                (Some(code), true) => conduit::i18n::format(
+                    "failure.connection_interrupted_http_650cf7",
+                    &[("code", format!("{}", code))],
+                ),
+                (None, false) => conduit::i18n::format(
+                    "failure.connection_interrupted",
+                    &[("brief", brief.to_string())],
+                ),
+                (None, true) => {
+                    conduit::i18n::text_static("failure.connection_interrupted_3eb19e").to_string()
+                }
             }
         });
     detail.or(message).unwrap_or_else(|| trimmed.to_string())
@@ -73,7 +84,9 @@ pub(crate) fn failure_summary(error: &str) -> String {
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
-        .unwrap_or("CLI 执行失败，请查看详情。");
+        .unwrap_or(conduit::i18n::text_static(
+            "failure.cli_execution_failed_view_details",
+        ));
     if line.chars().count() > 160 {
         format!("{}…", line.chars().take(160).collect::<String>())
     } else {
@@ -81,7 +94,7 @@ pub(crate) fn failure_summary(error: &str) -> String {
     }
 }
 
-pub(crate) fn failure_title(error: &str) -> &'static str {
+fn failure_category(error: &str) -> &'static str {
     let text = friendly_failure(error).to_ascii_lowercase();
     if text.contains("401")
         || text.contains("403")
@@ -103,8 +116,12 @@ pub(crate) fn failure_title(error: &str) -> &'static str {
     } else if text.contains("model")
         && (text.contains("not found")
             || text.contains("not available")
+            || text.contains("unavailable")
             || text.contains("does not exist"))
-        || text.contains("provider") && (text.contains("不可用") || text.contains("not found"))
+        || text.contains("provider")
+            && (text.contains("不可用")
+                || text.contains("not found")
+                || text.contains("unavailable"))
     {
         "模型或 Provider 配置不可用"
     } else if text.contains("timeout")
@@ -124,16 +141,28 @@ pub(crate) fn failure_title(error: &str) -> &'static str {
     }
 }
 
+pub(crate) fn failure_title(error: &str) -> &'static str {
+    conduit::i18n::source(failure_category(error))
+}
+
 pub(crate) fn failure_guidance(error: &str) -> &'static str {
-    match failure_title(error) {
-        "认证或权限失败" => "请检查 Provider 的凭证、登录状态及模型访问权限。",
-        "服务限流或额度不足" => "请稍后重试，或检查服务额度并切换 Provider / 模型。",
-        "上下文超出限制" => "请压缩上下文、换用更大上下文的模型，或新建会话。",
-        "模型或 Provider 配置不可用" => {
-            "请在设置中检查引擎、Provider 和模型配置，然后重试。"
+    match failure_category(error) {
+        "认证或权限失败" => {
+            conduit::i18n::text_static("failure.check_provider_credentials_sign_in_status_and")
         }
-        "连接或服务异常" => "请检查网络及服务状态；任务结束后可手动重试。",
-        _ => "可展开或复制错误详情；检查引擎配置后再手动重试。",
+        "服务限流或额度不足" => {
+            conduit::i18n::text_static("failure.try_again_later_or_check_service_quota")
+        }
+        "上下文超出限制" => {
+            conduit::i18n::text_static("failure.compact_the_context_use_a_model_with")
+        }
+        "模型或 Provider 配置不可用" => {
+            conduit::i18n::text_static("failure.check_engine_provider_and_model_configuration_in")
+        }
+        "连接或服务异常" => {
+            conduit::i18n::text_static("failure.check_your_network_and_service_status_you")
+        }
+        _ => conduit::i18n::text_static("failure.expand_or_copy_error_details_check_engine"),
     }
 }
 
@@ -259,6 +288,7 @@ mod tests {
     }
     #[test]
     fn repeated_errors_and_completion_echo_share_one_persisted_card() {
+        let _locale = crate::test_support::chinese();
         let mut session = session();
         for _ in 0..3 {
             record_failure(&mut session, "turn", "API Error: 503 unavailable", false);
@@ -279,6 +309,7 @@ mod tests {
     }
     #[test]
     fn duplicate_errors_do_not_cross_user_message_boundaries() {
+        let _locale = crate::test_support::chinese();
         let mut session = session();
         record_failure(&mut session, "first", "timeout", false);
         let user: ChatItem =
@@ -292,6 +323,7 @@ mod tests {
     }
     #[test]
     fn restored_duplicate_error_cards_merge_and_keep_the_latest_detail() {
+        let _locale = crate::test_support::chinese();
         let mut session = session();
         record_failure(&mut session, "turn", "network timeout", false);
         let mut repeated = session.messages[0].clone();
@@ -305,6 +337,7 @@ mod tests {
     }
     #[test]
     fn common_failures_have_specific_recovery_guidance() {
+        let _locale = crate::test_support::chinese();
         assert!(failure_guidance("401 unauthorized").contains("凭证"));
         assert!(failure_guidance("429 rate limit").contains("额度"));
         assert!(failure_guidance("maximum context length exceeded").contains("压缩"));

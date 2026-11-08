@@ -25,17 +25,29 @@ fn load(path: &Path, now: u64) -> Result<Center, String> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Center::default()),
-        Err(error) => return Err(format!("通知历史无法读取，原文件已保留：{error}")),
+        Err(error) => {
+            return Err(conduit::i18n::format(
+                "notifications.history.unable_to_read_notification_history_original_file",
+                &[("error", format!("{}", error))],
+            ));
+        }
     };
     let mut bytes = Vec::new();
     file.take(MAX_FILE_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| error.to_string())?;
     if bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err("通知历史超过容量限制，原文件已保留".into());
+        return Err(conduit::i18n::text_static(
+            "notifications.history.notification_history_exceeds_capacity_original_file_preserved",
+        )
+        .into());
     }
-    let snapshot =
-        serde_json::from_slice(&bytes).map_err(|_| "通知历史损坏，原文件已保留".to_string())?;
+    let snapshot = serde_json::from_slice(&bytes).map_err(|_| {
+        conduit::i18n::text_static(
+            "notifications.history.notification_history_is_corrupt_original_file_preserved",
+        )
+        .to_string()
+    })?;
     Center::restore(snapshot, now)
 }
 
@@ -55,8 +67,10 @@ impl History {
         // Lock before loading so this snapshot cannot overwrite another process's changes.
         let lock = if writable {
             let locked = (|| -> Result<File, String> {
-                fs::create_dir_all(path.parent().ok_or("通知历史目录无效")?)
-                    .map_err(|error| error.to_string())?;
+                fs::create_dir_all(path.parent().ok_or(conduit::i18n::text_static(
+                    "notifications.history.invalid_notification_history_directory",
+                ))?)
+                .map_err(|error| error.to_string())?;
                 let lock = OpenOptions::new()
                     .read(true)
                     .write(true)
@@ -64,8 +78,12 @@ impl History {
                     .truncate(false)
                     .open(path.with_extension("lock"))
                     .map_err(|error| error.to_string())?;
-                lock.try_lock()
-                    .map_err(|_| "通知历史正在由另一个进程使用，本次仅保留内存记录".to_string())?;
+                lock.try_lock().map_err(|_| {
+                    conduit::i18n::text_static(
+                        "notifications.history.notification_history_is_in_use_by_another",
+                    )
+                    .to_string()
+                })?;
                 Ok(lock)
             })();
             match locked {
@@ -95,8 +113,12 @@ impl History {
                         let Some((revision, snapshot)) = pending.lock().unwrap().take() else {
                             break;
                         };
-                        let result = save(&path, &snapshot)
-                            .map_err(|error| format!("通知历史保存失败：{error}"));
+                        let result = save(&path, &snapshot).map_err(|error| {
+                            conduit::i18n::format(
+                                "notifications.history.failed_to_save_notification_history",
+                                &[("error", format!("{}", error))],
+                            )
+                        });
                         let _ = sender.send((revision, result));
                     }
                 }
@@ -141,7 +163,12 @@ impl History {
         self.last_submit = Instant::now();
         *self.pending.lock().unwrap() = Some((self.requested, center.snapshot()));
         if let Err(mpsc::TrySendError::Disconnected(())) = wake.try_send(()) {
-            self.error = Some("通知历史保存线程已退出".into());
+            self.error = Some(
+                conduit::i18n::text_static(
+                    "notifications.history.notification_history_save_thread_exited",
+                )
+                .into(),
+            );
             self.wake = None;
         }
     }
@@ -154,7 +181,9 @@ fn save(path: &Path, snapshot: &Snapshot) -> std::io::Result<()> {
     let temp = path.with_extension("json.tmp");
     let bytes = serde_json::to_vec(snapshot)?;
     if bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err(std::io::Error::other("历史超出容量限制"));
+        return Err(std::io::Error::other(conduit::i18n::text_static(
+            "notifications.history.history_exceeds_capacity",
+        )));
     }
     let mut file = File::create(&temp)?;
     file.write_all(&bytes)?;
@@ -206,6 +235,7 @@ mod tests {
     }
     #[test]
     fn history_roundtrips_without_touching_the_conversation_store() {
+        let _locale = crate::test_support::chinese();
         let path = path("roundtrip");
         let (mut center, mut history) = History::open(path.clone(), true, 100);
         let id = center
@@ -222,6 +252,7 @@ mod tests {
     }
     #[test]
     fn failed_history_write_recovers_without_recursively_publishing() {
+        let _locale = crate::test_support::chinese();
         let path = path("write-recovery");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         let blocker = path.with_extension("json.tmp");
@@ -247,6 +278,7 @@ mod tests {
 
     #[test]
     fn corruption_and_a_second_writer_never_overwrite_history() {
+        let _locale = crate::test_support::chinese();
         let path = path("corrupt");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, b"invalid-json").unwrap();

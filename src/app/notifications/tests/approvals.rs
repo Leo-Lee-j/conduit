@@ -58,6 +58,7 @@ fn publish(
 fn background_actions_target_the_exact_ticket_and_wait_for_acknowledgement(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, true);
     let (first, second, id, focus) = cx.update(|window, cx| {
         app.update(cx, |app, cx| {
@@ -179,6 +180,7 @@ fn background_actions_target_the_exact_ticket_and_wait_for_acknowledgement(
 
 #[gpui_kit::test]
 fn unsupported_allow_once_keeps_deny_and_questions_only_offer_navigation(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, true);
     let (running, id, question) = cx.update(|window, cx| app.update(cx, |app, cx| {
         let running = start(app, 2);
@@ -256,6 +258,7 @@ fn unsupported_allow_once_keeps_deny_and_questions_only_offer_navigation(cx: &mu
 
 #[gpui_kit::test]
 fn chat_submission_refreshes_cached_notification_controls(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, true);
     let (running, id) = cx.update(|window, cx| {
         app.update(cx, |app, cx| {
@@ -291,6 +294,7 @@ fn chat_submission_refreshes_cached_notification_controls(cx: &mut TestAppContex
 fn stale_callbacks_reject_cancelled_finished_deleted_changed_and_closed_targets(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     for scenario in [
         "request-cancelled",
         "run-cancelled",
@@ -358,6 +362,7 @@ fn stale_callbacks_reject_cancelled_finished_deleted_changed_and_closed_targets(
 
 #[gpui_kit::test]
 fn repeated_prefix_and_ticket_cannot_rebind_an_old_notification(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, true);
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
@@ -394,6 +399,7 @@ fn repeated_prefix_and_ticket_cannot_rebind_an_old_notification(cx: &mut TestApp
 
 #[gpui_kit::test]
 fn repeated_question_ticket_notifies_again_and_resolves_only_its_runtime(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, true);
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
@@ -426,6 +432,7 @@ fn repeated_question_ticket_notifies_again_and_resolves_only_its_runtime(cx: &mu
 fn disconnected_runtime_expires_approval_instead_of_sticking_in_submitting(
     cx: &mut TestAppContext,
 ) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, true);
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
@@ -444,6 +451,7 @@ fn disconnected_runtime_expires_approval_instead_of_sticking_in_submitting(
 
 #[gpui_kit::test]
 fn cancellation_refreshes_cached_controls_and_does_not_claim_approval(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, true);
     let (running, id) = cx.update(|window, cx| {
         app.update(cx, |app, cx| {

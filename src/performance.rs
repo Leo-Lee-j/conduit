@@ -248,12 +248,14 @@ mod tests {
     use super::*;
     #[test]
     fn cpu_usage_is_normalized_to_machine_capacity() {
+        let _locale = crate::test_support::chinese();
         assert_eq!(cpu_percent(10_000_000, Duration::from_secs(1), 4), 25.0);
         assert_eq!(cpu_percent(0, Duration::from_secs(1), 4), 0.0);
         assert_eq!(cpu_percent(100_000_000, Duration::from_secs(1), 4), 100.0);
     }
     #[test]
     fn samples_real_private_memory_and_resets_interval_counters() {
+        let _locale = crate::test_support::chinese();
         let mut monitor = PerformanceMonitor::new();
         assert!(monitor.memory_bytes.is_some_and(|bytes| bytes > 0));
         assert!(monitor.private_bytes.is_some_and(|bytes| bytes > 0));
@@ -279,6 +281,7 @@ mod tests {
     }
     #[test]
     fn reset_clears_counters_and_starts_a_new_window() {
+        let _locale = crate::test_support::chinese();
         let mut monitor = PerformanceMonitor::new();
         monitor.begin_render(10, 1, 2);
         monitor.record_render(Duration::from_millis(3));
@@ -295,6 +298,7 @@ mod tests {
     }
     #[test]
     fn history_is_bounded_and_growth_keeps_its_sign_and_missing_values() {
+        let _locale = crate::test_support::chinese();
         let mut monitor = PerformanceMonitor::new();
         assert_eq!(monitor.private_growth(), None);
         let now = Instant::now();

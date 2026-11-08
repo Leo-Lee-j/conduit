@@ -284,6 +284,7 @@ mod tests {
 
     #[test]
     fn common_fence_languages_resolve() {
+        let _locale = crate::test_support::chinese();
         for language in [
             "rust",
             "python",
@@ -319,6 +320,7 @@ mod tests {
 
     #[test]
     fn scopes_map_onto_the_theme_names() {
+        let _locale = crate::test_support::chinese();
         let toml = spans(
             "toml",
             "[package]\nname = \"demo\" # the name\nversion = 1\n",
@@ -345,6 +347,7 @@ mod tests {
 
     #[test]
     fn names_stay_inside_char_boundaries() {
+        let _locale = crate::test_support::chinese();
         let code = "let s = \"中文\";\n";
         for (range, _) in highlight_names("rust", code) {
             assert!(code.is_char_boundary(range.start), "{range:?}");
@@ -353,6 +356,7 @@ mod tests {
     }
     #[test]
     fn file_syntax_infers_extensions_and_unknown_files_stay_plain() {
+        let _locale = crate::test_support::chinese();
         use std::path::Path;
         assert!(!super::highlight_file(Path::new("src/main.rs"), "fn main() {}\n").is_empty());
         assert!(

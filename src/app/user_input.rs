@@ -24,6 +24,7 @@ mod tests {
     fn cli_user_input_requires_choices_and_preserves_drafts_until_resolution(
         cx: &mut TestAppContext,
     ) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
         let output = slot.clone();
@@ -216,16 +217,15 @@ impl ConduitApp {
             .border_color(rgb(palette().warning_border))
             .bg(rgb(palette().warning_bg))
             .child(div().font_semibold().child(if submitted {
-                "正在提交回答…"
+                conduit::i18n::text_static("user_input.submitting_answer")
             } else {
-                "CLI 需要你确认选项"
+                conduit::i18n::text_static("user_input.the_cli_needs_you_to_confirm_options")
             }));
         if run.approvals.len() > 1 {
-            column = column.child(
-                div()
-                    .text_xs()
-                    .child(format!("还有 {} 项待处理", run.approvals.len() - 1)),
-            );
+            column = column.child(div().text_xs().child(conduit::i18n::format(
+                "user_input.more_pending",
+                &[("arg0", format!("{}", run.approvals.len() - 1))],
+            )));
         }
         let mut complete = false;
         if let Some(drafts) = run.question_drafts.get(&approval.id) {
@@ -246,7 +246,9 @@ impl ConduitApp {
                     })
                     .child(div().text_sm().child(question.question.clone()))
                     .when(question.multiple, |card| {
-                        card.child(div().text_xs().child("可选择多项"))
+                        card.child(div().text_xs().child(conduit::i18n::text_static(
+                            "user_input.select_multiple_options",
+                        )))
                     });
                 for (option_index, (label, description)) in question.options.iter().enumerate() {
                     let selected = draft.selected.contains(&option_index);
@@ -313,7 +315,7 @@ impl ConduitApp {
                 if question.custom {
                     card = card.child(
                         Input::new(&draft.custom)
-                            .aria_label("其他回答")
+                            .aria_label(conduit::i18n::text_static("user_input.other_answer"))
                             .disabled(disabled),
                     );
                 }
@@ -329,7 +331,7 @@ impl ConduitApp {
                 .justify_end()
                 .child(
                     Button::new("cli-question-skip")
-                        .label("跳过")
+                        .label(conduit::i18n::text_static("user_input.skip"))
                         .small()
                         .ghost()
                         .disabled(disabled)
@@ -340,7 +342,7 @@ impl ConduitApp {
                 .child(
                     Button::new("cli-question-submit")
                         .debug_selector(|| "cli-question-submit".into())
-                        .label("提交回答")
+                        .label(conduit::i18n::text_static("user_input.submit_answer"))
                         .small()
                         .primary()
                         .disabled(disabled || !complete)
@@ -369,7 +371,8 @@ impl ConduitApp {
                                 return;
                             }
                             run.runtime.answer(submit_id.clone(), answers);
-                            run.status = "正在提交回答…".into();
+                            run.status =
+                                conduit::i18n::text_static("user_input.submitting_answer").into();
                             this.input.read(cx).focus_handle(cx).focus(window, cx);
                             cx.notify();
                         })),

@@ -113,6 +113,7 @@ impl Trace {
 
 #[gpui_kit::test]
 fn frame_counter_observes_automatic_and_explicit_draws(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let frames = Rc::new(Cell::new(0));
     let (app, cx) = fixture_with_frame_counter(cx, vec![], store(), Some(frames.clone()));
     let initial = frames.get();
@@ -128,6 +129,7 @@ fn frame_counter_observes_automatic_and_explicit_draws(cx: &mut TestAppContext) 
 
 #[gpui_kit::test]
 fn command_result_and_snapshot_settle_without_an_explicit_draw(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let frames = Rc::new(Cell::new(0));
     let (app, cx) = fixture_with_frame_counter(cx, vec![package()], store(), Some(frames.clone()));
     for expected in 1..=2 {
@@ -160,6 +162,7 @@ fn command_result_and_snapshot_settle_without_an_explicit_draw(cx: &mut TestAppC
 
 #[gpui_kit::test]
 fn command_errors_repaint_and_success_clears_the_banner(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let directory = std::env::var_os("CONDUIT_DATA_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
@@ -239,6 +242,7 @@ fn command_errors_repaint_and_success_clears_the_banner(cx: &mut TestAppContext)
 #[gpui_kit::test]
 #[ignore = "stage diagnostics; use verify-desktop.py --phase diagnostics"]
 fn desktop_diagnostics_probe(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
     let driver = std::env::var("CONDUIT_DIAGNOSTIC_DRIVER").unwrap();
     assert!(matches!(driver.as_str(), "explicit-draw" | "effects-only"));
     let samples = number("CONDUIT_PERF_SAMPLES", 20..=2000);

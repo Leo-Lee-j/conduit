@@ -47,6 +47,7 @@ fn fixture() -> SessionRecord {
 
 #[test]
 fn file_preview_keeps_the_clicked_turn_boundary() {
+    let _locale = crate::test_support::chinese();
     let mut session = fixture();
     session.messages.extend([
         message(
@@ -108,6 +109,7 @@ mod ui {
 
     #[gpui_kit::test]
     fn warm_preview_reuses_analyses_and_preserves_file_and_edit_order(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         let (app, cx, _) = crate::app::queue::tests::fixture(cx, "turn-preview-warm");
         cx.update(|_, cx| {
             app.update(cx, |app, cx| {
@@ -172,6 +174,7 @@ mod ui {
 
     #[gpui_kit::test]
     fn preview_shares_pending_analysis_and_keeps_the_clicked_snapshot(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         use super::super::{DiffMode, FileEdits, TurnDiffPreview};
         let (app, cx, _) = crate::app::queue::tests::fixture(cx, "turn-preview-pending");
         let owner = app.clone();
@@ -212,6 +215,7 @@ mod ui {
 
     #[gpui_kit::test]
     fn closing_loading_preview_never_reopens_it_on_completion(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         use gpui_kit::component::WindowExt;
         let (app, cx, _) = crate::app::queue::tests::fixture(cx, "turn-preview-dismiss");
         cx.update(|window, cx| {
@@ -237,6 +241,7 @@ mod ui {
 
     #[gpui_kit::test]
     fn stats_file_click_opens_diff_and_preserves_chat(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let slot = Rc::new(std::cell::RefCell::new(None));
         let output = slot.clone();
@@ -305,6 +310,7 @@ mod ui {
 
     #[gpui_kit::test]
     fn latest_arrow_aligns_with_stats_above_queue_and_scrolls_to_end(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let slot = Rc::new(std::cell::RefCell::new(None));
         let output = slot.clone();

@@ -59,7 +59,9 @@ pub(in crate::app) fn approval_message(approval: &Approval) -> String {
     }
     let mut preview: String = summary.chars().take(480).collect();
     if preview.len() < summary.len() {
-        preview.push_str("…（完整请求请查看会话）");
+        preview.push_str(conduit::i18n::text_static(
+            "notifications.approvals.view_the_session_for_the_full_request",
+        ));
     }
     format!("{}\n{preview}", approval.title)
 }
@@ -87,9 +89,11 @@ impl ConduitApp {
                 Source::Session,
                 Level::Warning,
                 if question {
-                    "会话等待你的回答"
+                    conduit::i18n::text_static(
+                        "notifications.approvals.session_awaiting_your_answer",
+                    )
                 } else {
-                    "会话等待审批"
+                    conduit::i18n::text_static("notifications.approvals.session_awaiting_approval")
                 },
                 if question {
                     approval.title.clone()
@@ -246,6 +250,7 @@ mod tests {
 
     #[test]
     fn previews_surface_commands_and_affected_files_across_provider_shapes() {
+        let _locale = crate::test_support::chinese();
         for (input, detail, expected) in [
             (
                 serde_json::json!({"itemId":"tool"}),
@@ -282,6 +287,7 @@ mod tests {
 
     #[test]
     fn oversized_previews_are_bounded_and_direct_to_complete_details() {
+        let _locale = crate::test_support::chinese();
         let request = approval(
             serde_json::json!({"command":"检查目录 ".repeat(200)}),
             serde_json::Value::Null,

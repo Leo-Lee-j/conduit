@@ -60,15 +60,24 @@ fn search_path(name: &str) -> Option<PathBuf> {
 }
 
 fn npm_program() -> Result<(PathBuf, PathBuf)> {
-    let npm = search_path("npm.cmd").context("未找到 npm，请安装 Node.js 后重试")?;
-    let directory = npm.parent().context("npm 安装路径无效")?;
+    let npm = search_path("npm.cmd").context(conduit::i18n::text_static(
+        "cli.updates.install.npm_not_found_install_node_js_and",
+    ))?;
+    let directory = npm.parent().context(conduit::i18n::text_static(
+        "cli.updates.install.invalid_npm_install_path",
+    ))?;
     let script = directory.join("node_modules/npm/bin/npm-cli.js");
-    anyhow::ensure!(script.is_file(), "未找到 npm-cli.js，请检查 Node.js 安装");
+    anyhow::ensure!(
+        script.is_file(),
+        conduit::i18n::text("cli.updates.install.npm_cli_js_not_found_check_the")
+    );
     let adjacent = directory.join("node.exe");
     let node = if adjacent.is_file() {
         adjacent
     } else {
-        search_path("node.exe").context("未找到 node.exe，请检查 Node.js 安装")?
+        search_path("node.exe").context(conduit::i18n::text_static(
+            "cli.updates.install.node_exe_not_found_check_the_node",
+        ))?
     };
     Ok((node, script))
 }
@@ -96,7 +105,7 @@ impl Plan {
                 "--no-fund".into(),
                 "--progress=false".into(),
             ],
-            label: "npm · 原安装目录",
+            label: conduit::i18n::text_static("cli.updates.install.npm_original_install_directory"),
         }
     }
 
@@ -115,7 +124,9 @@ impl Plan {
                 || prefix.join("node_modules/.yarn-integrity").exists();
             anyhow::ensure!(
                 !other_manager,
-                "此 CLI 由其他 JavaScript 包管理器管理，请使用原包管理器更新"
+                conduit::i18n::text(
+                    "cli.updates.install.this_cli_is_managed_by_another_javascript"
+                )
             );
             let (program, script) = npm_program()?;
             return Ok(Self::npm(provider, &prefix, version, program, script));
@@ -124,7 +135,7 @@ impl Plan {
             !path
                 .components()
                 .any(|component| component.as_os_str() == "node_modules"),
-            "无法确认此 JavaScript 安装的来源，请使用原包管理器更新"
+            conduit::i18n::text("cli.updates.install.unable_to_identify_the_source_of_this")
         );
         let managed = path.components().any(|component| {
             let value = component.as_os_str().to_string_lossy().to_ascii_lowercase();
@@ -132,24 +143,26 @@ impl Plan {
         });
         anyhow::ensure!(
             !managed,
-            "此 CLI 由系统包管理器管理，请通过原包管理器更新；可查看官方更新说明"
+            conduit::i18n::text("cli.updates.install.this_cli_is_managed_by_a_system")
         );
         anyhow::ensure!(
             path.extension()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("exe")),
-            "无法识别此启动器的安装来源，请查看官方更新说明"
+            conduit::i18n::text(
+                "cli.updates.install.unable_to_identify_this_launcher_s_installation"
+            )
         );
         let args = match provider {
             Provider::Claude => vec!["update".into()],
             Provider::OpenCode => vec!["upgrade".into(), version.into()],
-            Provider::Codex => anyhow::bail!(
-                "此 Codex 为独立可执行文件，无法确认原安装方式；npm 安装支持一键更新，请查看官方更新说明"
-            ),
+            Provider::Codex => anyhow::bail!(conduit::i18n::text(
+                "cli.updates.install.this_codex_installation_is_a_standalone_executable"
+            )),
         };
         Ok(Self {
             program: path.to_path_buf(),
             args,
-            label: "CLI 原生更新",
+            label: conduit::i18n::text_static("cli.updates.install.native_cli_update"),
         })
     }
 }
@@ -161,7 +174,10 @@ pub(in crate::cli) fn run(
     cancelled: &AtomicBool,
     mut progress: impl FnMut(String),
 ) -> Result<VersionInfo> {
-    progress("正在读取本机版本并检查官方最新版本…".into());
+    progress(
+        conduit::i18n::text_static("settings.cli.reading_local_version_and_checking_the_latest")
+            .into(),
+    );
     let before = read_version(provider, path, cancelled)?;
     let update = check(provider, &before.version, cancelled)?;
     if update.status != UpdateStatus::Available {
@@ -171,9 +187,13 @@ pub(in crate::cli) fn run(
         });
     }
     let plan = Plan::detect(provider, path, &update.latest_version)?;
-    progress(format!(
-        "更新方式：{}\n正在更新 {} → {}…",
-        plan.label, before.version, update.latest_version
+    progress(conduit::i18n::format(
+        "cli.updates.install.update_method_updating",
+        &[
+            ("arg0", plan.label.to_string()),
+            ("arg1", before.version.to_string()),
+            ("arg2", update.latest_version.to_string()),
+        ],
     ));
     perform(provider, path, update, &plan, cancelled, &mut progress)
 }
@@ -189,18 +209,32 @@ fn perform(
     run_command(plan, cancelled, INSTALL_TIMEOUT, progress)?;
     anyhow::ensure!(
         !cancelled.load(Ordering::Acquire),
-        "更新已停止，安装可能未完成，请重新检测或重试"
+        conduit::i18n::text(
+            "cli.updates.install.update_stopped_installation_may_be_incomplete_detect"
+        )
     );
-    progress("更新命令已完成，正在重新检测本机版本…".into());
-    let after = read_version(provider, path, cancelled)
-        .context("更新命令已完成，但无法读取原路径的版本，请重新检测或检查启动路径")?;
-    let current = Version::parse(&after.version).context("更新后的版本格式无效")?;
+    progress(
+        conduit::i18n::text_static(
+            "cli.updates.install.update_command_completed_detecting_the_installed_version",
+        )
+        .into(),
+    );
+    let after = read_version(provider, path, cancelled).context(conduit::i18n::text_static(
+        "cli.updates.install.update_command_completed_but_the_version_at",
+    ))?;
+    let current = Version::parse(&after.version).context(conduit::i18n::text_static(
+        "cli.updates.install.invalid_version_format_after_update",
+    ))?;
     let expected = Version::parse(&update.latest_version)?;
     anyhow::ensure!(
         current.cmp_precedence(&expected).is_ge(),
-        "更新命令已完成，但当前版本 {} 尚未达到官方版本 {}；请检查原安装渠道后重试",
-        after.version,
-        update.latest_version
+        conduit::i18n::format(
+            "cli.updates.install.update_command_completed_but_version_is_still",
+            &[
+                ("arg0", after.version.to_string()),
+                ("arg1", update.latest_version.to_string())
+            ]
+        )
     );
     Ok(VersionInfo {
         update: Some(Ok(UpdateInfo {
@@ -232,7 +266,10 @@ fn run_command(
     timeout: Duration,
     progress: &mut impl FnMut(String),
 ) -> Result<()> {
-    anyhow::ensure!(!cancelled.load(Ordering::Acquire), "更新已停止");
+    anyhow::ensure!(
+        !cancelled.load(Ordering::Acquire),
+        conduit::i18n::text("cli.updates.install.update_stopped")
+    );
     let environment = std::collections::BTreeMap::from([
         ("CI".into(), "true".into()),
         ("NO_COLOR".into(), "1".into()),
@@ -245,7 +282,9 @@ fn run_command(
         &std::env::temp_dir(),
         &environment,
     )
-    .context("无法启动更新进程，请检查安装目录权限")?;
+    .context(conduit::i18n::text_static(
+        "cli.updates.install.unable_to_start_the_update_process_check",
+    ))?;
     drop(pipes.stdin);
     let mut log = Vec::new();
     let started = Instant::now();
@@ -254,26 +293,42 @@ fn run_command(
         loop {
             anyhow::ensure!(
                 !cancelled.load(Ordering::Acquire),
-                "更新已停止，安装可能未完成，请重新检测或重试"
+                conduit::i18n::text(
+                    "cli.updates.install.update_stopped_installation_may_be_incomplete_detect"
+                )
             );
             anyhow::ensure!(
                 started.elapsed() < timeout,
-                "更新超时，已停止进程树；安装可能未完成，请重新检测或重试"
+                conduit::i18n::text(
+                    "cli.updates.install.update_timed_out_process_tree_stopped_installation"
+                )
             );
             drain(&mut pipes.stdout, &mut log)?;
             drain(&mut pipes.stderr, &mut log)?;
             if let Some(code) = child.exit_code()? {
                 drain(&mut pipes.stdout, &mut log)?;
                 drain(&mut pipes.stderr, &mut log)?;
-                anyhow::ensure!(code == 0, "更新退出码 {code}：{}", visible_log(&log));
+                anyhow::ensure!(
+                    code == 0,
+                    conduit::i18n::format(
+                        "cli.updates.install.update_exit_code",
+                        &[
+                            ("code", format!("{}", code)),
+                            ("arg0", visible_log(&log).to_string())
+                        ]
+                    )
+                );
                 return Ok(());
             }
             if last_progress.elapsed() >= Duration::from_millis(250) {
                 let output = visible_log(&log);
-                progress(format!(
-                    "正在更新（{}，已用时 {} 秒）…\n{output}",
-                    plan.label,
-                    started.elapsed().as_secs()
+                progress(conduit::i18n::format(
+                    "cli.updates.install.updating_elapsed_seconds",
+                    &[
+                        ("arg0", plan.label.to_string()),
+                        ("arg1", format!("{}", started.elapsed().as_secs())),
+                        ("output", output.to_string()),
+                    ],
                 ));
                 last_progress = Instant::now();
             }
@@ -285,7 +340,7 @@ fn run_command(
     while child.active_processes()? > 0 || child.exit_code()?.is_none() {
         anyhow::ensure!(
             cleanup.elapsed() < Duration::from_secs(10),
-            "更新进程树清理超时"
+            conduit::i18n::text("cli.updates.install.update_process_cleanup_timed_out")
         );
         thread::sleep(Duration::from_millis(10));
     }
@@ -386,6 +441,7 @@ mod tests {
 
     #[test]
     fn cli_install_sources_match_selected_npm_package_and_reject_unrelated_binaries() {
+        let _locale = crate::test_support::chinese();
         let fixture = Fixture::new();
         for provider in Provider::ALL {
             let directory = fixture.0.join("node_modules").join(package(provider));
@@ -447,6 +503,7 @@ mod tests {
 
     #[test]
     fn cli_install_streams_bounded_output_and_reports_stderr_exit_failures() {
+        let _locale = crate::test_support::chinese();
         let fixture = Fixture::new();
         let plan = fixture.plan("[Console]::WriteLine(('x' * 30000)); [Console]::WriteLine('installing'); Start-Sleep -Milliseconds 600; [Console]::Error.WriteLine('permission denied'); exit 7");
         let mut progress = vec![];
@@ -466,6 +523,7 @@ mod tests {
 
     #[test]
     fn cli_install_cancellation_and_timeout_terminate_the_process_tree() {
+        let _locale = crate::test_support::chinese();
         let fixture = Fixture::new();
         let plan = fixture.plan("[Console]::WriteLine('started'); Start-Sleep -Seconds 60");
         let cancelled = AtomicBool::new(false);
@@ -488,6 +546,7 @@ mod tests {
 
     #[test]
     fn cli_install_verifies_selected_executable_after_update_and_rejects_stale_versions() {
+        let _locale = crate::test_support::chinese();
         let fixture = Fixture::new();
         let binary = fixture.0.join("codex.cmd");
         let mut plan = fixture.plan("param([string]$Target)\nSet-Content -LiteralPath $Target -Value '@echo codex-cli 1.2.0'");

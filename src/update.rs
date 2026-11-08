@@ -98,7 +98,7 @@ fn allowed_url(value: &str) -> Result<url::Url> {
             && url.username().is_empty()
             && url.password().is_none()
             && url.port_or_known_default() == Some(443),
-        "更新地址必须使用 HTTPS"
+        conduit::i18n::text("update.update_url_must_use_https")
     );
     anyhow::ensure!(
         matches!(
@@ -110,7 +110,7 @@ fn allowed_url(value: &str) -> Result<url::Url> {
                     | "objects.githubusercontent.com"
             )
         ),
-        "不允许的更新下载主机"
+        conduit::i18n::text("update.update_download_host_is_not_allowed")
     );
     Ok(url)
 }
@@ -131,19 +131,25 @@ fn get(agent: &ureq::Agent, address: &str) -> Result<ureq::http::Response<ureq::
                 },
             )
             .call()
-            .context("无法访问更新服务，请检查网络或稍后重试")?;
+            .context(conduit::i18n::text_static(
+                "update.unable_to_reach_update_service_check_your",
+            ))?;
         if response.status().is_redirection() {
             let next = response
                 .headers()
                 .get("location")
-                .context("下载重定向缺少地址")?
+                .context(conduit::i18n::text_static(
+                    "update.download_redirect_is_missing_its_url",
+                ))?
                 .to_str()?;
             url = allowed_url(url.join(next)?.as_str())?;
         } else {
             return Ok(response);
         }
     }
-    bail!("更新下载重定向次数过多")
+    bail!(conduit::i18n::text(
+        "update.too_many_update_download_redirects"
+    ))
 }
 
 // Retry only transient failures, never malformed data, TLS verification or
@@ -197,7 +203,10 @@ fn metadata(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>> {
                 .as_reader()
                 .take(MAX_METADATA + 1)
                 .read_to_end(&mut bytes)?;
-            anyhow::ensure!(bytes.len() as u64 <= MAX_METADATA, "更新信息超出大小限制");
+            anyhow::ensure!(
+                bytes.len() as u64 <= MAX_METADATA,
+                conduit::i18n::text("update.update_information_exceeds_the_size_limit")
+            );
             Ok(bytes)
         },
         thread::sleep,
@@ -208,13 +217,13 @@ pub fn installed_release(data_dir: &Path) -> Result<Release> {
     let bytes = fs::read(data_dir.join("installed-release.json"))?;
     anyhow::ensure!(
         bytes.len() <= 2 * MAX_METADATA as usize,
-        "已安装版本信息过大"
+        conduit::i18n::text("update.installed_version_information_is_too_large")
     );
     let mut release: Release = serde_json::from_slice(&bytes)?;
     release.manifest = verify_manifest(&release.raw, &release.signature, PUBLIC_KEY)?;
     anyhow::ensure!(
         release.manifest.version == env!("CARGO_PKG_VERSION"),
-        "已安装版本信息不匹配"
+        conduit::i18n::text("update.installed_version_information_mismatch")
     );
     Ok(release)
 }
@@ -238,13 +247,17 @@ pub fn ensure_disk_space(directory: &Path, required: u64) -> Result<()> {
     };
     anyhow::ensure!(
         result != 0,
-        "无法检查可用磁盘空间：{}",
-        std::io::Error::last_os_error()
+        conduit::i18n::format(
+            "update.unable_to_check_available_disk_space",
+            &[("arg0", format!("{}", std::io::Error::last_os_error()))]
+        )
     );
     anyhow::ensure!(
         available >= required,
-        "磁盘空间不足，至少需要 {} MiB",
-        required / (1024 * 1024)
+        conduit::i18n::format(
+            "update.insufficient_disk_space_at_least_mib_required",
+            &[("arg0", format!("{}", required / (1024 * 1024)))]
+        )
     );
     Ok(())
 }
@@ -278,7 +291,7 @@ pub fn check() -> Task {
 fn check_release() -> Result<Option<Release>> {
     anyhow::ensure!(
         !PUBLIC_KEY.is_empty(),
-        "此构建未配置更新公钥，请安装正式发布版本"
+        conduit::i18n::text("update.this_build_has_no_update_public_key")
     );
     let client = agent(Duration::from_secs(45));
     check_release_with(
@@ -295,7 +308,7 @@ fn check_release_with(
 ) -> Result<Option<Release>> {
     anyhow::ensure!(
         !public_key.is_empty(),
-        "此构建未配置更新公钥，请安装正式发布版本"
+        conduit::i18n::text("update.this_build_has_no_update_public_key")
     );
     let address = format!("https://api.github.com/repos/{REPOSITORY}/releases/latest");
     let data = match fetch(&address) {
@@ -319,7 +332,12 @@ fn check_release_with(
                 ) =>
         {
             return check_signed_latest(&mut fetch, public_key, current_version).with_context(
-                || format!("GitHub API 不可用（{error:#}），官方更新清单回退也失败"),
+                || {
+                    conduit::i18n::format(
+                        "update.github_api_unavailable_fallback_to_the_official",
+                        &[("error", format!("{:#}", error))],
+                    )
+                },
             );
         }
         Err(error) => return Err(error),
@@ -338,21 +356,23 @@ fn check_release_with(
             .iter()
             .find(|asset| asset.name == name)
             .map(|asset| asset.browser_download_url.as_str())
-            .context("发布缺少更新清单或签名")
+            .context(conduit::i18n::text_static(
+                "update.release_is_missing_its_update_manifest_or",
+            ))
     };
     let raw = fetch(asset("update.json")?)?;
     let signature = String::from_utf8(fetch(asset("update.json.sig")?)?)?;
     let manifest = verify_manifest(&raw, &signature, public_key)?;
     anyhow::ensure!(
         manifest.version == version.to_string(),
-        "更新版本与 GitHub 标签不一致"
+        conduit::i18n::text("update.update_version_does_not_match_the_github")
     );
     anyhow::ensure!(
         release
             .assets
             .iter()
             .any(|a| a.name == manifest.filename && a.browser_download_url == manifest.url),
-        "发布缺少清单指定的安装包"
+        conduit::i18n::text("update.release_is_missing_the_installer_specified_in")
     );
     Ok(Some(Release {
         manifest,
@@ -435,13 +455,19 @@ fn download_release(
         let mut downloaded = 0;
         let mut notified = Instant::now();
         loop {
-            anyhow::ensure!(!cancel.load(Ordering::Relaxed), "下载已取消");
+            anyhow::ensure!(
+                !cancel.load(Ordering::Relaxed),
+                conduit::i18n::text("update.download_cancelled")
+            );
             let read = input.read(&mut buf)?;
             if read == 0 {
                 break;
             }
             downloaded += read as u64;
-            anyhow::ensure!(downloaded <= manifest.size, "安装包超出预期大小");
+            anyhow::ensure!(
+                downloaded <= manifest.size,
+                conduit::i18n::text("update.installer_exceeds_the_expected_size")
+            );
             output.write_all(&buf[..read])?;
             if notified.elapsed() >= Duration::from_millis(200) {
                 progress(downloaded);
@@ -451,7 +477,10 @@ fn download_release(
         output.sync_all()?;
         drop(output);
         verify_package(&partial, &manifest)?;
-        anyhow::ensure!(!cancel.load(Ordering::Relaxed), "下载已取消");
+        anyhow::ensure!(
+            !cancel.load(Ordering::Relaxed),
+            conduit::i18n::text("update.download_cancelled")
+        );
         if path.exists() {
             fs::remove_file(&path)?;
         }

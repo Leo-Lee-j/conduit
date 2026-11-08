@@ -19,7 +19,10 @@ impl SaveReceipt {
         match self.0.try_recv() {
             Ok(result) => Some(result),
             Err(mpsc::TryRecvError::Empty) => None,
-            Err(mpsc::TryRecvError::Disconnected) => Some(Err("保存线程已退出".into())),
+            Err(mpsc::TryRecvError::Disconnected) => Some(Err(conduit::i18n::text_static(
+                "persistence.save_thread_exited",
+            )
+            .into())),
         }
     }
 }
@@ -55,7 +58,9 @@ impl Persistence {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         write(snapshot.store)
                     }))
-                    .unwrap_or_else(|_| Err("保存线程异常".into()));
+                    .unwrap_or_else(|_| {
+                        Err(conduit::i18n::text_static("persistence.save_thread_failed").into())
+                    });
                     if let Some(receipt) = snapshot.receipt {
                         let _ = receipt.send(result.clone());
                     }
@@ -81,10 +86,9 @@ impl Persistence {
         if self.enqueue(store, Some(sender)) {
             Ok(SaveReceipt(receiver))
         } else {
-            Err(self
-                .error
-                .clone()
-                .unwrap_or_else(|| "保存线程已退出".into()))
+            Err(self.error.clone().unwrap_or_else(|| {
+                conduit::i18n::text_static("persistence.save_thread_exited").into()
+            }))
         }
     }
     fn enqueue(
@@ -94,7 +98,10 @@ impl Persistence {
     ) -> bool {
         let mut pending = self.pending.lock().unwrap();
         if receipt.is_some() && pending.len() >= 32 {
-            self.error = Some("待保存消息过多，请等待磁盘写入完成。".into());
+            self.error = Some(
+                conduit::i18n::text_static("persistence.too_many_pending_messages_wait_for_disk")
+                    .into(),
+            );
             return false;
         }
         let replace = pending
@@ -113,7 +120,12 @@ impl Persistence {
             )
         };
         if retained.saturating_sub(largest) > self.extra_bytes_budget {
-            self.error = Some("待保存正文占用过多，请等待磁盘写入完成后重试。".into());
+            self.error = Some(
+                conduit::i18n::text_static(
+                    "persistence.pending_message_content_exceeds_the_memory_limit",
+                )
+                .into(),
+            );
             return false;
         }
         self.requested += 1;
@@ -131,7 +143,8 @@ impl Persistence {
         match self.wake.try_send(()) {
             Ok(()) | Err(mpsc::TrySendError::Full(())) => true,
             Err(mpsc::TrySendError::Disconnected(())) => {
-                self.error = Some("保存线程已退出".into());
+                self.error =
+                    Some(conduit::i18n::text_static("persistence.save_thread_exited").into());
                 false
             }
         }
@@ -193,6 +206,7 @@ mod tests {
     use super::*;
     #[test]
     fn slow_writer_bounds_retained_versions_without_losing_send_barriers() {
+        let _locale = crate::test_support::chinese();
         let (entered, started) = mpsc::channel();
         let (release, wait) = mpsc::channel();
         let mut writer = Persistence::with_writer(move |store| {
@@ -239,6 +253,7 @@ mod tests {
     }
     #[test]
     fn send_receipts_survive_coalescing_and_keep_their_own_failure() {
+        let _locale = crate::test_support::chinese();
         let (entered, started) = mpsc::channel();
         let (release, wait) = mpsc::channel();
         let mut writer = Persistence::with_writer(move |store| {
@@ -285,6 +300,7 @@ mod tests {
 
     #[test]
     fn writer_panic_reports_failed_receipt_and_accepts_a_later_retry() {
+        let _locale = crate::test_support::chinese();
         let mut writer = Persistence::with_writer(|store| {
             assert_ne!(store.version, 1, "injected writer panic");
             Ok(())
@@ -302,6 +318,7 @@ mod tests {
     }
     #[test]
     fn slow_writer_coalesces_snapshots_and_acknowledges_latest_revision() {
+        let _locale = crate::test_support::chinese();
         let (entered, started) = mpsc::channel();
         let (release, wait) = mpsc::channel();
         let (saved, results) = mpsc::channel();
@@ -335,6 +352,7 @@ mod tests {
     }
     #[test]
     fn failed_save_remains_visible_until_a_successful_retry() {
+        let _locale = crate::test_support::chinese();
         let calls = std::sync::atomic::AtomicUsize::new(0);
         let mut writer = Persistence::with_writer(move |_| {
             if calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {

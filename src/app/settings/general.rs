@@ -13,8 +13,8 @@ impl ConduitApp {
             self.store.ui.sessions_per_workspace.clamp(1, 30),
             1,
             30,
-            "减少工作区会话数",
-            "增加工作区会话数",
+            conduit::i18n::text_static("settings.general.decrease_workspace_session_count"),
+            conduit::i18n::text_static("settings.general.increase_workspace_session_count"),
             disabled,
             view.clone(),
             |app, value| app.store.ui.sessions_per_workspace = value,
@@ -24,8 +24,8 @@ impl ConduitApp {
             self.store.ui.max_tabs.clamp(1, MAX_TAB_LIMIT),
             1,
             MAX_TAB_LIMIT,
-            "减少最大标签数量",
-            "增加最大标签数量",
+            conduit::i18n::text_static("settings.general.decrease_maximum_tab_count"),
+            conduit::i18n::text_static("settings.general.increase_maximum_tab_count"),
             disabled,
             view.clone(),
             |app, value| app.store.ui.max_tabs = value,
@@ -35,18 +35,73 @@ impl ConduitApp {
             |app| app.store.ui.full_width_content,
             |app, value| app.store.ui.full_width_content = value,
         );
-        settings_page("通用", FullIconName::Settings).groups(vec![
-            settings_section("工作台布局").items(vec![
-                SettingItem::new("内容铺满", full_width)
-                    .description("开启后聊天内容铺满可用区域，关闭时居中显示")
-                    .disabled(disabled),
-                SettingItem::new("侧栏会话数量", sessions_limit)
-                    .description(
-                        "每个工作区默认显示的普通会话数；置顶会话不计入，更多会话可展开查看",
-                    )
-                    .disabled(disabled),
-                SettingItem::new("标签页上限", max_tabs_limit)
-                    .description("超出上限时自动关闭最早打开的标签页")
+        let language_view = view.clone();
+        let language = self.store.ui.language.clone();
+        let language_label = conduit::i18n::languages()
+            .iter()
+            .find(|entry| entry.id == language.as_str())
+            .map(|entry| entry.name.clone())
+            .unwrap_or_else(|| "English".into());
+        let language_field = SettingField::render(move |_, _, _| {
+            let view = language_view.clone();
+            Button::new("application-language")
+                .debug_selector(|| "application-language".into())
+                .outline()
+                .label(language_label.clone())
+                .icon(FullIconName::ChevronDown)
+                .disabled(disabled)
+                .dropdown_menu(move |mut menu, _, _| {
+                    for entry in conduit::i18n::languages() {
+                        let view = view.clone();
+                        let locale = conduit::i18n::Locale::from(entry.id.clone());
+                        menu = menu.item(PopupMenuItem::new(entry.name.clone()).on_click(
+                            move |_, window, cx| {
+                                view.update(cx, |app, cx| {
+                                    app.select_language(locale.clone(), window, cx)
+                                });
+                            },
+                        ));
+                    }
+                    menu
+                })
+        });
+        settings_page(
+            conduit::i18n::text_static("settings.general.general"),
+            FullIconName::Settings,
+        )
+        .groups(vec![
+            settings_section(conduit::i18n::text_static(
+                "settings.general.workbench_layout",
+            ))
+            .items(vec![
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.full_width_content"),
+                    full_width,
+                )
+                .description(conduit::i18n::text_static(
+                    "settings.general.fill_the_available_area_with_chat_content",
+                ))
+                .disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.sidebar_session_count"),
+                    sessions_limit,
+                )
+                .description(conduit::i18n::text_static(
+                    "settings.general.default_number_of_ordinary_sessions_per_workspace",
+                ))
+                .disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.tab_limit"),
+                    max_tabs_limit,
+                )
+                .description(conduit::i18n::text_static(
+                    "settings.general.automatically_close_the_oldest_tab_when_the",
+                ))
+                .disabled(disabled),
+            ]),
+            settings_section(conduit::i18n::text("language.section")).items(vec![
+                SettingItem::new(conduit::i18n::text("language.title"), language_field)
+                    .description(conduit::i18n::text("language.description"))
                     .disabled(disabled),
             ]),
         ])
@@ -98,28 +153,65 @@ impl ConduitApp {
                 });
             },
         );
-        settings_page("数据与更新", FullIconName::Settings).groups(vec![
-            settings_section("本机数据")
+        settings_page(
+            conduit::i18n::text_static("settings.general.data_and_updates"),
+            FullIconName::Settings,
+        )
+        .groups(vec![
+            settings_section(conduit::i18n::text_static("settings.general.local_data"))
                 .items(vec![
-                    value_item("数据目录", data_dir),
-                    value_item("配置文件", state_file),
+                    value_item(
+                        conduit::i18n::text_static("settings.general.data_directory"),
+                        data_dir,
+                    ),
+                    value_item(
+                        conduit::i18n::text_static("settings.general.configuration_file"),
+                        state_file,
+                    ),
                 ])
-                .footer(|_, _| "配置只保存在本机。"),
-            settings_section("应用更新").items(vec![
-                SettingItem::new("自动检查更新", auto_check)
-                    .description("启动后及每 6 小时后台检查")
-                    .disabled(disabled),
-                SettingItem::new("后台下载更新", auto_download)
-                    .description("发现新版本后下载并验证")
-                    .disabled(disabled),
-                SettingItem::new("空闲时安装并重启", auto_install)
-                    .description("任务结束后保存草稿，安装并重新打开应用")
-                    .disabled(disabled),
+                .footer(|_, _| {
+                    conduit::i18n::text_static(
+                        "settings.general.configuration_is_stored_locally_only",
+                    )
+                }),
+            settings_section(conduit::i18n::text_static(
+                "settings.general.application_updates",
+            ))
+            .items(vec![
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.automatically_check_for_updates"),
+                    auto_check,
+                )
+                .description(conduit::i18n::text_static(
+                    "settings.general.check_in_the_background_after_startup_and",
+                ))
+                .disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.download_updates_in_background"),
+                    auto_download,
+                )
+                .description(conduit::i18n::text_static(
+                    "settings.general.download_and_verify_new_versions_when_found",
+                ))
+                .disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.install_and_restart_when_idle"),
+                    auto_install,
+                )
+                .description(conduit::i18n::text_static(
+                    "settings.general.save_drafts_after_tasks_finish_install_the",
+                ))
+                .disabled(disabled),
             ]),
-            settings_section("诊断").item(
-                SettingItem::new("性能监测", performance)
-                    .description("在底部工具栏显示性能入口")
-                    .disabled(disabled),
+            settings_section(conduit::i18n::text_static("settings.general.diagnostics")).item(
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.performance_monitoring"),
+                    performance,
+                )
+                .description(conduit::i18n::text_static(
+                    "settings.general.show_performance_monitor_in_the_bottom_toolbar",
+                ))
+                .disabled(disabled),
             ),
         ])
     }
@@ -180,23 +272,51 @@ impl ConduitApp {
                 .naming_mode_picker(mode_view.clone(), disabled || !auto_rename)
         });
         let mut items = vec![
-            SettingItem::new("自动命名", auto_rename)
-                .description("关闭后仍可手动使用 AI 重命名")
+            SettingItem::new(
+                conduit::i18n::text_static("settings.defaults.automatic_naming"),
+                auto_rename,
+            )
+            .description(conduit::i18n::text_static(
+                "settings.general.manual_ai_renaming_remains_available_when_disabled",
+            ))
+            .disabled(disabled),
+            SettingItem::new(conduit::i18n::text_static("settings.general.trigger"), mode)
                 .disabled(disabled),
-            SettingItem::new("触发方式", mode).disabled(disabled),
             self.generation_disclosure(true, view.clone()),
         ];
         if self.settings_ui.naming_expanded {
             items.extend([
-                SettingItem::new("命名引擎", provider).disabled(disabled),
-                SettingItem::new("命名服务", channel).disabled(disabled),
-                SettingItem::new("命名模型", model).disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.naming_engine"),
+                    provider,
+                )
+                .disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.naming_service"),
+                    channel,
+                )
+                .disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.naming_model"),
+                    model,
+                )
+                .disabled(disabled),
             ]);
         }
-        settings_page("自动命名", FullIconName::Sparkles).group(
-            settings_section("会话命名")
-                .items(items)
-                .footer(|_, _| "命名在后台进行；失败保留当前标题，手动命名不会被覆盖。"),
+        settings_page(
+            conduit::i18n::text_static("settings.defaults.automatic_naming"),
+            FullIconName::Sparkles,
+        )
+        .group(
+            settings_section(conduit::i18n::text_static(
+                "settings.general.session_naming",
+            ))
+            .items(items)
+            .footer(|_, _| {
+                conduit::i18n::text_static(
+                    "settings.general.naming_runs_in_the_background_failures_keep",
+                )
+            }),
         )
     }
 
@@ -229,14 +349,18 @@ impl ConduitApp {
                 .h(px(180.))
                 .w_full()
                 .text_size(ui_text_size(12.))
-                .aria_label("Commit Message 生成提示词")
+                .aria_label(conduit::i18n::text_static(
+                    "settings.general.commit_message_generation_prompt",
+                ))
                 .disabled(disabled)
         });
         let reset_view = view.clone();
         let reset_input = self.git_prompt_input.clone();
         let reset = SettingField::render(move |_, _window, _| {
             Button::new("git-prompt-reset")
-                .label("恢复默认")
+                .label(conduit::i18n::text_static(
+                    "settings.appearance.restore_defaults",
+                ))
                 .small()
                 .ghost()
                 .disabled(disabled)
@@ -263,9 +387,21 @@ impl ConduitApp {
         let mut generation = vec![self.generation_disclosure(false, view.clone())];
         if self.settings_ui.git_expanded {
             generation.extend([
-                SettingItem::new("生成引擎", provider).disabled(disabled),
-                SettingItem::new("生成服务", channel).disabled(disabled),
-                SettingItem::new("生成模型", model).disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.generation_engine"),
+                    provider,
+                )
+                .disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.generation_service"),
+                    channel,
+                )
+                .disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.generation_model"),
+                    model,
+                )
+                .disabled(disabled),
             ]);
         }
         let tag_settings_view = view.clone();
@@ -309,8 +445,8 @@ impl ConduitApp {
             self.store.git.tag_step.clamp(1, 100),
             1,
             100,
-            "减少标签递增步长",
-            "增加标签递增步长",
+            conduit::i18n::text_static("settings.general.decrease_tag_increment"),
+            conduit::i18n::text_static("settings.general.increase_tag_increment"),
             disabled,
             view.clone(),
             |app, value| app.store.git.tag_step = value,
@@ -341,9 +477,9 @@ impl ConduitApp {
                         .small()
                         .ghost()
                         .label(if expanded {
-                            "收起提示词"
+                            conduit::i18n::text_static("settings.general.hide_prompt")
                         } else {
-                            "编辑提示词"
+                            conduit::i18n::text_static("settings.general.edit_prompt")
                         })
                         .on_click(move |_, _, cx| {
                             view.update(cx, |app, cx| {
@@ -353,29 +489,65 @@ impl ConduitApp {
                         }),
                 )
         })
-        .keywords(["提示词", "prompt"]);
+        .keywords([
+            conduit::i18n::text_static("settings.general.prompt"),
+            "prompt",
+        ]);
         let mut prompts = vec![edit];
         if expanded {
             prompts.extend([
-                SettingItem::new("提示词", prompt)
-                    .layout(Axis::Vertical)
-                    .disabled(disabled),
-                SettingItem::new("恢复默认", reset).disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.prompt"),
+                    prompt,
+                )
+                .layout(Axis::Vertical)
+                .disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.appearance.restore_defaults"),
+                    reset,
+                )
+                .disabled(disabled),
             ]);
         }
-        settings_page("Git 提交", FullIconName::GitFork).groups([
-            settings_section("标签生成").items(vec![
-                SettingItem::new("版本递增策略", tag_strategy)
-                    .description("根据已知稳定版标签生成新版本")
-                    .disabled(disabled),
-                SettingItem::new("递增步长", tag_step)
-                    .description("目标段增加指定数值，右侧版本段归零")
-                    .disabled(disabled),
+        settings_page(
+            conduit::i18n::text_static("settings.general.git_commits"),
+            FullIconName::GitFork,
+        )
+        .groups([
+            settings_section(conduit::i18n::text_static(
+                "settings.general.tag_generation",
+            ))
+            .items(vec![
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.version_increment_strategy"),
+                    tag_strategy,
+                )
+                .description(conduit::i18n::text_static(
+                    "settings.general.generate_a_version_from_known_stable_tags",
+                ))
+                .disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.increment"),
+                    tag_step,
+                )
+                .description(conduit::i18n::text_static(
+                    "settings.general.increase_the_selected_segment_by_this_amount",
+                ))
+                .disabled(disabled),
             ]),
-            settings_section("生成模型").items(generation),
-            settings_section("Commit Message 提示词")
-                .items(prompts)
-                .footer(|_, _| "修改自动保存，下次生成生效；已暂存文件名和 diff 会自动附加。"),
+            settings_section(conduit::i18n::text_static(
+                "settings.general.generation_model",
+            ))
+            .items(generation),
+            settings_section(conduit::i18n::text_static(
+                "settings.general.commit_message_prompt",
+            ))
+            .items(prompts)
+            .footer(|_, _| {
+                conduit::i18n::text_static(
+                    "settings.general.changes_save_automatically_and_apply_to_the",
+                )
+            }),
         ])
     }
 }

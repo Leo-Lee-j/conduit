@@ -11,6 +11,7 @@ fn key(workspace: &str, id: u64) -> SessionKey {
 
 #[test]
 fn cache_bounds_selection_and_scrolls_and_evicts_least_recently_used() {
+    let _locale = crate::test_support::chinese();
     let mut state = ToolDetailState::default();
     let first = key("tool-cache", 0);
     state.select(&first, "shared");
@@ -48,6 +49,7 @@ fn cache_bounds_selection_and_scrolls_and_evicts_least_recently_used() {
 
 #[test]
 fn workspace_identity_isolates_same_session_and_message_ids_and_deletion_cleans_state() {
+    let _locale = crate::test_support::chinese();
     let mut state = ToolDetailState::default();
     let alpha = key("tool-alpha", 7);
     let beta = key("tool-beta", 7);

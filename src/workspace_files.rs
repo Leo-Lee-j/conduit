@@ -47,7 +47,12 @@ pub struct Stamp {
 }
 
 pub fn stamp(path: &Path) -> Result<Stamp, String> {
-    let metadata = fs::metadata(path).map_err(|e| format!("无法读取文件状态：{e}"))?;
+    let metadata = fs::metadata(path).map_err(|e| {
+        conduit::i18n::format(
+            "workspace_files.unable_to_read_file_status",
+            &[("e", format!("{}", e))],
+        )
+    })?;
     Ok(Stamp {
         modified: metadata.modified().ok(),
         len: metadata.len(),
@@ -61,18 +66,28 @@ fn checked_path(key: &FileKey) -> Result<PathBuf, String> {
         .components()
         .any(|c| !matches!(c, Component::Normal(_)))
     {
-        return Err("路径必须位于当前工作区内。".into());
+        return Err(conduit::i18n::text_static(
+            "workspace_files.path_must_be_inside_the_current_workspace",
+        )
+        .into());
     }
-    let root = key
-        .workspace
-        .canonicalize()
-        .map_err(|e| format!("工作区不可访问：{e}"))?;
-    let path = root
-        .join(&key.relative)
-        .canonicalize()
-        .map_err(|e| format!("路径已删除或无法访问：{e}"))?;
+    let root = key.workspace.canonicalize().map_err(|e| {
+        conduit::i18n::format(
+            "workspace_files.workspace_inaccessible",
+            &[("e", format!("{}", e))],
+        )
+    })?;
+    let path = root.join(&key.relative).canonicalize().map_err(|e| {
+        conduit::i18n::format(
+            "workspace_files.path_deleted_or_inaccessible",
+            &[("e", format!("{}", e))],
+        )
+    })?;
     if !path.starts_with(&root) {
-        return Err("此链接指向工作区外部，请在对应工作区中打开。".into());
+        return Err(conduit::i18n::text_static(
+            "file_links.this_link_points_outside_the_workspace_open",
+        )
+        .into());
     }
     Ok(path)
 }
@@ -80,10 +95,17 @@ fn checked_path(key: &FileKey) -> Result<PathBuf, String> {
 pub fn directory(key: &FileKey, show_ignored: bool) -> Result<(Vec<Entry>, Stamp), String> {
     let path = checked_path(key)?;
     if !path.is_dir() {
-        return Err("此目录已不存在。".into());
+        return Err(
+            conduit::i18n::text_static("workspace_files.this_directory_no_longer_exists").into(),
+        );
     }
     // Validate permissions before the walker, which can otherwise yield an empty tree.
-    fs::read_dir(&path).map_err(|e| format!("无法读取目录：{e}"))?;
+    fs::read_dir(&path).map_err(|e| {
+        conduit::i18n::format(
+            "workspace_files.unable_to_read_directory",
+            &[("e", format!("{}", e))],
+        )
+    })?;
     let initial = stamp(&path)?;
     // Start at the workspace root so parent .gitignore rules remain effective.
     let walker = ignore::WalkBuilder::new(&key.workspace)
@@ -122,7 +144,12 @@ pub fn directory(key: &FileKey, show_ignored: bool) -> Result<(Vec<Entry>, Stamp
         .build();
     let mut entries = Vec::new();
     for entry in walker {
-        let entry = entry.map_err(|e| format!("部分目录无法访问：{e}"))?;
+        let entry = entry.map_err(|e| {
+            conduit::i18n::format(
+                "workspace_files.some_directories_are_inaccessible",
+                &[("e", format!("{}", e))],
+            )
+        })?;
         if entry.depth() == 0 {
             continue;
         }
@@ -133,7 +160,10 @@ pub fn directory(key: &FileKey, show_ignored: bool) -> Result<(Vec<Entry>, Stamp
             continue;
         }
         if entries.len() >= MAX_DIRECTORY_ENTRIES {
-            return Err("此目录包含超过 20,000 个条目，请缩小工作区范围。".into());
+            return Err(conduit::i18n::text_static(
+                "workspace_files.this_directory_contains_more_than_20_000",
+            )
+            .into());
         }
         let kind = entry.file_type();
         entries.push(Entry {
@@ -156,24 +186,45 @@ pub struct TextFile {
 pub fn read(key: &FileKey) -> Result<TextFile, String> {
     let path = checked_path(key)?;
     if !path.is_file() {
-        return Err("该路径不是普通文件，无法预览。".into());
+        return Err(
+            conduit::i18n::text_static("workspace_files.this_path_is_not_a_regular_file").into(),
+        );
     }
     let initial = stamp(&path)?;
     if initial.len > MAX_FILE_BYTES {
-        return Err("文件超过 1 MiB 预览上限，请使用外部编辑器打开。".into());
+        return Err(conduit::i18n::text_static(
+            "workspace_files.file_exceeds_the_1_mib_preview_limit",
+        )
+        .into());
     }
     let mut bytes = Vec::new();
     fs::File::open(&path)
-        .map_err(|e| format!("无法打开文件：{e}"))?
+        .map_err(|e| {
+            conduit::i18n::format(
+                "workspace_files.unable_to_open_file",
+                &[("e", format!("{}", e))],
+            )
+        })?
         .take(MAX_FILE_BYTES + 1)
         .read_to_end(&mut bytes)
-        .map_err(|e| format!("读取文件失败：{e}"))?;
+        .map_err(|e| {
+            conduit::i18n::format(
+                "workspace_files.failed_to_read_file",
+                &[("e", format!("{}", e))],
+            )
+        })?;
     if bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err("文件超过 1 MiB 预览上限，请使用外部编辑器打开。".into());
+        return Err(conduit::i18n::text_static(
+            "workspace_files.file_exceeds_the_1_mib_preview_limit",
+        )
+        .into());
     }
     let (text, encoding) = if bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]) {
         if bytes.len() % 2 != 0 {
-            return Err("UTF-16 文件内容不完整。".into());
+            return Err(conduit::i18n::text_static(
+                "workspace_files.incomplete_utf_16_file_contents",
+            )
+            .into());
         }
         let little = bytes[0] == 0xff;
         let units: Vec<_> = bytes[2..]
@@ -189,21 +240,35 @@ pub fn read(key: &FileKey) -> Result<TextFile, String> {
             })
             .collect();
         (
-            String::from_utf16(&units).map_err(|_| "UTF-16 编码无效。".to_string())?,
+            String::from_utf16(&units).map_err(|_| {
+                conduit::i18n::text_static("workspace_files.invalid_utf_16_encoding").to_string()
+            })?,
             if little { "UTF-16 LE" } else { "UTF-16 BE" },
         )
     } else {
         let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes);
-        (String::from_utf8(bytes.to_vec()).map_err(|_| "无法识别编码或这是二进制文件。首版支持 UTF-8 和带 BOM 的 UTF-16，请使用外部编辑器打开。".to_string())?, "UTF-8")
+        (
+            String::from_utf8(bytes.to_vec()).map_err(|_| {
+                conduit::i18n::text_static("workspace_files.unknown_encoding_or_binary_file_utf_8")
+                    .to_string()
+            })?,
+            "UTF-8",
+        )
     };
     if text
         .chars()
         .any(|c| c == '\0' || (c.is_control() && !matches!(c, '\n' | '\r' | '\t')))
     {
-        return Err("这是二进制文件，暂不提供文本预览。".into());
+        return Err(conduit::i18n::text_static(
+            "workspace_files.this_is_a_binary_file_text_preview",
+        )
+        .into());
     }
     if text.lines().count() > MAX_FILE_LINES || text.lines().any(|line| line.len() > 20_000) {
-        return Err("文件行数或单行长度超过安全预览上限，请使用外部编辑器打开。".into());
+        return Err(conduit::i18n::text_static(
+            "workspace_files.file_line_count_or_line_length_exceeds",
+        )
+        .into());
     }
     // Display normalized newlines while preserving the original file on disk.
     Ok(TextFile {
@@ -230,6 +295,7 @@ mod tests {
     }
     #[test]
     fn display_path_preserves_unicode_and_punctuation() {
+        let _locale = crate::test_support::chinese();
         let path = Path::new("工作区").join("文档").join("示例 [预览] #1.rs");
         assert_eq!(display_path(&path), path.to_str().unwrap());
         #[cfg(windows)]
@@ -247,6 +313,7 @@ mod tests {
 
     #[test]
     fn lazy_tree_sort_and_parent_ignore_rules() {
+        let _locale = crate::test_support::chinese();
         let root = root();
         fs::create_dir_all(root.join("src/nested")).unwrap();
         fs::create_dir_all(root.join("target")).unwrap();
@@ -279,6 +346,7 @@ mod tests {
     }
     #[test]
     fn bounded_reader_encoding_and_path_validation() {
+        let _locale = crate::test_support::chinese();
         let root = root();
         let key = FileKey {
             workspace: root.clone(),
