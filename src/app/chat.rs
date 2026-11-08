@@ -321,7 +321,6 @@ impl ConduitApp {
                 .content(move |_, window, cx| {
                     let app = app.clone();
                     let turn_key = turn_key.clone();
-                    let diff_root = root.clone();
                     let popover = cx.entity().downgrade();
                     turn_stats_details(
                         &panel_plan,
@@ -332,14 +331,10 @@ impl ConduitApp {
                         move |path, window, cx| {
                             let _ = popover.update(cx, |popover, cx| popover.dismiss(window, cx));
                             let _ = app.update(cx, |app, cx| {
-                                let Some(session) = app.session(session_id) else {
-                                    return;
-                                };
-                                let edits =
-                                    turn_diff::file_edits(session, turn_key.as_deref(), path);
-                                turn_diff::open(
-                                    workspace_relative_path(path, diff_root.as_deref()),
-                                    edits,
+                                app.open_turn_diff(
+                                    session_id,
+                                    turn_key.as_deref(),
+                                    path,
                                     window,
                                     cx,
                                 );

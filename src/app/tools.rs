@@ -2,6 +2,9 @@
 
 use super::*;
 
+mod diff_cache;
+pub(super) use diff_cache::DiffCache;
+
 /// Tool activity collapses into one quiet "执行工具" group. File edits and
 /// unresolved or rejected approvals stay outside so their UI keeps its place.
 #[cfg(test)]
@@ -693,20 +696,12 @@ fn opencode_edit_diffs(detail: &str) -> Option<Vec<EditFileDiff>> {
 /// Upper bound for one expanded edit card; the diff viewer scrolls inside it.
 const MAX_EDIT_DIFF_HEIGHT: f32 = 320.;
 
-/// One parsed diff state per tool card, kept across renders so scrolling and
-/// folded hunks survive chat repaints. `patch` invalidates it while the tool
-/// call is still streaming.
-pub(super) struct CachedDiff {
-    patch: String,
-    state: Entity<DiffState>,
-}
-
 pub(super) fn edit_diff_content(
     detail_key: &(u64, String),
     item: &ChatItem,
     scroll: &ScrollHandle,
     typography: &ChatTypography,
-    diffs: &mut HashMap<(u64, String), CachedDiff>,
+    diffs: &mut DiffCache,
     analysis: &mut tool_analysis::Cache,
     cx: &mut Context<ConduitApp>,
 ) -> (AnyElement, String) {
@@ -731,7 +726,7 @@ pub(super) fn edit_diff_content(
             (SharedString::from(file.note.clone()), file.truncated),
         );
     }
-    let Some(state) = cached_diff(detail_key, &patch, diffs, cx) else {
+    let Some(state) = diffs.state(detail_key, &patch, cx) else {
         let fallback = div()
             .w_full()
             .min_w_0()
@@ -798,36 +793,6 @@ pub(super) fn edit_diff_content(
         )
         .into_any_element();
     (viewport, copy_text)
-}
-
-fn cached_diff(
-    key: &(u64, String),
-    patch: &str,
-    diffs: &mut HashMap<(u64, String), CachedDiff>,
-    cx: &mut Context<ConduitApp>,
-) -> Option<Entity<DiffState>> {
-    if let Some(cached) = diffs.get(key)
-        && cached.patch == patch
-    {
-        return Some(cached.state.clone());
-    }
-    let files = DiffFile::parse(patch).ok()?;
-    if files.is_empty() {
-        return None;
-    }
-    let state = cx.new(|cx| {
-        DiffState::new(files, cx)
-            .with_mode(DiffMode::Unified)
-            .with_context_lines(None)
-    });
-    diffs.insert(
-        key.clone(),
-        CachedDiff {
-            patch: patch.to_string(),
-            state: state.clone(),
-        },
-    );
-    Some(state)
 }
 
 fn edit_diff_height(rows: usize, cx: &App) -> f32 {
@@ -918,7 +883,7 @@ pub(super) fn tool_detail_panel(
     item: &ChatItem,
     scroll: &ScrollHandle,
     typography: &ChatTypography,
-    diffs: &mut HashMap<(u64, String), CachedDiff>,
+    diffs: &mut DiffCache,
     analysis: &mut tool_analysis::Cache,
     cx: &mut Context<ConduitApp>,
 ) -> AnyElement {

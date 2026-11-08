@@ -29,30 +29,88 @@ fn turn_messages<'a>(session: &'a SessionRecord, turn: Option<&str>) -> &'a [Cha
     &messages[..end]
 }
 
-pub(super) fn file_edits(
-    session: &SessionRecord,
-    turn: Option<&str>,
-    path: &str,
-) -> Vec<EditFileDiff> {
-    turn_messages(session, turn)
-        .iter()
-        .filter(|item| item.kind == ItemKind::Tool)
-        .filter_map(edit_tool_diffs)
-        .flatten()
-        .filter(|diff| diff.path == path)
-        .collect()
+/// Keep the clicked turn's immutable tool versions while the shared worker finishes.
+/// Consume completed analyses in order so cache eviction cannot restart earlier work.
+struct FileEdits {
+    path: String,
+    pending: std::collections::VecDeque<ChatItem>,
+    edits: Vec<EditFileDiff>,
 }
 
-pub(super) fn open(path: String, edits: Vec<EditFileDiff>, window: &mut Window, cx: &mut App) {
-    if edits.is_empty() {
-        return;
+impl FileEdits {
+    fn new(session: &SessionRecord, turn: Option<&str>, path: &str) -> Self {
+        Self {
+            path: path.to_owned(),
+            pending: turn_messages(session, turn)
+                .iter()
+                .filter(|item| item.kind == ItemKind::Tool)
+                .cloned()
+                .collect(),
+            edits: Vec::new(),
+        }
     }
+
+    fn advance(&mut self, cache: &mut tool_analysis::Cache, cx: &mut Context<ConduitApp>) {
+        while let Some(item) = self.pending.front() {
+            let Some(value) = cache.get_background(item, cx) else {
+                break;
+            };
+            self.edits.extend(
+                value
+                    .files
+                    .iter()
+                    .filter(|diff| diff.path == self.path)
+                    .cloned(),
+            );
+            self.pending.pop_front();
+        }
+    }
+}
+
+impl ConduitApp {
+    pub(in crate::app) fn open_turn_diff(
+        &mut self,
+        session: u64,
+        turn: Option<&str>,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let root = self
+            .session_control
+            .locate(&self.store.workspaces, session)
+            .map(|(workspace, _)| {
+                self.store.workspaces[workspace]
+                    .path
+                    .to_string_lossy()
+                    .into_owned()
+            });
+        let display_path = workspace_relative_path(path, root.as_deref());
+        let Some(session) = self.session(session) else {
+            return;
+        };
+        let mut edits = FileEdits::new(session, turn, path);
+        edits.advance(&mut self.tool_analysis, cx);
+        if edits.pending.is_empty() && edits.edits.is_empty() {
+            return;
+        }
+        open(display_path, edits, cx.entity(), window, cx);
+    }
+}
+
+fn open(
+    path: String,
+    edits: FileEdits,
+    app: Entity<ConduitApp>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let mode = if window.viewport_size().width < px(800.) {
         DiffMode::Unified
     } else {
         DiffMode::Split
     };
-    let preview = cx.new(|cx| TurnDiffPreview::new(path, edits, mode, cx));
+    let preview = cx.new(|cx| TurnDiffPreview::new(path, edits, mode, &app, cx));
     window.open_dialog(cx, move |dialog, window, _| {
         let viewport = window.viewport_size();
         let width = (f32::from(viewport.width) - 48.).clamp(240., 1120.);
@@ -77,12 +135,49 @@ struct TurnDiffPreview {
     selected: usize,
     state: Entity<DiffState>,
     parse_failed: bool,
+    pending: Option<FileEdits>,
+    _analysis_subscription: Subscription,
 }
 
 impl TurnDiffPreview {
-    fn new(path: String, edits: Vec<EditFileDiff>, mode: DiffMode, cx: &mut Context<Self>) -> Self {
-        let parsed = DiffFile::parse(&edits[0].patch)
-            .ok()
+    fn new(
+        path: String,
+        mut request: FileEdits,
+        mode: DiffMode,
+        app: &Entity<ConduitApp>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        // Updating this already-open view cannot reopen a dismissed dialog. Dropping
+        // the view also drops its subscription and pending message snapshots.
+        let subscription = cx.observe(app, |this, app, cx| {
+            let Some(pending) = this.pending.as_mut() else {
+                return;
+            };
+            app.update(cx, |app, cx| pending.advance(&mut app.tool_analysis, cx));
+            if pending.pending.is_empty() {
+                this.edits = std::mem::take(&mut pending.edits);
+                this.pending = None;
+                let files = this
+                    .edits
+                    .first()
+                    .and_then(|edit| DiffFile::parse(&edit.patch).ok())
+                    .filter(|files| !files.is_empty());
+                this.parse_failed = files.is_none();
+                this.state.update(cx, |state, cx| {
+                    state.set_files(files.unwrap_or_default(), cx)
+                });
+                cx.notify();
+            }
+        });
+        let edits = if request.pending.is_empty() {
+            std::mem::take(&mut request.edits)
+        } else {
+            Vec::new()
+        };
+        let pending = (!request.pending.is_empty()).then_some(request);
+        let parsed = edits
+            .first()
+            .and_then(|edit| DiffFile::parse(&edit.patch).ok())
             .filter(|files| !files.is_empty());
         let parse_failed = parsed.is_none();
         let state = cx.new(|cx| {
@@ -96,6 +191,8 @@ impl TurnDiffPreview {
             selected: 0,
             state,
             parse_failed,
+            pending,
+            _analysis_subscription: subscription,
         }
     }
 
@@ -124,6 +221,40 @@ impl TurnDiffPreview {
 
 impl Render for TurnDiffPreview {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.pending.is_some() || self.edits.is_empty() {
+            return v_flex()
+                .id("turn-diff-preview")
+                .debug_selector(|| "turn-diff-preview".into())
+                .size_full()
+                .min_w_0()
+                .gap_3()
+                .p_4()
+                .bg(rgb(palette().surface))
+                .text_color(rgb(palette().text))
+                .child(
+                    h_flex()
+                        .gap_3()
+                        .items_center()
+                        .child(div().flex_1().min_w_0().truncate().child(self.path.clone()))
+                        .child(
+                            Button::new("turn-diff-close")
+                                .debug_selector(|| "turn-diff-close".into())
+                                .ghost()
+                                .small()
+                                .icon(IconName::Close)
+                                .accessibility_label("关闭文件 Diff")
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        ),
+                )
+                .child(div().debug_selector(|| "turn-diff-loading".into()).child(
+                    if self.pending.is_some() {
+                        "正在加载文件修改…"
+                    } else {
+                        "没有可显示的文件修改"
+                    },
+                ))
+                .into_any_element();
+        }
         let selected = self.selected;
         let edit = &self.edits[self.selected];
         let mode = self.state.read(cx).mode();
@@ -372,5 +503,6 @@ impl Render for TurnDiffPreview {
                     .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
                     .child(content),
             )
+            .into_any_element()
     }
 }

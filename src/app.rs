@@ -272,7 +272,7 @@ pub struct ConduitApp {
     last_live_tick: Instant,
     tool_scrolls: HashMap<(u64, String), ScrollHandle>,
     /// Parsed diff viewers for expanded edit cards, keyed like `tool_scrolls`.
-    tool_diffs: HashMap<(u64, String), CachedDiff>,
+    tool_diffs: DiffCache,
     tool_analysis: tool_analysis::Cache,
     message_focus: Option<(u64, String, Instant)>,
     pending_message_jump: Option<usize>,
@@ -726,7 +726,7 @@ impl ConduitApp {
             expanded_errors: HashSet::new(),
             last_live_tick: Instant::now(),
             tool_scrolls: HashMap::new(),
-            tool_diffs: HashMap::new(),
+            tool_diffs: DiffCache::default(),
             tool_analysis: Default::default(),
             message_focus: None,
             pending_message_jump: None,

@@ -1,4 +1,4 @@
-use super::{ChatItem, ItemKind, SessionRecord, file_edits, turn_file_stats};
+use super::{ChatItem, ItemKind, SessionRecord, turn_messages};
 
 fn message(key: &str, kind: ItemKind, text: &str, input: serde_json::Value) -> ChatItem {
     serde_json::from_value(serde_json::json!({
@@ -46,11 +46,15 @@ fn fixture() -> SessionRecord {
 }
 
 #[test]
-fn file_preview_keeps_the_clicked_turn_file_and_edit_order() {
+fn file_preview_keeps_the_clicked_turn_boundary() {
     let mut session = fixture();
-    let stats = turn_file_stats(&session);
     session.messages.extend([
-        message("later", ItemKind::User, "下一轮", serde_json::Value::Null),
+        message(
+            "later",
+            ItemKind::User,
+            "next turn",
+            serde_json::Value::Null,
+        ),
         message(
             "new-edit",
             ItemKind::Tool,
@@ -58,21 +62,13 @@ fn file_preview_keeps_the_clicked_turn_file_and_edit_order() {
             serde_json::json!({"file_path":"src/a.rs", "content":"later turn"}),
         ),
     ]);
-    let edits = file_edits(&session, Some("turn"), "src/a.rs");
-    assert_eq!(edits.len(), 2);
-    assert!(edits[0].patch.contains("+first"));
-    assert!(edits[1].patch.contains("+second"));
-    assert_eq!(
-        edits.iter().map(|edit| edit.added).sum::<usize>(),
-        stats.files["src/a.rs"].added
-    );
-    assert_eq!(
-        edits.iter().map(|edit| edit.removed).sum::<usize>(),
-        stats.files["src/a.rs"].removed
-    );
-    assert_eq!(file_edits(&session, None, "src/a.rs").len(), 1);
-    assert!(file_edits(&session, Some("missing-turn"), "src/a.rs").is_empty());
-    assert!(file_edits(&session, Some("turn"), "src/missing.rs").is_empty());
+    let keys: Vec<_> = turn_messages(&session, Some("turn"))
+        .iter()
+        .map(|item| item.key.as_str())
+        .collect();
+    assert_eq!(keys, ["first", "other-file", "second"]);
+    assert_eq!(turn_messages(&session, None)[0].key, "old");
+    assert!(turn_messages(&session, Some("missing-turn")).is_empty());
 }
 
 #[cfg(feature = "ui-tests")]
@@ -108,6 +104,135 @@ mod ui {
         cx.simulate_mouse_down(position, MouseButton::Left, Modifiers::default());
         cx.simulate_mouse_up(position, MouseButton::Left, Modifiers::default());
         settle(cx);
+    }
+
+    #[gpui_kit::test]
+    fn warm_preview_reuses_analyses_and_preserves_file_and_edit_order(cx: &mut TestAppContext) {
+        let (app, cx, _) = crate::app::queue::tests::fixture(cx, "turn-preview-warm");
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                let mut session = fixture();
+                let stats = crate::app::state::turn_file_stats(&session);
+                for item in session
+                    .messages
+                    .iter()
+                    .filter(|item| item.kind == ItemKind::Tool)
+                {
+                    assert!(app.tool_analysis.get(item, cx).is_some());
+                }
+                let parses = app.tool_analysis.parses;
+                session.messages.extend([
+                    message(
+                        "later",
+                        ItemKind::User,
+                        "next turn",
+                        serde_json::Value::Null,
+                    ),
+                    message(
+                        "new-edit",
+                        ItemKind::Tool,
+                        "Write",
+                        serde_json::json!({"file_path":"src/a.rs", "content":"later turn"}),
+                    ),
+                ]);
+                for _ in 0..3 {
+                    let mut request =
+                        super::super::FileEdits::new(&session, Some("turn"), "src/a.rs");
+                    request.advance(&mut app.tool_analysis, cx);
+                    assert!(request.pending.is_empty());
+                    assert_eq!(request.edits.len(), 2);
+                    assert!(request.edits[0].patch.contains("+first"));
+                    assert!(request.edits[1].patch.contains("+second"));
+                    assert_eq!(
+                        request.edits.iter().map(|diff| diff.added).sum::<usize>(),
+                        stats.files["src/a.rs"].added
+                    );
+                    assert_eq!(
+                        request.edits.iter().map(|diff| diff.removed).sum::<usize>(),
+                        stats.files["src/a.rs"].removed
+                    );
+                }
+                for (turn, path, expected) in [
+                    (None, "src/a.rs", 1),
+                    (Some("missing"), "src/a.rs", 0),
+                    (Some("turn"), "missing.rs", 0),
+                ] {
+                    let mut request = super::super::FileEdits::new(&session, turn, path);
+                    request.advance(&mut app.tool_analysis, cx);
+                    assert!(request.pending.is_empty());
+                    assert_eq!(request.edits.len(), expected);
+                }
+                assert_eq!(
+                    app.tool_analysis.parses, parses,
+                    "opening files must not parse warm tools again"
+                );
+            })
+        });
+    }
+
+    #[gpui_kit::test]
+    fn preview_shares_pending_analysis_and_keeps_the_clicked_snapshot(cx: &mut TestAppContext) {
+        use super::super::{DiffMode, FileEdits, TurnDiffPreview};
+        let (app, cx, _) = crate::app::queue::tests::fixture(cx, "turn-preview-pending");
+        let owner = app.clone();
+        let (preview, parses) = cx.update(|_, cx| app.update(cx, |app, cx| {
+            let mut session = fixture();
+            session.messages[2].input = serde_json::json!({
+                "file_path":"src/a.rs", "old_string":"before", "new_string":"first\n".repeat(2000)
+            }).to_string();
+            for item in [&session.messages[3], &session.messages[4]] {
+                assert!(app.tool_analysis.get(item, cx).is_some());
+            }
+            let parses = app.tool_analysis.parses;
+            assert!(app.tool_analysis.get(&session.messages[2], cx).is_none());
+            let mut request = FileEdits::new(&session, Some("turn"), "src/a.rs");
+            request.advance(&mut app.tool_analysis, cx);
+            assert!(!request.pending.is_empty());
+            assert_eq!(app.tool_analysis.parses, parses, "cache miss must not parse on the UI thread");
+            // An immutable snapshot remains bound to the clicked version while it loads.
+            session.messages[2].input = serde_json::json!({"file_path":"src/a.rs", "old_string":"before", "new_string":"replacement"}).to_string();
+            let preview = cx.new(|cx| TurnDiffPreview::new("src/a.rs".into(), request, DiffMode::Unified, &owner, cx));
+            (preview, parses)
+        }));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let preview = preview.read(cx);
+            assert!(preview.pending.is_none());
+            assert_eq!(preview.edits.len(), 2);
+            assert_eq!(preview.edits[0].added, 2000);
+            assert!(preview.edits[0].patch.contains("+first"));
+            assert!(preview.edits[1].patch.contains("+second"));
+            assert_eq!(
+                app.read(cx).tool_analysis.parses,
+                parses + 1,
+                "shared pending work must only parse once"
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn closing_loading_preview_never_reopens_it_on_completion(cx: &mut TestAppContext) {
+        use gpui_kit::component::WindowExt;
+        let (app, cx, _) = crate::app::queue::tests::fixture(cx, "turn-preview-dismiss");
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.writable = false;
+                app.session_mut(2).unwrap().messages = vec![message(
+                    "large",
+                    ItemKind::Tool,
+                    "Write",
+                    serde_json::json!({"file_path":"large.rs", "content":"line\n".repeat(4000)}),
+                )];
+                let parses = app.tool_analysis.parses;
+                app.open_turn_diff(2, None, "large.rs", window, cx);
+                assert_eq!(app.tool_analysis.parses, parses);
+            });
+            assert!(window.has_active_dialog(cx));
+            window.close_dialog(cx);
+        });
+        settle(cx);
+        cx.update(|window, cx| assert!(!window.has_active_dialog(cx)));
+        assert!(cx.debug_bounds("turn-diff-preview").is_none());
     }
 
     #[gpui_kit::test]

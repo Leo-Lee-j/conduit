@@ -165,12 +165,24 @@ impl Cache {
     }
 
     pub fn get(&mut self, item: &ChatItem, cx: &mut Context<ConduitApp>) -> Option<Arc<Analysis>> {
-        let value = self.request(item);
+        let value = self.request(item, false);
         self.pump(cx);
         value
     }
 
-    fn request(&mut self, item: &ChatItem) -> Option<Arc<Analysis>> {
+    /// Interactive previews reuse completed work and queue every cache miss, even
+    /// small payloads, so opening a whole turn never performs a batch of UI parses.
+    pub fn get_background(
+        &mut self,
+        item: &ChatItem,
+        cx: &mut Context<ConduitApp>,
+    ) -> Option<Arc<Analysis>> {
+        let value = self.request(item, true);
+        self.pump(cx);
+        value
+    }
+
+    fn request(&mut self, item: &ChatItem, background: bool) -> Option<Arc<Analysis>> {
         self.clock += 1;
         let identity = item.identity();
         let key = identity.as_ptr() as usize;
@@ -192,7 +204,7 @@ impl Cache {
             self.trim();
         }
         // Small tools keep their immediate UI; expensive first parses never run on the UI thread.
-        let value = if item.input.len() + item.detail.len() <= 8 * 1024 {
+        let value = if !background && item.input.len() + item.detail.len() <= 8 * 1024 {
             #[cfg(test)]
             {
                 self.parses += 1;
@@ -314,21 +326,21 @@ mod tests {
         let first = tool(2);
         let mut second = tool(3);
         for _ in 0..100 {
-            cache.request(&first).unwrap();
-            cache.request(&second).unwrap();
+            cache.request(&first, false).unwrap();
+            cache.request(&second, false).unwrap();
         }
         assert_eq!(cache.parses, 2);
         second.input = serde_json::json!({"file_path":"large.rs","content":"new"}).to_string();
-        cache.request(&first).unwrap();
-        cache.request(&second).unwrap();
+        cache.request(&first, false).unwrap();
+        cache.request(&second, false).unwrap();
         assert_eq!(cache.parses, 3);
     }
     #[test]
     fn large_payload_is_queued_and_preview_counts_every_line() {
         let item = tool(8000);
         let mut cache = Cache::default();
-        assert!(cache.request(&item).is_none());
-        assert!(cache.request(&item).is_none());
+        assert!(cache.request(&item, false).is_none());
+        assert!(cache.request(&item, false).is_none());
         assert_eq!(cache.pending.len(), 1);
         assert_eq!(cache.parses, 0);
         let value = Analysis::parse(&item);

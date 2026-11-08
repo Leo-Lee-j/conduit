@@ -412,6 +412,7 @@ impl ConduitApp {
             .retain(|(session, _)| *session != id);
         self.tool_scrolls.retain(|(session, _), _| *session != id);
         self.tool_details.forget_session(id);
+        self.tool_diffs.forget_session(id);
         self.remove_tab(id);
         self.select_fallback_session();
         self.delete_target = None;
@@ -736,6 +737,7 @@ impl ConduitApp {
             self.expanded_reasoning.retain(|(id, _)| *id != session.id);
             self.tool_scrolls.retain(|(id, _), _| *id != session.id);
             self.tool_details.forget_session(session.id);
+            self.tool_diffs.forget_session(session.id);
         }
         let removed_ids: Vec<u64> = removed.sessions.iter().map(|session| session.id).collect();
         self.open_tabs

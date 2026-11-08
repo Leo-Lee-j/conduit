@@ -161,6 +161,7 @@ impl ConduitApp {
             {
                 count -= 1;
                 bytes = bytes.saturating_sub(size);
+                self.tool_diffs.forget_session(id);
             }
         }
     }

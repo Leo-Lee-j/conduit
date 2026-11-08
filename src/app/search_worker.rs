@@ -23,6 +23,7 @@ pub(super) struct SearchUi {
     pub requested: Instant,
     pub task: Option<gpui_kit::Task<()>>,
     pub running: bool,
+    pub refresh_needed: bool,
     pub requested_query: String,
     pub cache: Cache,
 }
@@ -40,6 +41,7 @@ impl Default for SearchUi {
             requested: Instant::now(),
             task: None,
             running: false,
+            refresh_needed: false,
             requested_query: String::new(),
             cache: Cache::default(),
         }
@@ -144,16 +146,22 @@ pub(super) struct Results {
 }
 
 impl Results {
-    pub fn retain_current(&mut self, workspaces: &[Workspace]) {
+    /// Return whether a surviving session needs another search. A first save can
+    /// replace an in-memory version with a disk reference without a content revision.
+    pub fn retain_current(&mut self, workspaces: &[Workspace]) -> bool {
         let current: HashMap<_, _> = workspaces
             .iter()
             .flat_map(|w| w.sessions.iter().map(move |s| (s.id, (w, s))))
             .collect();
+        let mut refresh_needed = false;
         self.matches.retain(|id| {
             current.get(id).is_some_and(|(_, session)| {
-                self.versions
+                let valid = self
+                    .versions
                     .get(id)
-                    .is_some_and(|version| version.matches(session))
+                    .is_some_and(|version| version.matches(session));
+                refresh_needed |= !valid;
+                valid
             })
         });
         self.hits.retain(|hit| self.matches.contains(&hit.session));
@@ -163,6 +171,7 @@ impl Results {
             hit.provider = session.provider;
             hit.workspace_name = workspace.name();
         }
+        refresh_needed
     }
 }
 
@@ -182,10 +191,14 @@ impl Version {
     fn new(session: &SessionRecord) -> Self {
         Self {
             title: session.title.clone(),
-            body: if session.transcript.loaded {
+            // The saved reference describes content, independently of whether its
+            // messages happen to be resident. Unsaved edits still use exact identities.
+            body: if let Some(reference) = session.transcript.saved(&session.messages) {
+                BodyVersion::Disk(Some(reference))
+            } else if session.transcript.loaded {
                 BodyVersion::Memory(session.messages.iter().map(|m| m.identity()).collect())
             } else {
-                BodyVersion::Disk(session.transcript.reference.clone())
+                BodyVersion::Disk(None)
             },
         }
     }
@@ -202,8 +215,11 @@ impl Version {
                         .zip(&session.messages)
                         .all(|(a, b)| a.ptr_eq(&b.identity()))
             }
-            BodyVersion::Disk(reference) => {
-                !session.transcript.loaded && *reference == session.transcript.reference
+            BodyVersion::Disk(Some(reference)) => {
+                session.transcript.saved(&session.messages).as_ref() == Some(reference)
+            }
+            BodyVersion::Disk(None) => {
+                !session.transcript.loaded && session.transcript.reference.is_none()
             }
         }
     }
@@ -408,6 +424,109 @@ fn hit(session: &SessionRecord, workspace_name: &str, snippet: String) -> Search
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_search_matches_and_cache_survive_load_unload_and_reload() {
+        let fixture = crate::transcript::tests::Fixture::new();
+        fixture.store(1).save_to(&fixture.state).unwrap();
+        let mut store = crate::store::Store::load_from(&fixture.state).unwrap();
+        let cancel = AtomicBool::new(false);
+        let (mut results, mut cache) = collect_cached(
+            &store.workspaces,
+            "original reply",
+            &cancel,
+            Cache::default(),
+        );
+        for load in [true, false, true, false] {
+            let session = &mut store.workspaces[0].sessions[0];
+            if load {
+                *session = crate::transcript::load(session.clone()).unwrap();
+            } else {
+                assert!(crate::transcript::unload(session));
+            }
+            assert!(!results.retain_current(&store.workspaces));
+            assert_eq!(results.hits.len(), 1);
+            assert_eq!(results.matches.len(), 1);
+            (results, cache) = collect_cached(&store.workspaces, "original reply", &cancel, cache);
+            assert_eq!(
+                cache.scans, 1,
+                "residency must not rescan unchanged content"
+            );
+        }
+        // Loaded snapshots also use the durable version, and reject real unsaved changes.
+        store.workspaces[0].sessions[0] =
+            crate::transcript::load(store.workspaces[0].sessions[0].clone()).unwrap();
+        let mut loaded_results = collect(&store.workspaces, "original reply");
+        assert!(crate::transcript::unload(
+            &mut store.workspaces[0].sessions[0]
+        ));
+        assert!(!loaded_results.retain_current(&store.workspaces));
+        assert_eq!(loaded_results.hits.len(), 1);
+        store.workspaces[0].sessions[0] =
+            crate::transcript::load(store.workspaces[0].sessions[0].clone()).unwrap();
+        store.workspaces[0].sessions[0].messages[1].text = "changed reply".into();
+        assert!(loaded_results.retain_current(&store.workspaces));
+        assert!(loaded_results.hits.is_empty());
+        assert!(loaded_results.matches.is_empty());
+    }
+
+    #[test]
+    fn first_save_during_search_requests_retry_without_accepting_stale_content() {
+        let fixture = crate::transcript::tests::Fixture::new();
+        let mut store = fixture.store(1);
+        let mut results = collect(&store.workspaces, "original reply");
+        store.save_to(&fixture.state).unwrap();
+        assert!(crate::transcript::unload(
+            &mut store.workspaces[0].sessions[0]
+        ));
+        assert!(results.retain_current(&store.workspaces));
+        assert!(results.hits.is_empty());
+        let mut retried = collect(&store.workspaces, "original reply");
+        assert!(!retried.retain_current(&store.workspaces));
+        assert_eq!(retried.hits.len(), 1);
+        let session = &mut store.workspaces[0].sessions[0];
+        *session = crate::transcript::load(session.clone()).unwrap();
+        session.messages[1].text = "replaced content".into();
+        crate::transcript::save(session, &crate::transcript::directory(&fixture.state)).unwrap();
+        assert!(crate::transcript::unload(session));
+        assert!(retried.retain_current(&store.workspaces));
+        assert!(retried.hits.is_empty());
+    }
+
+    #[cfg(feature = "ui-tests")]
+    #[gpui_kit::test]
+    fn poll_retries_residency_invalidation_without_a_new_content_revision(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (app, cx, _) = crate::app::queue::tests::fixture(cx, "search-residency-retry");
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.writable = false;
+                app.dirty = false;
+                app.search_query = "residency-needle".into();
+                app.session_mut(1).unwrap().messages = vec![crate::transcript::tests::message(
+                    "user",
+                    "residency-needle",
+                    1,
+                )];
+                app.search_ui.revision = app.session_control.global_revision;
+                app.search_ui.refresh_needed = true;
+                app.search_ui.requested = Instant::now() - std::time::Duration::from_secs(1);
+                let generation = app.search_ui.generation;
+                app.poll(window, cx);
+                assert!(app.search_ui.running);
+                assert_eq!(app.search_ui.generation, generation + 1);
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let app = app.read(cx);
+            assert!(!app.search_ui.refresh_needed);
+            assert!(!app.search_ui.running);
+            assert_eq!(app.search_ui.hits.len(), 1);
+        });
+    }
+
     #[test]
     fn streaming_rescans_only_changed_session_and_publishes_stable_cold_matches() {
         let fixture = crate::transcript::tests::Fixture::new();

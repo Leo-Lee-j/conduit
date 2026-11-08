@@ -187,7 +187,7 @@ impl ConduitApp {
                     this.search_ui.revision = revision;
                     // Stable sessions are published even when another session streams.
                     // Deleted/replaced bodies and stale snippets never escape this filter.
-                    results.retain_current(&this.store.workspaces);
+                    this.search_ui.refresh_needed = results.retain_current(&this.store.workspaces);
                     if this.search_ui.result_query != result_query
                         || this.search_ui.matches != results.matches
                     {

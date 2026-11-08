@@ -2,18 +2,8 @@
 
 use super::*;
 
-pub(super) fn app_icon(size: f32) -> Img {
-    static ICON: std::sync::LazyLock<Arc<Image>> = std::sync::LazyLock::new(|| {
-        Arc::new(Image::from_bytes(
-            ImageFormat::Png,
-            include_bytes!("../../assets/app-icons/128x128@2x.png").to_vec(),
-        ))
-    });
-    img(ICON.clone())
-        .size(px(size))
-        .flex_shrink_0()
-        .object_fit(ObjectFit::Contain)
-}
+mod app_logo;
+pub(super) use app_logo::app_icon;
 
 /// Share the same status appearance between sidebar and tabs, with separate
 /// element/animation keys so both can be mounted for the same session.
