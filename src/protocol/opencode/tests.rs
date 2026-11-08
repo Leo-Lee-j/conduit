@@ -19,7 +19,7 @@ fn connected(native: Option<&str>, resume: bool, variant: Option<&str>) -> (Prot
     .with_options(
         Default::default(),
         crate::providers::RuntimeRoute {
-            opencode_variant: variant.map(str::to_owned),
+            acp_variant: variant.map(str::to_owned),
             ..Default::default()
         },
     );
@@ -136,7 +136,7 @@ fn opencode_automatic_effort_uses_medium_only_when_advertised() {
         ),
     ] {
         protocol.acp.stage = Stage::Configure;
-        protocol.route.opencode_variant = explicit.map(str::to_owned);
+        protocol.route.acp_variant = explicit.map(str::to_owned);
         let options: Vec<_> = levels
             .into_iter()
             .map(|value| json!({"value":value,"name":value}))

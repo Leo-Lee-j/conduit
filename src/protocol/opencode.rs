@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct OpenCodeSettings {
+pub struct AcpSettings {
     /// Engine-specific variant. Do not translate xhigh to max implicitly.
     #[serde(default)]
     pub variant: Option<String>,
@@ -14,17 +14,26 @@ pub struct OpenCodeSettings {
     pub options: Value,
 }
 
-impl OpenCodeSettings {
+impl AcpSettings {
     /// Respect explicit choices, including the native "default" option.
     /// Only choose medium automatically when the model advertises it.
     pub fn effective_variant(&self) -> Option<&str> {
         self.variant.as_deref().or_else(|| {
-            self.option("effort")["options"]
+            self.effort_option()["options"]
                 .as_array()?
                 .iter()
                 .any(|option| option["value"] == "medium")
                 .then_some("medium")
         })
+    }
+
+    pub fn effort_option(&self) -> &Value {
+        let qoder = self.option("reasoning_effort");
+        if qoder.is_null() {
+            self.option("effort")
+        } else {
+            qoder
+        }
     }
 
     pub fn models(&self) -> Vec<crate::models::ModelOption> {
@@ -51,7 +60,7 @@ impl OpenCodeSettings {
     }
 
     pub fn variants(&self) -> Vec<(String, String)> {
-        self.option("effort")["options"]
+        self.effort_option()["options"]
             .as_array()
             .into_iter()
             .flatten()
@@ -67,12 +76,7 @@ impl OpenCodeSettings {
 
 fn push_model(models: &mut Vec<crate::models::ModelOption>, option: &Value) {
     if let Some(id) = option["value"].as_str() {
-        crate::models::push_model(
-            models,
-            id,
-            option["name"].as_str().unwrap_or(id),
-            "OpenCode",
-        );
+        crate::models::push_model(models, id, option["name"].as_str().unwrap_or(id), "ACP");
     }
 }
 
@@ -85,7 +89,7 @@ pub(super) struct State {
     next_id: u64,
     pending_id: u64,
     config: VecDeque<(String, String)>,
-    options: OpenCodeSettings,
+    options: AcpSettings,
     tools: HashMap<String, Value>,
     context_window: u64,
     context_tokens: Option<u64>,
@@ -386,7 +390,7 @@ impl Protocol {
                 // effort only when preceding configuration replies have arrived.
                 let variant = self
                     .route
-                    .opencode_variant
+                    .acp_variant
                     .clone()
                     .or_else(|| self.reasoning_effort.wire().map(str::to_owned));
                 self.acp
@@ -472,7 +476,7 @@ impl Protocol {
                 .filter(|o| matches!(o["id"].as_str(), Some("model" | "effort")))
                 .cloned()
                 .collect();
-            step.events.push(Event::OpenCodeConfig(json!(options)));
+            step.events.push(Event::AcpConfig(json!(options)));
         }
     }
 
@@ -480,7 +484,7 @@ impl Protocol {
         while let Some((key, selection)) = self.acp.config.pop_front() {
             let selection = if key == "effort"
                 && selection == "default"
-                && self.route.opencode_variant.is_none()
+                && self.route.acp_variant.is_none()
                 && self.reasoning_effort == crate::providers::ReasoningEffort::Default
             {
                 self.acp

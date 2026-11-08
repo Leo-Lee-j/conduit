@@ -1,4 +1,4 @@
-//! Read-only checks against each engine's official stable GitHub release.
+//! Read-only checks against official stable GitHub releases or npm metadata.
 use super::*;
 use semver::Version;
 
@@ -44,6 +44,7 @@ pub fn release_url(provider: Provider) -> &'static str {
         Provider::Claude => "https://api.github.com/repos/anthropics/claude-code/releases/latest",
         Provider::Codex => "https://api.github.com/repos/openai/codex/releases/latest",
         Provider::OpenCode => "https://api.github.com/repos/anomalyco/opencode/releases/latest",
+        Provider::Qoder => "https://registry.npmjs.org/@qoder-ai/qodercli/latest",
     }
 }
 
@@ -52,6 +53,7 @@ pub fn guide_url(provider: Provider) -> &'static str {
         Provider::Claude => "https://code.claude.com/docs/en/setup#update-claude-code",
         Provider::Codex => "https://developers.openai.com/codex/cli",
         Provider::OpenCode => "https://opencode.ai/docs/cli/#upgrade",
+        Provider::Qoder => "https://docs.qoder.com/cli/installation",
     }
 }
 
@@ -63,6 +65,20 @@ struct Release {
 }
 
 fn compare_release(provider: Provider, installed: &str, bytes: &[u8]) -> Result<UpdateInfo> {
+    let normalized;
+    let bytes = if provider == Provider::Qoder {
+        #[derive(Deserialize)]
+        struct NpmRelease {
+            version: String,
+        }
+        let release: NpmRelease = serde_json::from_slice(bytes)?;
+        normalized = serde_json::to_vec(
+            &serde_json::json!({"tag_name": release.version, "draft": false, "prerelease": false}),
+        )?;
+        &normalized
+    } else {
+        bytes
+    };
     let release: Release = serde_json::from_slice(bytes).context(conduit::i18n::text_static(
         "cli.updates.unable_to_parse_official_version_information",
     ))?;
@@ -194,6 +210,37 @@ mod tests {
                     .status,
                 status
             );
+        }
+    }
+
+    #[test]
+    fn qoder_npm_release_metadata_is_compared_without_running_the_cli() {
+        let _locale = crate::test_support::chinese();
+        let release = br#"{"version":"1.1.85","dist":{"tarball":"ignored"}}"#;
+        assert_eq!(
+            compare_release(Provider::Qoder, "1.1.9", release)
+                .unwrap()
+                .status,
+            UpdateStatus::Available
+        );
+        assert_eq!(
+            compare_release(Provider::Qoder, "1.1.85", release)
+                .unwrap()
+                .status,
+            UpdateStatus::Current
+        );
+        assert_eq!(
+            compare_release(Provider::Qoder, "1.2.0", release)
+                .unwrap()
+                .status,
+            UpdateStatus::Ahead
+        );
+        for bytes in [
+            br#"{}"#.as_slice(),
+            br#"{"version":"1.2.0-beta"}"#,
+            br#"{"version":"bad"}"#,
+        ] {
+            assert!(compare_release(Provider::Qoder, "1.1.85", bytes).is_err());
         }
     }
 

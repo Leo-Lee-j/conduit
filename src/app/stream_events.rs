@@ -74,7 +74,7 @@ impl ConduitApp {
                 structural_change = true;
             }
             match event {
-                Event::OpenCodeConfig(options) => {
+                Event::AcpConfig(options) => {
                     let variant = if let Some(session) = self.session_mut(id) {
                         session.opencode.options = options;
                         session.opencode.effective_variant().map(str::to_owned)
@@ -82,7 +82,7 @@ impl ConduitApp {
                         None
                     };
                     if let Some(run) = self.session_control.runs.get_mut(&id) {
-                        run.opencode_variant = variant;
+                        run.acp_variant = variant;
                     }
                     self.dirty = true;
                     cx.emit(crate::providers::ProviderCatalogChanged);

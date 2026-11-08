@@ -17,9 +17,9 @@
 | CliAdapter | 生成启动描述、解释协议、报告握手状态、审批响应、取消消息、可选旁路通信 |
 | LaunchSpec | 参数、子进程环境、首次输入方式、成功退出是否可以作为完成依据 |
 | ChatRuntime | 保存确认后启动、stdio、消息边界、队列背压、审批票据、取消与超时、进程树清理 |
-| Protocol | 现有三种 CLI 的经过回归验证的 wire 解析后端，后续可按引擎继续拆分 |
+| Protocol | Claude / Codex / OpenCode 的 wire 解析后端，后续可按引擎继续拆分 |
 
-运行时通过 `Box<dyn CliAdapter>` 调用注册表提供的工厂结果。新增实现不需要加入 Protocol 的 Provider 分支。现有 Claude / Codex 通过标准 stdio 后端接入；OpenCode 使用自己的适配器处理启动准备、ACP 问答旁路与辅助文本任务。
+运行时通过 `Box<dyn CliAdapter>` 调用注册表提供的工厂结果。新增实现不需要加入 Protocol 的 Provider 分支。现有 Claude / Codex 通过标准 stdio 后端接入；OpenCode 使用自己的适配器处理启动准备、ACP 问答旁路与辅助文本任务；Qoder 使用独立 ACP 适配器。
 
 ## 契约与生命周期
 
@@ -58,6 +58,7 @@
 | Claude Code | stream-json 与 stdio 控制协议 | 认证与原生扩展由 CLI 管理；文本辅助任务禁止工具授权 |
 | Codex | `app-server --stdio` | 显式 Provider / 模型同时传入进程配置和会话请求，恢复时不能误用继承的其他路由 |
 | OpenCode | ACP | 原生模型/档位与会话身份；用户问答通过适配器旁路通信 |
+| Qoder CLI | `qodercli --acp` | 原生认证、动态模型/档位、工具审批与表单问答；纯文本辅助任务禁用工具 |
 
 应用权限约束只针对 CLI 实际支持并上报的请求；经过批准的命令仍可能访问工作区外文件，不将“工作区内修改”描述为文件系统沙箱。
 
@@ -72,8 +73,23 @@
 - 模型目录按工作区和 CLI 路径缓存到 `opencode-models/`，有效期 24 小时，手动刷新绕过缓存；不缓存原始凭据。
 - OpenCode 使用原生 Provider 配置，没有 Conduit 自定义 Provider / CCS 桥接或终端历史自动导入。应用内会话可以保存并续接。
 
+## Qoder CLI
+
+核心 ACP 接入以 Qoder CLI 1.1.85 的协议返回值为依据。先在终端完成 `qodercli login`，再从引擎选择器选择 Qoder CLI；路径支持设置页、`CONDUIT_QODER_PATH` 与 PATH。npm 启动器可按原 prefix 更新，独立安装暂由用户通过原生渠道更新。
+
+- 初始化后由 CLI 恢复原生登录态；未登录时提示先登录，不自动打开认证浏览器。新会话使用 `session/new`，已有会话优先 `session/resume`，不支持时使用 `session/load`。恢复失败不会静默新建，历史回放不重复追加。
+- 模型和 `reasoning_effort` 从会话的 `configOptions` 获取。首次可使用 CLI 默认模型，连接后显示会话目录；显式指定的模型或档位不可用时直接报错。切换模型清除旧档位。ACP 公共类型与 OpenCode 共享，磁盘仍保留原有 `opencode` 字段，兼容旧会话。
+- 只读模式只启用 `Read,Grep,Glob`，禁用 MCP；普通模式通过 `permissions.ask=["*"]` 将工具调用交给应用审批；完全访问模式自动批准工具请求。所有模式禁用 hooks。权限约束依赖 CLI 的工具策略，不构成文件系统沙箱。
+- 标题与 Git 说明等纯文本辅助任务使用同一 ACP 流程，但禁用全部工具、MCP 与 hooks；切换完全访问也不能解除限制。提示词通过 stdin 的两段文本发送，避免被当成 `/allow` 等原生命令执行。
+- 工具审批按 `kind` 选择真实 `optionId`。表单问答支持字符串、布尔/数值及单选/多选，校验数值、长度和数量限制；显示的字段需逐一填写。不支持的格式、正则等约束明确拒绝。取消后沿用运行时的软取消与进程树清理。
+- 保留公开回复、工具、计划、用量和会话配置；不展示 `agent_thought_chunk`。Skills/MCP 的发现与编辑、终端历史自动导入、Conduit 自定义 Provider / CCS 路由暂未接入，相关配置仍由原生 CLI 管理。
+
+实现见 [qoder.rs](../src/cli_adapter/qoder.rs)，协议回归见 [qoder/tests.rs](../src/cli_adapter/qoder/tests.rs)，跨进程回归见 [adapter_tests.rs](../src/chat_runtime/adapter_tests.rs)。
+
 ## 验证边界
 
 离线夹具覆盖握手、流式事件、准确续接、完成、审批、问答、辅助任务、取消与进程清理。独立测试适配器证明通用运行时不依赖已有 Provider 分支。
 
 真实安装的 OpenCode 可以结合隔离的本地模拟 HTTP/SSE 端点验证协议和本地工具路径，不调用真实账户；这仍不等于服务商认证、计费模型或长时间桌面验收。显式集成测试和常规命令见[测试与验收](testing.md)。
+
+Qoder 的离线协议和跨进程夹具覆盖恢复、审批、表单、取消与辅助任务限制；隔离 CLI 探测覆盖初始化、建会话、恢复会话、权限模式切换及未登录错误。未将这些检查等同于已登录模型端到端验收。

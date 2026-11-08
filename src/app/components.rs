@@ -60,6 +60,7 @@ const BRAND_SVGS: &[(&str, &[u8])] = &[
         "opencode",
         include_bytes!("../../assets/icons/opencode.svg"),
     ),
+    ("qoder", include_bytes!("../../assets/icons/qoder.svg")),
     ("openai", include_bytes!("../../assets/icons/openai.svg")),
     ("grok", include_bytes!("../../assets/icons/grok.svg")),
     (
@@ -172,6 +173,7 @@ pub(super) fn provider_icon(provider: Provider) -> Div {
         Provider::Claude => "claudecode",
         Provider::Codex => "codex",
         Provider::OpenCode => "opencode",
+        Provider::Qoder => "qoder",
     })
 }
 

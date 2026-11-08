@@ -6,6 +6,12 @@ use std::io::Write;
 pub fn destination(engine: Provider, workspace: Option<&Path>, kind: Kind) -> PathBuf {
     let locations = Locations::environment();
     match (engine, workspace, kind) {
+        (Provider::Qoder, root, Kind::Skill) => {
+            root.unwrap_or(&locations.home).join(".qoder/skills")
+        }
+        (Provider::Qoder, root, Kind::Mcp) => {
+            root.unwrap_or(&locations.home).join(".qoder/settings.json")
+        }
         (Provider::Claude, Some(root), Kind::Skill) => root.join(".claude/skills"),
         (Provider::Codex, Some(root), Kind::Skill) => root.join(".agents/skills"),
         (Provider::OpenCode, Some(root), Kind::Skill) => root.join(".opencode/skills"),
@@ -298,7 +304,7 @@ pub fn template(engine: Provider, kind: Kind) -> &'static str {
         Provider::Codex => conduit::i18n::text_static(
             "extensions.edit.edit_the_command_and_arguments_before_saving",
         ),
-        Provider::Claude => {
+        Provider::Claude | Provider::Qoder => {
             "{\n  \"mcpServers\": {\n    \"my_server\": {\n      \"command\": \"my-server\",\n      \"args\": []\n    }\n  }\n}\n"
         }
         Provider::OpenCode => {

@@ -6,10 +6,11 @@ pub enum Provider {
     Claude,
     Codex,
     OpenCode,
+    Qoder,
 }
 
 impl Provider {
-    pub const ALL: [Self; 3] = [Self::Claude, Self::Codex, Self::OpenCode];
+    pub const ALL: [Self; 4] = [Self::Claude, Self::Codex, Self::OpenCode, Self::Qoder];
     pub fn label(self) -> &'static str {
         self.descriptor().label
     }
@@ -162,7 +163,7 @@ pub struct SessionRecord {
     #[serde(default)]
     pub reasoning_effort: crate::providers::ReasoningEffort,
     #[serde(default)]
-    pub opencode: crate::protocol::OpenCodeSettings,
+    pub opencode: crate::protocol::AcpSettings,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub messages: Vec<ChatItem>,
     #[serde(default)]

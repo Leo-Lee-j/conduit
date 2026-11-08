@@ -26,13 +26,13 @@
   <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 
-Conduit brings **Claude Code, Codex, and OpenCode** into a shared desktop workspace. Keep conversations organized by project, follow tool activity, inspect changes, and commit your work without losing track of the task.
+Conduit brings **Claude Code, Codex, OpenCode, and Qoder CLI** into a shared desktop workspace. Keep conversations organized by project, follow tool activity, inspect changes, and commit your work without losing track of the task.
 
 Conduit is under active development and currently supports **Windows x64**. The interface supports **English and 简体中文**, switchable in **Settings → General → Language**. New installations default to English; existing installations retain Chinese until you choose another language. Detailed guides are currently in Chinese.
 
 ## Why Conduit?
 
-- **Choose your agent.** Use Claude Code, Codex, or OpenCode, with streaming replies, tool approvals, cancellation, and per-session model settings.
+- **Choose your agent.** Use Claude Code, Codex, OpenCode, or Qoder CLI, with streaming replies, tool approvals, cancellation, and per-session model settings.
 - **Keep projects organized.** Run sessions in parallel, search your history, pin important conversations, and resume native CLI sessions. Existing Claude Code and Codex terminal history is imported by workspace.
 - **Review what changed.** Browse files with syntax highlighting, read Markdown and Mermaid diagrams, and inspect unified or side-by-side diffs from a conversation turn. File and diff previews are currently read-only.
 - **Take changes through Git.** Stage selected files, manage branches, generate commit messages, commit, and push. Commits include only the staged changes in the files you select.
@@ -44,7 +44,7 @@ Conduit is under active development and currently supports **Windows x64**. The 
 ### What you need
 
 - **Windows x64** for the current desktop release.
-- At least one supported CLI — **Claude Code, Codex, or OpenCode** — installed and authenticated. Confirm it works in a terminal first.
+- At least one supported CLI — **Claude Code, Codex, OpenCode, or Qoder CLI** — installed and authenticated. Confirm it works in a terminal first.
 - **Git** installed if you want to use the Git features.
 
 Conduit uses the selected CLI's authentication and execution capabilities. It does not include a model service; model access and usage are handled through your configured CLI and provider.
@@ -86,7 +86,7 @@ To build from source, follow [CONTRIBUTING.md](CONTRIBUTING.md) for the Windows 
 
 ## Acknowledgements
 
-Built with **Rust**, **GPUI**, and [GPUI Kit](https://github.com/longbridge/gpui-kit). Thanks to the projects behind Claude Code, Codex, and OpenCode, and to [LobeHub Icons](https://github.com/lobehub/lobe-icons) for the engine and model marks.
+Built with **Rust**, **GPUI**, and [GPUI Kit](https://github.com/longbridge/gpui-kit). Thanks to the projects behind Claude Code, Codex, OpenCode, and Qoder CLI, and to [LobeHub Icons](https://github.com/lobehub/lobe-icons) for the engine and model marks.
 
 See [application icon generation](assets/app-icons/README.md) and [third-party icon attribution](assets/icons/README.md) for asset details.
 

@@ -1,8 +1,10 @@
 //! Engine-independent contract between CLI integrations and the process runtime.
 mod builtin;
 mod opencode;
+mod qoder;
 pub use builtin::{claude, codex};
 pub use opencode::opencode;
+pub use qoder::qoder;
 
 use crate::{
     domain::PermissionLevel,

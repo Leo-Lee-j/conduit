@@ -35,13 +35,16 @@ fn management_actions(actions: AnyElement, narrow: bool) -> Div {
 fn engine_tabs(
     engine: Provider,
     extensions: bool,
-    narrow: bool,
+    columns: u16,
     view: Entity<ConduitApp>,
 ) -> AnyElement {
-    let mut tabs = h_flex()
+    let mut tabs = div()
+        .grid()
+        .grid_cols(columns)
         .id("management-engines")
         .debug_selector(|| "management-engines".into())
         .w_full()
+        .max_w(rems(36.))
         .gap_1()
         .p_1()
         .rounded_lg()
@@ -61,17 +64,18 @@ fn engine_tabs(
                 .tooltip(candidate.label())
                 .ghost()
                 .selected(selected)
-                .flex_1()
+                .w_full()
                 .min_w_0()
                 .h(px(32.))
                 .rounded_md()
-                .child(h_flex().gap_2().child(provider_icon(candidate)).child(
-                    if narrow && candidate == Provider::Claude {
-                        "Claude"
-                    } else {
-                        candidate.label()
-                    },
-                ))
+                .child(
+                    h_flex()
+                        .debug_selector(move || format!("management-engine-content-{index}"))
+                        .flex_shrink_0()
+                        .gap_2()
+                        .child(provider_icon(candidate))
+                        .child(div().whitespace_nowrap().child(candidate.label())),
+                )
                 .when(selected, |tab| {
                     tab.bg(rgb(palette().surface))
                         .text_color(rgb(palette().text))
@@ -101,38 +105,35 @@ fn engine_tabs(
     tabs.into_any_element()
 }
 
-/// Combine engine context and page actions when there is room; keep their
-/// existing order in compact layouts so neither set of actions is clipped.
+/// Give engine choices and page actions separate rows so the full set of
+/// labels can wrap without clipping either controls or content.
 pub(super) fn management_toolbar(
     engine: Provider,
     extensions: bool,
     actions: Option<AnyElement>,
-    narrow: bool,
+    available_width: f32,
+    font_size: f32,
     view: Entity<ConduitApp>,
 ) -> AnyElement {
-    let tabs = engine_tabs(engine, extensions, narrow, view);
-    if narrow {
-        v_flex()
-            .w_full()
-            .flex_shrink_0()
-            .when_some(actions, |bar, actions| {
-                bar.child(management_actions(actions, true))
-            })
-            .child(div().px_3().py_2().child(tabs))
-            .into_any_element()
+    // Budget for complete labels, icons, button padding and grid gaps. Change
+    // the column count with the pane width and UI font, never clip a label.
+    let inner_width = (available_width - 24.).max(0.);
+    let scale = font_size / DEFAULT_UI_FONT_SIZE;
+    let columns = if inner_width >= 548. * scale {
+        4
+    } else if inner_width >= 272. * scale {
+        2
     } else {
-        h_flex()
-            .w_full()
-            .flex_shrink_0()
-            .flex_wrap()
-            .justify_between()
-            .gap_3()
-            .px_4()
-            .py_3()
-            .child(div().min_w(px(336.)).max_w(px(400.)).flex_1().child(tabs))
-            .when_some(actions, |bar, actions| {
-                bar.child(management_actions(actions, false).w_auto().px_0().py_0())
-            })
-            .into_any_element()
-    }
+        1
+    };
+    let narrow = available_width < 540.;
+    let tabs = engine_tabs(engine, extensions, columns, view);
+    v_flex()
+        .w_full()
+        .flex_shrink_0()
+        .child(div().w_full().px_3().py_2().child(tabs))
+        .when_some(actions, |bar, actions| {
+            bar.child(management_actions(actions, narrow))
+        })
+        .into_any_element()
 }

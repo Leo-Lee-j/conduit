@@ -272,3 +272,153 @@ fn text_input_eof_and_successful_exit_are_explicit_adapter_policies() {
         assert!(released.recv_timeout(Duration::from_secs(2)).unwrap());
     }
 }
+
+fn qoder_fixture(script: &str, gate: Option<Receiver<()>>) -> ChatRuntime {
+    let cwd = std::env::temp_dir();
+    let adapter = (Provider::Qoder.descriptor().adapter)(AdapterRequest {
+        cwd: cwd.clone(),
+        prompt: "fixture prompt".into(),
+        native_id: Some("qoder-original".into()),
+        model: None,
+        permission: crate::domain::PermissionLevel::WorkspaceWrite,
+        effort: crate::providers::ReasoningEffort::Default,
+        route: Default::default(),
+        text_only: false,
+    });
+    let script = format!(
+        r#"
+        $ErrorActionPreference = 'Stop'
+        function Send($value) {{ [Console]::WriteLine(($value | ConvertTo-Json -Depth 20 -Compress)) }}
+        function Read-Request($method) {{
+            $value = [Console]::ReadLine() | ConvertFrom-Json
+            if ($value.method -ne $method) {{ throw "Unexpected method: $($value.method)" }}
+            return $value
+        }}
+        $init = Read-Request 'initialize'
+        Send @{{jsonrpc='2.0';id=$init.id;result=@{{protocolVersion=1;agentInfo=@{{name='qoder-cli'}};agentCapabilities=@{{sessionCapabilities=@{{resume=@{{}}}}}}}}}}
+        $resume = Read-Request 'session/resume'
+        if ($resume.params.sessionId -ne 'qoder-original') {{ throw 'Wrong session' }}
+        Send @{{jsonrpc='2.0';method='session/update';params=@{{sessionId='qoder-original';update=@{{sessionUpdate='agent_message_chunk';content=@{{type='text';text='old history'}}}}}}}}
+        Send @{{jsonrpc='2.0';id=$resume.id;result=@{{sessionId='qoder-original';configOptions=@()}}}}
+        $mode = Read-Request 'session/set_mode'
+        if ($mode.params.modeId -ne 'default') {{ throw 'Wrong mode' }}
+        Send @{{jsonrpc='2.0';id=$mode.id;result=@{{}}}}
+        $prompt = Read-Request 'session/prompt'
+        if ($prompt.params.prompt.Count -ne 2 -or $prompt.params.prompt[0].text -ne 'fixture prompt') {{ throw 'Wrong prompt' }}
+        {script}
+    "#
+    );
+    let executable = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+        .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+    ChatRuntime::start_adapter_gated(
+        adapter,
+        executable,
+        Some(
+            ["-NoProfile", "-NonInteractive", "-Command", &script]
+                .map(String::from)
+                .into(),
+        ),
+        cwd,
+        gate,
+    )
+}
+
+#[test]
+fn qoder_runtime_resumes_routes_permissions_and_typed_answers_after_save() {
+    let _locale = crate::test_support::chinese();
+    let (release, gate) = mpsc::channel();
+    let runtime = qoder_fixture(
+        r#"
+        Send @{jsonrpc='2.0';id='permission';method='session/request_permission';params=@{sessionId='qoder-original';toolCall=@{toolCallId='tool';title='Read file'};options=@(@{optionId='yes';kind='allow_once'},@{optionId='no';kind='reject_once'})}}
+        $answer = [Console]::ReadLine() | ConvertFrom-Json
+        if ($answer.id -ne 'permission' -or $answer.result.outcome.optionId -ne 'yes') { throw 'Wrong approval' }
+        Send @{jsonrpc='2.0';id=73;method='elicitation/create';params=@{sessionId='qoder-original';mode='form';message='Choose';requestedSchema=@{type='object';properties=@{count=@{type='integer';minimum=1;maximum=5}}}}}
+        $answer = [Console]::ReadLine() | ConvertFrom-Json
+        if ($answer.id -ne 73 -or $answer.result.action -ne 'accept' -or $answer.result.content.count -ne 3) { throw 'Wrong form answer' }
+        Send @{jsonrpc='2.0';method='session/update';params=@{sessionId='qoder-original';update=@{sessionUpdate='agent_message_chunk';content=@{type='text';text='new reply'}}}}
+        Send @{jsonrpc='2.0';id=$prompt.id;result=@{stopReason='end_turn'}}
+        [Console]::ReadLine() | Out-Null
+    "#,
+        Some(gate),
+    );
+    assert!(matches!(
+        runtime.events.recv_timeout(Duration::from_millis(100)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
+    release.send(()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut approvals = 0;
+    let mut resolved = 0;
+    let mut text = String::new();
+    let mut native = None;
+    loop {
+        assert!(Instant::now() < deadline, "Qoder fixture did not finish");
+        match runtime.events.recv_timeout(Duration::from_secs(2)) {
+            Ok(Event::NativeId(id)) => native = Some(id),
+            Ok(Event::Approval(approval)) => {
+                approvals += 1;
+                if approval.is_user_input() {
+                    runtime.answer(
+                        approval.id,
+                        BTreeMap::from([("count".into(), vec!["3".into()])]),
+                    );
+                } else {
+                    runtime.decide(approval.id, true);
+                }
+            }
+            Ok(Event::ApprovalResolved { .. }) => resolved += 1,
+            Ok(Event::Delta { text: delta, .. }) => text.push_str(&delta),
+            Ok(Event::Finished { error, cancelled }) => {
+                assert_eq!(error, None);
+                assert!(!cancelled);
+                break;
+            }
+            Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(error) => panic!("missing terminal event: {error:?}"),
+        }
+    }
+    assert_eq!(native.as_deref(), Some("qoder-original"));
+    assert_eq!((approvals, resolved), (2, 2));
+    assert_eq!(text, "new reply");
+}
+
+#[test]
+fn qoder_runtime_cancel_invalidates_pending_questions_and_cleans_up() {
+    let _locale = crate::test_support::chinese();
+    let runtime = qoder_fixture(
+        r#"
+        Send @{jsonrpc='2.0';id=73;method='elicitation/create';params=@{sessionId='qoder-original';mode='form';message='Name';requestedSchema=@{type='object';properties=@{name=@{type='string'}}}}}
+        $cancel = Read-Request 'session/cancel'
+        if ($cancel.params.sessionId -ne 'qoder-original') { throw 'Wrong cancellation' }
+        Send @{jsonrpc='2.0';id=$prompt.id;result=@{stopReason='cancelled'}}
+        [Console]::ReadLine() | Out-Null
+    "#,
+        None,
+    );
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut ticket = None;
+    let mut resolved = false;
+    loop {
+        assert!(Instant::now() < deadline, "Qoder fixture did not cancel");
+        match runtime.events.recv_timeout(Duration::from_secs(2)) {
+            Ok(Event::Approval(approval)) => {
+                ticket = Some(approval.id);
+                runtime.cancel();
+            }
+            Ok(Event::ApprovalResolved { .. }) => resolved = true,
+            Ok(Event::Finished { error, cancelled }) => {
+                assert!(cancelled);
+                assert_eq!(error, None);
+                break;
+            }
+            Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(error) => panic!("missing terminal event: {error:?}"),
+        }
+    }
+    assert!(ticket.is_some());
+    assert!(!resolved, "cancelled question must never be accepted");
+    assert!(
+        !runtime.try_decide(ticket.unwrap(), true),
+        "finished runtime rejects stale decisions"
+    );
+}

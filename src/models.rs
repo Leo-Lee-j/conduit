@@ -181,6 +181,10 @@ pub fn load_from(provider: Provider, home: &Path) -> ModelCatalog {
     match provider {
         Provider::Claude => claude(home),
         Provider::Codex => codex(home),
+        Provider::Qoder => ModelCatalog {
+            note: Some(conduit::i18n::text("qoder.catalog_after_connect")),
+            ..Default::default()
+        },
         Provider::OpenCode => ModelCatalog {
             note: Some(
                 conduit::i18n::text_static("models.the_native_model_catalog_is_read_from").into(),

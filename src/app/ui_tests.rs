@@ -308,6 +308,7 @@ fn settings_connections_switch_engines_and_keep_read_only_actions_disabled(
     cx: &mut TestAppContext,
 ) {
     let _locale = crate::test_support::chinese();
+    use crate::domain::Provider;
     use gpui_kit::{AppContext as _, Modifiers, MouseButton};
     cx.update(gpui_kit::init);
     let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -353,18 +354,33 @@ fn settings_connections_switch_engines_and_keep_read_only_actions_disabled(
             let _ = window.draw(cx);
         });
         let body = cx.debug_bounds("settings-workspace-body").unwrap();
-        let mut last_right = body.left();
-        for selector in [
+        let engine_bounds = [
             "settings-engine-0",
             "settings-engine-1",
             "settings-engine-2",
-        ] {
-            let bounds = cx.debug_bounds(selector).unwrap();
-            assert!(bounds.left() >= last_right && bounds.right() <= body.right());
+            "settings-engine-3",
+        ]
+        .map(|selector| cx.debug_bounds(selector).expect(selector));
+        for (index, bounds) in engine_bounds.iter().enumerate() {
+            assert!(bounds.left() >= body.left() && bounds.right() <= body.right());
             assert!(bounds.top() >= body.top() && bounds.bottom() <= body.bottom());
-            last_right = bounds.right();
+            for previous in &engine_bounds[..index] {
+                assert!(
+                    bounds.left() >= previous.right()
+                        || bounds.right() <= previous.left()
+                        || bounds.top() >= previous.bottom()
+                        || bounds.bottom() <= previous.top(),
+                    "engine buttons must not overlap in either grid layout"
+                );
+            }
         }
-        for selector in ["settings-engine-2", "settings-nav-8", "settings-engine-0"] {
+        for (selector, provider) in [
+            ("settings-engine-1", Provider::Codex),
+            ("settings-engine-3", Provider::Qoder),
+            ("settings-engine-2", Provider::OpenCode),
+            ("settings-nav-8", Provider::OpenCode),
+            ("settings-engine-0", Provider::Claude),
+        ] {
             let bounds = cx.debug_bounds(selector).unwrap();
             cx.simulate_mouse_down(bounds.center(), MouseButton::Left, Modifiers::default());
             cx.simulate_mouse_up(bounds.center(), MouseButton::Left, Modifiers::default());
@@ -372,14 +388,9 @@ fn settings_connections_switch_engines_and_keep_read_only_actions_disabled(
             cx.update(|window, cx| {
                 let _ = window.draw(cx);
             });
+            cx.update(|_, cx| assert_eq!(app.read(cx).connection_settings.engine, provider));
             if selector == "settings-nav-8" {
-                cx.update(|_, cx| {
-                    assert_eq!(
-                        app.read(cx).connection_settings.engine,
-                        crate::domain::Provider::OpenCode
-                    );
-                    assert_eq!(app.read(cx).settings_ui.page, 8);
-                });
+                cx.update(|_, cx| assert_eq!(app.read(cx).settings_ui.page, 8));
                 assert!(cx.debug_bounds("settings-add-service").is_none());
             }
         }
@@ -816,7 +827,7 @@ fn opencode_model_picker_uses_session_catalog_and_saves_native_effort(cx: &mut T
         let session = app.session(1).unwrap();
         assert_eq!(session.opencode.variant.as_deref(), Some("max"));
         assert_eq!(
-            app.session_route(1).unwrap().opencode_variant.as_deref(),
+            app.session_route(1).unwrap().acp_variant.as_deref(),
             Some("max")
         );
         let restored: crate::domain::SessionRecord =
@@ -2608,6 +2619,9 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
 #[gpui_kit::test]
 fn long_chat_virtualizes_real_rows_and_keeps_history_jump_on_append(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
+    // A wall-clock second can legitimately repaint the sidebar's age label.
+    // Control time so wheel-only frames and age refreshes are tested separately.
+    let clock = super::events::test_clock::Clock::freeze(1_800_000_000);
     use crate::{
         domain::{ItemKind, PermissionLevel, Provider, SessionRecord, Usage, Workspace},
         store::Store,
@@ -2744,6 +2758,32 @@ fn long_chat_virtualizes_real_rows_and_keeps_history_jump_on_append(cx: &mut Tes
             (after.item_ix, after.offset_in_item),
             (before.item_ix, before.offset_in_item),
             "the transcript must still scroll while session navigation stays cached"
+        );
+        assert!(app.performance.read(cx).mounted_messages() < 100);
+        assert_eq!(
+            super::session_age_label(app.session(1).unwrap().last_activity_at()).as_deref(),
+            Some("0 S")
+        );
+    });
+
+    // The age-label tick must still invalidate navigation without moving history.
+    let before_tick = cx.update(|_, cx| app.read(cx).scroll.logical_scroll_top());
+    clock.set(1_800_000_001);
+    cx.update(|_, cx| app.update(cx, |_, cx| cx.notify()));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        let app = app.read(cx);
+        assert!(app.sidebar_view.read(cx).render_count > render_count);
+        assert_eq!(
+            super::session_age_label(app.session(1).unwrap().last_activity_at()).as_deref(),
+            Some("1 S")
+        );
+        let after_tick = app.scroll.logical_scroll_top();
+        assert_eq!(
+            (after_tick.item_ix, after_tick.offset_in_item),
+            (before_tick.item_ix, before_tick.offset_in_item),
+            "age-label updates must not move the transcript"
         );
         assert!(app.performance.read(cx).mounted_messages() < 100);
     });
@@ -5834,4 +5874,90 @@ mod history_and_search {
             });
         });
     }
+}
+
+#[gpui_kit::test]
+fn qoder_picker_persists_session_catalog_and_resets_effort_when_model_changes(
+    cx: &mut TestAppContext,
+) {
+    let _locale = crate::test_support::chinese();
+    use crate::domain::Provider;
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut session = super::tests::session();
+            session.provider = Provider::Qoder;
+            session.native_id = Some("qoder-context".into());
+            session.reasoning_effort = crate::providers::ReasoningEffort::Default;
+            session.opencode.options = serde_json::json!([
+                {"id":"model","options":[{"value":"model-a","name":"Alpha"},{"value":"model-b","name":"Beta"}]},
+                {"id":"reasoning_effort","options":[{"value":"low","name":"Low"},{"value":"high","name":"High"}]}
+            ]);
+            let store = crate::store::Store {
+                workspaces: vec![crate::domain::Workspace {
+                    path: std::env::temp_dir().join("conduit-qoder-picker-ui"), sessions: vec![session]
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window,cx,Ok(store),false,false);
+            app.selected_workspace = Some(0);
+            app.selected_session = Some(1);
+            app.new_session_provider = Provider::Qoder;
+            app.writable = true;
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app,window,cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    macro_rules! click {
+        ($selector:expr) => {{
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            let point = cx.debug_bounds($selector).expect($selector).center();
+            cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+            cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        }};
+    }
+    click!("composer-model-control");
+    assert!(cx.debug_bounds("session-effort-control").is_none());
+    click!("opencode-effort-2");
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        let session = app.session(1).unwrap();
+        assert_eq!(
+            app.session_route(1).unwrap().acp_variant.as_deref(),
+            Some("high")
+        );
+        assert!(
+            app.channel_route(Provider::Qoder, &super::ModelChannel::Ccs("test".into()))
+                .is_err()
+        );
+        let restored: crate::domain::SessionRecord =
+            serde_json::from_value(serde_json::to_value(session).unwrap()).unwrap();
+        assert_eq!(restored.provider, Provider::Qoder);
+        assert_eq!(restored.native_id.as_deref(), Some("qoder-context"));
+        assert_eq!(restored.opencode.variant.as_deref(), Some("high"));
+        assert_eq!(restored.opencode.models().len(), 2);
+    });
+    click!("session-model-option-2");
+    cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            let session = app.session(1).unwrap();
+            assert_eq!(session.model.as_deref(), Some("model-b"));
+            assert!(session.opencode.variant.is_none());
+            assert!(session.opencode.variants().is_empty());
+            assert_eq!(session.opencode.models().len(), 2);
+            app.writable = false;
+        });
+    });
 }

@@ -43,7 +43,7 @@ Git 写操作与聊天按仓库协调，包含共享 `.git` / `commondir` 的 li
 
 ## 原生历史导入
 
-从 Claude Code 和 Codex JSONL 日志后台导入。OpenCode 暂无终端历史自动导入；在应用中建立的 OpenCode 会话可按原生 ID 续接。
+从 Claude Code 和 Codex JSONL 日志后台导入。OpenCode 和 Qoder 暂无终端历史自动导入；在应用中建立的会话可按原生 ID 续接。
 
 ### 索引与增量解析
 

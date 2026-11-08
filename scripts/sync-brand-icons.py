@@ -9,7 +9,7 @@ VERSION = "1.98.0"
 ICONS = {
     name: f"{name}-color"
     for name in (
-        "claude", "claudecode", "codex", "deepseek", "qwen", "kimi", "zhipu", "minimax", "doubao",
+        "claude", "claudecode", "codex", "qoder", "deepseek", "qwen", "kimi", "zhipu", "minimax", "doubao",
         "hunyuan", "gemini", "stepfun", "mistral", "meta", "cohere", "gemma",
         "nvidia", "perplexity", "baichuan", "yi", "spark", "nova", "wenxin",
     )

@@ -3,7 +3,7 @@ use crate::domain::{PermissionLevel, Provider, Usage};
 use serde_json::{Value, json};
 mod opencode;
 mod user_input;
-pub use opencode::OpenCodeSettings;
+pub use opencode::AcpSettings;
 pub use user_input::UserQuestion;
 
 /// Which wire request an approval answers. The response shape differs per
@@ -15,9 +15,11 @@ pub enum ApprovalKind {
     Permissions,
     ClaudeTool,
     OpenCodeTool,
+    QoderTool,
     CodexUserInput,
     ClaudeUserInput,
     OpenCodeUserInput,
+    QoderUserInput,
 }
 #[derive(Clone, Debug)]
 pub struct Approval {
@@ -31,7 +33,7 @@ pub struct Approval {
 }
 #[derive(Clone, Debug)]
 pub enum Event {
-    OpenCodeConfig(Value),
+    AcpConfig(Value),
     NativeId(String),
     Usage(Usage),
     Delta {
@@ -87,7 +89,7 @@ pub struct Step {
     pub error: Option<String>,
 }
 impl Step {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             writes: vec![],
             events: vec![],
@@ -347,13 +349,14 @@ impl Protocol {
                                         .any(|item| item.as_str() == Some("acceptForSession"))
                                 })
                         }
-                        ApprovalKind::OpenCodeTool => {
+                        ApprovalKind::OpenCodeTool | ApprovalKind::QoderTool => {
                             opencode::permission_option(approval, "allow_always").is_some()
                         }
                         ApprovalKind::Permissions | ApprovalKind::ClaudeTool => false,
                         ApprovalKind::CodexUserInput
                         | ApprovalKind::ClaudeUserInput
-                        | ApprovalKind::OpenCodeUserInput => false,
+                        | ApprovalKind::OpenCodeUserInput
+                        | ApprovalKind::QoderUserInput => false,
                     },
             )
         } else {
@@ -385,6 +388,7 @@ impl Protocol {
             return args;
         }
         match self.provider {
+            Provider::Qoder => unreachable!("Qoder uses its own CliAdapter"),
             Provider::OpenCode => vec![
                 "acp".into(),
                 "--pure".into(),
@@ -509,6 +513,7 @@ impl Protocol {
     }
     pub fn initialize(&self) -> Value {
         match self.provider {
+            Provider::Qoder => unreachable!("Qoder uses its own CliAdapter"),
             Provider::OpenCode => {
                 json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientInfo":{"name":"conduit","version":"0.1.0"},"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}})
             }
@@ -522,6 +527,7 @@ impl Protocol {
     }
     pub fn accept(&mut self, value: Value) -> Step {
         self.initialized |= match self.provider {
+            Provider::Qoder => unreachable!("Qoder uses its own CliAdapter"),
             Provider::Codex => {
                 value["id"] == 1 && value.get("result").is_some() && value.get("error").is_none()
             }
@@ -533,6 +539,7 @@ impl Protocol {
             Provider::OpenCode => self.text_only && value["type"] == "text",
         };
         match self.provider {
+            Provider::Qoder => unreachable!("Qoder uses its own CliAdapter"),
             Provider::Codex => self.codex(value),
             Provider::Claude => self.claude(value),
             Provider::OpenCode => self.opencode(value),
@@ -1195,6 +1202,7 @@ impl Protocol {
             return self.user_input_cancel_response(approval);
         }
         match self.provider {
+            Provider::Qoder => unreachable!("Qoder uses its own CliAdapter"),
             Provider::OpenCode => opencode::approval_response_with_fallback(
                 approval,
                 allow,
@@ -1230,10 +1238,12 @@ impl Protocol {
                     json!({"id":approval.wire_id,"result":{"permissions":permissions,"scope":"turn"}})
                 }
                 ApprovalKind::OpenCodeTool
+                | ApprovalKind::QoderTool
                 | ApprovalKind::ClaudeTool
                 | ApprovalKind::CodexUserInput
                 | ApprovalKind::ClaudeUserInput
-                | ApprovalKind::OpenCodeUserInput => {
+                | ApprovalKind::OpenCodeUserInput
+                | ApprovalKind::QoderUserInput => {
                     unreachable!("Claude approvals are handled below")
                 }
             },

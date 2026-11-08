@@ -81,6 +81,25 @@ pub const REGISTRY: &[EngineDescriptor] = &[
         },
         adapter: crate::cli_adapter::opencode,
     },
+    EngineDescriptor {
+        provider: Provider::Qoder,
+        id: "qoder",
+        label: "Qoder CLI",
+        executable: "qodercli.exe",
+        path_env: "CONDUIT_QODER_PATH",
+        install_env: "USERPROFILE",
+        install_path: ".qoder/bin/qodercli/qodercli.exe",
+        npm_binary: None,
+        tested_version: "1.1.85",
+        version_signature: "",
+        guide: "https://docs.qoder.com/cli/installation",
+        capabilities: EngineCapabilities {
+            model_services: false,
+            mcp_toggle: false,
+            protocol: "ACP",
+        },
+        adapter: crate::cli_adapter::qoder,
+    },
 ];
 
 impl Provider {

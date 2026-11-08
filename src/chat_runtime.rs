@@ -1798,6 +1798,7 @@ mod tests {
             Provider::Claude => std::env::var("CONDUIT_CLAUDE_TEST_MODEL"),
             Provider::Codex => std::env::var("CONDUIT_CODEX_TEST_MODEL"),
             Provider::OpenCode => std::env::var("CONDUIT_OPENCODE_TEST_MODEL"),
+            Provider::Qoder => std::env::var("CONDUIT_QODER_TEST_MODEL"),
         }
         .ok()
         .filter(|value| !value.is_empty());

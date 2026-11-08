@@ -51,7 +51,7 @@ impl ProviderEditor {
         });
         let engine = provider.as_ref().map(|p| p.engine).unwrap_or_else(|| {
             let engine = app.read(cx).connection_settings.engine;
-            if engine == Provider::OpenCode {
+            if !engine.descriptor().capabilities.model_services {
                 Provider::Codex
             } else {
                 engine

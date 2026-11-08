@@ -32,11 +32,11 @@ pub enum ReasoningEffort {
 }
 
 impl ReasoningEffort {
-    /// OpenCode negotiates its native effort catalog after selecting the model.
+    /// ACP engines negotiate their native effort catalog after selecting the model.
     pub fn for_provider(provider: Provider) -> Self {
         match provider {
             Provider::Claude | Provider::Codex => Self::Medium,
-            Provider::OpenCode => Self::Default,
+            Provider::OpenCode | Provider::Qoder => Self::Default,
         }
     }
 
@@ -130,10 +130,12 @@ impl ModelProvider {
         }
     }
     pub fn validate(&self) -> Result<()> {
-        if self.engine == Provider::OpenCode {
-            bail!(conduit::i18n::text(
+        if !self.engine.descriptor().capabilities.model_services {
+            bail!(conduit::i18n::text(if self.engine == Provider::Qoder {
+                "qoder.native_route"
+            } else {
                 "providers.opencode_uses_its_native_provider_configuration_configure"
-            ));
+            }));
         }
         if self.name.trim().is_empty() {
             bail!(conduit::i18n::text("providers.enter_a_provider_name"));
@@ -194,7 +196,7 @@ impl ModelProvider {
 pub struct RuntimeRoute {
     pub config: serde_json::Map<String, Value>,
     pub default_model: Option<String>,
-    pub opencode_variant: Option<String>,
+    pub acp_variant: Option<String>,
     pub env: BTreeMap<String, String>,
 }
 
@@ -202,7 +204,7 @@ impl RuntimeRoute {
     pub fn endpoint(engine: Provider, name: &str, url: &str, key: Option<String>) -> Self {
         let mut route = Self::default();
         match engine {
-            Provider::OpenCode => {}
+            Provider::OpenCode | Provider::Qoder => {}
             Provider::Claude => {
                 route.env.insert("ANTHROPIC_BASE_URL".into(), url.into());
                 route

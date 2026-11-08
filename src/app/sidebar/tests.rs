@@ -366,6 +366,7 @@ fn ten_thousand_sessions_only_construct_viewport_rows(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn streaming_text_reuses_sidebar_and_order_but_title_and_archive_refresh(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
+    let _clock = crate::app::events::test_clock::Clock::freeze(1_800_000_000);
     let (app, cx) = fixture(cx, 1000);
     let (renders, sorts, rebuilds, rows, sizes) = cx.update(|_, cx| {
         let app = app.read(cx);

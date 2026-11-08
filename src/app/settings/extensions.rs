@@ -101,7 +101,10 @@ impl ConduitApp {
             kind,
         );
         let edit_view = view.clone();
-        let disabled = !self.writable || self.closing || self.extensions_ui.importing;
+        let disabled = self.extensions_ui.engine == Provider::Qoder
+            || !self.writable
+            || self.closing
+            || self.extensions_ui.importing;
         let import_view = view;
         h_flex()
             .gap_2()
@@ -171,7 +174,11 @@ impl ConduitApp {
     }
 
     fn import_skill(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.writable || self.closing || self.extensions_ui.importing {
+        if self.extensions_ui.engine == Provider::Qoder
+            || !self.writable
+            || self.closing
+            || self.extensions_ui.importing
+        {
             return;
         }
         let destination = extensions::edit::destination(
@@ -714,7 +721,7 @@ impl ConduitApp {
             .size_full()
             .min_w_0()
             .text_color(rgb(palette().text))
-            .child(management_toolbar(engine, true, Some(actions), narrow, view))
+            .child(management_toolbar(engine, true, Some(actions), available_width, self.store.ui.ui_font_size, view))
             .child(
                 v_flex()
                     .w_full()

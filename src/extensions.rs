@@ -473,6 +473,11 @@ impl<'a> Scan<'a> {
             .map(project_directories)
             .unwrap_or_default();
         match context.engine {
+            Provider::Qoder => {
+                self.catalog
+                    .errors
+                    .push(conduit::i18n::text("qoder.extensions_native"));
+            }
             Provider::Claude => {
                 self.skills(&locations.claude.join("skills"), "全局", 0);
                 for project in &projects {

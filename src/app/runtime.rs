@@ -405,7 +405,7 @@ impl ConduitApp {
                     )
                 })?;
             if session.channel == ModelChannel::Cli {
-                route.opencode_variant = session.opencode.variant.clone();
+                route.acp_variant = session.opencode.variant.clone();
             }
             route
         } else {
@@ -485,7 +485,7 @@ impl ConduitApp {
             && self.store.ui.naming_mode == NamingMode::FirstMessage
             && first_turn)
             .then(|| prompt.clone());
-        let opencode_variant = route.opencode_variant.clone();
+        let acp_variant = route.acp_variant.clone();
         let fresh_session = native_id.is_none();
         let context_window_fallback = self
             .session(id)
@@ -524,7 +524,7 @@ impl ConduitApp {
                 naming_snippet,
                 selection,
             });
-            run.opencode_variant = opencode_variant;
+            run.acp_variant = acp_variant;
             run.context_window_fallback = context_window_fallback;
             if fresh_session && provider == Provider::Codex {
                 run.output_tokens_at_start = Some(0);

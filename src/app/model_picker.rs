@@ -79,7 +79,7 @@ impl Render for SessionModelPicker {
         let channel = selection.channel;
         let selected = selection.model;
         let effort = selection.effort;
-        let native_models = if engine == Provider::OpenCode {
+        let native_models = if matches!(engine, Provider::OpenCode | Provider::Qoder) {
             let catalog_models = app.channel_models(engine, &ModelChannel::Cli).1;
             if !catalog_models.is_empty() {
                 catalog_models
@@ -90,9 +90,15 @@ impl Render for SessionModelPicker {
         } else {
             vec![]
         };
-        let (note, mut models) = if engine == Provider::OpenCode && channel == ModelChannel::Cli {
+        let (note, mut models) = if matches!(engine, Provider::OpenCode | Provider::Qoder)
+            && channel == ModelChannel::Cli
+        {
             (
-                app.channel_models(engine, &ModelChannel::Cli).0,
+                if engine == Provider::Qoder && !native_models.is_empty() {
+                    None
+                } else {
+                    app.channel_models(engine, &ModelChannel::Cli).0
+                },
                 native_models.clone(),
             )
         } else {
@@ -149,7 +155,7 @@ impl Render for SessionModelPicker {
                 .into_iter()
                 .map(|(name, model)| (ModelChannel::Cli, Some(model), name)),
         );
-        if engine != Provider::OpenCode {
+        if engine.descriptor().capabilities.model_services {
             channels.extend(
                 app.store
                     .providers
@@ -439,9 +445,11 @@ impl Render for SessionModelPicker {
                         .child(note),
                 )
             })
-            .when(engine == Provider::OpenCode, |panel| {
-                let picker = cx.entity();
-                panel.child(
+            .when(
+                matches!(engine, Provider::OpenCode | Provider::Qoder),
+                |panel| {
+                    let picker = cx.entity();
+                    panel.child(
                     v_flex()
                         .px_2()
                         .gap_2()
@@ -516,9 +524,12 @@ impl Render for SessionModelPicker {
                                 )),
                         ),
                 )
-            })
-            .when(engine != Provider::OpenCode, |panel| {
-                panel.child(
+                },
+            )
+            .when(
+                !matches!(engine, Provider::OpenCode | Provider::Qoder),
+                |panel| {
+                    panel.child(
                     v_flex()
                         .px_2()
                         .pt_3()
@@ -577,7 +588,8 @@ impl Render for SessionModelPicker {
                                 )),
                         ),
                 )
-            });
+                },
+            );
         v_flex()
             .debug_selector(|| "session-model-panel".into())
             .w(px(340.))
@@ -682,6 +694,7 @@ impl SessionModelPicker {
                             Provider::Claude => "engine-option-claude",
                             Provider::Codex => "engine-option-codex",
                             Provider::OpenCode => "engine-option-opencode",
+                            Provider::Qoder => "engine-option-qoder",
                         })
                         .ghost()
                         .h(px(34.))
@@ -794,7 +807,11 @@ impl ConduitApp {
             .and_then(|id| self.session(id))
             .map(|session| session.permission)
             .unwrap_or(self.pending_permission);
-        let opencode = self.new_session_provider == Provider::OpenCode;
+        let engine = self
+            .send_target(true)
+            .and_then(|id| self.session(id))
+            .map(|session| session.provider)
+            .unwrap_or(self.new_session_provider);
         let warning = permission == PermissionLevel::FullAccess;
         let trigger = Button::new("permission-picker-trigger")
             .ghost()
@@ -917,11 +934,20 @@ impl ConduitApp {
                                         .pl_6()
                                         .text_size(ui_text_size(12.))
                                         .text_color(rgb(palette().faint))
-                                        .child(match (opencode, option) {
-                                            (true, PermissionLevel::ReadOnly) => {
+                                        .child(match (engine, option) {
+                                            (Provider::Qoder, PermissionLevel::ReadOnly) => {
+                                                conduit::i18n::text_static("qoder.permission_read_only")
+                                            }
+                                            (Provider::Qoder, PermissionLevel::WorkspaceWrite) => {
+                                                conduit::i18n::text_static("qoder.permission_ask")
+                                            }
+                                            (Provider::Qoder, PermissionLevel::FullAccess) => {
+                                                conduit::i18n::text_static("qoder.permission_full_access")
+                                            }
+                                            (Provider::OpenCode, PermissionLevel::ReadOnly) => {
                                                 conduit::i18n::text_static("model_picker.opencode_read_tools_only_commands_and_writes")
                                             }
-                                            (true, PermissionLevel::WorkspaceWrite) => {
+                                            (Provider::OpenCode, PermissionLevel::WorkspaceWrite) => {
                                                 conduit::i18n::text_static("model_picker.opencode_writes_commands_and_access_outside_the")
                                             }
                                             (_, PermissionLevel::ReadOnly) => {
@@ -1008,7 +1034,7 @@ impl ConduitApp {
         let provider = selection.engine;
         let selected_model = selection.model;
         let (_, mut models) = self.channel_models(provider, &selection.channel);
-        if provider == Provider::OpenCode && models.is_empty() {
+        if matches!(provider, Provider::OpenCode | Provider::Qoder) && models.is_empty() {
             models = self
                 .native_model_preferences(provider)
                 .merge(&selection.opencode.models(), false);
@@ -1032,7 +1058,7 @@ impl ConduitApp {
         } else {
             self.channel_label(provider, &selection.channel)
         };
-        let effort = if provider == Provider::OpenCode {
+        let effort = if matches!(provider, Provider::OpenCode | Provider::Qoder) {
             selection
                 .opencode
                 .effective_variant()
@@ -1087,7 +1113,7 @@ impl ConduitApp {
                             .child(label),
                     )
                     .when(
-                        if provider == Provider::OpenCode {
+                        if matches!(provider, Provider::OpenCode | Provider::Qoder) {
                             selection.opencode.effective_variant().is_some()
                         } else {
                             selection.effort != ReasoningEffort::Default
@@ -1223,7 +1249,7 @@ impl ConduitApp {
         })?;
         let mut route = self.channel_route(s.provider, &s.channel)?;
         if s.channel == ModelChannel::Cli {
-            route.opencode_variant = s.opencode.variant.clone();
+            route.acp_variant = s.opencode.variant.clone();
         }
         Ok(route)
     }
@@ -1233,6 +1259,14 @@ impl ConduitApp {
         engine: Provider,
         channel: &ModelChannel,
     ) -> anyhow::Result<RuntimeRoute> {
+        anyhow::ensure!(
+            engine.descriptor().capabilities.model_services || *channel == ModelChannel::Cli,
+            conduit::i18n::text(if engine == Provider::Qoder {
+                "qoder.native_route"
+            } else {
+                "providers.opencode_uses_its_native_provider_configuration_configure"
+            })
+        );
         match channel {
             ModelChannel::Cli => Ok(RuntimeRoute::default()),
             ModelChannel::Ccs(id) => self
@@ -1326,7 +1360,7 @@ impl ConduitApp {
             .content(move |_, _, cx| {
                 let popover = cx.entity().downgrade();
                 let mut list = v_flex().w(px(220.)).gap(px(1.));
-                let options: [(Option<Provider>, &str); 4] = [
+                let options: [(Option<Provider>, &str); 5] = [
                     (
                         None,
                         conduit::i18n::text_static("generation.follow_current_session"),
@@ -1334,6 +1368,7 @@ impl ConduitApp {
                     (Some(Provider::Claude), Provider::Claude.label()),
                     (Some(Provider::Codex), Provider::Codex.label()),
                     (Some(Provider::OpenCode), Provider::OpenCode.label()),
+                    (Some(Provider::Qoder), Provider::Qoder.label()),
                 ];
                 for (index, (option, name)) in options.into_iter().enumerate() {
                     let view = view.clone();
@@ -1742,7 +1777,7 @@ impl ConduitApp {
             .content(move |_, _, cx| {
                 let popover = cx.entity().downgrade();
                 let mut list = v_flex().w(px(220.)).gap(px(1.));
-                let options: [(Option<Provider>, &str); 4] = [
+                let options: [(Option<Provider>, &str); 5] = [
                     (
                         None,
                         conduit::i18n::text_static("generation.follow_current_session"),
@@ -1750,6 +1785,7 @@ impl ConduitApp {
                     (Some(Provider::Claude), Provider::Claude.label()),
                     (Some(Provider::Codex), Provider::Codex.label()),
                     (Some(Provider::OpenCode), Provider::OpenCode.label()),
+                    (Some(Provider::Qoder), Provider::Qoder.label()),
                 ];
                 for (index, (option, name)) in options.into_iter().enumerate() {
                     let view = view.clone();

@@ -2,6 +2,9 @@
 
 use super::*;
 
+#[cfg(all(test, feature = "ui-tests"))]
+pub(super) mod test_clock;
+
 pub(super) use crate::failure::{
     failure_guidance, failure_repeats, failure_summary, failure_title, same_failure,
 };
@@ -31,6 +34,10 @@ pub(super) fn finish_tool_cards(session: &mut SessionRecord, prefix: &str, statu
 }
 
 pub(super) fn unix_now() -> u64 {
+    #[cfg(all(test, feature = "ui-tests"))]
+    if let Some(now) = test_clock::now() {
+        return now;
+    }
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -55,11 +62,8 @@ pub(super) fn session_age_label(activity_at: u64) -> Option<String> {
     if activity_at == 0 {
         return None;
     }
-    let activity = DateTime::from_timestamp(activity_at as i64, 0)?;
-    let seconds = Local::now()
-        .signed_duration_since(activity)
-        .num_seconds()
-        .max(0);
+    DateTime::from_timestamp(activity_at as i64, 0)?;
+    let seconds = unix_now().saturating_sub(activity_at);
     Some(match seconds {
         seconds if seconds < 60 => format!("{seconds} S"),
         seconds if seconds < 60 * 60 => format!("{} M", seconds / 60),

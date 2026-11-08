@@ -60,7 +60,7 @@ pub(crate) fn event_bytes(event: &Event) -> usize {
         Event::ApprovalResolved { id, .. } => id.len(),
         Event::Finished { error, .. } => error.as_ref().map_or(0, String::len),
         Event::Plan { steps } => steps.iter().map(|(a, b)| a.len() + b.len() + 64).sum(),
-        Event::OpenCodeConfig(value) => value.to_string().len(),
+        Event::AcpConfig(value) => value.to_string().len(),
         Event::Usage(_) => 256,
     }
 }

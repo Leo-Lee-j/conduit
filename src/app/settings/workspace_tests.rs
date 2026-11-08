@@ -232,14 +232,21 @@ fn settings_management_actions_fit_and_model_search_can_return_to_full_page(
     use crate::domain::Provider;
     use gpui_kit::component::{Theme, ThemeMode};
     let (app, cx) = fixture(cx);
-    for (width, height, mode) in [
-        (850., 500., ThemeMode::Light),
-        (1280., 900., ThemeMode::Dark),
-        (1920., 1080., ThemeMode::Light),
-        (1920., 1080., ThemeMode::Dark),
+    for (width, height, mode, font_size) in [
+        (850., 500., ThemeMode::Light, 16.),
+        (850., 500., ThemeMode::Dark, 20.),
+        (1280., 900., ThemeMode::Dark, 16.),
+        (1920., 1080., ThemeMode::Light, 16.),
+        (1920., 1080., ThemeMode::Dark, 16.),
     ] {
         cx.simulate_resize(size(px(width), px(height)));
-        cx.update(|window, cx| Theme::change(mode, Some(window), cx));
+        cx.update(|window, cx| {
+            Theme::change(mode, Some(window), cx);
+            app.update(cx, |app, cx| {
+                app.store.ui.ui_font_size = font_size;
+                app.apply_ui_font(cx);
+            });
+        });
         for page in [3, 8, 4, 9] {
             cx.update(|window, cx| {
                 app.update(cx, |app, cx| {
@@ -256,27 +263,53 @@ fn settings_management_actions_fit_and_model_search_can_return_to_full_page(
             let engines = cx.debug_bounds("management-engines").unwrap();
             assert_eq!(content.right(), body.right());
             assert!(engines.left() >= content.left() && engines.right() <= content.right());
-            let engine_selectors = if page == 4 || page == 9 {
-                [
-                    "extensions-engine-0",
-                    "extensions-engine-1",
-                    "extensions-engine-2",
-                ]
-            } else {
-                [
-                    "settings-engine-0",
-                    "settings-engine-1",
-                    "settings-engine-2",
-                ]
-            };
-            for selector in engine_selectors {
-                let tab = cx.debug_bounds(selector).unwrap();
+            let mut row_tops = Vec::new();
+            for (index, provider) in Provider::ALL.into_iter().enumerate() {
+                let prefix = if page == 4 || page == 9 {
+                    "extensions"
+                } else {
+                    "settings"
+                };
+                let tab = match (prefix, index) {
+                    ("settings", 0) => cx.debug_bounds("settings-engine-0"),
+                    ("settings", 1) => cx.debug_bounds("settings-engine-1"),
+                    ("settings", 2) => cx.debug_bounds("settings-engine-2"),
+                    ("settings", 3) => cx.debug_bounds("settings-engine-3"),
+                    ("extensions", 0) => cx.debug_bounds("extensions-engine-0"),
+                    ("extensions", 1) => cx.debug_bounds("extensions-engine-1"),
+                    ("extensions", 2) => cx.debug_bounds("extensions-engine-2"),
+                    ("extensions", 3) => cx.debug_bounds("extensions-engine-3"),
+                    _ => unreachable!(),
+                }
+                .unwrap();
+                let label = match index {
+                    0 => cx.debug_bounds("management-engine-content-0"),
+                    1 => cx.debug_bounds("management-engine-content-1"),
+                    2 => cx.debug_bounds("management-engine-content-2"),
+                    3 => cx.debug_bounds("management-engine-content-3"),
+                    _ => unreachable!(),
+                }
+                .unwrap();
                 assert!(tab.left() >= engines.left() && tab.right() <= engines.right());
+                assert!(tab.top() >= engines.top() && tab.bottom() <= engines.bottom());
+                row_tops.push(tab.top());
+                assert!(
+                    label.left() >= tab.left() + px(8.) && label.right() <= tab.right() - px(8.),
+                    "{} icon and complete label must fit inside the button: {label:?}, {tab:?}",
+                    provider.label()
+                );
                 assert!(
                     tab.size.width >= px(72.),
                     "engine choices must remain usable"
                 );
             }
+            assert!(
+                row_tops.iter().all(|top| matches!(
+                    row_tops.iter().filter(|other| *other == top).count(),
+                    1 | 2 | 4
+                )),
+                "engine choices use balanced rows, never three choices plus an orphan"
+            );
             if page == 3 {
                 assert!(
                     actions.is_none(),
@@ -527,6 +560,7 @@ fn settings_cli_updates_report_versions_errors_and_discard_changed_paths(cx: &mu
                 Provider::Claude => "settings-check-updates-0",
                 Provider::Codex => "settings-check-updates-1",
                 Provider::OpenCode => "settings-check-updates-2",
+                Provider::Qoder => "settings-check-updates-3",
             })
             .is_some()
         );
@@ -789,6 +823,11 @@ fn settings_cli_single_update_action_tracks_results_and_resets_latest_feedback(
                 "settings-probe-1",
                 "settings-install-update-1",
                 "settings-check-updates-1",
+            ),
+            Provider::Qoder => (
+                "settings-probe-3",
+                "settings-install-update-3",
+                "settings-check-updates-3",
             ),
             Provider::OpenCode => (
                 "settings-probe-2",

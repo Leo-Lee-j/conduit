@@ -35,7 +35,7 @@ impl CcsCatalog {
     pub fn imported_providers(&self) -> impl Iterator<Item = crate::providers::ModelProvider> + '_ {
         self.providers
             .iter()
-            .filter(|p| p.provider != Provider::OpenCode)
+            .filter(|p| p.provider.descriptor().capabilities.model_services)
             .map(|p| crate::providers::ModelProvider {
                 id: crate::providers::ModelProvider::ccs_id(p.provider, &p.id),
                 name: p.name.clone(),
@@ -88,6 +88,7 @@ pub fn runtime_route(
         Provider::Claude => "claude",
         Provider::Codex => "codex",
         Provider::OpenCode => "opencode",
+        Provider::Qoder => "qoder",
     };
     let raw: String = connection
         .query_row(
@@ -104,6 +105,7 @@ pub fn runtime_route(
         ))
     })?;
     match engine {
+        Provider::Qoder => bail!(conduit::i18n::text("qoder.native_route")),
         Provider::OpenCode => bail!(conduit::i18n::text(
             "ccs.ccs_routing_is_not_yet_supported_for"
         )),
@@ -248,6 +250,7 @@ pub fn load_from(path: &Path) -> CcsCatalog {
             Provider::Claude => "claude",
             Provider::Codex => "codex",
             Provider::OpenCode => "opencode",
+            Provider::Qoder => "qoder",
         };
         let endpoint: rusqlite::Result<Option<String>> = connection.query_row(
             "SELECT CASE WHEN app_type = 'claude' THEN json_extract(settings_config, '$.env.ANTHROPIC_BASE_URL') ELSE json_extract(settings_config, '$.config') END FROM providers WHERE id = ?1 AND app_type = ?2",

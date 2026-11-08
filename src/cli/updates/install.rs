@@ -16,6 +16,7 @@ fn package(provider: Provider) -> &'static str {
         Provider::Claude => "@anthropic-ai/claude-code",
         Provider::Codex => "@openai/codex",
         Provider::OpenCode => "opencode-ai",
+        Provider::Qoder => "@qoder-ai/qodercli",
     }
 }
 
@@ -154,6 +155,7 @@ impl Plan {
         );
         let args = match provider {
             Provider::Claude => vec!["update".into()],
+            Provider::Qoder => anyhow::bail!(conduit::i18n::text("qoder.native_update")),
             Provider::OpenCode => vec!["upgrade".into(), version.into()],
             Provider::Codex => anyhow::bail!(conduit::i18n::text(
                 "cli.updates.install.this_codex_installation_is_a_standalone_executable"

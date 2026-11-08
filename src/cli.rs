@@ -69,6 +69,7 @@ impl CliSettings {
             Provider::Claude => &self.claude_path,
             Provider::Codex => &self.codex_path,
             Provider::OpenCode => &self.opencode_path,
+            Provider::Qoder => return None,
         }
         .as_deref()
     }
@@ -78,6 +79,7 @@ impl CliSettings {
             Provider::Claude => &mut self.claude_path,
             Provider::Codex => &mut self.codex_path,
             Provider::OpenCode => &mut self.opencode_path,
+            Provider::Qoder => return,
         } = None;
     }
     pub fn enabled(&self, provider: Provider) -> bool {

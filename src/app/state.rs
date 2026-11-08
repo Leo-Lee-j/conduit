@@ -27,7 +27,7 @@ pub(super) struct ComposerSelection {
     pub(super) channel: ModelChannel,
     pub(super) model: Option<String>,
     pub(super) effort: ReasoningEffort,
-    pub(super) opencode: crate::protocol::OpenCodeSettings,
+    pub(super) opencode: crate::protocol::AcpSettings,
 }
 
 impl ComposerSelection {
@@ -64,7 +64,7 @@ impl ComposerSelection {
             self.effort = ReasoningEffort::for_provider(self.engine);
             self.opencode.variant = None;
             if let Some(options) = self.opencode.options.as_array_mut() {
-                options.retain(|o| o["id"] != "effort");
+                options.retain(|o| o["id"] != "effort" && o["id"] != "reasoning_effort");
             }
         }
         self.model = model;
@@ -252,7 +252,7 @@ pub(super) struct ActiveRun {
     pub(super) model: Option<String>,
     /// Snapshot of this turn's effort; picker changes apply only to the next turn.
     pub(super) reasoning_effort: ReasoningEffort,
-    pub(super) opencode_variant: Option<String>,
+    pub(super) acp_variant: Option<String>,
     pub(super) message_index: MessageIndex,
     pub(super) usage: Usage,
     /// None for imported/legacy usage without a trustworthy output baseline.
@@ -310,7 +310,7 @@ impl ActiveRun {
             activity: conduit::i18n::text_static("runtime.saves.starting_cli").into(),
             model,
             reasoning_effort,
-            opencode_variant: None,
+            acp_variant: None,
             message_index: MessageIndex::default(),
             usage,
             output_tokens_at_start,

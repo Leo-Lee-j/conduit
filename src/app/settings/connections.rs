@@ -175,7 +175,8 @@ impl ConduitApp {
                 engine,
                 false,
                 (services || self.settings_ui.group.is_some()).then(|| actions.into_any_element()),
-                narrow,
+                available_width,
+                self.store.ui.ui_font_size,
                 view.clone(),
             ))
             .child(

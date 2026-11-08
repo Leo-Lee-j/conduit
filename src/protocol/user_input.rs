@@ -20,6 +20,7 @@ impl Approval {
             ApprovalKind::CodexUserInput
                 | ApprovalKind::ClaudeUserInput
                 | ApprovalKind::OpenCodeUserInput
+                | ApprovalKind::QoderUserInput
         )
     }
 }
@@ -37,6 +38,7 @@ impl Approval {
             .map(|(index, q)| {
                 let claude = self.kind == ApprovalKind::ClaudeUserInput;
                 let opencode = self.kind == ApprovalKind::OpenCodeUserInput;
+                let qoder = self.kind == ApprovalKind::QoderUserInput;
                 UserQuestion {
                     id: if opencode {
                         index.to_string()
@@ -51,12 +53,12 @@ impl Approval {
                         .flatten()
                         .map(|o| (text(o, "label").into(), text(o, "description").into()))
                         .collect(),
-                    multiple: if opencode {
+                    multiple: if opencode || qoder {
                         q["multiple"].as_bool().unwrap_or(false)
                     } else {
                         claude && q["multiSelect"].as_bool().unwrap_or(false)
                     },
-                    custom: if opencode {
+                    custom: if opencode || qoder {
                         q["custom"].as_bool().unwrap_or(true)
                     } else {
                         claude

@@ -243,6 +243,7 @@ fn settle_summary(cx: &mut VisualTestContext) {
 #[gpui_kit::test]
 fn metadata_coalesces_without_chat_token_renders_and_hidden_views_pause(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
+    let _clock = crate::app::events::test_clock::Clock::freeze(1_800_000_000);
     let (app, cx) = fixture(cx, store(), plugins());
     cx.simulate_resize(size(px(1600.), px(700.)));
     draw(cx);
