@@ -1,5 +1,6 @@
 use super::{Level, Lifecycle, Notice, Source};
 use crate::app::{ActiveRun, ChatRuntime, ConduitApp, Event, Store, Workspace, unix_now};
+use crate::app::{NoticeLevel, NoticeSource, NoticeTarget};
 use gpui_kit::component::{Root, WindowExt as _};
 use gpui_kit::{
     AppContext as _, Entity, Focusable as _, Modifiers, MouseButton, TestAppContext,
@@ -543,4 +544,62 @@ fn persistent_errors_are_recorded_once_and_reading_does_not_dismiss_the_banner(
             app.persistence.error = None;
         })
     });
+}
+
+#[gpui_kit::test]
+fn git_notices_use_center_with_or_without_git_navigation(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut store = Store::default();
+            store.ui.performance_monitor = false;
+            store.workspaces = vec![Workspace {
+                path: std::env::temp_dir().join("conduit-git-notices"),
+                sessions: vec![crate::app::tests::session()],
+            }];
+            ConduitApp::with_store(window, cx, Ok(store), false, false)
+        });
+        app.update(cx, |app, cx| {
+            let path = app.selected_workspace_path().unwrap();
+            app.git_result_feedback(path.clone(), "后台推送完成", false, cx);
+            assert_eq!(app.notifications.pending.len(), 1);
+
+            app.show_git_navigation(cx);
+            assert!(app.git_navigation_open());
+            app.git_result_feedback(path.clone(), "提交完成", false, cx);
+            assert_eq!(app.notifications.pending.len(), 2);
+            let notice = &app.notifications.center.records()[0];
+            assert_eq!(notice.level, NoticeLevel::Success);
+            assert_eq!(notice.message, "提交完成");
+            assert_eq!(notice.target, Some(NoticeTarget::Workspace(path.clone())));
+
+            // Routine progress is recorded without adding a toast.
+            app.git_feedback(path.clone(), "正在暂存…", false, cx);
+            assert_eq!(app.notifications.pending.len(), 2);
+            assert_eq!(
+                app.notifications.center.records()[0].level,
+                NoticeLevel::Info
+            );
+
+            let error = "校验失败的完整说明\n".repeat(30);
+            app.git_feedback(path.clone(), error.clone(), true, cx);
+            assert_eq!(app.notifications.pending.len(), 3);
+            let notice = &app.notifications.center.records()[0];
+            assert_eq!(notice.source, NoticeSource::Git);
+            assert_eq!(notice.level, NoticeLevel::Error);
+            assert_eq!(notice.message, error);
+
+            // A background result keeps its own workspace, not the current selection.
+            let other = path.with_file_name("conduit-other-git-notices");
+            app.git_result_feedback(other.clone(), "后台推送失败", true, cx);
+            assert_eq!(app.notifications.pending.len(), 4);
+            assert_eq!(
+                app.notifications.center.records()[0].target,
+                Some(NoticeTarget::Workspace(other))
+            );
+            assert_eq!(app.notifications.center.records().len(), 5);
+        });
+        Root::new(app, window, cx)
+    });
+    cx.run_until_parked();
 }

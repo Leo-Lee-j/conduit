@@ -572,13 +572,11 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) -> bool {
         if let Some(reason) = self.branch_operation_blocked(&path) {
-            self.message = Some(reason.into());
-            cx.notify();
+            self.git_feedback(path, reason, true, cx);
             return false;
         }
         if self.selected_workspace_path().as_ref() != Some(&path) {
-            self.message = Some("工作区已切换，请重新打开分支菜单".into());
-            cx.notify();
+            self.git_feedback(path, "工作区已切换，请重新打开分支菜单", true, cx);
             return false;
         }
         if !self.branch_navigation_open() {

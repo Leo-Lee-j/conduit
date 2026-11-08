@@ -2932,6 +2932,7 @@ mod tests {
 #[cfg(all(test, feature = "ui-tests"))]
 mod git_navigation_tests {
     use super::{ActiveRun, ChatRuntime, ConduitApp, DiffMode, DocumentTab, Store, Workspace};
+    use crate::app::{NoticeLevel, NoticeSource, NoticeTarget};
     use crate::git;
     use gpui_kit::{
         AppContext, Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext,
@@ -3251,11 +3252,14 @@ mod git_navigation_tests {
             let snapshot = a.git.snapshot.as_ref().unwrap();
             assert_eq!(snapshot.staged_count(), 1);
             assert_eq!(snapshot.files[0].path, "new file.txt");
-            assert!(
-                !a.git.feedback[&repo.0].error,
-                "{}",
-                a.git.feedback[&repo.0].text
-            );
+            let notice = a
+                .notifications
+                .center
+                .records()
+                .iter()
+                .find(|notice| notice.source == NoticeSource::Git)
+                .unwrap();
+            assert_ne!(notice.level, NoticeLevel::Error, "{}", notice.message);
             assert!(a.git.drafts[&repo.0].input.read(cx).value().is_empty());
         });
     }
@@ -3324,7 +3328,16 @@ mod git_navigation_tests {
                     .get(&repo.0)
                     .is_none_or(|s| s.is_empty())
             );
-            assert!(!a.git.feedback[&repo.0].error);
+            assert_ne!(
+                a.notifications
+                    .center
+                    .records()
+                    .iter()
+                    .find(|notice| notice.source == NoticeSource::Git)
+                    .unwrap()
+                    .level,
+                NoticeLevel::Error
+            );
         });
         // A new file is manual the first time, automatic after it joins the index.
         cx.update(|_, cx| {
@@ -3355,7 +3368,19 @@ mod git_navigation_tests {
         std::fs::write(repo.0.join(".git/index.lock"), "fixture lock").unwrap();
         cx.update(|_, cx| app.update(cx, |a, cx| a.refresh_git(cx)));
         wait_git(cx, &app);
-        cx.update(|_, cx| assert!(app.read(cx).git.feedback[&repo.0].error));
+        cx.update(|_, cx| {
+            assert_eq!(
+                app.read(cx)
+                    .notifications
+                    .center
+                    .records()
+                    .iter()
+                    .find(|notice| notice.source == NoticeSource::Git)
+                    .unwrap()
+                    .level,
+                NoticeLevel::Error
+            )
+        });
         std::fs::remove_file(repo.0.join(".git/index.lock")).unwrap();
         cx.update(|_, cx| app.update(cx, |a, cx| a.refresh_git(cx)));
         wait_git(cx, &app);
@@ -3364,7 +3389,17 @@ mod git_navigation_tests {
                 app.read(cx).git.snapshot.as_ref().unwrap().unstaged_count(),
                 0
             );
-            assert!(!app.read(cx).git.feedback[&repo.0].error);
+            assert_ne!(
+                app.read(cx)
+                    .notifications
+                    .center
+                    .records()
+                    .iter()
+                    .find(|notice| notice.source == NoticeSource::Git)
+                    .unwrap()
+                    .level,
+                NoticeLevel::Error
+            );
         });
     }
 
@@ -3594,8 +3629,20 @@ mod git_navigation_tests {
         draw(cx);
         let navigation = cx.debug_bounds("git-navigation").unwrap();
         let actions = cx.debug_bounds("git-commit-actions").unwrap();
-        let feedback = cx.debug_bounds("git-action-feedback").unwrap();
-        assert!(feedback.bottom() <= actions.top());
+        assert!(cx.debug_bounds("git-action-feedback").is_none());
+        cx.update(|_, cx| {
+            let app = app.read(cx);
+            let notice = app
+                .notifications
+                .center
+                .records()
+                .iter()
+                .find(|notice| notice.source == NoticeSource::Git)
+                .unwrap();
+            assert_eq!(notice.level, NoticeLevel::Error);
+            assert!(notice.message.contains("检查提交失败的长错误说明"));
+            assert_eq!(notice.target, Some(NoticeTarget::Workspace(repo.0.clone())));
+        });
         assert!(actions.bottom() <= navigation.bottom());
         cx.update(|_, cx| {
             app.update(cx, |a, cx| {

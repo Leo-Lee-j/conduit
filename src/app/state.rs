@@ -383,11 +383,6 @@ pub(super) struct SessionNaming {
     pub(super) cleanup_error: Option<String>,
 }
 
-pub(super) struct GitFeedback {
-    pub(super) text: String,
-    pub(super) error: bool,
-}
-
 pub(super) fn update_commit_text(
     parts: &mut Vec<(String, String)>,
     key: String,

@@ -1,5 +1,6 @@
 use crate::app::queue::tests::{fixture, running};
 use crate::app::{ComposerSelection, ConduitApp, Event, ModelChannel, Provider, Store, queue};
+use crate::app::{NoticeLevel, NoticeSource, NoticeTarget};
 use crate::persistence::Persistence;
 use gpui_kit::{Context, TestAppContext, Window, component::WindowExt as _};
 use std::sync::{
@@ -635,7 +636,18 @@ fn helper_cleanup_faults_remain_visible_until_verified_completion(cx: &mut TestA
                             .cleanup_error
                             .is_some()
                     );
-                    assert!(this.git.feedback[&this.store.workspaces[0].path].error);
+                    assert!(
+                        this.notifications
+                            .center
+                            .records()
+                            .iter()
+                            .any(|notice| notice.source == NoticeSource::Git
+                                && notice.level == NoticeLevel::Error
+                                && notice.target
+                                    == Some(NoticeTarget::Workspace(
+                                        this.store.workspaces[0].path.clone()
+                                    )))
+                    );
                 }
                 this.closing = true;
                 this.poll(window, cx);

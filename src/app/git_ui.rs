@@ -46,51 +46,66 @@ impl ConduitApp {
         error: bool,
         cx: &mut Context<Self>,
     ) {
-        self.git.feedback.insert(
+        self.git_notice(
             path,
-            GitFeedback {
-                text: text.into(),
-                error,
+            text,
+            if error {
+                NoticeLevel::Error
+            } else {
+                NoticeLevel::Info
             },
+            if error {
+                NoticePresentation::Toast
+            } else {
+                NoticePresentation::History
+            },
+            cx,
         );
-        cx.notify();
     }
 
-    fn git_result_feedback(
+    pub(super) fn git_result_feedback(
         &mut self,
         path: PathBuf,
         text: impl Into<String>,
         error: bool,
         cx: &mut Context<Self>,
     ) {
-        let text = text.into();
-        let presentation = if self.git_navigation_open()
-            && self.selected_workspace_path().as_ref() == Some(&path)
-        {
-            NoticePresentation::History
-        } else {
-            NoticePresentation::Toast
-        };
+        self.git_notice(
+            path,
+            text,
+            if error {
+                NoticeLevel::Error
+            } else {
+                NoticeLevel::Success
+            },
+            NoticePresentation::Toast,
+            cx,
+        );
+    }
+
+    fn git_notice(
+        &mut self,
+        path: PathBuf,
+        text: impl Into<String>,
+        level: NoticeLevel,
+        presentation: NoticePresentation,
+        cx: &mut Context<Self>,
+    ) {
         self.notify_user(
             Notice::new(
                 NoticeSource::Git,
-                if error {
-                    NoticeLevel::Error
-                } else {
-                    NoticeLevel::Success
+                level,
+                match level {
+                    NoticeLevel::Error => "Git 操作失败",
+                    NoticeLevel::Success => "Git 操作完成",
+                    _ => "Git 操作提示",
                 },
-                if error {
-                    "Git 操作失败"
-                } else {
-                    "Git 操作完成"
-                },
-                text.clone(),
+                text,
             )
-            .target(NoticeTarget::Workspace(path.clone()))
+            .target(NoticeTarget::Workspace(path))
             .presentation(presentation),
             cx,
         );
-        self.git_feedback(path, text, error, cx);
     }
 
     pub(super) fn can_stage_files(&self) -> bool {
@@ -800,6 +815,7 @@ impl ConduitApp {
             }
         }
         let mut generation_result = None;
+        let mut cleanup_notice = None;
         if let Some(generation) = &mut self.git.generation {
             if generation.started.elapsed() > Duration::from_secs(120) && generation.error.is_none()
             {
@@ -836,15 +852,8 @@ impl ConduitApp {
                         generation.cleanup_error = Some(error.clone());
                         generation.error = Some(error.clone());
                         generation.runtime.cancel();
-                        self.git.feedback.insert(
-                            generation.path.clone(),
-                            GitFeedback {
-                                text: error.clone(),
-                                error: true,
-                            },
-                        );
+                        cleanup_notice = Some((generation.path.clone(), error));
                         self.closing = false;
-                        self.message = Some(error);
                         cx.notify();
                     }
                     Event::Approval(approval) => {
@@ -881,6 +890,9 @@ impl ConduitApp {
                 }
             }
         }
+        if let Some((path, error)) = cleanup_notice {
+            self.git_feedback(path, error, true, cx);
+        }
         if let Some(error) = generation_result {
             let generation = self.git.generation.take().unwrap();
             let text = generation
@@ -890,7 +902,9 @@ impl ConduitApp {
                 .collect::<Vec<_>>()
                 .join("\n\n");
             let text = normalize_commit_message(&text);
-            if error.as_deref() == Some("已取消生成。") {
+            if generation.cleanup_error.is_some() {
+                // Already delivered through the notification center when cleanup blocked.
+            } else if error.as_deref() == Some("已取消生成。") {
                 self.git_feedback(generation.path, "已取消生成，草稿未修改。", false, cx);
             } else if let Some(error) = error {
                 self.git_result_feedback(
@@ -1269,12 +1283,7 @@ impl ConduitApp {
                         ),
                     ),
             );
-        let feedback = self
-            .git
-            .feedback
-            .get(&path)
-            .filter(|feedback| feedback.error);
-        if feedback.is_some() || self.git.pending_tag_retry.contains_key(&path) {
+        if self.git.pending_tag_retry.contains_key(&path) {
             let mut row = h_flex()
                 .w_full()
                 .min_w_0()
@@ -1282,21 +1291,6 @@ impl ConduitApp {
                 .flex_shrink_0()
                 .gap_1()
                 .items_center();
-            if let Some(feedback) = feedback {
-                row = row.child(
-                    div()
-                        .id("git-action-feedback")
-                        .debug_selector(|| "git-action-feedback".into())
-                        .flex_1()
-                        .min_w_0()
-                        .h(px(24.))
-                        .overflow_y_scroll()
-                        .text_size(ui_text_size(11.))
-                        .line_height(relative(1.4))
-                        .text_color(rgb(palette().error_text))
-                        .child(feedback.text.clone()),
-                );
-            }
             if let Some(retry) = self.git.pending_tag_retry.get(&path) {
                 let retry_app = view.clone();
                 let tooltip = format!(
@@ -1447,8 +1441,15 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) {
         let Some(workspace) = self.selected_workspace_path() else {
-            self.message = Some("请先选择工作区再查看差异".into());
-            cx.notify();
+            self.notify_user(
+                Notice::new(
+                    NoticeSource::Git,
+                    NoticeLevel::Warning,
+                    "无法查看差异",
+                    "请先选择工作区再查看差异",
+                ),
+                cx,
+            );
             return;
         };
         self.open_diff_document(workspace, file, window, cx);

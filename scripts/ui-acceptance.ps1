@@ -2,7 +2,7 @@
 # Chinese seed strings in the system ANSI code page and fails to parse the script.
 <#
 .SYNOPSIS
-  Repeatable UI acceptance harness for the Conduit Chat M0 prototype.
+  Repeatable UI acceptance harness for the Conduit desktop application.
 
 .DESCRIPTION
   Actions:
@@ -15,7 +15,7 @@
              a UIA snapshot for review.
 
   This harness only produces evidence for manual acceptance; it does not replace
-  the human acceptance sign-off in docs/m0-validation.md.
+  the human acceptance sign-off in docs/testing.md.
 
 .EXAMPLE
   # Seed an isolated data directory, then capture the Chat view.

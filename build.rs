@@ -3,6 +3,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CONDUIT_UPDATE_PUBLIC_KEY");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=assets/app-icons/icon.ico");
+    println!("cargo:rerun-if-changed=assets/conduit-updater.manifest");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         embed_windows_resources();
     }
@@ -62,4 +63,16 @@ END
     embed_resource::compile_for(resource, ["conduit"], embed_resource::NONE)
         .manifest_required()
         .expect("compile Conduit icon and version resources");
+
+    // Explicitly declare the per-user helper's execution level so Windows
+    // does not need to infer it. The helper only updates HKCU and the user's
+    // installation, so it must retain the caller's privileges.
+    let manifest = root.join("assets/conduit-updater.manifest");
+    let manifest = manifest.to_string_lossy().replace('\\', "/");
+    let resource = output.join("conduit-updater.rc");
+    std::fs::write(&resource, format!(r#"1 24 "{manifest}""#))
+        .expect("write updater manifest resource");
+    embed_resource::compile_for(resource, ["conduit-updater"], embed_resource::NONE)
+        .manifest_required()
+        .expect("compile updater execution-level manifest");
 }

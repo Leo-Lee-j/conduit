@@ -489,41 +489,6 @@ impl GitLogView {
                 );
             }
         }
-        let mut feedback_panel = v_flex()
-            .id("git-branch-status")
-            .max_h(px(110.))
-            .overflow_y_scroll()
-            .flex_shrink_0();
-        if let Some(app) = self.app.upgrade() {
-            let app = app.read(cx);
-            if let Some(feedback) = self
-                .workspace
-                .as_ref()
-                .and_then(|p| app.git.feedback.get(p))
-            {
-                feedback_panel = feedback_panel.child(
-                    div()
-                        .id("git-branch-feedback")
-                        .p_2()
-                        .text_size(ui_text_size(11.))
-                        .text_color(rgb(if feedback.error {
-                            palette().danger_text
-                        } else {
-                            palette().muted
-                        }))
-                        .child(feedback.text.clone()),
-                );
-            }
-            if let Some(message) = &app.message {
-                feedback_panel = feedback_panel.child(
-                    div()
-                        .p_2()
-                        .text_size(ui_text_size(11.))
-                        .text_color(rgb(palette().danger_text))
-                        .child(message.clone()),
-                );
-            }
-        }
         let integration = self
             .app
             .upgrade()
@@ -567,7 +532,6 @@ impl GitLogView {
             )
             .children(integration)
             .child(list)
-            .child(feedback_panel)
             .children(host.side_form(cx))
             .into_any_element()
     }

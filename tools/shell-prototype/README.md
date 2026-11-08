@@ -1,53 +1,6 @@
 # Conduit GPUI Shell 验证原型
 
-2026-11-07 G5 连续 CPU 环境记录：新增 `windows_cpu_trace.py`，记录系统、探针和观察进程的 CPU 时间及实际采样间隔。40 进程校准/对照和使用边界见[本轮报告](../../docs/plugins/p2-load-trace-2026-11-07.md)；当前只用于诊断，不用于判定性能预算。
-
-2026-11-07 G5 状态区缓存：逐帧读取原生状态，独立复用状态区元素；原始 60 进程对照见[原报告](../../docs/plugins/p2-status-cache-2026-11-07.md)。[复核报告](../../docs/plugins/p2-status-cache-review-2026-11-07.md)已修正执行顺序与中位数口径，并补充 56 进程平衡对照和三项边界回归；结果仍有明显波动，生产准入保持未评估。
-
-2026-11-07 G5 宿主归因：独立缓存右侧标签栏，保留脚本内容刷新边界；活动/混合场景编辑p95三轮配对均下降，通知预算通过，编辑预算仍未通过。分项校准、注册句柄回归与42进程矩阵见 [本轮报告](../../docs/plugins/p2-host-profile-2026-11-07.md)。
-
-2026-11-07 G5 内存归因：新增显式 `allocation-probe` 测试特性，固定记录并投递完整测试帧；原探针JSON记录和下一帧回调积压分别得到验证，1,000轮复测见 [本轮报告](../../docs/plugins/p2-native-memory-2026-11-07.md)。生产准入仍未通过。
-
-2026-11-07 G5 插件缓存：缓存静态ScriptView并补齐独立根尺寸，宿主重绘及命令后额外draw的重复物化归零；中文输入、主题、窄窗与生命周期验证通过。完整矩阵与release交替A/B见 [本轮报告](../../docs/plugins/p2-plugin-cache-2026-11-07.md)，G5生产准入仍未通过。
-
-2026-11-07 G5 聊天缓存：增加 `ChatTimeline` 状态失效与 `ShellRoot::with_uncached_content()` 宿主入口，避免输入时重复布局/绘制长聊天。release 单字符 p95 从 15.81/16.89/19.01ms 降到 2.84/3.12/4.48ms；54 个正式测量进程通过，active/mixed 增量仍超参考预算，G5 未通过。探针 schema 2 使用绘制校准和 dev/release 均可用的可见性观测，见 [本轮报告](../../docs/plugins/p2-chat-cache-2026-11-07.md)。
-
-2026-11-06 G5 输入分项：新增 `--phase chat-profile`，拆开 Ctrl+A、14 字符输入和实际绘制，记录聊天行与 Markdown 元素阶段成本；同时修复 Windows CRLF 补丁重建、原型锁文件版本及关闭设置后插件输入焦点恢复。dev/release 共 66 个测量进程、3 项资源探针通过，release 长会话整段编辑仍超参考预算。实测与边界见 [本轮记录](../../docs/plugins/p2-chat-profile-2026-11-06.md)。
-
-2026-11-06 G5 重跑：固定源码与工具链下，dev / release 共 36 个 stress、12 个 diagnostics、18 个 breakdown 进程及 3 项资源探针通过；常规桌面回归各 48 项、Python 23 项通过。本轮证据独立保存在 `artifacts/g5-rerun-20261106T194814/`，原 3,216 个非二进制证据哈希未变。普通路径超时未复现，但长会话仍超参考预算，见 [重跑记录](../../docs/plugins/p2-g5-rerun-2026-11-06.md)。
-
-2026-11-06 G5 diagnostics：`verify-desktop.py --phase diagnostics --profile dev|release --samples 60 --warmup 10 --repeats 3` 对照 `explicit-draw` / `effects-only`，记录命令阶段、实际测试根绘制与运行时计数。失败保留 JSONL 和首次故障详情，整轮不发布成功汇总；唯一目录 `artifacts/desktop-diagnostics/<run>/run-results.json` 留存每轮结果。生产代码已修复成功结果收尾的冗余通知；普通路径截止时间故障仍待定位，见 [本轮记录](../../docs/plugins/p2-command-diagnostics-2026-11-06.md)。
-
-2026-11-06 G5 breakdown 后续：`verify-desktop.py --phase breakdown --profile dev|release --samples 60 --warmup 10 --repeats 3` 测量 host / registered / plugin 三场景，单列同步分发、更新副作用、结果收尾和显式绘制。输出 `desktop-breakdown-{profile}-results.json` 及独立原始目录，保留 performance/stress 证据。同工具链对照、计时边界、一次未定位的 dev 截止时间故障和复测结果见 [分项测量记录](../../docs/plugins/p2-breakdown-probe-2026-11-06.md)。
-
-2026-11-06 G5 stress 后续：`verify-desktop.py --phase stress --profile dev|release --samples 60 --warmup 10 --repeats 3 --cycles 20` 增加固定长会话、20 个注册包、3 个活动 VM、故障隔离和启停/空闲内存曲线。dev / release 各完成 18 个采样进程与 45 项常规回归。stress 结果独立保存，不覆盖 performance 六场景报告；长会话仍有预算超出，负载、校验与实测见 [stress 记录](../../docs/plugins/p2-stress-probe-2026-11-06.md)。
-
-2026-11-06 回归后续：`verify-desktop.py --phase test --profile release` 已支持普通 release 常规测试，插件定位改为组件 ID / 原生语义，原先 18 项失败全部解决；dev / release 各 45 项通过。`--profile` 同样适用于 check / build，日志、数据目录和报告按 profile 分开，空测试组或检查期间源码变化会使验证失败。详见 [release 回归记录](../../docs/plugins/p2-release-ui-regression-2026-11-06.md)。
-
-2026-11-06 G5 后续：`verify-desktop.py --phase performance` 在六种插件状态下启动独立测试进程，测量宿主编辑 / 绘制、插件命令及进程内存；dev / release 均已采样并保存原始数据、二进制和源码摘要。支持 `--samples 200 --warmup 20 --repeats 3`、`--profile release` 和 `--target-dir`，默认使用 dev 构建。测试平台没有原生 GPU 呈现；性能探针使用实际视图状态校验，历史数据仅对应各自源码快照。详见 [G5 进度与边界](../../docs/plugins/p2-performance-probe-2026-11-06.md)。
-
-2026-11-05 G4 后续：开发夹具的摘要、dialog、sheet 新增原生输入框，显示输入值和当前主题。桌面回归覆盖组合输入接口、粘贴、主题、Tab / Esc、设置页返回与窄窗状态保留；真实 Windows IME 尚未验收，详见 [G4 进度](../../docs/plugins/p2-input-focus-2026-11-05.md)。
-
-2026-11-05 G6 后续：增加运行时浮层所有权补丁，停止时撤销 dialog / sheet / toast / HUD / tooltip，保留其他 owner，修复焦点恢复。桌面停用、关闭与更新准备支持同步清理，详见 [G6 实现及验证](../../docs/plugins/p2-overlay-cleanup-2026-11-05.md)。真实 IME、完整浮层交互、生产性能和未来插件存储写入屏障继续验收。
-
-2026-11-05 桌面接入：新增 `conduit-shell-desktop` 验证入口，直接编译真实 ConduitApp，
-将开发插件接到现有导航、右侧和底栏，读取受权限限制的真实工作区摘要。构建和验收边界见
-[真实桌面开发接入](../../docs/plugins/p2-desktop-integration-2026-11-05.md)。正式发布仍不启用 Shell。
-
-2026-11-05 G3 后续：已增加定向 `on_command`、弱视图句柄、有界异步结果和统一停止回归。
-清单驱动的开发加载器也已接入 P1 Registry、ViewInstanceKey 和 RequestTicket；当前完整测试结果见
-[P2-A 开发加载适配器进度](../../docs/plugins/p2-development-loader-2026-11-05.md)。
-开发加载器当轮常规测试 61 项通过，6 项有意故障探针分别执行通过；最新结果见 G6 记录，以下初版和 G2/G5 数字保留历史含义。
-
-2026-11-05 后续：原型已增加按插件 Policy 加载和有限额解释器的候选补丁，13 项常规测试与
-4 项独立故障测试通过；默认 dev 链接、release 类型检查、Fast 全目标类型检查和 Windows
-窗口冒烟验证通过。详细结果及生产验收边界见
-[G2 / G5 记录](../../docs/plugins/p2-host-controls-2026-11-05.md)，可重建补丁见
-[patches](patches/README.md)。下方“本轮实测”数字为初版上游基线，后续验证单独记录。
-
-本工程用于验证 [Shell 设计](../../docs/plugins/phase-2-shell-runtime.md)的公开 API 接入路径，使用与 Conduit 相同的 GPUI Kit 提交 `11345ec002d9f182a266b5d5dd3a217090700a87`。它使用独立 Cargo workspace / lockfile；默认 member 运行原型，`desktop` member 编译真实桌面源码，正式应用 manifest 不引入 Shell 候选依赖。
-
-默认无参数模式只加载工程内的 G3 JS 夹具，使用合成工作区 A / B。开发模式可以接收用户明确指定的本地插件目录，先建立会话内快照并要求逐项批准业务权限；不会读取聊天 Store、CLI 配置、凭据或真实会话，也不会持久化信任。它不是完整安装器或生产多插件宿主。
+本工程用于验证原生贡献与受控 Shell 开发接入，不启用正式应用的第三方插件安装。架构和当前状态见[插件文档](../../docs/plugins/README.md)，清单/授权见[开发运行时](../../docs/plugins/runtime.md)，准入和未完成项见[验证清单](../../docs/plugins/validation.md)。本页集中维护可运行命令。
 
 ## 运行
 
@@ -75,7 +28,7 @@ cargo run --locked --manifest-path tools/shell-prototype/Cargo.toml --target-dir
 ```
 
 开发窗口初始不创建 VM；点击声明的 view 或底部 status command 才激活对应 owner。快照、路径和权限边界见
-[开发加载适配器进度](../../docs/plugins/p2-development-loader-2026-11-05.md)。
+[开发运行时](../../docs/plugins/runtime.md)。
 
 左侧 W 图标与中间内容底栏都可以首次激活脚本。左侧脚本可以打开右侧摘要、延迟更新底栏；右侧有独立计数器。顶部切换合成工作区、停用、触发 / 恢复渲染异常、切换宿主只读状态。内容区可以打开组件弹窗和 Shell 弹窗。850px 窗口下右侧覆盖内容，1200px 下独立布局；这仅是宿主布局接缝验证，不替代 Conduit 现有布局回归。
 
@@ -131,13 +84,9 @@ python tools/shell-prototype/verify.py --phase development-fault
 
 它们先完成测试编译，再在独立测试进程中执行无限 render 和有上限的资源故障探针，测量中断、停止与恢复。runner 的 120 秒外部超时用于停止本次测试及其子进程，不是插件运行时保护。堆探针使用 32 MiB VM 限额和最多 128 MiB 的脚本申请，故障测试默认忽略。
 
-`release-check` 只证明 release 配置类型检查，不代表已链接 release 可执行文件或通过真实 GPU 性能测试；`fast-check` 同理。当前实测状态见[原型验证记录](../../docs/plugins/shell-prototype-validation.md)。
+`release-check` 只证明 release 配置类型检查，不代表已链接 release 可执行文件或通过真实 GPU 性能测试；`fast-check` 同理。准入状态见[验证清单](../../docs/plugins/validation.md)。
 
-## 初版实测与 Windows 冒烟
-
-2026-11-05：默认 dev 编译 / 链接、release 类型检查、Clippy 通过；常规测试 12 项通过，独立 watchdog 测试 1 项通过。真实 Windows 窗口已启动、底栏激活后显示左右视图，并以退出码 0 关闭。
-
-**未打补丁的初版 Fast 检查失败**：固定上游 `gpui-base` 三处无参数 `Modifiers::secondary()` 调用与 `gpui-fast 0.1.11` 的 `secondary(&App)` 不兼容。这些初版缺口已由后续候选补丁推进：Fast 全目标类型检查通过，Policy 注入与有限额解释器的验证结果见 [本轮进度](../../docs/plugins/p2-host-controls-2026-11-05.md)。
+## Windows 窗口冒烟
 
 构建后可重现 Windows 窗口检查：
 
@@ -148,7 +97,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/shell-prototype/smoke-
 
 脚本会短暂显示本次启动的原型窗口，向该窗口底栏发送激活和定向命令点击并关闭它，保存启动 / 激活 / 命令结果截图与 `native-smoke.json` 到 `artifacts/`。截图需视觉核对；脚本不操作其他应用的窗口，也不代表 GPU 性能验收。
 
-`-Development` 使用 `development-overview` 包，检查清单加载、左侧 view、底栏 command 和停止，输出 `development-native-*` 截图和结果。2026-11-05 已视觉核对：左侧摘要显示 3 个会话，右侧命令计数为 1，停止后两侧清空，关闭退出码为 0。CLI 静态检查成功，缺少批准权限时在窗口创建前退出。
+`-Development` 使用 `development-overview` 包，检查清单加载、左侧 view、底栏 command 和停止，输出 `development-native-*` 截图和结果。
+
+## 性能与诊断
+
+以下阶段显式运行，默认 dev，可通过 `--profile release` 切换；不属于普通回归。
+
+```powershell
+python tools/shell-prototype/verify-desktop.py --phase performance --profile release --samples 200 --warmup 20 --repeats 3
+python tools/shell-prototype/verify-desktop.py --phase stress --profile release --cycles 20
+python tools/shell-prototype/verify-desktop.py --phase breakdown --profile release
+python tools/shell-prototype/verify-desktop.py --phase diagnostics --profile release
+python tools/shell-prototype/verify-desktop.py --phase chat-profile --profile release
+```
+
+`--target-dir` 可隔离构建输出。每次报告核对源码和可执行文件身份，原始数据与日志保留在新 artifacts 目录；这些 CPU/测试帧结果不能代替真实 GPU、IME 或滚动验收。
+
+原生内存和宿主分项另有显式忽略的测试探针：[native_memory.rs](../../src/app/plugin_ui/plugin_shell/tests/native_memory.rs)、[host_profile.rs](../../src/app/plugin_ui/plugin_shell/tests/host_profile.rs)。它们需要生成的插件包、隔离数据和输出路径，不是 `verify-desktop.py --phase` 选项。内存归因构建启用 `allocation-probe`；测试过滤器和环境参数以相应源码为准，不复制旧 artifacts 中的机器绝对路径。
+
+[windows_cpu_trace.py](windows_cpu_trace.py)提供 runner 可调用的 Windows CPU 采样，保留实际间隔、系统/探针/观察进程累计值及覆盖率；采样关闭对照用于校准开销。它只清理本次直接子进程，需要完整进程树清理的测试仍使用原 runner。统计规则和未完成项见[验证与准入](../../docs/plugins/validation.md)。
 
 ## 公共 API 验证范围
 
@@ -164,7 +131,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/shell-prototype/smoke-
 
 锁定的上游 workspace 使用 `rquickjs-compat` 门面让 Shell 与 LLRT 共享 QuickJS 类型。依赖 workspace 的 patch 不会被当前根工程继承，因此本工程显式使用同一提交的 `[patch.crates-io] rquickjs`。默认关闭 Shell 的 WebView feature，GPUI Fast 开关同时转发给 Kit 和 Shell。
 
-首次自由解析时，`rsa 0.10.0-rc.19` / `pkcs1 0.8.0` 导致固定 LLRT 的 `llrt_crypto` 出现六处 E0282 / E0284。原型锁回上游 lock 使用的 `rsa 0.10.0-rc.18` / `pkcs1 0.8.0-rc.4` 后继续验证；请使用已提交的 Cargo.lock 和 `--locked`。本工程不修改 Cargo 缓存中的任何源码。
+使用已提交的 Cargo.lock 和 `--locked`，其中包含与固定 LLRT 兼容的依赖解析；不要自由升级预发布依赖或修改 Cargo 缓存源码。
 
 ## 文件
 

@@ -3,6 +3,21 @@ use conduit::update::{self as service, Event as UpdateEvent, Release, Task, inst
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc;
 
+// Signed timestamps are RFC 3339 (UTC in release-manifest). Show local wall
+// time consistently, retaining compatibility with older date-only releases.
+fn format_release_time(value: &str) -> String {
+    if let Ok(timestamp) = chrono::DateTime::parse_from_rfc3339(value) {
+        timestamp
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string()
+    } else if let Ok(date) = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+        date.format("%Y-%m-%d 00:00:00").to_string()
+    } else {
+        "未知时间".into()
+    }
+}
+
 #[derive(Debug, Default, PartialEq)]
 pub(super) enum Phase {
     #[default]
@@ -502,7 +517,8 @@ impl ConduitApp {
             content = content
                 .child(div().font_semibold().child(format!(
                     "版本 {} · {}",
-                    release.manifest.version, release.manifest.published_at
+                    release.manifest.version,
+                    format_release_time(&release.manifest.published_at)
                 )))
                 .child(
                     div()
@@ -720,6 +736,30 @@ mod tests {
     use conduit::update::{Release, manifest::Manifest};
     use gpui_kit::component::WindowExt;
     use gpui_kit::{AppContext as _, TestAppContext, px, size};
+
+    #[test]
+    fn release_time_uses_local_seconds_and_handles_legacy_dates() {
+        use chrono::TimeZone as _;
+        // Use a fixed local instant so this test also works outside UTC+8.
+        let local = chrono::Local
+            .with_ymd_and_hms(2026, 11, 8, 9, 5, 7)
+            .single()
+            .unwrap();
+        let utc = local.with_timezone(&chrono::Utc).to_rfc3339();
+        assert_eq!(super::format_release_time(&utc), "2026-11-08 09:05:07");
+        let offset = chrono::FixedOffset::west_opt(5 * 3600).unwrap();
+        assert_eq!(
+            super::format_release_time(&local.with_timezone(&offset).to_rfc3339()),
+            "2026-11-08 09:05:07"
+        );
+        assert_eq!(
+            super::format_release_time("2026-11-08"),
+            "2026-11-08 00:00:00"
+        );
+        for invalid in ["", "invalid", "2026-02-30"] {
+            assert_eq!(super::format_release_time(invalid), "未知时间");
+        }
+    }
 
     #[gpui_kit::test]
     fn terminal_runtime_blocks_auto_install(cx: &mut TestAppContext) {

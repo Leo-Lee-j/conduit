@@ -79,13 +79,14 @@ impl Drop for Task {
     }
 }
 
-fn agent() -> ureq::Agent {
+fn agent(timeout: Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
         .https_only(true)
         .max_redirects(0)
         .timeout_connect(Some(Duration::from_secs(15)))
+        .timeout_recv_response(Some(Duration::from_secs(15)))
         .timeout_recv_body(Some(Duration::from_secs(30)))
-        .timeout_global(Some(Duration::from_secs(30 * 60)))
+        .timeout_global(Some(timeout))
         .build()
         .into()
 }
@@ -121,7 +122,14 @@ fn get(agent: &ureq::Agent, address: &str) -> Result<ureq::http::Response<ureq::
         let response = agent
             .get(url.as_str())
             .header("User-Agent", concat!("Conduit/", env!("CARGO_PKG_VERSION")))
-            .header("Accept", "application/vnd.github+json")
+            .header(
+                "Accept",
+                if url.host_str() == Some("api.github.com") {
+                    "application/vnd.github+json"
+                } else {
+                    "application/octet-stream"
+                },
+            )
             .call()
             .context("无法访问更新服务，请检查网络或稍后重试")?;
         if response.status().is_redirection() {
@@ -138,15 +146,62 @@ fn get(agent: &ureq::Agent, address: &str) -> Result<ureq::http::Response<ureq::
     bail!("更新下载重定向次数过多")
 }
 
+// Retry only transient failures, never malformed data, TLS verification or
+// allowlist/signature failures. Bounded backoff avoids amplifying outages.
+fn transient(error: &anyhow::Error) -> bool {
+    if let Some(error) = error.downcast_ref::<ureq::Error>() {
+        return matches!(
+            error,
+            ureq::Error::StatusCode(408 | 429 | 500..=599)
+                | ureq::Error::Io(_)
+                | ureq::Error::Timeout(_)
+                | ureq::Error::HostNotFound
+                | ureq::Error::ConnectionFailed
+                | ureq::Error::BodyStalled
+        );
+    }
+    error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::TimedOut
+                | std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::Interrupted
+                | std::io::ErrorKind::WouldBlock
+        )
+    })
+}
+
+fn retry_metadata<T>(
+    mut request: impl FnMut() -> Result<T>,
+    mut sleep: impl FnMut(Duration),
+) -> Result<T> {
+    for attempt in 0..3 {
+        match request() {
+            Err(error) if attempt < 2 && transient(&error) => {
+                sleep(Duration::from_millis(500 << attempt));
+            }
+            result => return result,
+        }
+    }
+    unreachable!()
+}
+
 fn metadata(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    get(agent, url)?
-        .body_mut()
-        .as_reader()
-        .take(MAX_METADATA + 1)
-        .read_to_end(&mut bytes)?;
-    anyhow::ensure!(bytes.len() as u64 <= MAX_METADATA, "更新信息超出大小限制");
-    Ok(bytes)
+    retry_metadata(
+        || {
+            let mut bytes = Vec::new();
+            get(agent, url)?
+                .body_mut()
+                .as_reader()
+                .take(MAX_METADATA + 1)
+                .read_to_end(&mut bytes)?;
+            anyhow::ensure!(bytes.len() as u64 <= MAX_METADATA, "更新信息超出大小限制");
+            Ok(bytes)
+        },
+        thread::sleep,
+    )
 }
 
 pub fn installed_release(data_dir: &Path) -> Result<Release> {
@@ -225,9 +280,25 @@ fn check_release() -> Result<Option<Release>> {
         !PUBLIC_KEY.is_empty(),
         "此构建未配置更新公钥，请安装正式发布版本"
     );
-    let client = agent();
+    let client = agent(Duration::from_secs(45));
+    check_release_with(
+        |url| metadata(&client, url),
+        PUBLIC_KEY,
+        env!("CARGO_PKG_VERSION"),
+    )
+}
+
+fn check_release_with(
+    mut fetch: impl FnMut(&str) -> Result<Vec<u8>>,
+    public_key: &str,
+    current_version: &str,
+) -> Result<Option<Release>> {
+    anyhow::ensure!(
+        !public_key.is_empty(),
+        "此构建未配置更新公钥，请安装正式发布版本"
+    );
     let address = format!("https://api.github.com/repos/{REPOSITORY}/releases/latest");
-    let data = match metadata(&client, &address) {
+    let data = match fetch(&address) {
         Ok(data) => data,
         Err(error)
             if matches!(
@@ -237,6 +308,20 @@ fn check_release() -> Result<Option<Release>> {
         {
             return Ok(None);
         }
+        // Anonymous API access may be rate limited independently of GitHub's
+        // release downloads. Only service/transport errors use this fallback;
+        // invalid API data and security errors must still fail closed.
+        Err(error)
+            if transient(&error)
+                || matches!(
+                    error.downcast_ref::<ureq::Error>(),
+                    Some(ureq::Error::StatusCode(403))
+                ) =>
+        {
+            return check_signed_latest(&mut fetch, public_key, current_version).with_context(
+                || format!("GitHub API 不可用（{error:#}），官方更新清单回退也失败"),
+            );
+        }
         Err(error) => return Err(error),
     };
     let release: GithubRelease = serde_json::from_slice(&data)?;
@@ -244,7 +329,7 @@ fn check_release() -> Result<Option<Release>> {
         return Ok(None);
     }
     let version = semver::Version::parse(release.tag_name.trim_start_matches('v'))?;
-    if version <= semver::Version::parse(env!("CARGO_PKG_VERSION"))? {
+    if version <= semver::Version::parse(current_version)? {
         return Ok(None);
     }
     let asset = |name: &str| -> Result<&str> {
@@ -255,9 +340,9 @@ fn check_release() -> Result<Option<Release>> {
             .map(|asset| asset.browser_download_url.as_str())
             .context("发布缺少更新清单或签名")
     };
-    let raw = metadata(&client, asset("update.json")?)?;
-    let signature = String::from_utf8(metadata(&client, asset("update.json.sig")?)?)?;
-    let manifest = verify_manifest(&raw, &signature, PUBLIC_KEY)?;
+    let raw = fetch(asset("update.json")?)?;
+    let signature = String::from_utf8(fetch(asset("update.json.sig")?)?)?;
+    let manifest = verify_manifest(&raw, &signature, public_key)?;
     anyhow::ensure!(
         manifest.version == version.to_string(),
         "更新版本与 GitHub 标签不一致"
@@ -269,6 +354,36 @@ fn check_release() -> Result<Option<Release>> {
             .any(|a| a.name == manifest.filename && a.browser_download_url == manifest.url),
         "发布缺少清单指定的安装包"
     );
+    Ok(Some(Release {
+        manifest,
+        raw,
+        signature,
+    }))
+}
+
+/// Fixed official endpoint; the signed manifest still restricts package host,
+/// repository, target, version and hash, even without the GitHub API listing.
+fn check_signed_latest(
+    fetch: &mut impl FnMut(&str) -> Result<Vec<u8>>,
+    public_key: &str,
+    current_version: &str,
+) -> Result<Option<Release>> {
+    let base = format!("https://github.com/{REPOSITORY}/releases/latest/download");
+    let raw = fetch(&format!("{base}/update.json"))?;
+    // Pin the signature to this manifest's version: Latest can change between
+    // requests. Validate the untrusted fields before using them in a URL, then
+    // authenticate the original bytes before making any update decision.
+    let candidate: Manifest = serde_json::from_slice(&raw)?;
+    candidate.validate()?;
+    let signature_url = format!(
+        "https://github.com/{REPOSITORY}/releases/download/v{}/update.json.sig",
+        candidate.version
+    );
+    let signature = String::from_utf8(fetch(&signature_url)?)?;
+    let manifest = verify_manifest(&raw, &signature, public_key)?;
+    if semver::Version::parse(&manifest.version)? <= semver::Version::parse(current_version)? {
+        return Ok(None);
+    }
     Ok(Some(Release {
         manifest,
         raw,
@@ -313,7 +428,7 @@ fn download_release(
     ensure_disk_space(cache, manifest.size + 32 * 1024 * 1024)?;
     let partial = cache.join(format!("{}.{}.part", manifest.filename, std::process::id()));
     let result = (|| {
-        let mut response = get(&agent(), &manifest.url)?;
+        let mut response = get(&agent(Duration::from_secs(30 * 60)), &manifest.url)?;
         let mut output = File::create(&partial)?;
         let mut input = response.body_mut().as_reader();
         let mut buf = [0_u8; 64 * 1024];
@@ -351,26 +466,4 @@ fn download_release(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn download_addresses_reject_untrusted_hosts_and_transport() {
-        for address in [
-            "http://github.com/x",
-            "https://github.com.evil.test/x",
-            "https://user@github.com/x",
-            "https://github.com:444/x",
-            "file:///x",
-        ] {
-            assert!(allowed_url(address).is_err(), "{address}");
-        }
-        assert!(
-            allowed_url("https://release-assets.githubusercontent.com/test?token=test").is_ok()
-        );
-    }
-    #[test]
-    fn preferences_are_backward_compatible() {
-        let p: Preferences = serde_json::from_str("{}").unwrap();
-        assert!(p.auto_check && p.auto_download && !p.auto_install);
-    }
-}
+mod tests;

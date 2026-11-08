@@ -1,5 +1,5 @@
 //! Git view and operation state have one owner and explicit dependencies.
-use super::state::{CommitDraft, CommitGeneration, GitFeedback, GitOperation};
+use super::state::{CommitDraft, CommitGeneration, GitOperation};
 use crate::git::{self, BranchProbe, GitProbe};
 use std::{
     collections::{HashMap, HashSet},
@@ -19,7 +19,6 @@ pub(super) struct GitUi {
     pub(super) drafts: HashMap<PathBuf, CommitDraft>,
     pub(super) generation: Option<CommitGeneration>,
     pub(super) operation: Option<GitOperation>,
-    pub(super) feedback: HashMap<PathBuf, GitFeedback>,
     pub(super) local_tags: HashMap<PathBuf, Vec<String>>,
     pub(super) remote_tags_checked: HashSet<PathBuf>,
     pub(super) remote_tags_probe: Option<git::RemoteTagsProbe>,
@@ -43,7 +42,6 @@ impl Default for GitUi {
             drafts: HashMap::new(),
             generation: None,
             operation: None,
-            feedback: HashMap::new(),
             local_tags: HashMap::new(),
             remote_tags_checked: HashSet::new(),
             remote_tags_probe: None,

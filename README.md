@@ -12,7 +12,8 @@ Windows 原生 AI 编程工作台，将 Claude Code、Codex 和 OpenCode 的对�
 - **会话导航**：工作区内按最近活动排列会话，运行中的会话优先；标签支持横向滚动与全部标签菜单，切换会话、关闭标签或调整窗口宽度时自动显示当前标签。
 - **消息排队**：回复过程中按 Enter 排队一条消息；输入框上方显示迷你气泡，支持取回编辑与移除，暂停时可手动发送。
 - **阅读体验**：Markdown、Mermaid 图表、主题与字体设置。
-- **应用更新**：后台下载、更新日志，以及安装并重启。
+- **集成终端**：按工作区管理 Shell 标签、输入与输出，支持 PowerShell、cmd 和终端程序。
+- **通知与更新**：统一操作通知与历史、后台下载、更新日志，以及安装并重启。
 
 ## 安装与使用
 
@@ -39,8 +40,9 @@ cargo run --locked
 ## 文档与反馈
 
 - [使用指南](docs/usage.md)
-- [自动发布与更新](docs/auto-update.md)
-- [技术设计](docs/technical-design.md)
+- [发布与更新](docs/releasing.md)
+- [架构与开发](docs/architecture.md)
+- [测试与验收](docs/testing.md)
 - [完整文档](docs/README.md)
 
 欢迎通过 [Issues](https://github.com/Leo-Lee-j/conduit/issues) 反馈问题，或提交 Pull Request。

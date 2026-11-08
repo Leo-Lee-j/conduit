@@ -1,4 +1,5 @@
 use super::{ChatItem, ChatTypography, file_ref, tool_content};
+use crate::app::{NoticeLevel, NoticeSource};
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, Render, ScrollDelta, ScrollHandle,
     ScrollWheelEvent, StatefulInteractiveElement, Styled, TestAppContext, Window,
@@ -1415,14 +1416,14 @@ fn git_branch_mouse_actions_checkout_create_and_track_real_repository(cx: &mut T
         cx.update(|_, cx| {
             let app = app.read(cx);
             assert!(
-                app.git.feedback.values().all(|feedback| !feedback.error),
-                "{}",
-                app.git
-                    .feedback
-                    .values()
-                    .map(|feedback| feedback.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n")
+                app.notifications
+                    .center
+                    .records()
+                    .iter()
+                    .find(|notice| notice.source == NoticeSource::Git)
+                    .is_none_or(|notice| notice.level != NoticeLevel::Error),
+                "{:?}",
+                app.notifications.center.records()
             );
         });
     }
@@ -5144,16 +5145,22 @@ fn commit_generation_recovers_from_transient_errors_and_preserves_edited_drafts(
             let path = this.selected_workspace_path().unwrap();
             assert!(this.git.generation.is_none());
             let text = this.git.drafts[&path].input.read(cx).value().to_string();
-            let feedback = &this.git.feedback[&path];
+            let feedback = this
+                .notifications
+                .center
+                .records()
+                .iter()
+                .find(|notice| notice.source == NoticeSource::Git)
+                .unwrap();
             if edited {
                 assert_eq!(text, "manual message");
-                assert!(feedback.text.contains("未覆盖"));
+                assert!(feedback.message.contains("未覆盖"));
             } else if reply.is_empty() {
-                assert!(feedback.error);
-                assert!(feedback.text.contains("401"));
+                assert_eq!(feedback.level, NoticeLevel::Error);
+                assert!(feedback.message.contains("401"));
             } else {
                 assert_eq!(text, "feat: staged changes\n\nDetailed body");
-                assert!(!feedback.error);
+                assert_eq!(feedback.level, NoticeLevel::Success);
             }
         });
     }

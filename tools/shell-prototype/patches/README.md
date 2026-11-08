@@ -38,25 +38,23 @@ python tools/shell-prototype/verify.py --phase fast-check
 Python 需要支持 `tomllib` 与 tar 的 `data` 提取过滤器。
 
 所有补丁应用使用 LF，不依赖机器的 `core.autocrlf` 设置。Windows CRLF 检出由 runner 在 stdin 输入时规范化，原始补丁文件及哈希保持不变。runner 在结果 JSON 中记录精确
-提交、补丁系列 SHA-256、生成源码 SHA-256 和 lockfile SHA-256；本轮已在全新目录重建并
-比对源码哈希一致。Fast 兼容分支通过 feature 条件编译保留默认 GPUI API；Fast 类型检查
-仍显示上游 ScrollWheelEvent / on_scroll_wheel 的弃用警告，不将其描述为零警告构建。
+提交、补丁系列 SHA-256、生成源码 SHA-256 和 lockfile SHA-256。验证补丁可复现性时，应在全新目录重建并比对源码哈希。Fast 兼容分支通过 feature 条件编译保留默认 GPUI API；类型检查结果及警告以本次运行输出为准。
 
 补丁公开的宿主入口：
 
-- `ShellRoot::with_uncached_content()`：Conduit Shell 入口与桌面夹具启用，避免整个宿主缓存重建时强制刷新聊天等后代缓存；默认脚本窗口仍缓存整个内容。实际收益、失效条件和回归见 [聊天缓存报告](../../../docs/plugins/p2-chat-cache-2026-11-07.md)。
+- `ShellRoot::with_uncached_content()`：Conduit Shell 入口与桌面夹具启用，避免整个宿主缓存重建时强制刷新聊天等后代缓存；默认脚本窗口仍缓存整个内容。实际收益、失效条件和回归见 [聊天缓存边界与验证](../../../docs/plugins/validation.md)。
 
 - `PluginManager::load_with_policy`：发现、检查重复 ID 后，由宿主返回批准的 Policy；错误拒绝加载。
   manager 固定 application / dataDir 身份，宿主显式提供能力、存储和模块。
 - `ShellRuntime::load_view_with_policy`：从求值到挂载都携带明确 Policy，沿用原有作用域和任务代次。
 - `ShellRuntime::new_isolated_with_components_and_limits`：每个插件独立、有限额的解释器。
 - `ShellRuntime::stop` / `resource_error` / `heap_usage_bytes`：停止、故障诊断与 JS 堆观测。
-- `ShellRoot::clear_stopped_overlays`：同步撤销已停止 VM 的浮层引用；默认停止通知也会触发前台清理，绘制与脚本调用前复查。身份不持有 VM，清理保留其他 owner 和宿主浮层，详见 [G6 记录](../../../docs/plugins/p2-overlay-cleanup-2026-11-05.md)。
+- `ShellRoot::clear_stopped_overlays`：同步撤销已停止 VM 的浮层引用；默认停止通知也会触发前台清理，绘制与脚本调用前复查。身份不持有 VM，清理保留其他 owner 和宿主浮层，详见 [浮层清理契约](../../../docs/plugins/runtime.md)。
 - `ShellRuntime::command_target` / `CommandTarget::dispatch`：定向调用具体视图的 `on_command`。
   参数与返回只允许有界数据；仅用于受限解释器。`CommandCall::try_take` 或
   `wait().await` 后的 `CommandReply::accept` 在接收时复查目标代次。
   宿主仍需单独验证 contextVersion；停止使待接收及已缓存结果失效。详见
-  [G3 记录](../../../docs/plugins/p2-targeted-commands-2026-11-05.md)。
+  [命令调用契约](../../../docs/plugins/runtime.md)。
 
 限额包括 JS 堆、解释器栈、单次执行、滑动窗口累计执行与调用数、原生描述操作、展开后的树深度/
 节点数、递归数据转换数/字节和日志数/字节。资源违规使 VM 进入不可恢复使用的状态，取消其任务；
@@ -67,4 +65,4 @@ Python 需要支持 `tomllib` 与 tar 的 `data` 提取过滤器。
 确认超时。JS 堆数值不包含 Rust/native/GPU 内存。宿主函数必须返回有界摘要，耗时 IO 放到后台。
 这些限制及真实交互性能仍要在后续生产集成中分别验收。
 
-`ScriptView::set_fill_container` 与宿主 `.cached(size_full)` 配合，确保缓存根的百分比宽度及原生输入区域正常；详见 [缓存与布局记录](../../../docs/plugins/p2-plugin-cache-2026-11-07.md)。
+`ScriptView::set_fill_container` 与宿主 `.cached(size_full)` 配合，确保缓存根的百分比宽度及原生输入区域正常；详见 [缓存与布局验证](../../../docs/plugins/validation.md)。
