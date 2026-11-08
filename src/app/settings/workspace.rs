@@ -8,7 +8,22 @@ impl ConduitApp {
         available_width: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let narrow = available_width < 720.;
+        let navigation_width =
+            navigation::settings_navigation_width(available_width, self.store.ui.ui_font_size);
+        let narrow = navigation_width == 52.;
+        let compact = narrow || f32::from(window.viewport_size().height) < 650.;
+        let searching = !self.settings_ui.search.read(cx).value().trim().is_empty();
+        let page = self.settings_ui.page.min(navigation::PAGES.len() - 1);
+        let title = if searching {
+            conduit::i18n::text_static("settings.summary.search_title")
+        } else {
+            conduit::i18n::source(navigation::PAGES[page].1)
+        };
+        let summary = conduit::i18n::text_static(if searching {
+            "settings.summary.search"
+        } else {
+            navigation::PAGE_SUMMARIES[page]
+        });
         v_flex()
             .id("settings-workspace")
             .key_context("ConduitSettings")
@@ -24,46 +39,98 @@ impl ConduitApp {
                 h_flex()
                     .id("settings-workspace-header")
                     .debug_selector(|| "settings-workspace-header".into())
-                    .h(px(52.))
+                    .h(px(if compact { 52. } else { 76. }))
                     .flex_shrink_0()
-                    .px_4()
-                    .gap_3()
                     .border_b_1()
                     .border_color(rgb(palette().border))
                     .child(
-                        Button::new("settings-back")
-                            .debug_selector(|| "settings-close".into())
-                            .icon(FullIconName::ArrowLeft)
-                            .accessibility_label(conduit::i18n::text_static(
-                                "settings.workspace.back_to_workbench",
-                            ))
-                            .when(!narrow, |button| {
-                                button.label(conduit::i18n::text_static(
-                                    "settings.workspace.back_to_workbench",
-                                ))
-                            })
-                            .ghost()
-                            .tooltip(conduit::i18n::format(
-                                "settings.workspace.back_to_workbench_a9f951",
-                                &[(
-                                    "arg0",
-                                    shortcuts::display("settings_back", &self.store.ui.shortcuts)
-                                        .to_string(),
-                                )],
-                            ))
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.close_settings(window, cx)),
+                        h_flex()
+                            .w(px(navigation_width))
+                            .h_full()
+                            .flex_shrink_0()
+                            .px(px(if narrow { 8. } else { 16. }))
+                            .child(
+                                Button::new("settings-back")
+                                    .debug_selector(|| "settings-close".into())
+                                    .icon(FullIconName::ArrowLeft)
+                                    .accessibility_label(conduit::i18n::text_static(
+                                        "settings.workspace.back_to_workbench",
+                                    ))
+                                    .when(!narrow, |button| {
+                                        button.label(conduit::i18n::text_static("files.settings"))
+                                    })
+                                    .ghost()
+                                    .tooltip(conduit::i18n::format(
+                                        "settings.workspace.back_to_workbench_a9f951",
+                                        &[(
+                                            "arg0",
+                                            shortcuts::display(
+                                                "settings_back",
+                                                &self.store.ui.shortcuts,
+                                            )
+                                            .to_string(),
+                                        )],
+                                    ))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.close_settings(window, cx)
+                                    })),
                             ),
                     )
                     .child(
-                        div().flex_1().min_w_0().child(
-                            Input::new(&self.settings_ui.search)
-                                .prefix(FullIconName::Search)
-                                .aria_label(conduit::i18n::text_static(
-                                    "settings.workspace.search_all_settings",
-                                ))
-                                .cleanable(true),
-                        ),
+                        h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .px_4()
+                            .gap_4()
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .id("settings-page-title")
+                                            .debug_selector(|| "settings-page-title".into())
+                                            .truncate()
+                                            .text_size(ui_text_size(if compact {
+                                                16.
+                                            } else {
+                                                20.
+                                            }))
+                                            .line_height(ui_text_size(if compact {
+                                                24.
+                                            } else {
+                                                28.
+                                            }))
+                                            .font_semibold()
+                                            .child(title),
+                                    )
+                                    .when(!compact, |heading| {
+                                        heading.child(
+                                            div()
+                                                .truncate()
+                                                .text_size(ui_text_size(12.))
+                                                .line_height(ui_text_size(16.))
+                                                .text_color(rgb(palette().muted))
+                                                .child(summary),
+                                        )
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .w(px(if narrow { 192. } else { 260. }))
+                                    .max_w(relative(0.5))
+                                    .flex_shrink_0()
+                                    .child(
+                                        Input::new(&self.settings_ui.search)
+                                            .prefix(FullIconName::Search)
+                                            .aria_label(conduit::i18n::text_static(
+                                                "settings.workspace.search_all_settings",
+                                            ))
+                                            .cleanable(true),
+                                    ),
+                            ),
                     ),
             )
             .child(

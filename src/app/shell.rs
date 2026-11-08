@@ -805,23 +805,13 @@ impl Render for ConduitApp {
             .bg(rgb(palette().canvas))
             .border_color(rgb(palette().border))
             .child(
-                h_flex()
-                    .items_center()
-                    .gap_2()
-                    .child(app_icon(20.))
-                    .child(
-                        div()
-                            .text_size(ui_text_size(13.))
-                            .font_semibold()
-                            .text_color(rgb(palette().text))
-                            .child("Conduit"),
-                    )
-                    .child(
-                        div()
-                            .text_size(ui_text_size(10.))
-                            .text_color(rgb(palette().faint))
-                            .child(conduit::i18n::text_static("common.preview_build")),
-                    ),
+                h_flex().items_center().gap_2().child(app_icon(20.)).child(
+                    div()
+                        .text_size(ui_text_size(13.))
+                        .font_semibold()
+                        .text_color(rgb(palette().text))
+                        .child("Conduit"),
+                ),
             );
         let title_bar = title_bar.child(div().flex_1()).child(
             h_flex()

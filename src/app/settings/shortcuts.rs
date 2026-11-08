@@ -348,7 +348,7 @@ impl ConduitApp {
                             })
                         });
                         SettingItem::new(conduit::i18n::source(shortcut.label), field).description(
-                            format!(
+                            settings_description(format!(
                                 "{}{}",
                                 shortcut.scope.label(),
                                 if customized {
@@ -356,7 +356,7 @@ impl ConduitApp {
                                 } else {
                                     conduit::i18n::text_static("settings.shortcuts.default")
                                 }
-                            ),
+                            )),
                         )
                     })
                     .collect::<Vec<_>>(),

@@ -7,6 +7,9 @@ use gpui_kit::component::status_bar::StatusBar;
 mod cache;
 mod keyboard;
 pub(super) use cache::SidebarState;
+
+// Keep the virtual-list estimates and rendered navigation rows in agreement.
+const ROW_HEIGHT: f32 = 36.;
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests;
 
@@ -19,7 +22,7 @@ pub(super) fn navigation_pane() -> Div {
 
 pub(super) fn navigation_header() -> Div {
     h_flex()
-        .h(px(34.))
+        .h(px(ROW_HEIGHT))
         .flex_shrink_0()
         .min_w_0()
         .px_2()
@@ -382,7 +385,7 @@ impl ConduitApp {
                     cache::Row::Loading(_) => {
                         let workspace = &self.store.workspaces[index];
                         h_flex()
-                            .h(px(30.))
+                            .h(px(ROW_HEIGHT))
                             .flex_shrink_0()
                             .pl(px(24.))
                             .pr(px(8.))
@@ -432,7 +435,7 @@ impl ConduitApp {
                             .when(self.sidebar.keyboard_row.as_ref().is_some_and(|row| matches!(row, cache::Row::Session { id: focused, .. } if *focused == id)), |row| row.aria_active_descendant())
                             .debug_selector(move || format!("session-row-{id}"))
                             .relative()
-                            .h(px(30.))
+                            .h(px(ROW_HEIGHT))
                             .flex_shrink_0()
                             .pl(px(24.))
                             .pr(px(8.))
@@ -601,7 +604,7 @@ impl ConduitApp {
         let can_edit = self.writable && !self.closing;
         h_flex()
             .w_full()
-            .h(px(30.))
+            .h(px(ROW_HEIGHT))
             .px_2()
             .items_center()
             .justify_between()
@@ -676,7 +679,7 @@ impl ConduitApp {
             .when(self.sidebar.keyboard_row.as_ref().is_some_and(|row| matches!(row, cache::Row::Workspace { path, .. } if *path == workspace.path)), |row| row.aria_active_descendant())
             .group("workspace-row")
             .relative()
-            .h(px(30.))
+            .h(px(ROW_HEIGHT))
             .flex_shrink_0()
             .px_2()
             .gap_2()
@@ -877,7 +880,7 @@ fn session_menu(
         )
         .item(
             PopupMenuItem::new(conduit::i18n::text_static("sidebar.rename_with_ai"))
-                .icon(gpui_kit::assets::IconName::Sparkles)
+                .icon(FullIconName::Pencil)
                 .disabled(!can_ai_rename)
                 .on_click(move |_, window, cx| {
                     ai_rename_app.update(cx, |this, cx| {

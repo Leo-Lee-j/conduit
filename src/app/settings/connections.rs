@@ -133,7 +133,7 @@ impl ConduitApp {
                             Button::new("settings-view-extensions")
                                 .small()
                                 .ghost()
-                                .icon(FullIconName::Sparkles)
+                                .icon(FullIconName::Blocks)
                                 .label(conduit::i18n::text_static(
                                     "settings.connections.manage_skills",
                                 ))
@@ -171,18 +171,13 @@ impl ConduitApp {
         v_flex()
             .size_full()
             .min_w_0()
-            .when(services || self.settings_ui.group.is_some(), |body| {
-                body.child(management_actions(actions.into_any_element(), narrow))
-            })
-            .child(
-                div()
-                    .px(px(if narrow { 12. } else { 24. }))
-                    .pb_3()
-                    .when(!services && self.settings_ui.group.is_none(), |row| {
-                        row.pt_3()
-                    })
-                    .child(engine_tabs(engine, false, narrow, view.clone())),
-            )
+            .child(management_toolbar(
+                engine,
+                false,
+                (services || self.settings_ui.group.is_some()).then(|| actions.into_any_element()),
+                narrow,
+                view.clone(),
+            ))
             .child(
                 div().flex_1().min_h_0().w_full().child(
                     Settings::new(format!(
@@ -192,7 +187,7 @@ impl ConduitApp {
                     .sidebar_width(px(0.))
                     .sidebar_size_range(px(0.)..px(0.))
                     .sidebar_style(&StyleRefinement::default().hidden())
-                    .with_group_variant(GroupBoxVariant::Normal)
+                    .with_group_variant(GroupBoxVariant::Fill)
                     .page(
                         page.into_page(self.settings_ui.group, view)
                             .header_style(&StyleRefinement::default().hidden()),

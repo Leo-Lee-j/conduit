@@ -36,10 +36,10 @@ impl Row {
     }
     pub(super) fn height(&self) -> f32 {
         match self {
-            Self::Controls => 30.,
+            Self::Controls => ROW_HEIGHT,
             Self::More { .. } => 28.,
             Self::Empty => 76.,
-            _ => 30.,
+            _ => ROW_HEIGHT,
         }
     }
     pub(super) fn same_identity(&self, other: &Self) -> bool {

@@ -45,6 +45,30 @@ pub(super) const PAGES: [(&str, &str, &str); 11] = [
 
 const PAGE_ORDER: [usize; 11] = [0, 1, 2, 3, 8, 10, 4, 9, 5, 6, 7];
 
+/// The header and navigation share a column, including at larger UI font sizes.
+pub(super) fn settings_navigation_width(available_width: f32, font_size: f32) -> f32 {
+    let expanded = 224. * (font_size / DEFAULT_UI_FONT_SIZE).max(1.);
+    if available_width < expanded + 496. {
+        52.
+    } else {
+        expanded
+    }
+}
+
+pub(super) const PAGE_SUMMARIES: [&str; 11] = [
+    "settings.summary.general",
+    "settings.summary.appearance",
+    "settings.summary.shortcuts",
+    "settings.summary.cli",
+    "settings.summary.skills",
+    "settings.summary.naming",
+    "settings.summary.git",
+    "settings.summary.maintenance",
+    "settings.summary.models",
+    "settings.summary.mcp",
+    "settings.summary.defaults",
+];
+
 pub(super) fn matches_search(text: &str, query: &str) -> bool {
     let text = text.to_lowercase();
     query
@@ -62,32 +86,30 @@ impl ConduitApp {
         cx: &App,
     ) -> AnyElement {
         let disabled = !self.writable || self.closing;
-        let narrow = available_width < 720.;
-        let navigation_width = if narrow {
-            52.
-        } else if available_width < 1000. {
-            176.
-        } else {
-            192.
-        };
+        let font_scale = self.store.ui.ui_font_size / DEFAULT_UI_FONT_SIZE;
+        let navigation_width =
+            settings_navigation_width(available_width, self.store.ui.ui_font_size);
+        let narrow = navigation_width == 52.;
         let content_width = (available_width - navigation_width).max(0.);
         let query = self.settings_ui.search.read(cx).value();
         let searching = !query.trim().is_empty();
-        let mut navigation = v_flex().gap_1().w_full();
+        let mut navigation = v_flex().gap_0p5().w_full();
         let mut group = "";
         for index in PAGE_ORDER {
             let (section, title, _) = PAGES[index];
             let section = conduit::i18n::source(section);
             let title = conduit::i18n::source(title);
             if !narrow && group != section {
+                let first_group = group.is_empty();
                 group = section;
                 navigation = navigation.child(
                     div()
-                        .pt_3()
+                        .pt(px(if first_group { 8. } else { 16. }))
                         .pb_1()
                         .px_3()
                         .text_size(ui_text_size(12.))
-                        .font_semibold()
+                        .line_height(ui_text_size(16.))
+                        .font_medium()
                         .text_color(rgb(palette().muted))
                         .child(section),
                 );
@@ -98,7 +120,7 @@ impl ConduitApp {
                 2 => FullIconName::Keyboard,
                 3 => FullIconName::SquareTerminal,
                 4 | 9 => FullIconName::Blocks,
-                5 => FullIconName::Sparkles,
+                5 => FullIconName::Pencil,
                 6 => FullIconName::GitFork,
                 7 => FullIconName::Database,
                 8 => FullIconName::Server,
@@ -114,12 +136,16 @@ impl ConduitApp {
                     .child(
                         h_flex()
                             .w_full()
-                            .gap_3()
-                            .child(Icon::new(icon).small())
-                            .when(!narrow, |row| row.child(title)),
+                            .min_w_0()
+                            .items_center()
+                            .gap_2()
+                            .child(Icon::new(icon).size(px(16.)).flex_shrink_0())
+                            .when(!narrow, |row| {
+                                row.child(div().flex_1().min_w_0().truncate().child(title))
+                            }),
                     )
                     .ghost()
-                    .h(px(34.))
+                    .h(px(32. * font_scale.max(1.)))
                     .w_full()
                     .when(!narrow, |button| button.justify_start())
                     .text_size(ui_text_size(13.))
@@ -162,7 +188,7 @@ impl ConduitApp {
             .sidebar_width(px(0.))
             .sidebar_size_range(px(0.)..px(0.))
             .sidebar_style(&StyleRefinement::default().hidden())
-            .with_group_variant(GroupBoxVariant::Outline)
+            .with_group_variant(GroupBoxVariant::Fill)
             .default_selected_index(gpui_kit::component::setting::SelectIndex {
                 page_ix: 0,
                 group_ix: None,

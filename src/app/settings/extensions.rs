@@ -714,13 +714,7 @@ impl ConduitApp {
             .size_full()
             .min_w_0()
             .text_color(rgb(palette().text))
-            .child(management_actions(actions, narrow))
-            .child(
-                div()
-                    .px(px(if narrow { 12. } else { 24. }))
-                    .pb(px(if narrow { 8. } else { 12. }))
-                    .child(engine_tabs(engine, true, narrow, view)),
-            )
+            .child(management_toolbar(engine, true, Some(actions), narrow, view))
             .child(
                 v_flex()
                     .w_full()
@@ -959,7 +953,7 @@ fn render_extension_row(
                         .items_start()
                         .child(div().size(px(32.)).flex_shrink_0().rounded_md().bg(rgb(palette().surface_strong))
                             .flex().items_center().justify_center()
-                            .child(Icon::new(if mcp { FullIconName::Server } else { FullIconName::Sparkles }).small().text_color(rgb(palette().muted))))
+                            .child(Icon::new(if mcp { FullIconName::Server } else { FullIconName::Blocks }).small().text_color(rgb(palette().muted))))
                         .child(
                             v_flex()
                                 .flex_1()
@@ -1099,7 +1093,7 @@ fn render_extension_row(
                         Icon::new(if *kind == Kind::Mcp {
                             FullIconName::Server
                         } else {
-                            FullIconName::Sparkles
+                            FullIconName::Blocks
                         })
                         .text_color(rgb(palette().muted)),
                     ),

@@ -79,20 +79,39 @@ fn settings_actions_style() -> StyleRefinement {
 fn settings_section(title: impl Into<SharedString>) -> SettingGroup {
     let title = title.into();
     let keywords = [title.clone()];
-    SettingGroup::new().py(px(18.)).gap(px(20.)).item(
+    SettingGroup::new().variant(GroupBoxVariant::Fill).item(
         SettingItem::render(move |_, _, _| {
             div()
                 .w_full()
-                .pb(px(8.))
-                .border_b_1()
-                .border_color(rgb(palette().border))
-                .text_size(ui_text_size(14.))
+                .text_size(ui_text_size(12.))
+                .line_height(ui_text_size(16.))
                 .font_semibold()
-                .text_color(rgb(palette().text))
+                .text_color(rgb(palette().muted))
                 .child(title.clone())
         })
         .keywords(keywords),
     )
+}
+
+/// Plain library descriptions inherit the same 14px size as their labels.
+/// Use its styled text variant to keep supporting copy at 12px, with the same
+/// UI-font scaling as the rest of settings. Escape copy so translated text is
+/// always displayed literally, even if it contains markup characters.
+fn settings_description(text: impl Into<SharedString>) -> gpui_kit::component::text::TextView {
+    let text: SharedString = text.into();
+    let escaped = text
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('\n', "<br>");
+    gpui_kit::component::text::TextView::html("settings-description", escaped)
+        .selectable(false)
+        .w_full()
+        .mt_1()
+        .text_size(ui_text_size(12.))
+        .line_height(relative(1.5))
+        .font_normal()
+        .text_color(rgb(palette().muted))
 }
 
 /// A read-only setting value, right-aligned in the row.
@@ -417,7 +436,7 @@ mod extension_management;
 mod general;
 mod management;
 mod model_management;
-use management::{engine_tabs, management_actions, management_badge};
+use management::{management_badge, management_toolbar};
 #[path = "settings/models.rs"]
 mod model_sync;
 pub(super) use connections::ConnectionsUi;

@@ -40,10 +40,10 @@ fn theme_options(selected: AppearanceMode, view: Entity<ConduitApp>, disabled: b
             .child(
                 Button::new(id)
                     .outline()
-                    .h(px(124.))
+                    .h(px(128.))
                     .w_full()
-                    .p(px(10.))
-                    .rounded(px(10.))
+                    .p_3()
+                    .rounded(px(8.))
                     .border_color(rgb(if active {
                         palette().focus
                     } else {
@@ -78,14 +78,14 @@ fn theme_options(selected: AppearanceMode, view: Entity<ConduitApp>, disabled: b
                                 h_flex()
                                     .w_full()
                                     .h(px(48.))
-                                    .rounded(px(5.))
+                                    .rounded(px(4.))
                                     .overflow_hidden()
                                     .border_1()
                                     .border_color(rgb(preview.border))
                                     .bg(rgb(preview.canvas))
                                     .child(
                                         div()
-                                            .w(px(22.))
+                                            .w(px(24.))
                                             .h_full()
                                             .bg(rgb(preview.sidebar_bg))
                                             .border_r_1()
@@ -95,7 +95,7 @@ fn theme_options(selected: AppearanceMode, view: Entity<ConduitApp>, disabled: b
                                         v_flex()
                                             .flex_1()
                                             .px_2()
-                                            .gap(px(5.))
+                                            .gap_1()
                                             .child(
                                                 div()
                                                     .w(relative(0.65))
@@ -122,7 +122,7 @@ fn theme_options(selected: AppearanceMode, view: Entity<ConduitApp>, disabled: b
                             .child(
                                 h_flex()
                                     .w_full()
-                                    .gap(px(6.))
+                                    .gap_2()
                                     .child(Icon::new(icon).small().text_color(rgb(icon_color)))
                                     .child(
                                         div()
@@ -210,7 +210,7 @@ fn font_select_field(
         };
         div()
             .debug_selector(move || selector.into())
-            .w(px(188.))
+            .w(px(192.))
             .flex_shrink_0()
             .child(
                 Select::new(select)
@@ -495,52 +495,52 @@ impl ConduitApp {
                     })
                     .keywords([conduit::i18n::text_static("settings.appearance.theme"), conduit::i18n::text_static("settings.appearance.light"), conduit::i18n::text_static("settings.appearance.dark"), conduit::i18n::text_static("settings.appearance.system")]),
                 )
-                .footer(|_, _| conduit::i18n::text_static("settings.appearance.applies_immediately_system_mode_follows_windows_appearance")),
+                .footer(|_, _| settings_description(conduit::i18n::text_static("settings.appearance.applies_immediately_system_mode_follows_windows_appearance")).mt_0()),
             settings_section(conduit::i18n::text_static("settings.appearance.application_interface"))
                 .item(
                     SettingItem::new(conduit::i18n::text_static("settings.appearance.interface_font"), ui_font)
-                        .description(conduit::i18n::text_static("settings.appearance.used_for_the_sidebar_tabs_menus_buttons"))
+                        .description(settings_description(conduit::i18n::text_static("settings.appearance.used_for_the_sidebar_tabs_menus_buttons")))
                         .keywords([conduit::i18n::text_static("settings.appearance.application"), conduit::i18n::text_static("settings.appearance.interface"), "UI", conduit::i18n::text_static("settings.appearance.font"), "font"])
                         .disabled(disabled),
                 )
                 .item(
                     SettingItem::new(conduit::i18n::text_static("settings.appearance.interface_font_size"), ui_size)
-                        .description(conduit::i18n::text_static("settings.appearance.12_20_px_default_16_scales_interface"))
+                        .description(settings_description(conduit::i18n::text_static("settings.appearance.12_20_px_default_16_scales_interface")))
                         .keywords([conduit::i18n::text_static("settings.appearance.application"), conduit::i18n::text_static("settings.appearance.interface"), conduit::i18n::text_static("settings.appearance.font_size"), conduit::i18n::text_static("settings.appearance.size"), "font", "size"])
                         .disabled(disabled),
                 )
                 .item(
                     SettingItem::new(conduit::i18n::text_static("settings.appearance.restore_defaults"), ui_reset)
-                        .description(conduit::i18n::text_static("settings.appearance.reset_only_the_interface_font_and_size"))
+                        .description(settings_description(conduit::i18n::text_static("settings.appearance.reset_only_the_interface_font_and_size")))
                         .disabled(disabled),
                 )
-                .footer(|_, _| conduit::i18n::text_static("settings.appearance.changes_apply_immediately_and_are_saved_automatically")),
+                .footer(|_, _| settings_description(conduit::i18n::text_static("settings.appearance.changes_apply_immediately_and_are_saved_automatically")).mt_0()),
             settings_section(conduit::i18n::text_static("settings.appearance.chat_text")).items(vec![
                 SettingItem::new(conduit::i18n::text_static("settings.appearance.body_font"), chat_font)
-                    .description(conduit::i18n::text_static("settings.appearance.used_for_messages_and_input_defaults_to"))
+                    .description(settings_description(conduit::i18n::text_static("settings.appearance.used_for_messages_and_input_defaults_to")))
                     .disabled(disabled),
                 SettingItem::new(conduit::i18n::text_static("settings.appearance.font_size"), chat_size)
-                    .description(conduit::i18n::text_static("settings.appearance.12_20_px_default_15"))
+                    .description(settings_description(conduit::i18n::text_static("settings.appearance.12_20_px_default_15")))
                     .disabled(disabled),
                 SettingItem::new(conduit::i18n::text_static("settings.appearance.line_height"), chat_line_height)
-                    .description(conduit::i18n::text_static("settings.appearance.1_2_2_0_default_1_5"))
+                    .description(settings_description(conduit::i18n::text_static("settings.appearance.1_2_2_0_default_1_5")))
                     .disabled(disabled),
             ]),
             settings_section(conduit::i18n::text_static("settings.appearance.code_blocks")).items(vec![
                 SettingItem::new(conduit::i18n::text_static("settings.appearance.code_font"), code_font)
-                    .description(conduit::i18n::text_static("settings.appearance.used_for_code_blocks_and_tool_output"))
+                    .description(settings_description(conduit::i18n::text_static("settings.appearance.used_for_code_blocks_and_tool_output")))
                     .disabled(disabled),
                 SettingItem::new(conduit::i18n::text_static("settings.appearance.code_font_size"), code_size)
-                    .description(conduit::i18n::text_static("settings.appearance.10_18_px_default_13"))
+                    .description(settings_description(conduit::i18n::text_static("settings.appearance.10_18_px_default_13")))
                     .disabled(disabled),
                 SettingItem::new(conduit::i18n::text_static("settings.appearance.copy_button"), code_copy)
-                    .description(conduit::i18n::text_static("settings.appearance.show_a_copy_button_in_the_upper"))
+                    .description(settings_description(conduit::i18n::text_static("settings.appearance.show_a_copy_button_in_the_upper")))
                     .disabled(disabled),
                 SettingItem::new(conduit::i18n::text_static("settings.appearance.line_numbers"), code_line_numbers)
-                    .description(conduit::i18n::text_static("settings.appearance.show_line_numbers_beside_code_blocks_excluded"))
+                    .description(settings_description(conduit::i18n::text_static("settings.appearance.show_line_numbers_beside_code_blocks_excluded")))
                     .disabled(disabled),
                 SettingItem::new(conduit::i18n::text_static("settings.appearance.syntax_highlighting"), code_syntax)
-                    .description(conduit::i18n::text_static("settings.appearance.color_code_by_language_when_disabled_use"))
+                    .description(settings_description(conduit::i18n::text_static("settings.appearance.color_code_by_language_when_disabled_use")))
                     .disabled(disabled),
             ]),
             settings_section(conduit::i18n::text_static("settings.appearance.chat_preview")).items(vec![
@@ -556,7 +556,7 @@ impl ConduitApp {
                 })
                 .keywords([conduit::i18n::text_static("mermaid.preview"), conduit::i18n::text_static("settings.appearance.chat_preview")]),
                 SettingItem::new(conduit::i18n::text_static("settings.appearance.restore_defaults"), reset)
-                    .description(conduit::i18n::text_static("settings.appearance.reset_chat_font_size_line_height_and"))
+                    .description(settings_description(conduit::i18n::text_static("settings.appearance.reset_chat_font_size_line_height_and")))
                     .disabled(disabled),
             ]),
         ])

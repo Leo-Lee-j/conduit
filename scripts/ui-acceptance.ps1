@@ -34,6 +34,7 @@ param(
     [ValidateSet('seed', 'capture')]
     [string]$Action = 'capture',
     [string]$Name = 'capture',
+    [string]$Executable = '',
     [string]$DataDir = '',
     [string]$OutDir = '',
     [string]$WorkspacePath = '',
@@ -300,7 +301,7 @@ $ScrollAt = @($ScrollAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -
 $ClickAtAfterScroll = @($ClickAtAfterScroll | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 $DragAt = @($DragAt | ForEach-Object { $_ -split ';' } | Where-Object { $_ -ne '' })
 
-$exe = Join-Path $root 'target\debug\conduit.exe'
+$exe = if ($Executable -eq '') { Join-Path $root 'target\debug\conduit.exe' } else { [IO.Path]::GetFullPath($Executable) }
 if (-not (Test-Path -LiteralPath $exe)) { throw 'Run cargo build --locked first.' }
 if (-not (Test-Path -LiteralPath (Join-Path $DataDir 'state.json'))) {
     throw "No state.json in $DataDir; run -Action seed first."

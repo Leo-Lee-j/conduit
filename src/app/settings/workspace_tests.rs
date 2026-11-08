@@ -255,7 +255,28 @@ fn settings_management_actions_fit_and_model_search_can_return_to_full_page(
             let actions = cx.debug_bounds("settings-page-actions");
             let engines = cx.debug_bounds("management-engines").unwrap();
             assert_eq!(content.right(), body.right());
-            assert!(content.right() - engines.right() <= px(24.));
+            assert!(engines.left() >= content.left() && engines.right() <= content.right());
+            let engine_selectors = if page == 4 || page == 9 {
+                [
+                    "extensions-engine-0",
+                    "extensions-engine-1",
+                    "extensions-engine-2",
+                ]
+            } else {
+                [
+                    "settings-engine-0",
+                    "settings-engine-1",
+                    "settings-engine-2",
+                ]
+            };
+            for selector in engine_selectors {
+                let tab = cx.debug_bounds(selector).unwrap();
+                assert!(tab.left() >= engines.left() && tab.right() <= engines.right());
+                assert!(
+                    tab.size.width >= px(72.),
+                    "engine choices must remain usable"
+                );
+            }
             if page == 3 {
                 assert!(
                     actions.is_none(),
@@ -264,13 +285,19 @@ fn settings_management_actions_fit_and_model_search_can_return_to_full_page(
                 assert!(engines.top() - content.top() <= px(12.));
             } else {
                 let actions = actions.unwrap();
-                assert_eq!(actions.right(), content.right());
+                assert!(content.right() - actions.right() <= px(24.));
                 assert!(actions.left() >= body.left() && actions.right() <= body.right());
                 assert!(
                     actions.size.height <= px(48.),
                     "actions must not reserve a title row"
                 );
-                assert!(engines.top() >= actions.bottom() && engines.right() <= body.right());
+                assert!(
+                    engines.right() <= actions.left()
+                        || actions.right() <= engines.left()
+                        || engines.bottom() <= actions.top()
+                        || actions.bottom() <= engines.top(),
+                    "engine choices and page actions must not overlap in either layout"
+                );
                 let action = cx
                     .debug_bounds(if page == 8 {
                         "settings-add-service"
@@ -291,7 +318,7 @@ fn settings_management_actions_fit_and_model_search_can_return_to_full_page(
                 let filter = cx.debug_bounds("extensions-filter-trigger").unwrap();
                 let refresh = cx.debug_bounds("extensions-refresh").unwrap();
                 assert!(scope.right() <= filter.left() && filter.right() <= refresh.left());
-                assert!(refresh.right() <= engines.right());
+                assert!(refresh.right() <= content.right());
             }
         }
         cx.update(|window, cx| {

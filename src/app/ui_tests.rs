@@ -254,6 +254,13 @@ fn settings_workspace_keeps_layout_and_returns_without_losing_context(cx: &mut T
             "settings retain usable content height in the workspace"
         );
         assert!(close.top() >= header.top() && close.bottom() <= header.bottom());
+        let title = cx.debug_bounds("settings-page-title").unwrap();
+        let content = cx.debug_bounds("settings-content").unwrap();
+        assert!(title.top() >= header.top() && title.bottom() <= header.bottom());
+        assert!(
+            title.left() >= content.left() && title.right() <= content.right(),
+            "page context must align with the form column at wide and narrow sizes"
+        );
         let appearance = cx.debug_bounds("settings-nav-1").unwrap();
         cx.simulate_mouse_down(appearance.center(), MouseButton::Left, Modifiers::default());
         cx.simulate_mouse_up(appearance.center(), MouseButton::Left, Modifiers::default());
