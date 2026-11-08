@@ -81,7 +81,7 @@ The English and [Chinese](README.zh-CN.md) project pages cover the same essentia
 
 Bug reports, documentation improvements, and pull requests are welcome. [Open an issue](https://github.com/Leo-Lee-j/conduit/issues) with your Conduit version, steps to reproduce, and expected and actual behavior. Discuss substantial features or architecture changes before implementing them.
 
-To build from source, follow [CONTRIBUTING.md (中文)](CONTRIBUTING.md) for the Windows Rust toolchain, build commands, and required checks. The [architecture guide](docs/architecture.md) describes how the project fits together.
+To build from source, follow [CONTRIBUTING.md](CONTRIBUTING.md) for the Windows Rust toolchain, build commands, and required checks. The [architecture guide](docs/architecture.md) describes how the project fits together.
 
 ## Acknowledgements
 

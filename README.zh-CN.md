@@ -23,7 +23,7 @@
   <a href="https://github.com/Leo-Lee-j/conduit/releases/latest"><strong>下载 Windows 版</strong></a> ·
   <a href="docs/usage.md">使用指南</a> ·
   <a href="https://github.com/Leo-Lee-j/conduit/issues">反馈问题</a> ·
-  <a href="CONTRIBUTING.md">参与贡献</a>
+  <a href="CONTRIBUTING.zh-CN.md">参与贡献</a>
 </p>
 
 Conduit 将 **Claude Code、Codex 和 OpenCode** 带入同一个桌面工作区。按项目组织对话，跟进工具执行，检查代码修改，再完成提交，让任务从开始到交付都有清晰的上下文。
@@ -81,7 +81,7 @@ Conduit 复用所选 CLI 的认证与执行能力，不自带模型服务。模�
 
 欢迎反馈问题、改进文档或提交 Pull Request。[提交 Issue](https://github.com/Leo-Lee-j/conduit/issues) 时，请附上 Conduit 版本、复现步骤、预期结果与实际行为。较大的功能或架构调整，请先讨论范围。
 
-如需从源码构建，请参考 [CONTRIBUTING.md](CONTRIBUTING.md) 中的 Windows Rust 开发环境、构建命令与必要检查。[架构文档](docs/architecture.md)介绍了项目的模块与协作方式。
+如需从源码构建，请参考 [贡献指南](CONTRIBUTING.zh-CN.md) 中的 Windows Rust 开发环境、构建命令与必要检查。[架构文档](docs/architecture.md)介绍了项目的模块与协作方式。
 
 ## 致谢
 

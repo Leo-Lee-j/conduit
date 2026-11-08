@@ -19,7 +19,7 @@
 
 | 文档 | 内容 |
 | --- | --- |
-| [参与贡献](../CONTRIBUTING.md) | 开发环境、提交前检查和文档维护规则 |
+| [参与贡献](../CONTRIBUTING.zh-CN.md) | 开发环境、提交前检查和文档维护规则 |
 | [架构](architecture.md) | 产品边界、模块职责与主要数据流 |
 | [会话与存储](sessions.md) | 并发、发送确认、正文按需加载、历史导入及恢复 |
 | [CLI 适配器](cli-adapters.md) | 接入契约、进程管理、OpenCode 特有行为 |
@@ -41,4 +41,4 @@
 - [Shell 原型运行与命令](../tools/shell-prototype/README.md)、[上游补丁维护](../tools/shell-prototype/patches/README.md)。
 - [应用图标生成](../assets/app-icons/README.md)、[引擎与模型图标来源](../assets/icons/README.md)。资源来源和许可说明随资源保留。
 
-文档应描述当前仓库行为。未实现方案必须标注状态；测试命令不代表已经执行，过去一次通过也不代表当前版本已完成验收。维护约定见[参与贡献](../CONTRIBUTING.md)。
+文档应描述当前仓库行为。未实现方案必须标注状态；测试命令不代表已经执行，过去一次通过也不代表当前版本已完成验收。维护约定见[参与贡献](../CONTRIBUTING.zh-CN.md)。

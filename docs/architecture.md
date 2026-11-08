@@ -63,4 +63,4 @@ flowchart TD
 
 依赖由 `Cargo.lock` 和 GPUI Kit 固定 revision 锁定。`build.rs` 设置主程序图标、版本资源和栈预留，并为更新助手嵌入 `asInvoker` 权限声明。NSIS 按当前用户安装，安装目录与数据目录分离。
 
-开发入口见[参与贡献](../CONTRIBUTING.md)，验证方式见[测试与验收](testing.md)，签名发布和失败恢复见[发布与更新](releasing.md)。
+开发入口见[参与贡献](../CONTRIBUTING.zh-CN.md)，验证方式见[测试与验收](testing.md)，签名发布和失败恢复见[发布与更新](releasing.md)。
