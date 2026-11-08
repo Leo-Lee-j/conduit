@@ -72,6 +72,7 @@ The English and [Chinese](README.zh-CN.md) project pages cover the same essentia
 | --- | --- |
 | [User guide](docs/usage.md) | Setup, conversations, shortcuts, and updates |
 | [Settings and AI connections](docs/settings.md) | CLI paths, model providers, Skills, and MCP |
+| [Plugins and icon themes](docs/plugins/github-catalog.md) | GitHub discovery, installation, and official plugins |
 | [Files and previews](docs/files.md) | File references, search, Markdown, and Mermaid |
 | [Git workflows](docs/git.md) | Staging, commits, branches, and recovery |
 | [Integrated terminal](docs/terminal.md) | Workspace shells and terminal behavior |

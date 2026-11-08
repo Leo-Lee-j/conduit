@@ -175,6 +175,7 @@ impl ConduitApp {
         let plugins = PluginUi::with_shell(packages)?;
         self.plugins.stop_instances();
         self.plugins = plugins;
+        self.refresh_installed_plugins(cx);
         self.sync_plugin_context();
         self.refresh_shell_context(cx);
         cx.notify();

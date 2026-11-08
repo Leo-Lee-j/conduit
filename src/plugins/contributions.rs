@@ -53,6 +53,12 @@ pub struct StatusItem {
     pub command: Option<CommandId>,
     pub when: When,
 }
+/// A data-only file icon provider, registered and revoked with its owner.
+#[derive(Clone, Debug)]
+pub struct FileIconThemeDescriptor {
+    pub id: ItemId,
+    pub title: String,
+}
 #[derive(Clone, Debug)]
 pub struct ContributionSet {
     pub owner: Owner,
@@ -60,6 +66,7 @@ pub struct ContributionSet {
     pub views: Vec<ViewDescriptor>,
     pub activity_items: Vec<ActivityItem>,
     pub status_items: Vec<StatusItem>,
+    pub file_icon_themes: Vec<FileIconThemeDescriptor>,
 }
 impl ContributionSet {
     pub fn empty(owner: Owner) -> Self {
@@ -69,6 +76,7 @@ impl ContributionSet {
             views: vec![],
             activity_items: vec![],
             status_items: vec![],
+            file_icon_themes: vec![],
         }
     }
 }

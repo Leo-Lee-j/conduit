@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "plugins": [
+    {
+      "id": "conduit-plugins.outline-icons",
+      "name": "Outline Icons",
+      "version": "1.0.0",
+      "description": "Outline file icons with distinct colors for source code, configuration and documentation.",
+      "min_app_version": "0.2.6",
+      "kind": "file-icons",
+      "path": "plugins/outline-icons"
+    }
+  ]
+}

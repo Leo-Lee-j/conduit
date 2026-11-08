@@ -111,6 +111,7 @@ impl ConduitApp {
             && self.session_control.queue_saves.is_empty()
             && self.probes.is_empty()
             && self.opencode_model_probes.is_empty()
+            && !self.plugins.packages.busy
             && self.git.operation.is_none()
             && self.git.generation.is_none()
             && self.session_control.namings.is_empty()

@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "id": "conduit-plugins.outline-icons",
+  "name": "Outline Icons",
+  "version": "1.0.0",
+  "description": "Outline file icons with distinct colors for source code, configuration and documentation.",
+  "file_icons": {
+    "icons": {
+      "file": {
+        "path": "icons/file.svg"
+      },
+      "folder": {
+        "path": "icons/folder.svg",
+        "light": "#42627a",
+        "dark": "#8daec5"
+      },
+      "folder-open": {
+        "path": "icons/folder-open.svg",
+        "light": "#42627a",
+        "dark": "#8daec5"
+      },
+      "code": {
+        "path": "icons/code.svg",
+        "light": "#9a4b16",
+        "dark": "#e6ac7b"
+      },
+      "config": {
+        "path": "icons/config.svg",
+        "light": "#856305",
+        "dark": "#e0c06b"
+      },
+      "markdown": {
+        "path": "icons/markdown.svg",
+        "light": "#285d9c",
+        "dark": "#8bb6e8"
+      }
+    },
+    "file": "file",
+    "folder": "folder",
+    "folder_expanded": "folder-open",
+    "file_names": {
+      "cargo.toml": "config",
+      ".gitignore": "config",
+      "readme": "markdown"
+    },
+    "file_extensions": {
+      "rs": "code",
+      "js": "code",
+      "ts": "code",
+      "tsx": "code",
+      "jsx": "code",
+      "py": "code",
+      "java": "code",
+      "go": "code",
+      "c": "code",
+      "cpp": "code",
+      "h": "code",
+      "cs": "code",
+      "sh": "code",
+      "ps1": "code",
+      "json": "config",
+      "toml": "config",
+      "yaml": "config",
+      "yml": "config",
+      "ini": "config",
+      "env": "config",
+      "md": "markdown",
+      "mdx": "markdown"
+    }
+  },
+  "author": "Conduit",
+  "min_app_version": "0.2.6"
+}

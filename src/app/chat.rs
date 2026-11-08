@@ -1162,11 +1162,7 @@ impl ConduitApp {
                     .gap_1()
                     .opacity(0.)
                     .group_hover(message_group.clone(), |this| this.opacity(1.))
-                    .child(
-                        model_mark(provider, model_id)
-                            .size(px(11.))
-                            .text_color(rgb(palette().faint)),
-                    )
+                    .child(model_mark(provider, model_id).text_color(rgb(palette().faint)))
                     .child(
                         div()
                             .text_size(px(10.))

@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 
 mod commands;
 mod example;
+pub(super) mod management;
 pub(super) mod right;
 #[cfg(conduit_shell_desktop)]
 #[path = "plugin_ui/plugin_shell.rs"]
@@ -31,6 +32,7 @@ struct NavigationAdapter {
     refresh_on_notify: bool,
 }
 pub(super) struct PluginUi {
+    pub(super) packages: management::Manager,
     #[cfg(conduit_shell_desktop)]
     shell: Option<shell::ShellPluginHost>,
     registry: Registry,
@@ -51,6 +53,7 @@ pub(super) struct PluginUi {
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct NavigationRevision {
     registry: u64,
+    icons: u64,
     context: u64,
     selected: ViewId,
     collapsed: bool,
@@ -126,6 +129,7 @@ impl PluginUi {
             })
             .collect();
         let mut ui = Self {
+            packages: Default::default(),
             #[cfg(conduit_shell_desktop)]
             shell: None,
             registry,
@@ -206,6 +210,7 @@ impl PluginUi {
     pub(super) fn revision(&self) -> NavigationRevision {
         NavigationRevision {
             registry: self.registry.revision(),
+            icons: self.packages.revision,
             context: self.snapshot.version(),
             selected: self.selected().clone(),
             collapsed: self.collapsed(),

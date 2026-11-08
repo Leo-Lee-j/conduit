@@ -914,3 +914,198 @@ fn settings_mcp_tool_counts_are_visible_without_expanding_and_clear_on_refresh(
     });
     assert!(app.read_with(cx, |app, _| app.extensions_ui.tool_reports.is_empty()));
 }
+
+#[gpui_kit::test]
+fn settings_plugins_manage_icon_theme_lifecycle_and_readonly_state(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    use conduit::plugin_packages as packages;
+    let (app, cx) = fixture(cx);
+    let root = crate::app::plugin_ui::management::installation_root();
+    let source =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/plugins/outline-icons");
+    let id = packages::install(&source, &root).unwrap();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.refresh_installed_plugins(cx);
+            app.select_settings_page(11, window, cx);
+        })
+    });
+    draw(cx);
+    cx.update(|_, cx| {
+        app.read_with(cx, |app, _| {
+            assert_eq!(app.plugins.packages.entries.len(), 1);
+            assert!(app.plugins.packages.entries[0].registration.is_some());
+            assert!(
+                app.settings_search_matches("plugin")
+                    .iter()
+                    .any(|r| r.page == 11)
+            );
+        })
+    });
+    for (width, height) in [(850., 500.), (1280., 800.)] {
+        cx.simulate_resize(size(px(width), px(height)));
+        draw(cx);
+        let bounds = cx.debug_bounds("settings-content").unwrap();
+        for selector in ["plugin-install", "plugin-refresh", "plugin-default-icons"] {
+            let control = cx.debug_bounds(selector).unwrap();
+            assert!(control.left() >= bounds.left() && control.right() <= bounds.right());
+        }
+    }
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.set_plugin_enabled(&id, false, cx);
+            app.select_file_icon_theme(Some(id.clone()), cx);
+            assert!(app.store.ui.plugins.file_icon_theme.is_none());
+            assert!(
+                app.plugins.packages.entries[0].registration.is_some(),
+                "read-only toggle"
+            );
+            app.writable = true;
+            app.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
+            cx.notify();
+        })
+    });
+    draw(cx);
+    let select = cx
+        .debug_bounds("plugin-use-example.outline-icons")
+        .unwrap()
+        .center();
+    cx.simulate_mouse_down(select, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(select, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            assert_eq!(
+                app.store.ui.plugins.file_icon_theme.as_deref(),
+                Some(id.as_str())
+            );
+            let before = app.plugins.revision();
+            app.set_plugin_enabled(&id, false, cx);
+            assert!(app.store.ui.plugins.disabled.contains(&id));
+            assert!(app.store.ui.plugins.file_icon_theme.is_none());
+            assert!(app.plugins.packages.entries[0].registration.is_none());
+            assert!(
+                app.plugins.revision() != before,
+                "icon changes invalidate navigation cache"
+            );
+            app.select_file_icon_theme(Some(id.clone()), cx);
+            assert!(
+                app.store.ui.plugins.file_icon_theme.is_none(),
+                "disabled themes cannot activate"
+            );
+            app.refresh_installed_plugins(cx);
+        })
+    });
+    draw(cx);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            assert!(
+                app.plugins.packages.entries[0].registration.is_none(),
+                "refresh preserves disabled preference"
+            );
+            app.set_plugin_enabled(&id, true, cx);
+            app.select_file_icon_theme(Some(id.clone()), cx);
+            app.refresh_installed_plugins(cx);
+        })
+    });
+    draw(cx);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            assert_eq!(
+                app.store.ui.plugins.file_icon_theme.as_deref(),
+                Some(id.as_str())
+            );
+            app.uninstall_plugin(id.clone(), cx);
+        })
+    });
+    draw(cx);
+    cx.update(|_, cx| {
+        app.read_with(cx, |app, _| {
+            assert!(app.plugins.packages.entries.is_empty());
+            assert!(app.store.ui.plugins.file_icon_theme.is_none());
+            assert!(!app.store.ui.plugins.disabled.contains(&id));
+        })
+    });
+    assert!(!root.join(&id).exists());
+    assert!(source.join(packages::MANIFEST).exists());
+}
+
+#[gpui_kit::test]
+fn plugin_discovery_installs_official_package_and_respects_readonly_mode(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx) = fixture(cx);
+    let official = conduit::plugin_packages::catalog::bundled_entry();
+    let id = official.plugin.id.clone();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            // Seed a completed discovery result: this UI test must never contact GitHub.
+            app.plugins.packages.catalog.queried = true;
+            app.select_settings_page(11, window, cx);
+        })
+    });
+    draw(cx);
+    let discover = cx.debug_bounds("plugins-discover-tab").unwrap().center();
+    cx.simulate_mouse_down(discover, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(discover, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    for (width, height) in [(850., 500.), (1280., 800.)] {
+        cx.simulate_resize(size(px(width), px(height)));
+        draw(cx);
+        let content = cx.debug_bounds("settings-content").unwrap();
+        let search = cx.debug_bounds("plugin-catalog-search").unwrap();
+        assert!(search.left() >= content.left() && search.right() <= content.right());
+    }
+    let button = cx
+        .debug_bounds("catalog-install-conduit-plugins.outline-icons")
+        .unwrap()
+        .center();
+    cx.simulate_mouse_down(button, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(button, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    assert!(app.read_with(cx, |app, _| app.plugins.packages.entries.is_empty()));
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.writable = true;
+            app.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
+            cx.notify();
+        })
+    });
+    draw(cx);
+    cx.simulate_mouse_down(button, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(button, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    app.read_with(cx, |app, _| {
+        assert_eq!(app.plugins.packages.entries.len(), 1);
+        let package = &app.plugins.packages.entries[0].package;
+        assert_eq!(package.manifest.id, id);
+        assert!(matches!(
+            package.source,
+            Some(conduit::plugin_packages::catalog::Source::Bundled { .. })
+        ));
+        assert!(app.plugins.packages.entries[0].registration.is_some());
+    });
+    // The installed tab uses the same manager and persisted icon preference.
+    let installed = cx.debug_bounds("plugins-installed-tab").unwrap().center();
+    cx.simulate_mouse_down(installed, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(installed, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    assert!(
+        cx.debug_bounds("plugin-conduit-plugins.outline-icons")
+            .is_some()
+    );
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.select_file_icon_theme(Some(id.clone()), cx);
+            assert_eq!(
+                app.store.ui.plugins.file_icon_theme.as_deref(),
+                Some(id.as_str())
+            );
+            app.uninstall_plugin(id.clone(), cx);
+        })
+    });
+    draw(cx);
+    assert!(
+        app.read_with(cx, |app, _| app.plugins.packages.entries.is_empty()
+            && app.store.ui.plugins.file_icon_theme.is_none())
+    );
+}

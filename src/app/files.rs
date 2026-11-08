@@ -926,20 +926,23 @@ impl ConduitApp {
                                             },
                                         )
                                     })
+                                    .child(div().w(px(12.)).flex_shrink_0().when(
+                                        directory,
+                                        |slot| {
+                                            slot.child(
+                                                Icon::new(if expanded {
+                                                    IconName::ChevronDown
+                                                } else {
+                                                    IconName::ChevronRight
+                                                })
+                                                .size(px(12.))
+                                                .text_color(rgb(palette().muted)),
+                                            )
+                                        },
+                                    ))
                                     .child(
-                                        Icon::new(if directory {
-                                            if expanded {
-                                                IconName::ChevronDown
-                                            } else {
-                                                IconName::ChevronRight
-                                            }
-                                        } else {
-                                            IconName::File
-                                        })
-                                        .small()
-                                        .text_color(rgb(
-                                            status.map_or(palette().muted, TreeGitStatus::color),
-                                        )),
+                                        this.file_tree_icon(&entry.relative, directory, expanded)
+                                            .small(),
                                     )
                                     .child(
                                         div()

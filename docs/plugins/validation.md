@@ -2,6 +2,24 @@
 
 当前结论：原生贡献和 Shell 开发接入已有自动化回归，Shell 生产准入尚未完成；P2 后端决策与 P3 安装管理不能据此宣布完成。本文保留准入定义和可复验方法，不汇总不同源码快照的通过数。
 
+## 声明式图标插件
+
+正式应用支持本地和 GitHub 文件图标包，格式见[图标主题](icon-themes.zh-CN.md)，在线发现与发布见[GitHub 目录](github-catalog.zh-CN.md)。这一数据插件路径独立于下方 Shell 脚本准入：它只解析清单和 SVG，不创建脚本运行时。
+
+```powershell
+cargo test --locked --lib plugin_packages::
+cargo test --locked --features ui-tests --bin conduit settings_plugins_manage_icon_theme_lifecycle_and_readonly_state -- --test-threads=1
+cargo test --locked --features ui-tests --bin conduit plugin_discovery_installs_official_package_and_respects_readonly_mode -- --test-threads=1
+```
+
+回归覆盖复制安装和卸载、重复 ID、名称与复合扩展名匹配、展开文件夹、路径越界、SVG 限制、损坏包隔离、注册撤销和设置持久化。设置页测试覆盖只读状态、窄窗布局、主题选择、启停、刷新与卸载后的默认图标回退。GitHub 测试使用可注入传输层覆盖单包／目录仓库、固定 commit、版本 tag、身份不匹配、分页、缓存和离线官方安装，不连接真实 GitHub。真实桌面仍需检查深浅主题中的图标清晰度和文件夹展开效果；公共 API 的联网冒烟单独记录，不能把本地未推送的目录当成已发布。
+
+显式联网检查使用以下独立命令，仅访问公共 GitHub 搜索、仓库 commit 和 README；不安装远程包，也不要求 token。它消耗公共 API 配额，因此常规测试默认跳过：
+
+```powershell
+cargo test --locked --lib github_public_catalog_connectivity -- --ignored --nocapture
+```
+
 ## G1–G6
 
 | 门槛 | 已有基础 | 继续验证的边界 |

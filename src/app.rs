@@ -774,6 +774,7 @@ impl ConduitApp {
                     .into(),
             );
         }
+        app.refresh_installed_plugins(cx);
         app.sync_plugin_context();
         app.restore_update_drafts(window, cx);
         app.show_installed_changelog(window, cx);

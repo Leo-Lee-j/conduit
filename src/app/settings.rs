@@ -444,6 +444,7 @@ pub(super) use connections::ConnectionsUi;
 mod extensions_view;
 #[path = "settings/navigation.rs"]
 mod navigation;
+mod plugins;
 mod search;
 #[path = "settings/shortcuts.rs"]
 mod shortcut_settings;

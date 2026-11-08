@@ -72,6 +72,7 @@ Conduit 复用所选 CLI 的认证与执行能力，不自带模型服务。模�
 | --- | --- |
 | [使用指南](docs/usage.md) | 配置、对话、快捷键与更新 |
 | [设置与 AI 连接](docs/settings.md) | CLI 路径、模型服务、Skills 与 MCP |
+| [插件与图标主题](docs/plugins/github-catalog.zh-CN.md) | GitHub 发现、安装与官方插件 |
 | [文件与内容预览](docs/files.md) | 文件引用、搜索、Markdown 与 Mermaid |
 | [Git 工作流](docs/git.md) | 暂存、提交、分支与失败恢复 |
 | [集成终端](docs/terminal.md) | 工作区 Shell 与终端行为 |

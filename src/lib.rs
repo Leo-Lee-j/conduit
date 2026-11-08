@@ -1,5 +1,6 @@
 //! Host data models shared by desktop adapters and focused tests.
 extern crate self as conduit;
+pub mod plugin_packages;
 pub mod plugins;
 pub mod update;
 

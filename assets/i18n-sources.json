@@ -1582,7 +1582,7 @@
   "无法定位 MCP 配置，请编辑原文件": "extensions.mcp.unable_to_locate_mcp_configuration_edit_the",
   "无法定位配置对象": "extensions.mcp.unable_to_locate_configuration_object",
   "无法合并配置，请编辑原文件": "extensions.mcp.unable_to_merge_configuration_edit_the_original",
-  "插件": "extensions.plugin",
+  "插件": "settings.plugins.title",
   "配置已禁用": "extensions.configuration_disabled",
   "已发现": "extensions.discovered",
   "已配置 · 连接未检测": "extensions.configured_connection_not_tested",

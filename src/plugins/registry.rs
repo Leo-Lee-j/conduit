@@ -84,6 +84,7 @@ pub struct Removed {
     pub commands: Vec<CommandId>,
     pub activities: Vec<ItemId>,
     pub statuses: Vec<ItemId>,
+    pub file_icon_themes: Vec<ItemId>,
 }
 #[derive(Clone, Debug)]
 pub enum ActionRequest {
@@ -167,6 +168,11 @@ impl Registry {
             .iter()
             .find(|v| v.id == *id)
     }
+    pub fn file_icon_themes(&self) -> impl Iterator<Item = &FileIconThemeDescriptor> {
+        self.entries
+            .values()
+            .flat_map(|entry| entry.set.file_icon_themes.iter())
+    }
     pub fn views(&self) -> impl Iterator<Item = &ViewDescriptor> {
         self.entries.values().flat_map(|e| &e.set.views)
     }
@@ -218,6 +224,7 @@ impl Registry {
             .chain(set.views.iter().map(|i| i.id.as_str()))
             .chain(set.activity_items.iter().map(|i| i.id.as_str()))
             .chain(set.status_items.iter().map(|i| i.id.as_str()))
+            .chain(set.file_icon_themes.iter().map(|i| i.id.as_str()))
         {
             require(
                 set.owner.owns(id),
@@ -232,6 +239,9 @@ impl Registry {
             !ids.is_empty() && ids.len() <= 512,
             "contribution set must have 1..512 entries",
         )?;
+        for theme in &set.file_icon_themes {
+            text(&theme.title, 160, true)?;
+        }
         for command in &set.commands {
             text(&command.title, 160, true)?;
             if let ArgumentPolicy::Object {
@@ -342,6 +352,12 @@ impl Registry {
             commands: entry.set.commands.into_iter().map(|v| v.id).collect(),
             activities: entry.set.activity_items.into_iter().map(|v| v.id).collect(),
             statuses: entry.set.status_items.into_iter().map(|v| v.id).collect(),
+            file_icon_themes: entry
+                .set
+                .file_icon_themes
+                .into_iter()
+                .map(|v| v.id)
+                .collect(),
         })
     }
     pub fn prepare_command(

@@ -28,6 +28,9 @@ pub enum NamingMode {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UiSettings {
+    /// Installed data plugins stay enabled unless explicitly disabled.
+    #[serde(default)]
+    pub plugins: conduit::plugin_packages::Preferences,
     /// Missing fields in existing installations retain their original language.
     #[serde(default = "conduit::i18n::Locale::legacy")]
     pub language: conduit::i18n::Locale,
@@ -182,6 +185,7 @@ impl UiSettings {
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
+            plugins: Default::default(),
             language: Default::default(),
             terminal_profile: Default::default(),
             terminal_height: default_terminal_height(),

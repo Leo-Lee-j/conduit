@@ -13,7 +13,7 @@ pub(in crate::app) struct SettingsUi {
     pub prompt_expanded: bool,
 }
 
-pub(super) const PAGES: [(&str, &str, &str); 11] = [
+pub(super) const PAGES: [(&str, &str, &str); 12] = [
     ("工作台", "通用", "布局 内容 会话数量 标签"),
     ("工作台", "外观", "主题 字体 文字 代码"),
     ("工作台", "快捷键", "键盘 shortcut"),
@@ -41,9 +41,14 @@ pub(super) const PAGES: [(&str, &str, &str); 11] = [
         "MCP 工具 配置 服务器 添加 编辑 停用 恢复 同名 来源",
     ),
     ("AI 连接", "新会话默认", "默认 模型 服务 引擎 新建 对话"),
+    (
+        "扩展能力",
+        "插件",
+        "plugin icons theme install enable disable uninstall 文件图标 主题 安装 启用 停用 卸载",
+    ),
 ];
 
-const PAGE_ORDER: [usize; 11] = [0, 1, 2, 3, 8, 10, 4, 9, 5, 6, 7];
+const PAGE_ORDER: [usize; 12] = [0, 1, 2, 3, 8, 10, 11, 4, 9, 5, 6, 7];
 
 /// The header and navigation share a column, including at larger UI font sizes.
 pub(super) fn settings_navigation_width(available_width: f32, font_size: f32) -> f32 {
@@ -55,7 +60,7 @@ pub(super) fn settings_navigation_width(available_width: f32, font_size: f32) ->
     }
 }
 
-pub(super) const PAGE_SUMMARIES: [&str; 11] = [
+pub(super) const PAGE_SUMMARIES: [&str; 12] = [
     "settings.summary.general",
     "settings.summary.appearance",
     "settings.summary.shortcuts",
@@ -67,6 +72,7 @@ pub(super) const PAGE_SUMMARIES: [&str; 11] = [
     "settings.summary.models",
     "settings.summary.mcp",
     "settings.summary.defaults",
+    "settings.plugins.summary",
 ];
 
 pub(super) fn matches_search(text: &str, query: &str) -> bool {
@@ -119,7 +125,7 @@ impl ConduitApp {
                 1 => FullIconName::Palette,
                 2 => FullIconName::Keyboard,
                 3 => FullIconName::SquareTerminal,
-                4 | 9 => FullIconName::Blocks,
+                4 | 9 | 11 => FullIconName::Blocks,
                 5 => FullIconName::Pencil,
                 6 => FullIconName::GitFork,
                 7 => FullIconName::Database,
@@ -165,6 +171,8 @@ impl ConduitApp {
         }
         let content = if searching {
             self.settings_search_results(&query, view.clone())
+        } else if self.settings_ui.page == 11 {
+            self.settings_plugins_content(view.clone())
         } else if matches!(self.settings_ui.page, 3 | 8) {
             self.settings_connections_content(content_width, view.clone())
         } else if matches!(self.settings_ui.page, 4 | 9) {
