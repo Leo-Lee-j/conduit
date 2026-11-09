@@ -268,7 +268,8 @@ pub struct ConduitApp {
     expanded_tools: HashSet<(u64, String)>,
     /// Groups manually pinned open after the assistant starts replying.
     expanded_tool_groups: HashSet<(u64, String)>,
-    expanded_reasoning: HashSet<(u64, String)>,
+    /// Explicit choices survive streaming and changes to the default visibility.
+    reasoning_expansion: HashMap<(u64, String), bool>,
     expanded_errors: HashSet<(u64, String)>,
     /// Last elapsed-label repaint: every second for turns/recent ages, otherwise every minute.
     last_live_tick: Instant,
@@ -748,7 +749,7 @@ impl ConduitApp {
             restore_reading_position: false,
             expanded_tools: HashSet::new(),
             expanded_tool_groups: HashSet::new(),
-            expanded_reasoning: HashSet::new(),
+            reasoning_expansion: HashMap::new(),
             expanded_errors: HashSet::new(),
             last_live_tick: Instant::now(),
             tool_scrolls: HashMap::new(),

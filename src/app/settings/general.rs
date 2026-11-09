@@ -35,6 +35,11 @@ impl ConduitApp {
             |app| app.store.ui.full_width_content,
             |app, value| app.store.ui.full_width_content = value,
         );
+        let collapse_reasoning = switch_field(
+            view.clone(),
+            |app| app.store.ui.collapse_reasoning,
+            ConduitApp::set_reasoning_collapsed,
+        );
         let language_view = view.clone();
         let language = self.store.ui.language.clone();
         let language_label = conduit::i18n::languages()
@@ -82,6 +87,14 @@ impl ConduitApp {
                 )
                 .description(settings_description(conduit::i18n::text_static(
                     "settings.general.fill_the_available_area_with_chat_content",
+                )))
+                .disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.collapse_reasoning"),
+                    collapse_reasoning,
+                )
+                .description(settings_description(conduit::i18n::text_static(
+                    "settings.general.collapse_reasoning_description",
                 )))
                 .disabled(disabled),
                 SettingItem::new(

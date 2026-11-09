@@ -157,6 +157,20 @@ impl Render for SidebarView {
 }
 
 impl ConduitApp {
+    fn workspace_collapsed(&self, path: &Path) -> bool {
+        self.collapsed_workspaces.contains(path) || self.sidebar.auto_collapsed.contains(path)
+    }
+
+    fn set_workspace_collapsed(&mut self, path: &Path, collapsed: bool) {
+        if collapsed {
+            self.collapsed_workspaces.insert(path.to_owned());
+            self.sidebar.auto_expanded.remove(path);
+        } else {
+            self.collapsed_workspaces.remove(path);
+            self.sidebar.auto_expanded.insert(path.to_owned());
+        }
+    }
+
     fn refresh_sidebar(&mut self) -> bool {
         let inputs = cache::Inputs::new(self);
         self.sidebar
@@ -657,7 +671,7 @@ impl ConduitApp {
         let app_entity = cx.entity();
         let can_edit = self.writable && !self.closing;
         let workspace_selected = self.selected_workspace == Some(index);
-        let collapsed = self.collapsed_workspaces.contains(&workspace.path);
+        let collapsed = self.workspace_collapsed(&workspace.path);
         let importing = self.history_loading.contains(&workspace.path);
         let toggle_path = workspace.path.clone();
         let drag_path = workspace.path.clone();
@@ -751,9 +765,7 @@ impl ConduitApp {
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
-                        if !this.collapsed_workspaces.insert(toggle_path.clone()) {
-                            this.collapsed_workspaces.remove(&toggle_path);
-                        }
+                        this.set_workspace_collapsed(&toggle_path, !this.workspace_collapsed(&toggle_path));
                         cx.notify();
                     })),
             )

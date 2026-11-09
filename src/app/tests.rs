@@ -609,7 +609,43 @@ fn composer_defaults_to_medium_and_preserves_explicit_effort_until_model_changes
     }
 }
 #[test]
-fn contiguous_tool_groups_include_adjacent_completed_activity() {
+fn claude_thinking_stream_and_snapshot_restore_without_duplicate_reply_or_opaque_data() {
+    let _locale = crate::test_support::chinese();
+    let mut protocol =
+        crate::protocol::Protocol::new(Provider::Claude, "C:/work".into(), "hello".into(), None);
+    let mut s = session();
+    let events = [
+        serde_json::json!({"type":"stream_event","event":{"type":"message_start","message":{"id":"m"}}}),
+        serde_json::json!({"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"Checking"}}}),
+        serde_json::json!({"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" the code"}}}),
+        serde_json::json!({"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"opaque-signature"}}}),
+        serde_json::json!({"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"text"}}}),
+        serde_json::json!({"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Done"}}}),
+        serde_json::json!({"type":"assistant","message":{"id":"m","content":[
+            {"type":"thinking","thinking":"Checking the code","signature":"opaque-signature"},
+            {"type":"redacted_thinking","data":"opaque-data"},
+            {"type":"text","text":"Done"}
+        ]}}),
+    ];
+    for value in events {
+        for event in protocol.accept(value).events {
+            apply_event(&mut s, "turn", event);
+        }
+    }
+    assert_eq!(s.messages.len(), 2);
+    assert_eq!(s.messages[0].kind, ItemKind::Reasoning);
+    assert_eq!(s.messages[0].text, "Checking the code");
+    assert_eq!(s.messages[1].kind, ItemKind::Assistant);
+    assert_eq!(s.messages[1].text, "Done");
+    let saved = serde_json::to_string(&s.messages).unwrap();
+    assert!(!saved.contains("opaque-"));
+    let restored: Vec<ChatItem> = serde_json::from_str(&saved).unwrap();
+    assert_eq!(restored[0].text, "Checking the code");
+    assert_eq!(restored[0].key, s.messages[0].key);
+}
+
+#[test]
+fn contiguous_tool_groups_keep_reasoning_independently_visible() {
     let _locale = crate::test_support::chinese();
     let activity = |key: &str, kind: ItemKind, title: &str, status: &str| {
         ChatItem::from(crate::domain::ChatItemData {
@@ -632,11 +668,28 @@ fn contiguous_tool_groups_include_adjacent_completed_activity() {
         activity("c", ItemKind::Reasoning, "thinking", ""),
         activity("d", ItemKind::Tool, "other", "completed"),
     ];
-    assert_eq!(super::contiguous_tool_group(&s, 1), Some((0, 4)));
-    assert_eq!(super::contiguous_tool_group(&s, 2), Some((0, 4)));
+    assert_eq!(super::contiguous_tool_group(&s, 1), Some((0, 2)));
+    assert_eq!(super::contiguous_tool_group(&s, 2), None);
+    assert_eq!(super::contiguous_tool_group(&s, 3), Some((3, 4)));
 
     s.messages[1].status = "运行中".into();
-    assert_eq!(super::contiguous_tool_group(&s, 0), Some((0, 4)));
+    assert_eq!(super::contiguous_tool_group(&s, 0), Some((0, 2)));
+
+    s.messages[1].status = "completed".into();
+    s.messages
+        .push(activity("reply", ItemKind::Assistant, "done", ""));
+    let mut rows = super::chat::rows::Rows::default();
+    rows.refresh(Some(&s), &Default::default());
+    assert_eq!(
+        rows.rows.iter().map(|row| row.message).collect::<Vec<_>>(),
+        vec![0, 2, 3, 4]
+    );
+    assert!(
+        rows.group(2).is_none(),
+        "thinking remains visible after tool groups collapse"
+    );
+    assert_eq!(rows.group(0).unwrap().count, 2);
+    assert!(!rows.group(0).unwrap().expanded);
 }
 #[test]
 fn empty_stream_blocks_do_not_split_tools_or_count_as_replies() {

@@ -413,8 +413,8 @@ impl ConduitApp {
         self.expanded_tools.retain(|(session, _)| *session != id);
         self.expanded_tool_groups
             .retain(|(session, _)| *session != id);
-        self.expanded_reasoning
-            .retain(|(session, _)| *session != id);
+        self.reasoning_expansion
+            .retain(|(session, _), _| *session != id);
         self.tool_scrolls.retain(|(session, _), _| *session != id);
         self.tool_details.forget_session(id);
         self.tool_diffs.forget_session(id);
@@ -766,7 +766,8 @@ impl ConduitApp {
             self.session_control.unread_completed.remove(&session.id);
             self.expanded_errors.retain(|(id, _)| *id != session.id);
             self.expanded_tools.retain(|(id, _)| *id != session.id);
-            self.expanded_reasoning.retain(|(id, _)| *id != session.id);
+            self.reasoning_expansion
+                .retain(|(id, _), _| *id != session.id);
             self.tool_scrolls.retain(|(id, _), _| *id != session.id);
             self.tool_details.forget_session(session.id);
             self.tool_diffs.forget_session(session.id);

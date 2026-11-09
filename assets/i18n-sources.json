@@ -1,4 +1,6 @@
 {
+  "自动折叠非活跃工作空间": "settings.appearance.auto_collapse_inactive_workspaces",
+  "自动折叠最近 3 天内没有会话活动的工作空间。当前工作空间和正在运行的会话保持可见，仍可手动展开任意工作空间。": "settings.appearance.auto_collapse_inactive_workspaces_description",
   "运行中": "events.running",
   "输出中": "events.streaming_output",
   "已完成": "history.completed",

@@ -70,6 +70,64 @@ fn connected(native: Option<&str>, resume: bool, variant: Option<&str>) -> (Prot
 }
 
 #[test]
+fn opencode_thinking_chunks_preserve_order_and_filter_replays_and_foreign_sessions() {
+    let _locale = crate::test_support::chinese();
+    let mut protocol = Protocol::new(Provider::OpenCode, "C:/work".into(), "hello".into(), None);
+    protocol.acp.session_id = Some("session".into());
+    let chunk = |session: &str, kind: &str, text: &str| {
+        json!({
+            "method":"session/update", "params":{"sessionId":session,"update":{
+                "sessionUpdate":kind,"content":{"type":"text","text":text}
+            }}
+        })
+    };
+    assert!(
+        protocol
+            .accept(chunk("session", "agent_thought_chunk", "old"))
+            .events
+            .is_empty()
+    );
+    protocol.acp.stage = Stage::Prompt;
+    assert!(
+        protocol
+            .accept(chunk("other", "agent_thought_chunk", "foreign"))
+            .events
+            .is_empty()
+    );
+    for text in ["Checking", " the code"] {
+        let step = protocol.accept(chunk("session", "agent_thought_chunk", text));
+        assert!(
+            matches!(&step.events[0], Event::ReasoningSummary { key, text: actual, snapshot: false, .. }
+            if key == "acp-thought-1" && actual == text)
+        );
+    }
+    let reply = protocol.accept(chunk("session", "agent_message_chunk", "First answer"));
+    assert!(matches!(&reply.events[0], Event::Delta { key, .. } if key == "acp-reply-1"));
+    let thought = protocol.accept(chunk("session", "agent_thought_chunk", "One more check"));
+    assert!(
+        matches!(&thought.events[0], Event::ReasoningSummary { key, .. } if key == "acp-thought-2")
+    );
+    let reply = protocol.accept(chunk("session", "agent_message_chunk", "Second answer"));
+    assert!(matches!(&reply.events[0], Event::Delta { key, .. } if key == "acp-reply-2"));
+    protocol.accept(
+        json!({"method":"session/update","params":{"sessionId":"session","update":{
+            "sessionUpdate":"tool_call","toolCallId":"tool","title":"Read"
+        }}}),
+    );
+    let thought = protocol.accept(chunk("session", "agent_thought_chunk", "After the tool"));
+    assert!(
+        matches!(&thought.events[0], Event::ReasoningSummary { key, .. } if key == "acp-thought-3")
+    );
+    protocol.acp.stage = Stage::Done;
+    assert!(
+        protocol
+            .accept(chunk("session", "agent_thought_chunk", "late"))
+            .events
+            .is_empty()
+    );
+}
+
+#[test]
 fn opencode_new_load_and_resume_apply_model_and_variant_before_prompt() {
     let _locale = crate::test_support::chinese();
     for (native, resume) in [

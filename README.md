@@ -33,7 +33,7 @@ Conduit is under active development and currently supports **Windows x64**. The 
 ## Why Conduit?
 
 - **Choose your agent.** Use Claude Code, Codex, OpenCode, or Qoder CLI, with streaming replies, tool approvals, cancellation, and per-session model settings.
-- **Keep projects organized.** Run sessions in parallel, search your history, pin important conversations, and resume native CLI sessions. Existing Claude Code and Codex terminal history is imported by workspace.
+- **Keep projects organized.** Run sessions in parallel, search your history, pin important conversations, and resume native CLI sessions. Existing Claude Code, Codex, and OpenCode terminal history is imported by workspace.
 - **Review what changed.** Browse files with syntax highlighting, read Markdown and Mermaid diagrams, and inspect unified or side-by-side diffs from a conversation turn. File and diff previews are currently read-only.
 - **Take changes through Git.** Stage selected files, manage branches, generate commit messages, commit, and push. Commits include only the staged changes in the files you select.
 - **Keep working while an agent runs.** Queue a follow-up message, switch sessions, or use workspace terminal tabs with PowerShell, cmd, and terminal programs.

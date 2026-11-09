@@ -71,7 +71,7 @@
 - 取消先发 `session/cancel`，最多等待 750 ms，再进入统一 Job 清理。适配器与旁路资源保留到进程树确认退出。
 - 自动命名和 Git 说明使用 `opencode run --pure --format json` 文本任务。内容经 stdin 发送，任务禁用工具，使用独立临时历史目录，清理后删除；模型错误直接报告，不自动换模型。
 - 模型目录按工作区和 CLI 路径缓存到 `opencode-models/`，有效期 24 小时，手动刷新绕过缓存；不缓存原始凭据。
-- OpenCode 使用原生 Provider 配置，没有 Conduit 自定义 Provider / CCS 桥接或终端历史自动导入。应用内会话可以保存并续接。
+- OpenCode 使用原生 Provider 配置，没有 Conduit 自定义 Provider / CCS 桥接。终端历史从本地 SQLite 数据库按工作区导入，应用内会话和导入会话都可以按原生 ID 续接。
 
 ## Qoder CLI
 

@@ -3,6 +3,7 @@
 use super::*;
 
 mod cache;
+mod scroll;
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests;
@@ -17,14 +18,20 @@ pub(super) const NAVIGATION_DEFAULT_WIDTH: f32 = NAVIGATION_MAX_WIDTH;
 pub(super) struct ChatTimeline {
     app: WeakEntity<ConduitApp>,
     scroll: ListState,
+    wheel: std::rc::Rc<std::cell::RefCell<scroll::Wheel>>,
     render_state: Option<cache::State>,
 }
 
 impl ChatTimeline {
+    pub(super) fn wheel_pending(&self, app: &ConduitApp) -> bool {
+        self.wheel.borrow().is_pending(app)
+    }
+
     pub(super) fn new(app: WeakEntity<ConduitApp>, scroll: ListState) -> Self {
         Self {
             app,
             scroll,
+            wheel: Default::default(),
             render_state: None,
         }
     }
@@ -32,17 +39,20 @@ impl ChatTimeline {
     fn handle_scroll(
         &mut self,
         event: &ScrollWheelEvent,
-        origin: Point<Pixels>,
+        origin: ListOffset,
         cx: &mut Context<Self>,
     ) {
         let delta = event.delta.pixel_delta(px(20.)).y;
-        self.scroll
-            .set_offset_from_scrollbar(point(px(0.), origin.y + delta));
+        if delta == px(0.) {
+            // Horizontal/zero-delta packets do not leave the vertical anchor.
+            self.scroll.scroll_to(origin);
+            return;
+        }
+        if let Some(app) = self.app.upgrade() {
+            self.wheel.borrow_mut().sync(app.read(cx));
+        }
+        let at_bottom = self.wheel.borrow_mut().apply(&self.scroll, origin, delta);
         let top = self.scroll.logical_scroll_top();
-        let at_bottom = self
-            .scroll
-            .is_scrolled_to_end()
-            .unwrap_or(top.item_ix >= self.scroll.item_count());
         let _ = self.app.update(cx, |app, cx| {
             let navigating = app.pending_message_jump.take().is_some();
             let outline = app
@@ -64,7 +74,7 @@ impl Render for ChatTimeline {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(app) = self.app.upgrade() {
             let app = app.read(cx);
-            if app.at_bottom && app.pending_message_jump.is_none() {
+            if app.at_bottom && app.pending_message_jump.is_none() && !self.wheel_pending(app) {
                 self.scroll.scroll_to_end();
             }
             let monitor = app
@@ -77,14 +87,17 @@ impl Render for ChatTimeline {
             }
         }
         let app = self.app.clone();
-        let list = gpui_kit::list(self.scroll.clone(), move |index, _, cx| {
-            app.update(cx, |app, cx| app.render_message(index, cx))
+        let list = gpui_kit::list(self.scroll.clone(), move |index, window, cx| {
+            app.update(cx, |app, cx| app.render_message(index, window, cx).0)
                 .unwrap_or_else(|_| div().into_any_element())
         })
         .size_full();
-        let origin = std::rc::Rc::new(std::cell::Cell::new(Point::<Pixels>::default()));
+        let origin = std::rc::Rc::new(std::cell::Cell::new(self.scroll.logical_scroll_top()));
         let capture_origin = origin.clone();
         let scroll = self.scroll.clone();
+        let layout_scroll = self.scroll.clone();
+        let layout_app = self.app.clone();
+        let wheel = self.wheel.clone();
         div()
             .relative()
             .size_full()
@@ -95,22 +108,20 @@ impl Render for ChatTimeline {
             }))
             .child(
                 canvas(
-                    |_, _, _| (),
+                    move |bounds, window, cx| {
+                        wheel
+                            .borrow_mut()
+                            .prepare(&layout_scroll, &layout_app, bounds, window, cx);
+                    },
                     move |bounds, _, window, _| {
                         // gpui-pre 0.3.9 coalesces wheel packets against the
                         // last painted anchor, losing movement on reversals.
-                        // Capture the live offset before its listener, then
-                        // replace that result in our bubble handler. Nested
+                        // Capture the live logical anchor before its listener,
+                        // then restore it in our bubble handler. Nested
                         // scrollers get first refusal and can stop bubbling.
                         window.on_mouse_event(move |event: &ScrollWheelEvent, phase, _, _| {
                             if phase == DispatchPhase::Capture && bounds.contains(&event.position) {
-                                let offset = scroll.scroll_px_offset_for_scrollbar();
-                                // scroll_to_end can temporarily use an item-count
-                                // sentinel; normalize it to the viewport's top.
-                                capture_origin.set(point(
-                                    px(0.),
-                                    offset.y.max(-scroll.max_offset_for_scrollbar().y),
-                                ));
+                                capture_origin.set(scroll.logical_scroll_top());
                             }
                         });
                     },

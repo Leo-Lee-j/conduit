@@ -546,6 +546,19 @@ fn turn_stats_details(
 }
 
 impl ConduitApp {
+    pub(super) fn set_reasoning_collapsed(&mut self, collapsed: bool) {
+        self.store.ui.collapse_reasoning = collapsed;
+        self.chat_rows.invalidate();
+        self.scroll.remeasure_items(0..self.scroll.item_count());
+    }
+
+    fn reasoning_expanded(&self, key: &(u64, String)) -> bool {
+        self.reasoning_expansion
+            .get(key)
+            .copied()
+            .unwrap_or(!self.store.ui.collapse_reasoning)
+    }
+
     pub(super) fn tool_group_header(
         &self,
         session_id: u64,
@@ -690,18 +703,31 @@ impl ConduitApp {
         let reasoning = item.kind == ItemKind::Reasoning;
         let detail_key = (session_id, item.key.clone());
         let expanded = if reasoning {
-            self.expanded_reasoning.contains(&detail_key)
+            self.reasoning_expanded(&detail_key)
         } else {
             self.expanded_tools.contains(&detail_key)
         };
-        let running = tool_running(item);
+        let running = tool_running(item)
+            || (reasoning
+                && self.session_control.runs.contains_key(&session_id)
+                && self.session(session_id).is_some_and(|session| {
+                    session
+                        .messages
+                        .iter()
+                        .rev()
+                        .find(|message| !is_empty_chat_placeholder(message))
+                        .is_some_and(|last| last.key == item.key)
+                }));
         let failed = !running && tool_failed(item);
         let category = if running && reasoning {
             conduit::i18n::text_static("chat.thinking").to_string()
+        } else if reasoning {
+            conduit::i18n::text_static("chat.reasoning").to_string()
         } else {
             tool_category(item)
         };
         let summary = tool_summary(item);
+        let show_summary = !summary.is_empty() && !(reasoning && expanded);
         let toggle_key = detail_key.clone();
         Button::new(SharedString::from(format!(
             "activity-{session_id}-{}",
@@ -726,9 +752,9 @@ impl ConduitApp {
         .on_click(cx.listener(move |this, _, _, cx| {
             this.remeasure_message(index);
             if reasoning {
-                if !this.expanded_reasoning.remove(&toggle_key) {
-                    this.expanded_reasoning.insert(toggle_key.clone());
-                }
+                let expanded = this.reasoning_expanded(&toggle_key);
+                this.reasoning_expansion
+                    .insert(toggle_key.clone(), !expanded);
             } else if !this.expanded_tools.remove(&toggle_key) {
                 this.expanded_tools.insert(toggle_key.clone());
             }
@@ -804,7 +830,7 @@ impl ConduitApp {
                             .child(conduit::i18n::text_static("chat.failed")),
                     )
                 })
-                .when(!summary.is_empty(), |row| {
+                .when(show_summary, |row| {
                     row.child(
                         div()
                             .flex_shrink_0()
@@ -821,15 +847,53 @@ impl ConduitApp {
                             .text_color(rgb(palette().muted))
                             .child(summary),
                     )
+                })
+                .when(reasoning, |row| {
+                    row.when(!show_summary, |row| row.child(div().flex_1()))
+                        .child(
+                            Icon::new(if expanded {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .small()
+                            .text_color(rgb(palette().muted)),
+                        )
                 }),
         )
         .into_any_element()
     }
 
-    pub(super) fn render_message(&mut self, row: usize, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_message(
+        &mut self,
+        row: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (
+        AnyElement,
+        Option<Entity<gpui_kit::base::text::TextViewState>>,
+    ) {
         let started = Instant::now();
         let index = self.chat_rows.message(row);
-        let element = self.render_message_content(index, cx);
+        // Keep the Markdown state in the row's namespace even when it is only
+        // measured as overdraw. Scroll layout can then wait for the parser
+        // instead of treating a long reply's empty first frame as its height.
+        let markdown = self
+            .selected_session
+            .and_then(|id| self.session(id))
+            .and_then(|session| {
+                let item = session.messages.get(index)?;
+                (item.kind == ItemKind::Assistant).then(|| {
+                    let state = window.use_keyed_state(
+                        SharedString::from(format!("chat-markdown-{}-{}", session.id, item.key)),
+                        cx,
+                        |_, cx| gpui_kit::base::text::TextViewState::markdown(&item.text, cx),
+                    );
+                    state.update(cx, |state, cx| state.set_text(&item.text, cx));
+                    state
+                })
+            });
+        let element = self.render_message_content(index, markdown.as_ref(), cx);
         #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
         profiling::record("row_build", started.elapsed());
         if self.store.ui.performance_monitor {
@@ -837,10 +901,15 @@ impl ConduitApp {
                 monitor.record_message_render(index, started.elapsed());
             });
         }
-        element
+        (element, markdown)
     }
 
-    fn render_message_content(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+    fn render_message_content(
+        &mut self,
+        index: usize,
+        markdown: Option<&Entity<gpui_kit::base::text::TextViewState>>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(session) = self
             .store
             .workspaces
@@ -1214,12 +1283,12 @@ impl ConduitApp {
                     .gap_1()
                     .group(message_group)
                     .child(
-                        chat_markdown_view(
-                            SharedString::from(format!("reply-{}-{}", session_id, item.key)),
-                            item.text.clone(),
+                        styled_markdown_view(
+                            TextView::new(markdown.expect("assistant Markdown state")),
                             &typography,
                             &format!("code-copy-{}-{}", session_id, item.key),
                             true,
+                            None,
                         )
                         .on_link_click(move |url, event, window, cx| {
                             let activate = match event {
@@ -1256,7 +1325,7 @@ impl ConduitApp {
             }
             ItemKind::Reasoning => {
                 let detail_key = (session_id, item.key.clone());
-                let expanded = self.expanded_reasoning.contains(&detail_key);
+                let expanded = self.reasoning_expanded(&detail_key);
                 let mut content = v_flex()
                     .w_full()
                     .min_w_0()
@@ -1264,7 +1333,8 @@ impl ConduitApp {
                     .child(self.activity_row(session_id, index, item, cx));
                 if expanded {
                     content = content.child(
-                        v_flex()
+                        div()
+                            .debug_selector(move || format!("reasoning-body-{session_id}-{index}"))
                             .w_full()
                             .min_w_0()
                             .p_3()
@@ -1278,7 +1348,20 @@ impl ConduitApp {
                                 body.font_family(family)
                             })
                             .text_color(rgb(palette().muted))
-                            .child(item.text.clone()),
+                            .cursor_text()
+                            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                                if event.pressed_button == Some(MouseButton::Left) {
+                                    this.timeline.update(cx, |_, cx| cx.notify());
+                                    cx.notify();
+                                }
+                            }))
+                            .child(gpui_kit::base::SelectableText::new(
+                                SharedString::from(format!(
+                                    "reasoning-text-{session_id}-{}",
+                                    item.key
+                                )),
+                                item.text.clone(),
+                            )),
                     );
                 }
                 activity_container(content.into_any_element(), tool_group.is_some())

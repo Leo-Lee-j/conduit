@@ -3,6 +3,113 @@ use crate::app::{NoticeLevel, NoticeSource};
 use gpui_kit::{TestAppContext, point, px};
 
 #[gpui_kit::test]
+fn thinking_disclosure_preserves_manual_choices_across_streaming_and_sessions(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::{Modifiers, MouseButton, VisualTestContext, size};
+    let _locale = crate::test_support::chinese();
+    let (app, cx, _) = super::queue::tests::fixture(cx, "thinking-disclosure");
+    let draw = |cx: &mut VisualTestContext| {
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+    };
+    let click = |cx: &mut VisualTestContext, selector: &'static str| {
+        let center = cx.debug_bounds(selector).expect(selector).center();
+        cx.simulate_mouse_down(center, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(center, MouseButton::Left, Modifiers::default());
+    };
+    cx.simulate_resize(size(px(1100.), px(700.)));
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.startup = None;
+            app.writable = false;
+            for id in [1, 2] {
+                app.session_mut(id).unwrap().messages = serde_json::from_value(serde_json::json!([
+                    {"key":"user","kind":"User","text":"Check the code"},
+                    {"key":"turn-thought","kind":"Reasoning","text":"Checking the code"},
+                    {"key":"tool","kind":"Tool","text":"Read","status":"completed"},
+                    {"key":"reply","kind":"Assistant","text":"Done"}
+                ]))
+                .unwrap();
+            }
+            app.sync_chat_rows();
+            cx.notify();
+        })
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("reasoning-body-1-1").is_none());
+    click(cx, "activity-1-1");
+    draw(cx);
+    assert!(cx.debug_bounds("reasoning-body-1-1").is_some());
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.set_reasoning_collapsed(false);
+            cx.notify();
+        })
+    });
+    draw(cx);
+    click(cx, "activity-1-1");
+    draw(cx);
+    assert!(cx.debug_bounds("reasoning-body-1-1").is_none());
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            super::apply_event(
+                app.session_mut(1).unwrap(),
+                "turn",
+                crate::protocol::Event::ReasoningSummary {
+                    key: "thought".into(),
+                    text: " and checking again".into(),
+                    summary_index: 0,
+                    snapshot: false,
+                },
+            );
+            app.sync_chat_rows();
+            cx.notify();
+        })
+    });
+    draw(cx);
+    assert!(
+        cx.debug_bounds("reasoning-body-1-1").is_none(),
+        "streaming must respect a manual collapse"
+    );
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.switch(1, Some(2), window, cx);
+            app.sync_chat_rows();
+            cx.notify();
+        })
+    });
+    draw(cx);
+    assert!(
+        cx.debug_bounds("reasoning-body-2-1").is_some(),
+        "same message key in another session follows the default"
+    );
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.set_reasoning_collapsed(true);
+            cx.notify();
+        })
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("reasoning-body-2-1").is_none());
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.switch(0, Some(1), window, cx);
+            app.set_reasoning_collapsed(false);
+            app.sync_chat_rows();
+            cx.notify();
+        })
+    });
+    draw(cx);
+    assert!(
+        cx.debug_bounds("reasoning-body-1-1").is_none(),
+        "explicit choice survives switching sessions and defaults"
+    );
+}
+
+#[gpui_kit::test]
 fn error_retry_keeps_partial_output_when_context_validation_fails(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     use crate::{domain::Workspace, protocol::Event, store::Store};

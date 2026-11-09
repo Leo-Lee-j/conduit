@@ -4,6 +4,8 @@ use gpui_kit::component::VirtualListScrollHandle;
 use gpui_kit::component::menu::PopupMenu;
 use std::rc::Rc;
 
+const INACTIVE_WORKSPACE_AGE: u64 = 3 * 24 * 60 * 60;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Row {
     Controls,
@@ -107,6 +109,8 @@ pub(super) struct Inputs {
     workspaces: Vec<(PathBuf, usize)>,
     expanded: HashSet<usize>,
     collapsed: HashSet<PathBuf>,
+    auto_expanded: HashSet<PathBuf>,
+    auto_collapse_inactive: bool,
     loading: HashSet<PathBuf>,
     runs: HashSet<u64>,
     unread: HashSet<u64>,
@@ -146,6 +150,8 @@ impl Inputs {
                 .collect(),
             expanded: app.expanded_workspaces.clone(),
             collapsed: app.collapsed_workspaces.clone(),
+            auto_expanded: app.sidebar.auto_expanded.clone(),
+            auto_collapse_inactive: app.store.ui.auto_collapse_inactive_workspaces,
             loading: app.history_loading.clone(),
             runs: app.session_control.runs.keys().copied().collect(),
             unread: app.session_control.unread_completed.clone(),
@@ -171,6 +177,8 @@ impl Inputs {
         self.workspaces == other.workspaces
             && self.expanded == other.expanded
             && self.collapsed == other.collapsed
+            && self.auto_expanded == other.auto_expanded
+            && self.auto_collapse_inactive == other.auto_collapse_inactive
             && self.loading == other.loading
             && self.query == other.query
             && self.results == other.results
@@ -191,6 +199,8 @@ pub(in crate::app) struct SidebarState {
     pub(in crate::app) dirty_sessions: HashSet<u64>,
     dirty_workspaces: HashSet<PathBuf>,
     groups: HashMap<PathBuf, WorkspaceRows>,
+    pub(super) auto_expanded: HashSet<PathBuf>,
+    pub(super) auto_collapsed: HashSet<PathBuf>,
     indices: HashMap<PathBuf, usize>,
     inputs: Option<Inputs>,
     latest_activity: u64,
@@ -215,6 +225,8 @@ impl Default for SidebarState {
             dirty_sessions: HashSet::new(),
             dirty_workspaces: HashSet::new(),
             groups: HashMap::new(),
+            auto_expanded: HashSet::new(),
+            auto_collapsed: HashSet::new(),
             indices: HashMap::new(),
             inputs: None,
             latest_activity: 0,
@@ -279,6 +291,8 @@ impl SidebarState {
                 .collect();
             self.groups
                 .retain(|path, _| self.indices.contains_key(path));
+            self.auto_expanded
+                .retain(|path| self.indices.contains_key(path));
         }
         for workspace in &store.workspaces {
             if self.dirty_workspaces.contains(&workspace.path)
@@ -314,6 +328,33 @@ impl SidebarState {
                     order_changed || previous.is_none_or(|old| old.archived != next.archived);
                 group.needs_sort |= order_changed;
                 group.summaries.insert(id, next);
+                changed = true;
+            }
+        }
+        // Use cached summaries, including unloaded transcript activity. Recheck
+        // on age ticks so a long-running app also crosses the three-day boundary.
+        if changed || rebuild {
+            let now = inputs.age_tick * inputs.age_interval;
+            let auto_collapsed = if inputs.auto_collapse_inactive && inputs.query.is_empty() {
+                self.groups
+                    .iter()
+                    .filter(|(path, group)| {
+                        self.indices.get(*path).copied() != inputs.selected_workspace
+                            && !inputs.auto_expanded.contains(*path)
+                            && !group.summaries.values().any(|s| {
+                                s.running
+                                    || (s.activity > 0
+                                        && now.saturating_sub(s.activity) < INACTIVE_WORKSPACE_AGE)
+                            })
+                    })
+                    .map(|(path, _)| path.clone())
+                    .collect()
+            } else {
+                HashSet::new()
+            };
+            if self.auto_collapsed != auto_collapsed {
+                self.auto_collapsed = auto_collapsed;
+                rebuild = true;
                 changed = true;
             }
         }
@@ -358,7 +399,7 @@ impl SidebarState {
                         .copied()
                         .or_else(|| workspace.sessions.first().map(|s| s.id)),
                 });
-                if inputs.collapsed.contains(path) {
+                if inputs.collapsed.contains(path) || self.auto_collapsed.contains(path) {
                     continue;
                 }
                 if inputs.loading.contains(path) {
@@ -471,5 +512,132 @@ impl SidebarState {
         }
         self.origins = origins;
         self.rows = Rc::new(rows);
+    }
+}
+
+#[cfg(all(test, feature = "ui-tests"))]
+mod tests {
+    use super::{INACTIVE_WORKSPACE_AGE, Inputs, Row};
+    use crate::app::{ConduitApp, Store, Workspace};
+    use gpui_kit::{AppContext, TestAppContext};
+
+    #[gpui_kit::test]
+    fn inactive_workspaces_follow_activity_and_preserve_manual_choices(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
+        cx.update(gpui_kit::init);
+        cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let now = 1_000_000;
+                let mut old = crate::app::tests::session();
+                old.created_at = now - INACTIVE_WORKSPACE_AGE;
+                let mut recent = old.clone();
+                recent.id = 2;
+                // A cold transcript's recent activity must override old creation.
+                recent.transcript.loaded = false;
+                recent.transcript.reference = Some(
+                    serde_json::from_value(serde_json::json!({
+                        "hash": "test-reference",
+                        "message_count": 1,
+                        "last_activity_at": now - 1,
+                        "has_user": true,
+                        "bytes": 0,
+                        "attachments": []
+                    }))
+                    .unwrap(),
+                );
+                let root = std::env::temp_dir().join("conduit-inactive-workspaces");
+                let store = Store {
+                    workspaces: vec![
+                        Workspace {
+                            path: root.join("old"),
+                            sessions: vec![old],
+                        },
+                        Workspace {
+                            path: root.join("recent"),
+                            sessions: vec![recent],
+                        },
+                        Workspace {
+                            path: root.join("empty"),
+                            sessions: vec![],
+                        },
+                    ],
+                    ..Default::default()
+                };
+                let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
+                app.writable = false;
+                app.startup = None;
+                app.selected_workspace = None;
+                app.selected_session = None;
+                let old_path = root.join("old");
+                let recent_path = root.join("recent");
+                let empty_path = root.join("empty");
+                let refresh = |app: &mut ConduitApp, time| {
+                    let mut inputs = Inputs::new(app);
+                    inputs.age_interval = 1;
+                    inputs.age_tick = time;
+                    app.sidebar
+                        .refresh(&app.store, &app.session_control, &app.search_ui, inputs);
+                };
+                refresh(&mut app, now);
+                assert!(app.sidebar.auto_collapsed.is_empty());
+                app.store.ui.auto_collapse_inactive_workspaces = true;
+                refresh(&mut app, now - 1);
+                assert!(!app.workspace_collapsed(&old_path));
+                refresh(&mut app, now);
+                assert!(app.workspace_collapsed(&old_path));
+                assert!(app.workspace_collapsed(&empty_path));
+                assert!(!app.workspace_collapsed(&recent_path));
+                assert!(
+                    !app.sidebar
+                        .rows
+                        .iter()
+                        .any(|row| matches!(row, Row::Session { id: 1, .. }))
+                );
+                let sender = crate::app::queue::tests::running(&mut app, 1);
+                refresh(&mut app, now);
+                assert!(!app.workspace_collapsed(&old_path));
+                app.session_control.runs.remove(&1);
+                drop(sender);
+                refresh(&mut app, now);
+                assert!(app.workspace_collapsed(&old_path));
+                app.set_workspace_collapsed(&old_path, false);
+                refresh(&mut app, now + 1);
+                assert!(!app.workspace_collapsed(&old_path));
+                assert!(
+                    app.sidebar
+                        .rows
+                        .iter()
+                        .any(|row| matches!(row, Row::Session { id: 1, .. }))
+                );
+                app.set_workspace_collapsed(&recent_path, true);
+                app.store.ui.auto_collapse_inactive_workspaces = false;
+                refresh(&mut app, now + 2);
+                assert!(!app.workspace_collapsed(&empty_path));
+                assert!(app.workspace_collapsed(&recent_path));
+                app.store.ui.auto_collapse_inactive_workspaces = true;
+                app.selected_workspace = Some(2);
+                refresh(&mut app, now + 3);
+                assert!(!app.workspace_collapsed(&empty_path));
+                app.selected_workspace = None;
+                app.search_query = "search".into();
+                refresh(&mut app, now + 4);
+                assert!(app.sidebar.auto_collapsed.is_empty());
+                app.search_query.clear();
+                app.sidebar.auto_expanded.clear();
+                app.session_mut(1).unwrap().created_at = now + 4;
+                refresh(&mut app, now + 5);
+                assert!(!app.workspace_collapsed(&old_path));
+                assert!(app.workspace_collapsed(&empty_path));
+                for query in ["非活跃", "inactive workspace"] {
+                    assert!(
+                        app.settings_search_matches(query)
+                            .iter()
+                            .any(|result| { result.page == 1 && result.group == Some(1) })
+                    );
+                }
+                app
+            });
+            gpui_kit::component::Root::new(app, window, cx)
+        });
     }
 }

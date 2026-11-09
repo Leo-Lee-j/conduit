@@ -10,6 +10,7 @@ pub(super) struct State {
     typography: ChatTypography,
     palette: theme::Palette,
     full_width: bool,
+    collapse_reasoning: bool,
     monitor: bool,
     writable: bool,
     closing: bool,
@@ -18,7 +19,8 @@ pub(super) struct State {
     catalog: Option<(Option<String>, Vec<crate::models::ModelOption>)>,
     copied: Option<SharedString>,
     highlighted: Option<(u64, String)>,
-    expanded: [HashSet<(u64, String)>; 3],
+    expanded: [HashSet<(u64, String)>; 2],
+    reasoning_expansion: HashMap<(u64, String), bool>,
     scroll: Option<(usize, Pixels)>,
 }
 
@@ -48,6 +50,7 @@ impl State {
             typography: app.chat_typography(),
             palette: palette(),
             full_width: app.store.ui.full_width_content,
+            collapse_reasoning: app.store.ui.collapse_reasoning,
             monitor: app.store.ui.performance_monitor,
             writable: app.writable,
             closing: app.closing,
@@ -61,11 +64,8 @@ impl State {
                 .message_focus
                 .as_ref()
                 .map(|(id, key, _)| (*id, key.clone())),
-            expanded: [
-                app.expanded_tools.clone(),
-                app.expanded_reasoning.clone(),
-                app.expanded_errors.clone(),
-            ],
+            expanded: [app.expanded_tools.clone(), app.expanded_errors.clone()],
+            reasoning_expansion: app.reasoning_expansion.clone(),
             scroll: (!app.at_bottom || app.pending_message_jump.is_some())
                 .then_some((top.item_ix, top.offset_in_item)),
         }

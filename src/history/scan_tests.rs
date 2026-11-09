@@ -37,6 +37,7 @@ impl Fixture {
             Some(&self.root),
             vec![self.workspace.clone()],
             &self.index,
+            Some(&self.opencode_path()),
             &AtomicBool::new(false),
         )
     }
@@ -68,6 +69,27 @@ impl Fixture {
             serde_json::json!({"type":"session_meta", "payload":{"id":"native-codex", "cwd":self.workspace, "timestamp":"2026-11-04T00:00:00Z"}})
         )
     }
+
+    fn opencode_path(&self) -> PathBuf {
+        self.root.join(".local/share/opencode/opencode.db")
+    }
+
+    fn opencode(&self) -> rusqlite::Connection {
+        let path = self.opencode_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let connection = rusqlite::Connection::open(path).unwrap();
+        connection.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, title TEXT,
+                parent_id TEXT, time_archived INTEGER, time_created INTEGER, time_updated INTEGER);
+             CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT);
+             CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT,
+                time_created INTEGER, data TEXT);
+             CREATE INDEX message_session ON message(session_id,time_created,id);
+             CREATE INDEX part_message ON part(message_id,id);"
+        ).unwrap();
+        connection
+    }
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -95,6 +117,280 @@ fn append(path: &Path, text: &str) {
 }
 fn messages(batch: &Batch) -> Value {
     serde_json::to_value(&batch.sessions[0][0].messages).unwrap()
+}
+
+fn opencode_session(connection: &rusqlite::Connection, fixture: &Fixture, id: &str) {
+    connection.execute(
+        "INSERT INTO session VALUES (?1, ?2, '历史会话', NULL, NULL, 1791619301308, 1791619301308)",
+        rusqlite::params![id, fixture.workspace.to_string_lossy()],
+    ).unwrap();
+    connection.execute(
+        "INSERT INTO message VALUES (?1, ?2, 1791619301389, ?3)",
+        rusqlite::params![format!("{id}-user"), id, serde_json::json!({"role":"user", "model":{"providerID":"local", "modelID":"test-model"}}).to_string()],
+    ).unwrap();
+    opencode_part(
+        connection,
+        id,
+        &format!("{id}-user"),
+        "0",
+        serde_json::json!({"type":"text", "text":"检查导入"}),
+    );
+}
+
+fn opencode_part(
+    connection: &rusqlite::Connection,
+    session: &str,
+    message: &str,
+    id: &str,
+    data: Value,
+) {
+    connection
+        .execute(
+            "INSERT INTO part VALUES (?1, ?2, ?3, 1791619301389, ?4)",
+            rusqlite::params![
+                format!("{session}-{id}"),
+                message,
+                session,
+                data.to_string()
+            ],
+        )
+        .unwrap();
+}
+
+#[test]
+fn opencode_history_joins_cli_imports_without_duplicates_or_source_writes() {
+    let fixture = Fixture::new();
+    std::fs::create_dir_all(&fixture.workspace).unwrap();
+    std::fs::write(
+        fixture.file(Provider::Claude, "claude"),
+        fixture.claude("claude", "Claude question"),
+    )
+    .unwrap();
+    std::fs::write(fixture.file(Provider::Codex, "codex"), fixture.codex_meta() +
+        &format!("{}\n", serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"user", "content":[{"type":"input_text", "text":"Codex question"}]}}))).unwrap();
+    let connection = fixture.opencode();
+    // Native ids must remain independent across providers.
+    let id = "native-codex";
+    opencode_session(&connection, &fixture, id);
+    let workspace_text = fixture.workspace.to_string_lossy();
+    let cwd = workspace_text
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&workspace_text)
+        .replace('\\', "/");
+    connection
+        .execute("UPDATE session SET directory=?1", [cwd])
+        .unwrap();
+    connection.execute("INSERT INTO message VALUES ('answer', ?1, 1791619301400, '{\"role\":\"assistant\",\"providerID\":\"local\",\"modelID\":\"test-model\"}')", [id]).unwrap();
+    for (part_id, data) in [
+        (
+            "1",
+            serde_json::json!({"type":"reasoning", "text":"先检查目录"}),
+        ),
+        (
+            "2",
+            serde_json::json!({"type":"tool", "tool":"read", "state":{"status":"completed", "input":{"filePath":"README.md"}, "output":"file contents"}}),
+        ),
+        ("3", serde_json::json!({"type":"text", "text":"检查完成"})),
+        ("4", serde_json::json!({"type":"step-finish"})),
+    ] {
+        opencode_part(&connection, id, "answer", part_id, data);
+    }
+    for (part_id, data) in [
+        (
+            "file",
+            serde_json::json!({"type":"file", "filename":"example.png", "url":"data:image/png;base64,secret"}),
+        ),
+        (
+            "hidden",
+            serde_json::json!({"type":"text", "text":"hidden", "ignored":true}),
+        ),
+        (
+            "synthetic",
+            serde_json::json!({"type":"text", "text":"injected", "synthetic":true}),
+        ),
+    ] {
+        opencode_part(&connection, id, &format!("{id}-user"), part_id, data);
+    }
+    for excluded in ["child", "archived", "foreign"] {
+        opencode_session(&connection, &fixture, excluded);
+    }
+    connection
+        .execute_batch(
+            "UPDATE session SET parent_id='native-codex' WHERE id='child';
+        UPDATE session SET time_archived=1 WHERE id='archived';
+        UPDATE session SET directory='unrelated-workspace' WHERE id='foreign';
+        PRAGMA wal_checkpoint(TRUNCATE);",
+        )
+        .unwrap();
+    let original = std::fs::read(fixture.opencode_path()).unwrap();
+    let cold = fixture.scan();
+    assert!(cold.warnings.is_empty(), "{:?}", cold.warnings);
+    assert_eq!(
+        cold.sessions[0].len(),
+        3,
+        "total={}, completed={}, sessions={:?}",
+        cold.total,
+        cold.completed,
+        cold.sessions[0]
+            .iter()
+            .map(|s| (s.provider, &s.native_id))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(cold.completed, cold.total);
+    let imported = cold.sessions[0]
+        .iter()
+        .find(|s| s.provider == Provider::OpenCode)
+        .unwrap();
+    assert_eq!(imported.native_id, id);
+    assert_eq!(imported.title, "历史会话");
+    assert_eq!(imported.created_at, 1_791_619_301);
+    assert_eq!(imported.model.as_deref(), Some("local/test-model"));
+    assert_eq!(
+        imported
+            .messages
+            .iter()
+            .map(|m| m.kind.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            ItemKind::User,
+            ItemKind::User,
+            ItemKind::Reasoning,
+            ItemKind::Tool,
+            ItemKind::Assistant
+        ]
+    );
+    assert_eq!(imported.messages[1].text, "@example.png");
+    assert_eq!(imported.messages[3].detail, "file contents");
+    assert_eq!(
+        imported.messages[3].status,
+        crate::message_status::ToolStatus::Completed
+    );
+    assert!(
+        !serde_json::to_string(&imported.messages)
+            .unwrap()
+            .contains("secret")
+    );
+    let mut workspace = crate::domain::Workspace {
+        path: fixture.workspace.clone(),
+        sessions: vec![],
+    };
+    let mut next_id = 1;
+    assert_eq!(
+        merge_imported(
+            &mut workspace,
+            &mut next_id,
+            cold.sessions.into_iter().next().unwrap()
+        ),
+        3
+    );
+    let warm = fixture.scan();
+    assert!(warm.warnings.is_empty());
+    assert_eq!(
+        merge_imported(
+            &mut workspace,
+            &mut next_id,
+            warm.sessions.into_iter().next().unwrap()
+        ),
+        0
+    );
+    assert_eq!(workspace.sessions.len(), 3);
+    assert_eq!(std::fs::read(fixture.opencode_path()).unwrap(), original);
+}
+
+#[test]
+fn opencode_batches_continue_past_a_corrupt_session_and_an_unavailable_database() {
+    let fixture = Fixture::new();
+    let connection = fixture.opencode();
+    for number in 0..BATCH_FILES + 4 {
+        opencode_session(&connection, &fixture, &format!("session-{number:02}"));
+    }
+    opencode_session(&connection, &fixture, "broken");
+    connection
+        .execute("UPDATE part SET data='{' WHERE session_id='broken'", [])
+        .unwrap();
+    let mut scanner = fixture.scanner();
+    let cancel = AtomicBool::new(false);
+    let mut imported = Vec::new();
+    let mut warnings = Vec::new();
+    let mut completed = 0;
+    loop {
+        let batch = scanner.next(&cancel);
+        assert!(batch.completed - completed <= BATCH_FILES);
+        completed = batch.completed;
+        imported.extend(batch.sessions.into_iter().next().unwrap());
+        warnings.extend(batch.warnings);
+        if batch.done {
+            break;
+        }
+    }
+    assert_eq!(imported.len(), BATCH_FILES + 4);
+    assert_eq!(completed, BATCH_FILES + 5);
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("broken"));
+    drop(scanner);
+    connection.execute_batch("DROP TABLE session").unwrap();
+    std::fs::write(
+        fixture.file(Provider::Claude, "fallback"),
+        fixture.claude("fallback", "still imported"),
+    )
+    .unwrap();
+    let batch = fixture.scan();
+    assert_eq!(batch.sessions[0].len(), 1);
+    assert_eq!(batch.sessions[0][0].provider, Provider::Claude);
+    assert_eq!(batch.warnings.len(), 1);
+    assert!(batch.warnings[0].contains("opencode.db"));
+}
+
+#[test]
+fn opencode_large_session_keeps_a_snapshot_across_batches_and_cancels_without_partial_import() {
+    let fixture = Fixture::new();
+    let connection = fixture.opencode();
+    opencode_session(&connection, &fixture, "large");
+    for n in 1..180 {
+        opencode_part(
+            &connection,
+            "large",
+            "large-user",
+            &format!("{n:03}"),
+            serde_json::json!({"type":"text", "text":format!("message {n}")}),
+        );
+    }
+    let cancel = AtomicBool::new(false);
+    let mut scanner = fixture.scanner();
+    let first = scanner.next(&cancel);
+    assert!(!first.done);
+    assert!(first.sessions[0].is_empty());
+    assert_eq!(first.completed, 0);
+    opencode_part(
+        &connection,
+        "large",
+        "large-user",
+        "999",
+        serde_json::json!({"type":"text", "text":"appended while importing"}),
+    );
+    let imported = loop {
+        let batch = scanner.next(&cancel);
+        if batch.done {
+            break batch;
+        }
+        assert!(batch.sessions[0].is_empty());
+    };
+    assert_eq!(imported.sessions[0][0].messages.len(), 180);
+    drop(scanner);
+    let mut scanner = fixture.scanner();
+    assert!(!scanner.next(&cancel).done);
+    cancel.store(true, Ordering::Release);
+    let cancelled = scanner.next(&cancel);
+    assert!(cancelled.done);
+    assert!(cancelled.sessions[0].is_empty());
+    assert_eq!(cancelled.completed, 0);
+    drop(scanner);
+    let fresh = fixture.scan();
+    assert_eq!(fresh.sessions[0][0].messages.len(), 181);
+    assert_eq!(
+        fresh.sessions[0][0].messages.last().unwrap().text,
+        "appended while importing"
+    );
 }
 
 #[test]
@@ -236,6 +532,7 @@ fn workspace_index_filters_foreign_sessions_but_allows_later_workspace_import() 
         Some(&fixture.root),
         vec![fixture.root.join("other")],
         &fixture.index,
+        None,
         &cancel,
     );
     assert!(other.next(&cancel).sessions[0].is_empty());
@@ -244,6 +541,7 @@ fn workspace_index_filters_foreign_sessions_but_allows_later_workspace_import() 
         Some(&fixture.root),
         vec![fixture.root.join("other")],
         &fixture.index,
+        None,
         &cancel,
     );
     assert_eq!(other.next(&cancel).total, 0);

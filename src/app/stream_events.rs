@@ -3,9 +3,10 @@ use super::*;
 impl ConduitApp {
     pub(super) fn poll_streams(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let navigating = self.pending_message_jump.is_some();
-        let follow = self.scroll.is_scrolled_to_end().unwrap_or_else(|| {
-            self.scroll.logical_scroll_top().item_ix >= self.scroll.item_count()
-        });
+        let follow = !self.timeline.read(cx).wheel_pending(self)
+            && self.scroll.is_scrolled_to_end().unwrap_or_else(|| {
+                self.scroll.logical_scroll_top().item_ix >= self.scroll.item_count()
+            });
         // Re-render when the scroll position crosses the "at the end" threshold
         // so the floating arrow appears/disappears without polling every frame.
         if !navigating && follow != self.at_bottom {

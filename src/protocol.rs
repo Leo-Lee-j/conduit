@@ -44,7 +44,8 @@ pub enum Event {
         key: String,
         text: String,
     },
-    /// Public summary text explicitly emitted by the provider, not hidden reasoning.
+    /// Thinking text or summaries explicitly emitted by the CLI. Opaque,
+    /// encrypted and redacted blocks never enter the transcript.
     ReasoningSummary {
         key: String,
         text: String,
@@ -165,6 +166,7 @@ pub struct Protocol {
     /// message. Hidden blocks (for example extended thinking) shift the raw
     /// stream index, while the assistant snapshot only lists visible blocks.
     claude_text_blocks: std::collections::HashMap<u64, usize>,
+    claude_thinking_blocks: std::collections::HashMap<u64, usize>,
     tool_inputs: std::collections::HashMap<String, Value>,
     #[cfg(test)]
     pub approval_test: bool,
@@ -284,6 +286,7 @@ impl Protocol {
             claude_latest_usage: None,
             claude_usage_message: None,
             claude_text_blocks: Default::default(),
+            claude_thinking_blocks: Default::default(),
             tool_inputs: Default::default(),
             #[cfg(test)]
             approval_test: false,
@@ -967,6 +970,7 @@ impl Protocol {
                 if event_type == "message_start" {
                     self.claude_message = text(&event["message"], "id").into();
                     self.claude_text_blocks.clear();
+                    self.claude_thinking_blocks.clear();
                     if v["parent_tool_use_id"].is_null() {
                         let id = self.claude_message.clone();
                         self.claude_usage_message = Some(id.clone());
@@ -981,6 +985,34 @@ impl Protocol {
                     self.claude_text_blocks.insert(block_index, ordinal);
                 }
                 match event_type {
+                    "content_block_start"
+                        if text(&event["content_block"], "type") == "thinking" =>
+                    {
+                        let ordinal = self.claude_thinking_blocks.len();
+                        self.claude_thinking_blocks.insert(block_index, ordinal);
+                        let thinking = text(&event["content_block"], "thinking");
+                        if !thinking.is_empty() {
+                            step.events.push(Event::ReasoningSummary {
+                                key: format!("{}-thinking-{ordinal}", self.claude_message),
+                                text: thinking.into(),
+                                summary_index: 0,
+                                snapshot: true,
+                            });
+                        }
+                    }
+                    "content_block_delta" if text(&event["delta"], "type") == "thinking_delta" => {
+                        let ordinal = self
+                            .claude_thinking_blocks
+                            .get(&block_index)
+                            .copied()
+                            .unwrap_or(block_index as usize);
+                        step.events.push(Event::ReasoningSummary {
+                            key: format!("{}-thinking-{ordinal}", self.claude_message),
+                            text: text(&event["delta"], "thinking").into(),
+                            summary_index: 0,
+                            snapshot: false,
+                        });
+                    }
                     "message_delta" if v["parent_tool_use_id"].is_null() => {
                         if let Some(id) = self.claude_usage_message.clone() {
                             self.update_claude_usage(&id, &event["usage"], &mut step);
@@ -1025,8 +1057,21 @@ impl Protocol {
                 }
                 if let Some(blocks) = message["content"].as_array() {
                     let mut text_ordinal = 0usize;
+                    let mut thinking_ordinal = 0usize;
                     for block in blocks.iter() {
                         match text(block, "type") {
+                            "thinking" => {
+                                let thinking = text(block, "thinking");
+                                if !thinking.is_empty() {
+                                    step.events.push(Event::ReasoningSummary {
+                                        key: format!("{id}-thinking-{thinking_ordinal}"),
+                                        text: thinking.into(),
+                                        summary_index: 0,
+                                        snapshot: true,
+                                    });
+                                }
+                                thinking_ordinal += 1;
+                            }
                             "text" => {
                                 step.events.push(Event::Text {
                                     key: format!("{id}-{text_ordinal}"),

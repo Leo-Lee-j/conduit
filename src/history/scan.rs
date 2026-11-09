@@ -154,7 +154,7 @@ enum Loaded {
     Complete(Option<(Vec<String>, ImportedSession)>),
 }
 
-fn batch_exhausted(batch: &Batch, started: std::time::Instant) -> bool {
+pub(super) fn batch_exhausted(batch: &Batch, started: std::time::Instant) -> bool {
     batch.bytes_read.saturating_add(batch.verified_bytes) >= BATCH_BYTES
         || started.elapsed() >= std::time::Duration::from_millis(100)
 }
@@ -167,13 +167,20 @@ pub(crate) struct Scanner {
     total: usize,
     completed: usize,
     pending: Option<Pending>,
+    opencode: Option<super::opencode::Scanner>,
 }
 impl Scanner {
     pub(crate) fn new(workspaces: Vec<PathBuf>, cancel: &AtomicBool) -> Self {
+        let home = home();
+        let opencode_path = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home.as_ref().map(|home| home.join(".local/share")))
+            .map(|root| root.join("opencode/opencode.db"));
         Self::open(
-            home().as_deref(),
+            home.as_deref(),
             workspaces,
             &crate::store::Store::path().with_file_name("history-index-v1.sqlite3"),
+            opencode_path.as_deref(),
             cancel,
         )
     }
@@ -181,6 +188,7 @@ impl Scanner {
         home: Option<&Path>,
         workspaces: Vec<PathBuf>,
         index_path: &Path,
+        opencode_path: Option<&Path>,
         cancel: &AtomicBool,
     ) -> Self {
         let mut warnings = Vec::new();
@@ -269,7 +277,16 @@ impl Scanner {
                 .then_with(|| right.stamp.modified.cmp(&left.stamp.modified))
                 .then_with(|| left.path.cmp(&right.path))
         });
-        let total = candidates.len();
+        let opencode = opencode_path.and_then(|path| {
+            match super::opencode::Scanner::open(path, &workspaces, cancel) {
+                Ok(scanner) => scanner,
+                Err(error) => {
+                    warnings.push(format!("{}：{error}", path.display()));
+                    None
+                }
+            }
+        });
+        let total = candidates.len() + opencode.as_ref().map_or(0, |scanner| scanner.remaining());
         Self {
             index,
             workspaces,
@@ -278,6 +295,7 @@ impl Scanner {
             total,
             completed: 0,
             pending: None,
+            opencode,
         }
     }
     pub(crate) fn next(&mut self, cancel: &AtomicBool) -> Batch {
@@ -338,7 +356,24 @@ impl Scanner {
             }
         }
         batch.completed = self.completed;
-        batch.done = self.queue.is_empty() || cancel.load(Ordering::Acquire);
+        if self.queue.is_empty()
+            && let Some(scanner) = &mut self.opencode
+        {
+            scanner.next(
+                &self.workspaces,
+                cancel,
+                &mut batch,
+                started,
+                BATCH_FILES - files,
+            );
+            self.completed = batch.completed;
+        }
+        batch.done = (self.queue.is_empty()
+            && self
+                .opencode
+                .as_ref()
+                .is_none_or(|scanner| scanner.remaining() == 0))
+            || cancel.load(Ordering::Acquire);
         for sessions in &mut batch.sessions {
             sessions.sort_by_key(|session| std::cmp::Reverse(session.created_at));
         }

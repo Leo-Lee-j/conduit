@@ -91,6 +91,9 @@ pub(super) struct State {
     config: VecDeque<(String, String)>,
     options: AcpSettings,
     tools: HashMap<String, Value>,
+    thought_index: u64,
+    in_thought: bool,
+    reply_index: u64,
     context_window: u64,
     context_tokens: Option<u64>,
     helper_directory: Option<std::path::PathBuf>,
@@ -571,9 +574,29 @@ impl Protocol {
             return;
         }
         match update["sessionUpdate"].as_str() {
+            Some("agent_thought_chunk") if update["content"]["type"] == "text" => {
+                let thinking = text(&update["content"], "text");
+                if !thinking.is_empty() {
+                    if !self.acp.in_thought {
+                        self.acp.thought_index += 1;
+                        self.acp.reply_index += 1;
+                        self.acp.in_thought = true;
+                    }
+                    step.events.push(Event::ReasoningSummary {
+                        key: format!("acp-thought-{}", self.acp.thought_index),
+                        text: thinking.into(),
+                        summary_index: 0,
+                        snapshot: false,
+                    });
+                }
+            }
             Some("agent_message_chunk") if update["content"]["type"] == "text" => {
+                self.acp.in_thought = false;
                 step.events.push(Event::Delta {
-                    key: update["messageId"].as_str().unwrap_or("acp-reply").into(),
+                    key: update["messageId"]
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| format!("acp-reply-{}", self.acp.reply_index)),
                     text: text(&update["content"], "text").into(),
                 });
             }
@@ -581,6 +604,10 @@ impl Protocol {
                 let Some(id) = update["toolCallId"].as_str() else {
                     return;
                 };
+                if !self.acp.tools.contains_key(id) {
+                    self.acp.reply_index += 1;
+                    self.acp.in_thought = false;
+                }
                 let merged = self.acp.tools.entry(id.into()).or_insert_with(|| json!({}));
                 for (k, v) in update.as_object().into_iter().flatten() {
                     merged[k] = v.clone();

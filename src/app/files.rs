@@ -388,9 +388,17 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let closing_active = self
-            .active_document()
-            .is_some_and(|tab| tabs.contains(&tab));
+        let active = self.active_document();
+        let closing_active = active.is_some_and(|tab| tabs.contains(&tab));
+        // Capture the owner before removing the document. Tab order is global,
+        // so its last entry can belong to an unrelated workspace.
+        let document_workspace = active
+            .and_then(|tab| match tab {
+                DocumentTab::File(id) => self.files.documents.get(&id).map(|d| &d.key.workspace),
+                DocumentTab::Diff(id) => self.files.diffs.get(&id).map(|d| &d.workspace),
+                _ => None,
+            })
+            .and_then(|path| self.store.workspaces.iter().position(|w| &w.path == path));
         let closing_settings = tabs.contains(&DocumentTab::Settings);
         if closing_settings {
             self.settings_ui.open = false;
@@ -417,7 +425,41 @@ impl ConduitApp {
                 }
             }
         }
-        if closing_active && !closing_settings {
+        if closing_active && let Some(workspace) = document_workspace {
+            self.active_diff = None;
+            self.active_file = None;
+            let sessions = &self.store.workspaces[workspace].sessions;
+            let available = |id: &u64| {
+                !tabs.contains(&DocumentTab::Chat(*id))
+                    && sessions.iter().any(|s| s.id == *id && !s.archived)
+            };
+            let session = self
+                .selected_session
+                .filter(available)
+                .or_else(|| {
+                    self.open_tabs
+                        .iter()
+                        .rev()
+                        .filter_map(|tab| tab.chat())
+                        .find(available)
+                })
+                .or_else(|| {
+                    // Batch-close must not reopen a conversation the user closed.
+                    if tabs.iter().any(|tab| tab.chat().is_some()) {
+                        return None;
+                    }
+                    sessions
+                        .iter()
+                        .filter(|s| available(&s.id))
+                        .max_by_key(|s| (s.last_activity_at(), s.id))
+                        .map(|s| s.id)
+                });
+            if let Some(id) = session {
+                self.select_document(DocumentTab::Chat(id), window, cx);
+            } else {
+                self.switch(workspace, None, window, cx);
+            }
+        } else if closing_active && !closing_settings {
             self.active_diff = None;
             self.active_file = None;
             if let Some(next) = self.open_tabs.last().copied() {
@@ -2285,9 +2327,33 @@ mod tests {
                     .unwrap();
                 a.select_document(tab, window, cx);
                 assert_eq!(a.selected_workspace, Some(1));
+                // Closing the beta preview must restore beta, even though alpha
+                // is the only open chat (and the global tab limit is one).
+                a.input
+                    .update(cx, |input, cx| input.set_value("draft beta", window, cx));
+                a.close_documents(&[tab], window, cx);
+                assert_eq!(a.active_document(), Some(DocumentTab::Chat(2)));
+                assert_eq!(a.selected_workspace, Some(1));
+                assert_eq!(a.input.read(cx).value(), "draft beta");
+                assert_eq!(a.drafts.get(&1).unwrap(), "draft alpha");
+                a.open_workspace_file(fixture.key("beta", "src/main.rs"), true, window, cx);
                 a.forget_workspace_files(&fixture.0.join("beta"));
                 assert_eq!(a.active_file, None);
                 assert!(fixture.0.join("beta/src/main.rs").exists());
+                a.open_workspace_file(fixture.key("beta", "src/main.rs"), false, window, cx);
+                let all = a.open_tabs.clone();
+                a.close_documents(&all, window, cx);
+                assert!(a.open_tabs.is_empty());
+                assert_eq!(a.selected_workspace, Some(1));
+                assert_eq!(a.selected_session, None);
+                // An empty workspace also stays selected after its file closes.
+                a.store.workspaces[1].sessions.clear();
+                a.open_workspace_file(fixture.key("beta", "src/main.rs"), false, window, cx);
+                a.push_tab(1);
+                let file = a.active_document().unwrap();
+                a.close_documents(&[file], window, cx);
+                assert_eq!(a.selected_workspace, Some(1));
+                assert_eq!(a.selected_session, None);
             })
         });
         cx.run_until_parked();
@@ -2509,6 +2575,49 @@ mod git_navigation_tests {
         repo.git(&["tag", "v1.0.1"]);
         click(cx, "nav-git");
         wait_git(cx, &app);
+        // Re-selecting the repository's chat does not reorder the global tabs.
+        // Closing its diff must return to that chat, not the later foreign tab.
+        cx.update(|window, cx| {
+            app.update(cx, |a, cx| {
+                a.switch(1, Some(2), window, cx);
+                a.switch(0, Some(1), window, cx);
+                assert_eq!(a.open_tabs.last(), Some(&DocumentTab::Chat(2)));
+                a.input.update(cx, |input, cx| {
+                    input.set_value("repository draft", window, cx)
+                });
+                a.open_git_diff(
+                    git::ChangedFile {
+                        path: "src/main.rs".into(),
+                        original: None,
+                        index: ' ',
+                        worktree: 'M',
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(a.selected_workspace, Some(0));
+                assert_eq!(a.selected_session, Some(1));
+            });
+        });
+        wait_git(cx, &app);
+        let diff = cx.update(|_, cx| app.read(cx).active_diff.unwrap());
+        let close_selector: &'static str =
+            Box::leak(format!("diff-tab-close-{diff}").into_boxed_str());
+        let close = cx.debug_bounds(close_selector).unwrap().center();
+        cx.simulate_mouse_move(close, None, Modifiers::default());
+        cx.simulate_mouse_down(close, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(close, MouseButton::Left, Modifiers::default());
+        draw(cx);
+        cx.update(|window, cx| {
+            app.update(cx, |a, cx| {
+                assert_eq!(a.active_document(), Some(DocumentTab::Chat(1)));
+                assert_eq!(a.selected_workspace, Some(0));
+                assert_eq!(a.git.workspace.as_ref(), Some(&repo.0));
+                assert_eq!(a.input.read(cx).value(), "repository draft");
+                a.input
+                    .update(cx, |input, cx| input.set_value("", window, cx));
+            });
+        });
         cx.update(|window, cx| {
             app.update(cx, |a, cx| {
                 assert_eq!(a.git.local_tags[&repo.0], vec!["v1.0.0"]);

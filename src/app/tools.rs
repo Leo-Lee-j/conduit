@@ -45,11 +45,9 @@ pub(super) fn is_empty_chat_placeholder(item: &ChatItem) -> bool {
 }
 
 pub(super) fn is_groupable_activity(item: &ChatItem) -> bool {
-    match item.kind {
-        ItemKind::Tool => is_compact_tool(item),
-        ItemKind::Reasoning => !item.text.trim().is_empty(),
-        _ => false,
-    }
+    // Thinking has its own disclosure control and must remain discoverable
+    // after the surrounding tool groups collapse when a reply arrives.
+    is_compact_tool(item)
 }
 
 /// Approval history must not permanently change a normal tool's layout.

@@ -3,7 +3,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 
-const PARSER_VERSION: u32 = 1;
+// Reparse cached Claude histories to include CLI-emitted thinking blocks.
+const PARSER_VERSION: u32 = 2;
 const MAX_ENTRY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_INDEX_BYTES: i64 = 256 * 1024 * 1024;
 

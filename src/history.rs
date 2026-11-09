@@ -4,13 +4,14 @@
 //!
 //! - Claude Code: `~/.claude/projects/<escaped-cwd>/<session-uuid>.jsonl`
 //! - Codex: `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`
+//! - OpenCode: `~/.local/share/opencode/opencode.db`
 //!
-//! Both stores are append-only JSONL written by the CLIs themselves; we only
-//! read them. Imported sessions carry the CLI-native session/thread id as
+//! The source stores are only read. Imported sessions carry the CLI-native session/thread id as
 //! `native_id`, so sending a message in an imported session continues the very
 //! same conversation the terminal CLI sees.
 
 mod index;
+mod opencode;
 mod scan;
 pub(crate) use scan::Scanner;
 
@@ -30,7 +31,7 @@ pub struct ImportedSession {
     pub messages: Vec<ChatItem>,
 }
 
-/// Scans both CLI histories for sessions whose working directory is
+/// Scans native CLI histories for sessions whose working directory is
 /// `workspace`, newest first.
 pub fn scan_workspace(workspace: &Path) -> Vec<ImportedSession> {
     scan_workspaces(&[workspace.to_owned()])
@@ -38,7 +39,7 @@ pub fn scan_workspace(workspace: &Path) -> Vec<ImportedSession> {
         .unwrap_or_default()
 }
 
-/// Scans both CLI histories once for several workspaces at startup. Each
+/// Scans native CLI histories once for several workspaces at startup. Each
 /// session file is read once and assigned to every workspace whose cwd it
 /// matches, instead of rescanning the whole history per workspace.
 pub fn scan_workspaces(workspaces: &[PathBuf]) -> Vec<Vec<ImportedSession>> {
@@ -277,14 +278,15 @@ fn home() -> Option<PathBuf> {
 }
 
 fn same_dir(a: &str, b: &Path) -> bool {
-    let normalize = |p: &str| p.replace('/', "\\").to_lowercase();
-    let b = b.to_string_lossy().replace('/', "\\").to_lowercase();
-    let a = normalize(a);
-    a == b
-        || Path::new(&a)
-            .canonicalize()
-            .map(|c| c == b)
-            .unwrap_or(false)
+    let normalize = |path: &Path| path.to_string_lossy().replace('/', "\\").to_lowercase();
+    let a = Path::new(a);
+    normalize(a) == normalize(b)
+        || match (a.canonicalize(), b.canonicalize()) {
+            // Canonical paths can restore filesystem casing or expand 8.3 names.
+            // Normalize both results, including Windows verbatim path prefixes.
+            (Ok(a), Ok(b)) => normalize(&a) == normalize(&b),
+            _ => false,
+        }
 }
 
 // ---------------------------------------------------------------------------
@@ -412,8 +414,13 @@ fn extend_claude(lines: impl Iterator<Item = String>, state: ClaudeState) -> Cla
                 }
                 for (part, part_index) in content_parts(message) {
                     match part.get("type").and_then(Value::as_str) {
-                        Some("text") => {
-                            let Some(text) = part.get("text").and_then(Value::as_str) else {
+                        Some(kind @ ("text" | "thinking")) => {
+                            let field = if kind == "thinking" {
+                                "thinking"
+                            } else {
+                                "text"
+                            };
+                            let Some(text) = part.get(field).and_then(Value::as_str) else {
                                 continue;
                             };
                             if text.trim().is_empty() {
@@ -423,7 +430,11 @@ fn extend_claude(lines: impl Iterator<Item = String>, state: ClaudeState) -> Cla
                                 elapsed_ms: None,
                                 key: format!("import-{index}-{part_index}"),
                                 created_at: event_created_at,
-                                kind: ItemKind::Assistant,
+                                kind: if kind == "thinking" {
+                                    ItemKind::Reasoning
+                                } else {
+                                    ItemKind::Assistant
+                                },
                                 text: text.to_owned(),
                                 input: String::new(),
                                 detail: String::new(),
@@ -1367,7 +1378,7 @@ mod tests {
             r#"{"type":"summary","summary":"old"}"#.to_owned(),
             format!(r#"{{"type":"user","promptSource":"typed","sessionId":"abc-123","cwd":"{cwd}","message":{{"role":"user","content":"检查进度"}},"timestamp":"2026-10-22T15:28:04.736Z"}}"#),
             format!(r#"{{"type":"user","promptSource":"tool_result","sessionId":"abc-123","cwd":"{cwd}","message":{{"role":"user","content":[{{"type":"tool_result"}}]}}}}"#),
-            format!(r#"{{"type":"assistant","sessionId":"abc-123","cwd":"{cwd}","message":{{"role":"assistant","model":"claude-x","content":[{{"type":"text","text":"好的"}},{{"type":"tool_use","id":"t1","name":"Bash","input":{{"command":"ls"}}}}]}}}}"#),
+            format!(r#"{{"type":"assistant","sessionId":"abc-123","cwd":"{cwd}","message":{{"role":"assistant","model":"claude-x","content":[{{"type":"thinking","thinking":"先检查目录","signature":"opaque-signature"}},{{"type":"redacted_thinking","data":"opaque-data"}},{{"type":"text","text":"好的"}},{{"type":"tool_use","id":"t1","name":"Bash","input":{{"command":"ls"}}}}]}}}}"#),
         ].join("\n");
         assert!(
             parse_claude(&jsonl, &workspace.join("missing")).is_none(),
@@ -1380,11 +1391,18 @@ mod tests {
         assert_eq!(session.created_at, 1_792_682_884);
         assert_eq!(session.model.as_deref(), Some("claude-x"));
         let kinds: Vec<_> = session.messages.iter().map(|m| m.kind.clone()).collect();
-        assert_eq!(kinds.len(), 3);
+        assert_eq!(kinds.len(), 4);
         assert_eq!(session.messages[0].text, "检查进度");
-        assert!(matches!(session.messages[1].kind, ItemKind::Assistant));
-        assert!(matches!(session.messages[2].kind, ItemKind::Tool));
-        assert_eq!(session.messages[2].text, "Bash");
+        assert_eq!(session.messages[1].kind, ItemKind::Reasoning);
+        assert_eq!(session.messages[1].text, "先检查目录");
+        assert!(matches!(session.messages[2].kind, ItemKind::Assistant));
+        assert!(matches!(session.messages[3].kind, ItemKind::Tool));
+        assert_eq!(session.messages[3].text, "Bash");
+        assert!(
+            !serde_json::to_string(&session.messages)
+                .unwrap()
+                .contains("opaque-")
+        );
     }
 
     #[test]
@@ -1640,6 +1658,7 @@ mod tests {
             Some(&dir),
             vec![dir.join("nope")],
             &dir.join("index.sqlite3"),
+            None,
             &cancel,
         )
         .next(&cancel);

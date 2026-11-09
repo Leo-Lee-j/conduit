@@ -483,9 +483,14 @@ impl ConduitApp {
             |app, value| app.store.ui.code_line_numbers = value,
         );
         let code_syntax = switch_field(
-            view,
+            view.clone(),
             |app| app.store.ui.code_syntax_highlight,
             |app, value| app.store.ui.code_syntax_highlight = value,
+        );
+        let auto_collapse = switch_field(
+            view,
+            |app| app.store.ui.auto_collapse_inactive_workspaces,
+            |app, value| app.store.ui.auto_collapse_inactive_workspaces = value,
         );
         settings_page(conduit::i18n::text_static("settings.appearance.appearance"), FullIconName::Palette).groups(vec![
             settings_section(conduit::i18n::text_static("settings.appearance.theme"))
@@ -497,6 +502,11 @@ impl ConduitApp {
                 )
                 .footer(|_, _| settings_description(conduit::i18n::text_static("settings.appearance.applies_immediately_system_mode_follows_windows_appearance")).mt_0()),
             settings_section(conduit::i18n::text_static("settings.appearance.application_interface"))
+                .item(
+                    SettingItem::new(conduit::i18n::text_static("settings.appearance.auto_collapse_inactive_workspaces"), auto_collapse)
+                        .description(settings_description(conduit::i18n::text_static("settings.appearance.auto_collapse_inactive_workspaces_description")))
+                        .disabled(disabled),
+                )
                 .item(
                     SettingItem::new(conduit::i18n::text_static("settings.appearance.interface_font"), ui_font)
                         .description(settings_description(conduit::i18n::text_static("settings.appearance.used_for_the_sidebar_tabs_menus_buttons")))

@@ -154,7 +154,7 @@ fn qoder_resume_never_silently_replaces_session_or_replays_history() {
 }
 
 #[test]
-fn qoder_streams_merge_tools_filter_sessions_and_keep_private_thoughts_out() {
+fn qoder_streams_merge_tools_and_keep_thinking_scoped_to_the_active_session() {
     let (mut adapter, writes) = ready(request(), true);
     let text =
         json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}});
@@ -167,7 +167,20 @@ fn qoder_streams_merge_tools_filter_sessions_and_keep_private_thoughts_out() {
     assert!(
         matches!(&adapter.accept(notification("original",text)).events[0],Event::Delta {text,..} if text=="hello")
     );
-    assert!(adapter.accept(notification("original",json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"private"}}))).events.is_empty());
+    let thought = json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Checking the file"}});
+    assert!(
+        adapter
+            .accept(notification("foreign", thought.clone()))
+            .events
+            .is_empty()
+    );
+    for _ in 0..2 {
+        let step = adapter.accept(notification("original", thought.clone()));
+        assert!(
+            matches!(&step.events[0], Event::ReasoningSummary { key, text, snapshot: false, .. }
+            if key == "qoder-thought-1" && text == "Checking the file")
+        );
+    }
     adapter.accept(notification("original",json!({"sessionUpdate":"tool_call","toolCallId":"t","title":"Read file","rawInput":{"path":"x"}})));
     let tool = adapter.accept(notification(
         "original",
@@ -178,6 +191,10 @@ fn qoder_streams_merge_tools_filter_sessions_and_keep_private_thoughts_out() {
         tool.events
             .iter()
             .any(|e| matches!(e,Event::ToolInput{input,..} if input.contains("path")))
+    );
+    let thought = adapter.accept(notification("original", thought));
+    assert!(
+        matches!(&thought.events[0], Event::ReasoningSummary { key, .. } if key == "qoder-thought-2")
     );
     adapter.accept(notification(
         "original",

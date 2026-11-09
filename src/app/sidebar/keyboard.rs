@@ -91,10 +91,10 @@ impl ConduitApp {
             }
             cache::Row::Workspace { path, last, .. } => {
                 if key == "left" {
-                    self.collapsed_workspaces.insert(path.clone());
+                    self.set_workspace_collapsed(path, true);
                 }
                 if key == "right" {
-                    self.collapsed_workspaces.remove(path);
+                    self.set_workspace_collapsed(path, false);
                 }
                 if key == "enter"
                     && let Some(index) = self.sidebar.workspace_index(path)

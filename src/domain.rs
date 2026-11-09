@@ -186,7 +186,7 @@ fn usage_is_zero(usage: &Usage) -> bool {
 pub enum ItemKind {
     User,
     Assistant,
-    /// Provider-supplied reasoning summary; never raw private chain-of-thought.
+    /// Thinking text or summaries explicitly supplied by the CLI.
     Reasoning,
     Tool,
     Notice,
