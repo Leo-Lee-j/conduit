@@ -73,6 +73,7 @@ mod files;
 mod generation;
 mod git_branches;
 mod git_compare;
+mod git_conflicts;
 mod git_diff;
 mod git_log;
 mod git_state;

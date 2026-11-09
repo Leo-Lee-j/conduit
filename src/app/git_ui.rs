@@ -189,7 +189,10 @@ impl ConduitApp {
         };
         let mut files = vec![];
         for file in &snapshot.files {
-            if selected.contains(&file.path) && (file.unstaged() || file.untracked()) {
+            if selected.contains(&file.path)
+                && !file.conflicted()
+                && (file.unstaged() || file.untracked())
+            {
                 files.push(file.path.clone());
                 if matches!(file.worktree, 'R' | 'C')
                     && let Some(original) = &file.original
@@ -240,7 +243,7 @@ impl ConduitApp {
         };
         let mut files = vec![];
         for file in &snapshot.files {
-            if selected.contains(&file.path) && file.staged() {
+            if selected.contains(&file.path) && !file.conflicted() && file.staged() {
                 files.push(file.path.clone());
                 if let Some(original) = &file.original {
                     files.push(original.clone());
@@ -864,6 +867,13 @@ impl ConduitApp {
         if let Some(result) = completed {
             let operation = self.git.operation.take().unwrap();
             let path = operation.probe.path.clone();
+            if let Some(browser) = self.git.conflict_browsers.get(&path) {
+                let error = match &result {
+                    Ok(result) => result.error.clone(),
+                    Err(error) => Some(error.clone()),
+                };
+                browser.update(cx, |browser, cx| browser.finished(error, cx));
+            }
             match result {
                 Ok(result) => {
                     let tags_changed = result.retry_completed
@@ -1641,8 +1651,20 @@ impl ConduitApp {
                     != repository
                         .as_ref()
                         .map(|repo| (&repo.current, repo.detached));
+                let conflicts_changed = self
+                    .git
+                    .repository
+                    .as_ref()
+                    .map(|r| r.conflicts.as_slice())
+                    .unwrap_or_default()
+                    != repository
+                        .as_ref()
+                        .map(|r| r.conflicts.as_slice())
+                        .unwrap_or_default();
                 self.git.repository = repository;
-                if head_changed && self.git_status_visible() && self.git.probe.is_none() {
+                if ((head_changed && self.git_status_visible()) || conflicts_changed)
+                    && self.git.probe.is_none()
+                {
                     self.refresh_git(cx);
                 }
                 cx.notify();
@@ -1661,6 +1683,10 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if file.conflicted() {
+            self.open_git_conflicts(window, cx);
+            return;
+        }
         let Some(workspace) = self.selected_workspace_path() else {
             self.notify_user(
                 Notice::new(
@@ -1739,6 +1765,7 @@ impl ConduitApp {
                     .insert(path.clone(), snapshot.tags.clone());
                 self.git.snapshot = Some(snapshot);
                 self.git.error = None;
+                self.discover_git_conflicts(window, cx);
                 if auto_stage {
                     self.auto_stage_tracked_files(cx);
                 }
@@ -2032,9 +2059,11 @@ impl ConduitApp {
                     for file in files {
                         let app = view.clone();
                         let target = file.clone();
-                        let can_stage =
-                            self.can_stage_files() && (file.unstaged() || file.untracked());
-                        let can_unstage = self.can_stage_files() && file.staged();
+                        let can_stage = self.can_stage_files()
+                            && !file.conflicted()
+                            && (file.unstaged() || file.untracked());
+                        let can_unstage =
+                            self.can_stage_files() && !file.conflicted() && file.staged();
                         let workspace = self.selected_workspace_path().unwrap_or_default();
                         let checked = self
                             .git
@@ -2143,7 +2172,8 @@ impl ConduitApp {
                                         let discard_app = menu_app.clone();
                                         let discard_file = menu_file.clone();
                                         let discard_workspace = menu_workspace.clone();
-                                        let can_discard = menu_app.read(cx).can_stage_files()
+                                        let can_discard = !menu_file.conflicted()
+                                            && menu_app.read(cx).can_stage_files()
                                             && menu_app
                                                 .read(cx)
                                                 .git
@@ -2257,7 +2287,10 @@ impl ConduitApp {
                                         })
                                         .checked(checked)
                                         .disabled(
-                                            !(file.staged() || file.unstaged() || file.untracked()),
+                                            file.conflicted()
+                                                || !(file.staged()
+                                                    || file.unstaged()
+                                                    || file.untracked()),
                                         )
                                         .accessibility_label(conduit::i18n::format(
                                             "git_ui.select",

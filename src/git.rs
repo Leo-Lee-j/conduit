@@ -9,6 +9,7 @@ use crate::child::{Child, available};
 use anyhow::{Context, Result, anyhow, bail};
 mod branches;
 mod compare;
+pub mod conflicts;
 mod discard;
 mod log;
 mod selected;
@@ -101,6 +102,19 @@ impl ChangedFile {
 
     pub fn untracked(&self) -> bool {
         self.index == '?' && self.worktree == '?'
+    }
+
+    pub fn conflicted(&self) -> bool {
+        matches!(
+            (self.index, self.worktree),
+            ('D', 'D')
+                | ('A', 'U')
+                | ('U', 'D')
+                | ('U', 'A')
+                | ('D', 'U')
+                | ('A', 'A')
+                | ('U', 'U')
+        )
     }
 }
 
@@ -275,6 +289,7 @@ pub enum Operation {
         target: CommitTarget,
     },
     Branch(Box<BranchRequest>),
+    ResolveConflict(Box<conflicts::Resolution>),
     Commit {
         /// None commits the full index; Some commits only these staged paths.
         files: Option<Vec<String>>,
@@ -1188,7 +1203,7 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
             .ok_or_else(|| anyhow!(conduit::i18n::text("git.branches.git_exe_not_found")))?;
         if !matches!(
             &operation,
-            Operation::Stage { .. } | Operation::Unstage { .. }
+            Operation::Stage { .. } | Operation::Unstage { .. } | Operation::ResolveConflict(_)
         ) && let Some(state) = branches::integration_state(&git, workspace, cancel)?
         {
             bail!(conduit::i18n::format(
@@ -1198,6 +1213,10 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
         }
         match operation {
             Operation::Branch(_) => unreachable!(),
+            Operation::ResolveConflict(resolution) => {
+                conflicts::resolve(&git, workspace, *resolution, cancel)?;
+                Ok(conduit::i18n::text("git_conflicts.saved"))
+            }
             Operation::Discard { file, target } => {
                 discard::discard_file(&git, workspace, &file, &target, cancel)?;
                 Ok(conduit::i18n::format(
@@ -1952,6 +1971,7 @@ fn run_git_with_timeout(
 
 struct CommandOutput {
     text: String,
+    bytes: Vec<u8>,
     truncated: bool,
 }
 
@@ -2043,6 +2063,7 @@ fn run_git_with_environment(
             if stop_when_full && truncated {
                 return Ok(CommandOutput {
                     text: String::from_utf8_lossy(&stdout).into_owned(),
+                    bytes: stdout,
                     truncated,
                 });
             }
@@ -2052,6 +2073,10 @@ fn run_git_with_environment(
                 // --no-index uses exit code 1 to report a successful comparison
                 // with differences, like diff(1).
                 if code != 0
+                    // merge-file returns the number of conflicts (capped at
+                    // 127); those are valid merge output, not command errors.
+                    && !(args.first().is_some_and(|arg| arg == "merge-file")
+                        && (1..=127).contains(&code))
                     && !(code == 1
                         && args
                             .windows(2)
@@ -2070,6 +2095,7 @@ fn run_git_with_environment(
                 }
                 return Ok(CommandOutput {
                     text: String::from_utf8_lossy(&stdout).into_owned(),
+                    bytes: stdout,
                     truncated,
                 });
             }

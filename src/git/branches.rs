@@ -150,7 +150,7 @@ pub(super) fn metadata(git: &Path, workspace: &Path, cancel: &AtomicBool) -> Res
     info.sort_by_key(|branch| context.current_ref.as_ref() != Some(&branch.full_ref));
     info.truncate(MAX_BRANCHES);
     let integration = integration_state(git, workspace, cancel)?;
-    let conflicts = if integration.is_some() {
+    let conflicts = {
         run_git(
             git,
             workspace,
@@ -161,8 +161,6 @@ pub(super) fn metadata(git: &Path, workspace: &Path, cancel: &AtomicBool) -> Res
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .collect()
-    } else {
-        vec![]
     };
     let remotes = run_git(git, workspace, &["remote"], cancel)?
         .lines()

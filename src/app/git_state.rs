@@ -8,6 +8,9 @@ use std::{
 };
 
 pub(super) struct GitUi {
+    pub(super) conflict_browsers:
+        HashMap<PathBuf, gpui_kit::Entity<super::git_conflicts::ConflictBrowser>>,
+    pub(super) announced_conflicts: HashMap<PathBuf, Vec<String>>,
     pub(super) probe: Option<GitProbe>,
     pub(super) auto_stage_after_refresh: bool,
     pub(super) snapshot: Option<git::Snapshot>,
@@ -31,6 +34,8 @@ pub(super) struct GitUi {
 impl Default for GitUi {
     fn default() -> Self {
         Self {
+            conflict_browsers: HashMap::new(),
+            announced_conflicts: HashMap::new(),
             probe: None,
             auto_stage_after_refresh: false,
             snapshot: None,
@@ -56,6 +61,7 @@ impl Default for GitUi {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) enum GitChangeGroup {
+    Conflicts,
     Changes,
     Untracked,
     Added,
@@ -64,11 +70,13 @@ pub(super) enum GitChangeGroup {
 }
 
 impl GitChangeGroup {
-    pub(super) const ALL: [Self; 2] = [Self::Changes, Self::Untracked];
-    pub(super) const STATUS: [Self; 3] = [Self::Added, Self::Modified, Self::Deleted];
+    pub(super) const ALL: [Self; 3] = [Self::Conflicts, Self::Changes, Self::Untracked];
+    pub(super) const STATUS: [Self; 4] =
+        [Self::Conflicts, Self::Added, Self::Modified, Self::Deleted];
 
     pub(super) fn label(self) -> &'static str {
         match self {
+            Self::Conflicts => conduit::i18n::text_static("git_conflicts.title"),
             Self::Changes => "Changes",
             Self::Untracked => "Unversioned Files",
             Self::Added => conduit::i18n::text_static("git_state.added"),
@@ -78,7 +86,11 @@ impl GitChangeGroup {
     }
 
     pub(super) fn contains(self, file: &git::ChangedFile) -> bool {
+        if file.conflicted() {
+            return self == Self::Conflicts;
+        }
         match self {
+            Self::Conflicts => false,
             Self::Changes => !file.untracked(),
             Self::Untracked => file.untracked(),
             Self::Added => file.kind() == git::ChangeKind::Added,

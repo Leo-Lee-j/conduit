@@ -558,7 +558,7 @@ fn fs_canonical(path: &Path) -> PathBuf {
 }
 
 impl ConduitApp {
-    fn branch_operation_blocked(&self, path: &Path) -> Option<&'static str> {
+    pub(super) fn branch_operation_blocked(&self, path: &Path) -> Option<&'static str> {
         if self.closing || !self.writable {
             Some(conduit::i18n::text_static(
                 "git_branches.the_application_is_currently_read_only",
@@ -648,14 +648,23 @@ impl ConduitApp {
                 ],
             ))
             .child(div().text_size(ui_text_size(11.)).child(if supported {
-                conduit::i18n::text_static(
-                    "git_branches.resolve_conflicts_in_an_external_editor_run",
-                )
+                conduit::i18n::text_static("git_conflicts.banner_hint")
             } else {
                 conduit::i18n::text_static("git_branches.finish_or_abort_this_operation_in_the")
             }));
         for conflict in repository.conflicts.iter().take(20) {
             banner = banner.child(div().truncate().child(conflict.clone()));
+        }
+        if !repository.conflicts.is_empty() {
+            let app = app.clone();
+            banner = banner.child(
+                Button::new("git-resolve-conflicts")
+                    .small()
+                    .label(conduit::i18n::text("git_conflicts.title"))
+                    .on_click(move |_, window, cx| {
+                        app.update(cx, |app, cx| app.open_git_conflicts(window, cx));
+                    }),
+            );
         }
         if repository.conflicts.len() > 20 {
             banner = banner.child(conduit::i18n::text_static(
