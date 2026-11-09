@@ -207,9 +207,10 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("conduit-catalog-cache-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
-        let executable = root.join("fake-opencode.exe");
-        // Invalid executable: a cache hit must never try to launch it.
-        std::fs::write(&executable, b"not executable").unwrap();
+        let executable = root.join("fake-opencode.cmd");
+        // A cache hit must not run this failing command. Invalid .exe bytes can
+        // open a blocking Windows compatibility dialog instead of returning.
+        std::fs::write(&executable, b"@exit /b 1\r\n").unwrap();
         let settings = cli::CliSettings {
             opencode_path: Some(executable),
             ..Default::default()
