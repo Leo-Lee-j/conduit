@@ -73,6 +73,11 @@ Section "Conduit" SEC_APP
   CreateDirectory "$SMPROGRAMS\Conduit"
   CreateShortcut "$SMPROGRAMS\Conduit\Conduit.lnk" "$INSTDIR\conduit.exe" "" "$INSTDIR\conduit.exe" 0
   CreateShortcut "$SMPROGRAMS\Conduit\Uninstall Conduit.lnk" "$INSTDIR\uninstall.exe"
+  ; Explorer-created desktop links can retain the old shell item's icon.
+  ; Replace an existing link, but respect users who removed it (or never made one).
+  IfFileExists "$DESKTOP\Conduit.lnk" 0 desktop_shortcut_done
+  CreateShortcut "$DESKTOP\Conduit.lnk" "$INSTDIR\conduit.exe" "" "$INSTDIR\conduit.exe" 0
+desktop_shortcut_done:
   WriteRegStr HKCU "Software\Conduit" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Conduit" "DisplayName" "Conduit"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Conduit" "DisplayVersion" "${APP_VERSION}"
@@ -92,6 +97,10 @@ install_failed:
   SetErrorLevel 1
   Quit
 install_done:
+  ; The executable's path stays the same across upgrades. Invalidate Explorer's
+  ; cached icons after all files and shortcuts have been updated, including /S.
+  ; SHCNE_ASSOCCHANGED, SHCNF_IDLIST
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
 SectionEnd
 
 Function un.onInit

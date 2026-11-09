@@ -29,6 +29,7 @@ flowchart TD
 - 默认后台下载并验证签名与 SHA-256，不自动重启；可开启“空闲时安装并重启”。
 - 安装请求会等待 CLI、Git、终端、命名、版本探测和历史导入结束。准备重启时禁止新任务，保存聊天/工作区草稿、Git 提交草稿、附件和选择位置。
 - 更新助手嵌入 `asInvoker` 执行权限声明，按当前用户权限运行；NSIS 同样使用 `RequestExecutionLevel user`。助手从缓存运行，等待旧进程句柄释放，获取安装目录独占锁后静默执行 NSIS；其他数据目录的实例仍在运行时放弃安装并尝试打开旧版本。
+- 安装完成后刷新 Windows 图标缓存，并更新已有的桌面 `Conduit.lnk`，使其使用当前安装程序的图标；没有桌面快捷方式时不会额外创建。
 - 安装失败时还原 exe、DLL、卸载器和版本标记，并恢复卸载信息中的版本；日志/备份位于数据目录的 `updates/handoff-*`。
 - 新版本首次启动显示对应 changelog。聊天历史与配置不由安装器覆盖，升级前另存 `state.before-update.json`。
 
@@ -81,7 +82,10 @@ Release notes 根据 `.github/release.yml` 的 PR 标签分类。没有 PR 记�
 ```powershell
 ./scripts/check-core.ps1
 ./scripts/smoke.ps1 -View settings
+./scripts/windows/test-installer.ps1
 ```
+
+安装器图标回归使用独立的注册表键、桌面/开始菜单目录和小型测试程序，验证静默升级、已有快捷方式更新、已删除快捷方式不重建及中文空格路径；需要 NSIS 3，可用 `-MakeNsis` 指定编译器。
 
 发布前应在独立 Windows 测试环境中完成 A → B 的真实签名升级演练，覆盖中文及空格安装路径、有任务/草稿/附件、其他实例运行、网络取消、损坏包、磁盘不足、安装失败恢复。`release-manifest` 会在签名时检查公私钥匹配，并使用客户端验证器复验生成结果。
 
