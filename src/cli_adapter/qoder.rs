@@ -293,7 +293,7 @@ impl CliAdapter for QoderAdapter {
             completion: Completion::ProtocolEvent,
             input: InitialInput::Json(
                 json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
-                "protocolVersion":1,"clientInfo":{"name":"conduit","version":env!("CARGO_PKG_VERSION")},
+                "protocolVersion":1,
                 "clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false,
                     "elicitation":{"form":{}}}}}),
             ),

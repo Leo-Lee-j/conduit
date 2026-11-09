@@ -515,10 +515,12 @@ impl Protocol {
         match self.provider {
             Provider::Qoder => unreachable!("Qoder uses its own CliAdapter"),
             Provider::OpenCode => {
-                json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientInfo":{"name":"conduit","version":"0.1.0"},"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}})
+                json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}})
             }
             Provider::Codex => {
-                json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"conduit","title":"Conduit","version":"0.1.0"},"capabilities":{"experimentalApi":true}}})
+                // Keep the native CLI identity in provider requests. The required
+                // client version stays empty; Codex supplies its own engine version.
+                json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"codex_cli_rs","version":""},"capabilities":{"experimentalApi":true}}})
             }
             Provider::Claude => {
                 json!({"type":"control_request","request_id":"conduit-init","request":{"subtype":"initialize","hooks":{}}})
