@@ -668,6 +668,9 @@ fn contiguous_tool_groups_keep_reasoning_independently_visible() {
         activity("c", ItemKind::Reasoning, "thinking", ""),
         activity("d", ItemKind::Tool, "other", "completed"),
     ];
+    // Reasoning is a transcript item in its own right. It must remain visible
+    // after the following assistant reply instead of being swallowed by the
+    // completed tool group.
     assert_eq!(super::contiguous_tool_group(&s, 1), Some((0, 2)));
     assert_eq!(super::contiguous_tool_group(&s, 2), None);
     assert_eq!(super::contiguous_tool_group(&s, 3), Some((3, 4)));
@@ -1298,7 +1301,7 @@ fn error_summary_extracts_json_and_bounds_multiline_diagnostics() {
         super::failure_summary("\n请求超时\n原始诊断信息"),
         "请求超时"
     );
-    assert_eq!(super::failure_summary(""), "CLI 执行失败，请查看详情。");
+    assert_eq!(super::failure_summary(""), "本次请求未完成，请查看详情。");
     assert_eq!(
         super::failure_summary(&"错".repeat(200)).chars().count(),
         161

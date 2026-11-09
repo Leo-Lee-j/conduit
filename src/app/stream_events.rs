@@ -272,7 +272,7 @@ impl ConduitApp {
                             (
                                 NoticeLevel::Error,
                                 conduit::i18n::text_static("stream_events.session_failed"),
-                                error.clone(),
+                                failure_summary(error),
                             )
                         } else {
                             (
@@ -436,7 +436,11 @@ impl ConduitApp {
                     }
                     if let Some(run) = self.session_control.runs.get_mut(&id) {
                         run.status = conduit::i18n::text_static("stream_events.running").into();
-                        run.activity = conduit::i18n::text_static("stream_events.thinking").into();
+                        // A thread ID only confirms the CLI handshake, not model output.
+                        run.activity =
+                            conduit::i18n::text_static("stream_events.waiting_for_model_response")
+                                .into();
+                        run.activity_message = None;
                     }
                     self.dirty = true;
                     self.persist();
@@ -448,6 +452,18 @@ impl ConduitApp {
                                 conduit::i18n::text_static("stream_events.generating_response")
                                     .to_string()
                             }
+                            Event::ReasoningSummary {
+                                text,
+                                snapshot: false,
+                                ..
+                            } if !text.trim().is_empty() => {
+                                conduit::i18n::text_static("stream_events.thinking").to_string()
+                            }
+                            Event::ErrorBanner(error) => crate::failure::retry_activity(error)
+                                .unwrap_or_else(|| {
+                                    conduit::i18n::text_static("stream_events.request_failed")
+                                        .to_string()
+                                }),
                             Event::ToolInput { .. } => {
                                 conduit::i18n::text_static("stream_events.preparing_tool_call")
                                     .to_string()
@@ -472,6 +488,10 @@ impl ConduitApp {
                         };
                         if !activity.is_empty() {
                             run.activity_message = match &other {
+                                Event::ErrorBanner(error) => {
+                                    crate::failure::retry_activity_message(error)
+                                        .map(|message| (activity.clone(), message))
+                                }
                                 Event::Tool { title, status, .. }
                                     if !title.is_empty()
                                         && status

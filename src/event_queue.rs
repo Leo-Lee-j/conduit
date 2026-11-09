@@ -96,6 +96,27 @@ impl Sender {
             queue.bytes += text.len();
             return Ok(());
         }
+        if queue.bytes + cost <= MAX_BYTES
+            && let Event::ReasoningSummary {
+                key,
+                text,
+                summary_index,
+                snapshot: false,
+            } = &event
+            && let Some(Event::ReasoningSummary {
+                key: old_key,
+                text: old_text,
+                summary_index: old_index,
+                snapshot: false,
+            }) = queue.events.back_mut()
+            && old_key == key
+            && old_index == summary_index
+            && old_text.len() + text.len() <= 256 * 1024
+        {
+            old_text.push_str(text);
+            queue.bytes += text.len();
+            return Ok(());
+        }
         let finished = matches!(event, Event::Finished { .. });
         let cleanup = matches!(event, Event::CleanupBlocked(_));
         let control = matches!(
@@ -193,6 +214,41 @@ mod tests {
         assert!(matches!(rx.try_recv(), Ok(Event::Text { text, .. }) if text=="complete"));
         assert!(matches!(rx.try_recv(), Ok(Event::Delta { key, .. }) if key=="two"));
     }
+    #[test]
+    fn reasoning_deltas_coalesce_but_preserve_sections_snapshots_and_keys() {
+        let (tx, rx) = channel();
+        let event = |key: &str, summary_index, snapshot, text: &str| Event::ReasoningSummary {
+            key: key.into(),
+            text: text.into(),
+            summary_index,
+            snapshot,
+        };
+        // Many tiny tokens must not exhaust the event budget before a UI tick.
+        for _ in 0..MAX_EVENTS * 2 {
+            tx.send(event("one", 0, false, "a")).unwrap();
+        }
+        tx.send(event("one", 1, false, "b")).unwrap();
+        tx.send(event("one", 0, true, "complete")).unwrap();
+        tx.send(event("one", 0, false, "c")).unwrap();
+        tx.send(event("two", 0, false, "d")).unwrap();
+        assert!(
+            matches!(rx.try_recv(), Ok(Event::ReasoningSummary {text, summary_index:0, snapshot:false,..}) if text == "a".repeat(MAX_EVENTS * 2))
+        );
+        assert!(
+            matches!(rx.try_recv(), Ok(Event::ReasoningSummary {text, summary_index:1,..}) if text == "b")
+        );
+        assert!(
+            matches!(rx.try_recv(), Ok(Event::ReasoningSummary {text, snapshot:true,..}) if text == "complete")
+        );
+        assert!(
+            matches!(rx.try_recv(), Ok(Event::ReasoningSummary {text, snapshot:false,..}) if text == "c")
+        );
+        assert!(
+            matches!(rx.try_recv(), Ok(Event::ReasoningSummary {key, text,..}) if key == "two" && text == "d")
+        );
+        assert_eq!(tx.0.queue.lock().unwrap().bytes, 0);
+    }
+
     #[test]
     fn saturation_preserves_completion_without_waiting_on_consumer() {
         let _locale = crate::test_support::chinese();

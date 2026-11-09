@@ -154,7 +154,7 @@ fn qoder_resume_never_silently_replaces_session_or_replays_history() {
 }
 
 #[test]
-fn qoder_streams_merge_tools_and_keep_thinking_scoped_to_the_active_session() {
+fn qoder_streams_merge_tools_filter_sessions_and_display_thinking() {
     let (mut adapter, writes) = ready(request(), true);
     let text =
         json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}});
@@ -167,7 +167,7 @@ fn qoder_streams_merge_tools_and_keep_thinking_scoped_to_the_active_session() {
     assert!(
         matches!(&adapter.accept(notification("original",text)).events[0],Event::Delta {text,..} if text=="hello")
     );
-    let thought = json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Checking the file"}});
+    let thought = json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Inspect file"}});
     assert!(
         adapter
             .accept(notification("foreign", thought.clone()))
@@ -175,10 +175,10 @@ fn qoder_streams_merge_tools_and_keep_thinking_scoped_to_the_active_session() {
             .is_empty()
     );
     for _ in 0..2 {
-        let step = adapter.accept(notification("original", thought.clone()));
+        let first = adapter.accept(notification("original", thought.clone()));
         assert!(
-            matches!(&step.events[0], Event::ReasoningSummary { key, text, snapshot: false, .. }
-            if key == "qoder-thought-1" && text == "Checking the file")
+            matches!(&first.events[0], Event::ReasoningSummary {key, text, snapshot:false, ..}
+            if key == "qoder-thought-0" && text == "Inspect file")
         );
     }
     adapter.accept(notification("original",json!({"sessionUpdate":"tool_call","toolCallId":"t","title":"Read file","rawInput":{"path":"x"}})));
@@ -192,13 +192,24 @@ fn qoder_streams_merge_tools_and_keep_thinking_scoped_to_the_active_session() {
             .iter()
             .any(|e| matches!(e,Event::ToolInput{input,..} if input.contains("path")))
     );
-    let thought = adapter.accept(notification("original", thought));
-    assert!(
-        matches!(&thought.events[0], Event::ReasoningSummary { key, .. } if key == "qoder-thought-2")
-    );
     adapter.accept(notification(
         "original",
         json!({"sessionUpdate":"usage_update","size":1000,"used":250}),
+    ));
+    let second = adapter.accept(notification("original", thought));
+    assert!(
+        matches!(&second.events[0], Event::ReasoningSummary {key, ..} if key == "qoder-thought-1")
+    );
+    let reply = adapter.accept(notification(
+        "original",
+        json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"done"}}),
+    ));
+    assert!(matches!(
+        reply.events.as_slice(),
+        [
+            Event::ReasoningSummary { snapshot: true, .. },
+            Event::Delta { .. }
+        ]
     ));
     let done=adapter.accept(json!({"id":writes.last().unwrap()["id"],"result":{"stopReason":"end_turn","usage":{"inputTokens":100,"outputTokens":10,"totalTokens":110}}}));
     assert!(matches!(

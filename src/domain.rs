@@ -186,7 +186,7 @@ fn usage_is_zero(usage: &Usage) -> bool {
 pub enum ItemKind {
     User,
     Assistant,
-    /// Thinking text or summaries explicitly supplied by the CLI.
+    /// Provider-published thinking text or reasoning summary for display.
     Reasoning,
     Tool,
     Notice,

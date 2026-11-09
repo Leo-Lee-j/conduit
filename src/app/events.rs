@@ -17,7 +17,7 @@ pub(super) fn finish_tool_cards(session: &mut SessionRecord, prefix: &str, statu
         {
             approval.status = "已取消".into();
         }
-        if item.kind == ItemKind::Tool
+        if matches!(item.kind, ItemKind::Tool | ItemKind::Reasoning)
             && item.key.starts_with(&prefix)
             && matches!(
                 item.status,
@@ -25,7 +25,13 @@ pub(super) fn finish_tool_cards(session: &mut SessionRecord, prefix: &str, statu
                     | crate::message_status::ToolStatus::Output
             )
         {
-            item.status = status.into();
+            item.status = if item.kind == ItemKind::Reasoning
+                && status == crate::message_status::ToolStatus::MissingResult.as_str()
+            {
+                crate::message_status::ToolStatus::Completed
+            } else {
+                status.into()
+            };
         }
     }
 }
@@ -84,10 +90,19 @@ pub(super) fn apply_event_indexed(
     } = event
     {
         let key = format!("{prefix}-{key}");
+        let status = if snapshot {
+            crate::message_status::ToolStatus::Completed
+        } else {
+            crate::message_status::ToolStatus::Running
+        };
         if let Some(position) = index.find(&session.messages, &key) {
             let item = &mut session.messages[position];
+            item.status = status;
             if snapshot {
-                item.text = text;
+                // Some engines omit the body on completion. Preserve the deltas.
+                if !text.trim().is_empty() {
+                    item.text = text;
+                }
                 item.detail.clear();
             } else {
                 let part = summary_index.to_string();
@@ -99,6 +114,9 @@ pub(super) fn apply_event_indexed(
             }
             return Some(position);
         }
+        if text.trim().is_empty() {
+            return None;
+        }
         session
             .messages
             .push(ChatItem::from(crate::domain::ChatItemData {
@@ -108,8 +126,12 @@ pub(super) fn apply_event_indexed(
                 kind: ItemKind::Reasoning,
                 text,
                 input: String::new(),
-                detail: summary_index.to_string(),
-                status: Default::default(),
+                detail: if snapshot {
+                    String::new()
+                } else {
+                    summary_index.to_string()
+                },
+                status,
                 approval: None,
                 model: None,
             }));

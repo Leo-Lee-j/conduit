@@ -3,7 +3,7 @@
 use super::*;
 
 pub(super) use super::git_state::{GitChangeGroup, GitUi};
-use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::{checkbox::Checkbox, skeleton::Skeleton};
 
 impl ConduitApp {
     pub(super) fn selected_workspace_path(&self) -> Option<PathBuf> {
@@ -1482,26 +1482,43 @@ impl ConduitApp {
                     .bg(rgb(palette().surface))
                     .border_1()
                     .border_color(rgb(palette().border))
-                    .child(
-                        div().size_full().min_h_0().child(
-                            Textarea::new(&draft.input)
-                                .appearance(false)
-                                .bordered(false)
-                                .h(relative(1.))
-                                .text_size(ui_text_size(13.))
-                                .aria_label(conduit::i18n::text_static("git_ui.git_commit_message"))
-                                .disabled(
-                                    self.closing
-                                        || !self.writable
-                                        || generating
-                                        || self
-                                            .git
-                                            .operation
-                                            .as_ref()
-                                            .is_some_and(|operation| operation.probe.path == path),
-                                ),
-                        ),
-                    ),
+                    .when(generating, |input| {
+                        input.child(
+                            v_flex()
+                                .debug_selector(|| "git-commit-skeleton".into())
+                                .size_full()
+                                .p_2()
+                                .gap_2()
+                                .children([0.82, 0.95, 0.6].into_iter().map(|width| {
+                                    Skeleton::new()
+                                        .h(px(10.))
+                                        .w(relative(width))
+                                        .rounded(px(3.))
+                                        .flex_shrink_0()
+                                })),
+                        )
+                    })
+                    .when(!generating, |input| {
+                        input.child(
+                            div().size_full().min_h_0().child(
+                                Textarea::new(&draft.input)
+                                    .appearance(false)
+                                    .bordered(false)
+                                    .h(relative(1.))
+                                    .text_size(ui_text_size(13.))
+                                    .aria_label(conduit::i18n::text_static(
+                                        "git_ui.git_commit_message",
+                                    ))
+                                    .disabled(
+                                        self.closing
+                                            || !self.writable
+                                            || self.git.operation.as_ref().is_some_and(
+                                                |operation| operation.probe.path == path,
+                                            ),
+                                    ),
+                            ),
+                        )
+                    }),
             );
         if self.git.pending_tag_retry.contains_key(&path) {
             let mut row = h_flex()
@@ -1788,6 +1805,7 @@ impl ConduitApp {
                 .small()
                 .compact()
                 .icon(IconName::RefreshCw)
+                .loading(self.git.probe.is_some())
                 .accessibility_label(conduit::i18n::text_static("git_ui.refresh_git_status"))
                 .tooltip(conduit::i18n::text_static("git_ui.refresh_git_status"))
                 .cursor_pointer()
@@ -2518,10 +2536,7 @@ impl ConduitApp {
                             ("arg1", format!("{}", snapshot.unstaged_count())),
                             ("arg2", format!("{}", snapshot.untracked_count())),
                         ],
-                    ))
-                    .when(self.git.probe.is_some(), |row| {
-                        row.child(Spinner::new().small())
-                    }),
+                    )),
             )
             .child(body)
             .into_any_element()

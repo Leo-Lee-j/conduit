@@ -447,15 +447,36 @@ impl ConduitApp {
         }
         if self.new_session_provider != provider {
             self.pending_model_selection = None;
+            // An unsent conversation already owns its tab, draft and attachments.
+            // Change its route in place while there is no engine context to resume.
+            let target = self.selected_session.filter(|id| {
+                !self.session_busy(*id)
+                    && !self.session_control.queue_saves.contains_key(id)
+                    && !self.session_draft_save_pending(*id)
+                    && self.session(*id).is_some_and(|session| {
+                        session.transcript.loaded
+                            && session.messages.is_empty()
+                            && session.native_id.is_none()
+                            && session.exit_code.is_none()
+                            && !session.interrupted
+                    })
+            });
+            if let Some(id) = target {
+                let selection = self.default_selection(provider);
+                if let Some(session) = self.session_mut(id) {
+                    session.provider = provider;
+                    selection.apply(session);
+                }
+                self.persist();
+            }
         }
         self.new_session_provider = provider;
         self.remember_provider(provider);
         if provider == Provider::OpenCode {
             self.ensure_opencode_models(false, cx);
         }
-        // Switching the engine targets the *next* new session: it never
-        // jumps to an existing history session. The current session stays
-        // selected and its tab stays open.
+        // Conversations with history keep their engine and context. Switching
+        // away from one configures the next new conversation without navigating.
         let _ = window;
         cx.notify();
     }

@@ -141,7 +141,7 @@ fn default_full_width_content() -> bool {
 }
 
 fn default_collapse_reasoning() -> bool {
-    true
+    false
 }
 
 fn default_ui_font_size() -> f32 {
@@ -1043,9 +1043,9 @@ mod tests {
         );
         assert_eq!(store.ui.max_tabs, 8);
         assert!(store.ui.full_width_content);
-        assert!(store.ui.collapse_reasoning);
+        assert!(!store.ui.collapse_reasoning);
         assert!(
-            serde_json::from_value::<UiSettings>(serde_json::json!({}))
+            !serde_json::from_value::<UiSettings>(serde_json::json!({}))
                 .unwrap()
                 .collapse_reasoning
         );
@@ -1068,7 +1068,7 @@ mod tests {
         store.ui.auto_collapse_inactive_workspaces = true;
         store.ui.max_tabs = 12;
         store.ui.full_width_content = false;
-        store.ui.collapse_reasoning = false;
+        store.ui.collapse_reasoning = true;
         store.ui.naming_mode = NamingMode::Latest;
         store.ui.ui_font_family = Some("Microsoft YaHei".into());
         store.ui.ui_font_size = 18.0;
@@ -1098,7 +1098,7 @@ mod tests {
         assert!(reloaded.ui.auto_collapse_inactive_workspaces);
         assert_eq!(reloaded.ui.max_tabs, 12);
         assert!(!reloaded.ui.full_width_content);
-        assert!(!reloaded.ui.collapse_reasoning);
+        assert!(reloaded.ui.collapse_reasoning);
         assert_eq!(reloaded.ui.naming_mode, NamingMode::Latest);
         assert_eq!(
             reloaded.ui.ui_font_family.as_deref(),

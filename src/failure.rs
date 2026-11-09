@@ -1,69 +1,31 @@
 //! Compact, deduplicated engine diagnostics with actionable recovery hints.
 use crate::domain::{ChatItem, ItemKind, SessionRecord};
 
-/// Whether a failure notice repeats text an earlier assistant/tool message
-/// already shows. CLI wrappers often echo the same provider error in both the
-/// assistant output and the task result, and showing it twice reads as a
-/// duplicated reply.
-/// Turn a raw CLI failure blob into a one-line banner summary. The runtime
-/// reports some failures as pretty-printed JSON (e.g. a Codex `turn.error`
-/// object); those get parsed so the banner shows the cause, not the payload.
+mod diagnostics;
+
+/// Extract the original cause from native JSON diagnostics.
 pub(crate) fn friendly_failure(error: &str) -> String {
-    let trimmed = error.trim();
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) else {
-        return trimmed.to_string();
-    };
-    let get = |keys: &[&str]| -> Option<String> {
-        keys.iter().find_map(|key| {
-            json.get(*key)
-                .and_then(|value| {
-                    value
-                        .as_str()
-                        .or_else(|| value.get("message").and_then(|v| v.as_str()))
-                })
-                .map(str::to_string)
-                .filter(|value| !value.is_empty())
-        })
-    };
-    let message = get(&["message", "error"]).or_else(|| {
-        json.get("errors")
-            .and_then(|v| v.as_array())
-            .and_then(|v| v.first())
-            .and_then(|v| v.as_str())
-            .map(str::to_owned)
-    });
-    let detail = json
-        .get("codexErrorInfo")
-        .and_then(|info| info.get("responseStreamDisconnected"))
-        .map(|disconnected| {
-            let status = disconnected["httpStatusCode"].as_i64();
-            let detail = disconnected["additionalDetails"].as_str().unwrap_or("");
-            let brief = detail.split(['\n', ';']).next().unwrap_or(detail).trim();
-            let brief = if brief.chars().count() > 120 {
-                format!("{}…", brief.chars().take(120).collect::<String>())
-            } else {
-                brief.to_string()
-            };
-            match (status, brief.is_empty()) {
-                (Some(code), false) => conduit::i18n::format(
-                    "failure.connection_interrupted_http",
-                    &[("code", format!("{}", code)), ("brief", brief.to_string())],
-                ),
-                (Some(code), true) => conduit::i18n::format(
-                    "failure.connection_interrupted_http_650cf7",
-                    &[("code", format!("{}", code))],
-                ),
-                (None, false) => conduit::i18n::format(
-                    "failure.connection_interrupted",
-                    &[("brief", brief.to_string())],
-                ),
-                (None, true) => {
-                    conduit::i18n::text_static("failure.connection_interrupted_3eb19e").to_string()
-                }
-            }
-        });
-    detail.or(message).unwrap_or_else(|| trimmed.to_string())
+    if codex_client_restricted(error) {
+        return conduit::i18n::text_static("failure.codex_official_clients_only").to_string();
+    }
+    diagnostics::message(error)
 }
+
+pub(crate) fn retry_activity(error: &str) -> Option<String> {
+    retry_activity_message(error).map(|message| message.render())
+}
+
+pub(crate) fn retry_activity_message(error: &str) -> Option<conduit::i18n::Message> {
+    diagnostics::retry_message(error)
+}
+
+pub(crate) fn codex_client_restricted(error: &str) -> bool {
+    error
+        .to_ascii_lowercase()
+        .contains("only allows codex official clients")
+}
+
+/// Whether a result echoes a diagnostic already shown in this turn.
 pub(crate) fn same_failure(message: &str, error: &str) -> bool {
     let message = message.trim();
     let error = error.trim();
@@ -79,7 +41,20 @@ pub(crate) fn failure_summary(error: &str) -> String {
         .trim()
         .strip_prefix("执行失败：")
         .unwrap_or(error.trim());
-    let friendly = friendly_failure(error);
+    let friendly = if codex_client_restricted(error) {
+        friendly_failure(error)
+    } else {
+        diagnostics::Cause::detect(error)
+            .summary(error)
+            .unwrap_or_else(|| {
+                let message = friendly_failure(error);
+                if message.starts_with(['{', '[']) || !message.is_empty() && message.is_ascii() {
+                    conduit::i18n::text_static("failure.unrecognized_response").into()
+                } else {
+                    message
+                }
+            })
+    };
     let line = friendly
         .lines()
         .map(str::trim)
@@ -95,57 +70,42 @@ pub(crate) fn failure_summary(error: &str) -> String {
 }
 
 fn failure_category(error: &str) -> &'static str {
-    let text = friendly_failure(error).to_ascii_lowercase();
-    if text.contains("401")
-        || text.contains("403")
-        || text.contains("api key")
-        || text.contains("unauthorized")
-        || text.contains("authentication")
-    {
-        "认证或权限失败"
-    } else if text.contains("429")
-        || text.contains("rate limit")
-        || text.contains("quota")
-        || text.contains("overloaded")
-    {
-        "服务限流或额度不足"
-    } else if text.contains("context")
-        && (text.contains("length") || text.contains("window") || text.contains("limit"))
-    {
-        "上下文超出限制"
-    } else if text.contains("model")
-        && (text.contains("not found")
-            || text.contains("not available")
-            || text.contains("unavailable")
-            || text.contains("does not exist"))
-        || text.contains("provider")
-            && (text.contains("不可用")
-                || text.contains("not found")
-                || text.contains("unavailable"))
-    {
-        "模型或 Provider 配置不可用"
-    } else if text.contains("timeout")
-        || text.contains("timed out")
-        || text.contains("连接")
-        || text.contains("network")
-        || text.contains("disconnect")
-        || text.contains("connection")
-        || text.contains("500")
-        || text.contains("502")
-        || text.contains("503")
-        || text.contains("504")
-    {
-        "连接或服务异常"
-    } else {
-        "本次回复未完成"
+    use diagnostics::Cause;
+    match diagnostics::Cause::detect(error) {
+        Cause::Credentials | Cause::Permission => "认证或权限失败",
+        Cause::Quota | Cause::RateLimit => "服务限流或额度不足",
+        Cause::Context => "上下文超出限制",
+        Cause::Model => "模型或 Provider 配置不可用",
+        Cause::Timeout | Cause::Connection | Cause::Service => "连接或服务异常",
+        Cause::Unknown if error.contains("连接") => "连接或服务异常",
+        Cause::Unknown => "本次回复未完成",
     }
 }
 
 pub(crate) fn failure_title(error: &str) -> &'static str {
-    conduit::i18n::source(failure_category(error))
+    use diagnostics::Cause;
+    let key = match Cause::detect(error) {
+        Cause::RateLimit => "failure.title_rate_limited",
+        Cause::Quota => "failure.title_quota_exhausted",
+        Cause::Timeout => "failure.title_timeout",
+        Cause::Connection => "failure.title_connection",
+        Cause::Service => "failure.title_service",
+        _ => return conduit::i18n::source(failure_category(error)),
+    };
+    conduit::i18n::text_static(key)
 }
 
 pub(crate) fn failure_guidance(error: &str) -> &'static str {
+    if codex_client_restricted(error) {
+        return conduit::i18n::text_static("failure.codex_client_restriction_guidance");
+    }
+    match diagnostics::Cause::detect(error) {
+        diagnostics::Cause::RateLimit => {
+            return conduit::i18n::text_static("failure.rate_limit_guidance");
+        }
+        diagnostics::Cause::Quota => return conduit::i18n::text_static("failure.quota_guidance"),
+        _ => {}
+    }
     match failure_category(error) {
         "认证或权限失败" => {
             conduit::i18n::text_static("failure.check_provider_credentials_sign_in_status_and")
@@ -182,12 +142,8 @@ pub(crate) fn failure_repeats(item: &ChatItem) -> u64 {
 }
 
 fn fingerprint(error: &str) -> String {
-    let friendly = friendly_failure(
-        error
-            .trim()
-            .strip_prefix("执行失败：")
-            .unwrap_or(error.trim()),
-    );
+    // Group retries by their original cause, not by a translated generic label.
+    let friendly = diagnostics::fingerprint(error);
     let mut text = friendly.trim().to_ascii_lowercase();
     for marker in ["request id:", "request_id:", "(request id:"] {
         if let Some(index) = text.find(marker) {
@@ -339,16 +295,101 @@ mod tests {
     fn common_failures_have_specific_recovery_guidance() {
         let _locale = crate::test_support::chinese();
         assert!(failure_guidance("401 unauthorized").contains("凭证"));
-        assert!(failure_guidance("429 rate limit").contains("额度"));
+        assert!(failure_guidance("429 rate limit").contains("频率"));
+        assert!(failure_guidance("insufficient_quota").contains("额度"));
         assert!(failure_guidance("maximum context length exceeded").contains("压缩"));
         assert!(failure_guidance("model does not exist").contains("模型配置"));
         assert_eq!(
             failure_summary(r#"{"error":{"message":"service unavailable"}}"#),
-            "service unavailable"
+            conduit::i18n::text_static("failure.service_unavailable")
         );
         assert!(is_engine_error_text("API Error: 503"));
         assert!(!is_engine_error_text(
             "Here is how to handle an API Error: 503"
         ));
+    }
+    #[test]
+    fn native_retries_keep_progress_raw_details_and_terminal_state() {
+        let _locale = crate::test_support::chinese();
+        let error = |attempt, will_retry| {
+            serde_json::json!({
+            "error": {"message": format!("Reconnecting... {attempt}/5: stream disconnected before completion"),
+                "codexErrorInfo": "responseStreamDisconnected"},
+            "willRetry": will_retry
+        }).to_string()
+        };
+        let mut session = session();
+        let first = error(1, true);
+        let second = error(2, true);
+        record_failure(&mut session, "turn", &first, false);
+        record_failure(&mut session, "turn", &second, false);
+        assert_eq!(session.messages.len(), 1);
+        assert_eq!(failure_repeats(&session.messages[0]), 2);
+        assert_eq!(session.messages[0].detail, second);
+        assert_eq!(
+            retry_activity(&second).as_deref(),
+            Some("正在重新连接（2/5）…")
+        );
+        assert_eq!(failure_summary(&second), "与模型服务的连接中断");
+        assert_eq!(
+            retry_activity("codex Reconnecting... 3/5").as_deref(),
+            Some("正在重新连接（3/5）…")
+        );
+        let terminal = error(5, false);
+        record_failure(&mut session, "turn", &terminal, true);
+        assert_eq!(session.messages.len(), 1);
+        assert_eq!(session.messages[0].detail, terminal);
+        assert!(retry_activity(&session.messages[0].detail).is_none());
+        assert!(retry_activity("已取消；不会自动重试。").is_none());
+        assert!(retry_activity("We should discuss reconnecting to a database").is_none());
+        // Different native causes must not merge just because their translations match.
+        record_failure(&mut session, "turn", "HTTP 503: overloaded", false);
+        record_failure(&mut session, "turn", "HTTP 502: gateway error", false);
+        assert_eq!(session.messages.len(), 3);
+        let status_only = |code| {
+            serde_json::json!({"error": {"message": "Reconnecting... 1/5",
+            "codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode":code}}}, "willRetry":true})
+            .to_string()
+        };
+        record_failure(&mut session, "turn", &status_only(502), false);
+        record_failure(&mut session, "turn", &status_only(503), false);
+        assert_eq!(session.messages.len(), 5);
+    }
+
+    #[test]
+    fn native_errors_have_localized_causes_and_keep_real_status_codes() {
+        let _locale = crate::test_support::chinese();
+        for (raw, expected) in [
+            (
+                "API Error: 401 unauthorized",
+                "登录凭证无效或已过期，请检查登录状态（HTTP 401）",
+            ),
+            (
+                "unexpected status 403 Forbidden",
+                "当前账户无权使用此模型或服务（HTTP 403）",
+            ),
+            (
+                "429 Too Many Requests",
+                "请求过于频繁，服务暂时限制了访问（HTTP 429）",
+            ),
+            ("insufficient_quota", "账户额度或余额不足，暂时无法继续请求"),
+            (
+                "maximum context length exceeded",
+                "会话内容超过了模型可处理的长度",
+            ),
+            ("model does not exist", "所选模型或服务配置不可用"),
+            ("request timed out", "等待模型响应超时"),
+            (
+                r#"{"error":{"message":"Reconnecting... 1/5","codexErrorInfo":{"httpConnectionFailed":{"httpStatusCode":503}}},"willRetry":true}"#,
+                "模型服务暂时不可用，请稍后重试（HTTP 503）",
+            ),
+            (r#""internalServerError""#, "模型服务暂时不可用，请稍后重试"),
+        ] {
+            assert_eq!(failure_summary(raw), expected, "{raw}");
+        }
+        assert_eq!(
+            friendly_failure(r#"{"error":{"message":"original detail"},"willRetry":true}"#),
+            "original detail"
+        );
     }
 }

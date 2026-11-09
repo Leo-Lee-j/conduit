@@ -98,17 +98,21 @@ fn opencode_thinking_chunks_preserve_order_and_filter_replays_and_foreign_sessio
         let step = protocol.accept(chunk("session", "agent_thought_chunk", text));
         assert!(
             matches!(&step.events[0], Event::ReasoningSummary { key, text: actual, snapshot: false, .. }
-            if key == "acp-thought-1" && actual == text)
+            if key == "acp-thought-0" && actual == text)
         );
     }
     let reply = protocol.accept(chunk("session", "agent_message_chunk", "First answer"));
-    assert!(matches!(&reply.events[0], Event::Delta { key, .. } if key == "acp-reply-1"));
+    assert!(
+        matches!(reply.events.last().unwrap(), Event::Delta { key, .. } if key == "acp-reply-1")
+    );
     let thought = protocol.accept(chunk("session", "agent_thought_chunk", "One more check"));
     assert!(
-        matches!(&thought.events[0], Event::ReasoningSummary { key, .. } if key == "acp-thought-2")
+        matches!(&thought.events[0], Event::ReasoningSummary { key, .. } if key == "acp-thought-1")
     );
     let reply = protocol.accept(chunk("session", "agent_message_chunk", "Second answer"));
-    assert!(matches!(&reply.events[0], Event::Delta { key, .. } if key == "acp-reply-2"));
+    assert!(
+        matches!(reply.events.last().unwrap(), Event::Delta { key, .. } if key == "acp-reply-2")
+    );
     protocol.accept(
         json!({"method":"session/update","params":{"sessionId":"session","update":{
             "sessionUpdate":"tool_call","toolCallId":"tool","title":"Read"
@@ -116,7 +120,7 @@ fn opencode_thinking_chunks_preserve_order_and_filter_replays_and_foreign_sessio
     );
     let thought = protocol.accept(chunk("session", "agent_thought_chunk", "After the tool"));
     assert!(
-        matches!(&thought.events[0], Event::ReasoningSummary { key, .. } if key == "acp-thought-3")
+        matches!(&thought.events[0], Event::ReasoningSummary { key, .. } if key == "acp-thought-2")
     );
     protocol.acp.stage = Stage::Done;
     assert!(
@@ -488,4 +492,48 @@ fn full_access_opencode_permission_never_requires_a_ui_gate() {
         let readonly = full.with_permission(PermissionLevel::ReadOnly);
         assert_eq!(readonly.automatic_approval(approval), Some(false));
     }
+}
+
+#[test]
+fn opencode_reasoning_chunks_preserve_segments_and_ignore_replay_and_other_sessions() {
+    let _locale = crate::test_support::chinese();
+    let (mut protocol, writes) = connected(None, true, None);
+    let thought = |session| {
+        json!({"method":"session/update","params":{"sessionId":session,
+        "update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Inspect files"}}}})
+    };
+    assert!(protocol.accept(thought("foreign")).events.is_empty());
+    protocol.acp.stage = Stage::Session;
+    assert!(protocol.accept(thought("ses_test")).events.is_empty());
+    protocol.acp.stage = Stage::Prompt;
+    for _ in 0..2 {
+        assert!(
+            matches!(protocol.accept(thought("ses_test")).events.as_slice(),
+            [Event::ReasoningSummary {key,text,snapshot:false,..}]
+            if key == "acp-thought-0" && text == "Inspect files")
+        );
+    }
+    let tool = protocol.accept(
+        json!({"method":"session/update","params":{"sessionId":"ses_test",
+        "update":{"sessionUpdate":"tool_call","toolCallId":"tool","title":"Read"}}}),
+    );
+    assert!(matches!(
+        &tool.events[0],
+        Event::ReasoningSummary { snapshot: true, .. }
+    ));
+    assert!(
+        matches!(protocol.accept(thought("ses_test")).events.as_slice(),
+        [Event::ReasoningSummary {key,..}] if key == "acp-thought-1")
+    );
+    let done = protocol
+        .accept(json!({"id":writes.last().unwrap()["id"],"result":{"stopReason":"end_turn"}}));
+    assert!(done.done);
+    assert!(matches!(
+        done.events.as_slice(),
+        [Event::ReasoningSummary { snapshot: true, .. }]
+    ));
+    assert!(protocol.accept(thought("ses_test")).events.is_empty());
+    protocol.acp.stage = Stage::Prompt;
+    protocol.text_only = true;
+    assert!(protocol.accept(thought("ses_test")).events.is_empty());
 }

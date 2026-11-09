@@ -25,6 +25,7 @@ fn thinking_disclosure_preserves_manual_choices_across_streaming_and_sessions(
         app.update(cx, |app, cx| {
             app.startup = None;
             app.writable = false;
+            app.set_reasoning_collapsed(true);
             for id in [1, 2] {
                 app.session_mut(id).unwrap().messages = serde_json::from_value(serde_json::json!([
                     {"key":"user","kind":"User","text":"Check the code"},
@@ -454,6 +455,7 @@ fn model_picker_switches_engine_and_applies_the_full_route_to_a_new_session(
     let (_, cx) = cx.add_window_view(|window, cx| {
         let app = cx.new(|cx| {
             let mut session = super::tests::session();
+            session.native_id = Some("existing-claude-context".into());
             session.model = Some("claude-sonnet-4-6".into());
             session.reasoning_effort = ReasoningEffort::High;
             let store = Store {
@@ -1838,5 +1840,110 @@ fn qoder_picker_persists_session_catalog_and_resets_effort_when_model_changes(
             assert_eq!(session.opencode.models().len(), 2);
             app.writable = false;
         });
+    });
+}
+
+#[gpui_kit::test]
+fn cli_retry_progress_keeps_native_details_and_recovers_with_output(cx: &mut TestAppContext) {
+    use crate::protocol::{Event, Protocol};
+    use gpui_kit::{Modifiers, MouseButton};
+    use serde_json::json;
+    let _locale = crate::test_support::chinese();
+    let (app, cx, _) = super::queue::tests::fixture(cx, "cli-retry-status");
+    let sender = cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            app.startup = None;
+            app.writable = false;
+            app.session_mut(1).unwrap().messages.clear();
+            super::queue::tests::running(app, 1)
+        })
+    });
+    let mut protocol = Protocol::new(
+        super::Provider::Codex,
+        "C:/work".into(),
+        "hello".into(),
+        None,
+    );
+    let mut expected_detail = String::new();
+    for attempt in 1..=2 {
+        let step = protocol.accept(json!({"method":"error", "params":{
+            "threadId":"retry-thread", "turnId":"turn",
+            "error":{"message":format!("Reconnecting... {attempt}/5: stream disconnected before completion"),
+                "codexErrorInfo":{"responseStreamDisconnected":{"httpStatusCode":502}}},
+            "willRetry":true
+        }}));
+        for event in step.events {
+            if let Event::ErrorBanner(raw) = &event {
+                expected_detail = raw.clone();
+            }
+            sender.send(event).unwrap();
+        }
+        cx.update(|window, cx| app.update(cx, |app, cx| app.poll_streams(window, cx)));
+    }
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.simulate_next_frame(cx);
+        let _ = window.draw(cx);
+    });
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert_eq!(
+            app.session_control.runs[&1].activity_label(),
+            "正在自动重试（2/5）…"
+        );
+        assert_eq!(app.session(1).unwrap().messages.len(), 1);
+        assert_eq!(app.session(1).unwrap().messages[0].detail, expected_detail);
+    });
+    assert!(cx.debug_bounds("cli-error-0").is_some());
+    assert!(cx.debug_bounds("cli-error-details-0").is_none());
+    let point = cx.debug_bounds("cli-error-toggle-0").unwrap().center();
+    cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.simulate_next_frame(cx);
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("cli-error-details-0").is_some());
+    let point = cx.debug_bounds("cli-error-copy-0").unwrap().center();
+    cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+    assert_eq!(
+        cx.update(|_, cx| cx.read_from_clipboard().unwrap().text().unwrap()),
+        expected_detail
+    );
+    sender
+        .send(Event::Delta {
+            key: "reply".into(),
+            text: "Recovered response".into(),
+        })
+        .unwrap();
+    cx.update(|window, cx| app.update(cx, |app, cx| app.poll_streams(window, cx)));
+    cx.update(|_, cx| {
+        assert_eq!(
+            app.read(cx).session_control.runs[&1].activity_label(),
+            conduit::i18n::text_static("stream_events.generating_response")
+        );
+    });
+    sender
+        .send(Event::Finished {
+            error: None,
+            cancelled: false,
+        })
+        .unwrap();
+    cx.update(|window, cx| app.update(cx, |app, cx| app.poll_streams(window, cx)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.simulate_next_frame(cx);
+        let _ = window.draw(cx);
+    });
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert!(!app.session_control.runs.contains_key(&1));
+        assert_eq!(app.session(1).unwrap().messages.len(), 2);
+        assert_eq!(
+            app.session(1).unwrap().messages[1].text,
+            "Recovered response"
+        );
     });
 }

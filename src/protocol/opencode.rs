@@ -91,8 +91,7 @@ pub(super) struct State {
     config: VecDeque<(String, String)>,
     options: AcpSettings,
     tools: HashMap<String, Value>,
-    thought_index: u64,
-    in_thought: bool,
+    thoughts: super::ThoughtStream,
     reply_index: u64,
     context_window: u64,
     context_tokens: Option<u64>,
@@ -407,6 +406,7 @@ impl Protocol {
                 self.acp_next(&mut step);
             }
             Stage::Prompt => {
+                self.acp.thoughts.finish(&mut step.events);
                 if let Some(usage) = result.get("usage") {
                     self.acp_usage(usage, &mut step);
                 }
@@ -574,24 +574,19 @@ impl Protocol {
             return;
         }
         match update["sessionUpdate"].as_str() {
-            Some("agent_thought_chunk") if update["content"]["type"] == "text" => {
-                let thinking = text(&update["content"], "text");
-                if !thinking.is_empty() {
-                    if !self.acp.in_thought {
-                        self.acp.thought_index += 1;
-                        self.acp.reply_index += 1;
-                        self.acp.in_thought = true;
-                    }
-                    step.events.push(Event::ReasoningSummary {
-                        key: format!("acp-thought-{}", self.acp.thought_index),
-                        text: thinking.into(),
-                        summary_index: 0,
-                        snapshot: false,
-                    });
+            Some("agent_thought_chunk")
+                if !self.text_only && update["content"]["type"] == "text" =>
+            {
+                if self
+                    .acp
+                    .thoughts
+                    .push("acp", text(&update["content"], "text"), &mut step.events)
+                {
+                    self.acp.reply_index += 1;
                 }
             }
             Some("agent_message_chunk") if update["content"]["type"] == "text" => {
-                self.acp.in_thought = false;
+                self.acp.thoughts.finish(&mut step.events);
                 step.events.push(Event::Delta {
                     key: update["messageId"]
                         .as_str()
@@ -605,8 +600,8 @@ impl Protocol {
                     return;
                 };
                 if !self.acp.tools.contains_key(id) {
+                    self.acp.thoughts.finish(&mut step.events);
                     self.acp.reply_index += 1;
-                    self.acp.in_thought = false;
                 }
                 let merged = self.acp.tools.entry(id.into()).or_insert_with(|| json!({}));
                 for (k, v) in update.as_object().into_iter().flatten() {

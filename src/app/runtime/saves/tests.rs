@@ -110,6 +110,110 @@ fn slow_save_retains_draft_and_attachments_and_gates_cli(cx: &mut TestAppContext
 }
 
 #[gpui_kit::test]
+fn unsent_session_engine_switch_preserves_identity_draft_and_attachments(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx, root) = fixture(cx, "unsent-engine-switch");
+    let file = root.join("reference.txt");
+    std::fs::write(&file, "attachment").unwrap();
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            this.store.cli.codex_path = Some(root.join("offline.cmd"));
+            this.store.session_defaults.insert(
+                Provider::Codex,
+                crate::store::SessionDefaults {
+                    channel: ModelChannel::Cli,
+                    model: Some("gpt-5".into()),
+                },
+            );
+            let session = this.session_mut(1).unwrap();
+            session.native_id = None;
+            session.model = Some("claude-model".into());
+            session.reasoning_effort = crate::providers::ReasoningEffort::High;
+            session.opencode.variant = Some("old-variant".into());
+            session.permission = crate::domain::PermissionLevel::FullAccess;
+            let tabs = this.open_tabs.clone();
+            let next_id = this.next_id;
+            this.attach_paths(&[file], window, cx);
+            this.input.update(cx, |input, cx| {
+                input.set_value("send from the same conversation", window, cx)
+            });
+
+            this.select_engine(Provider::Codex, window, cx);
+            assert_eq!(this.selected_session, Some(1));
+            assert_eq!(this.send_target(true), Some(1));
+            assert_eq!(this.model_picker_session_id(1), Some(1));
+            assert_eq!(this.open_tabs, tabs);
+            assert_eq!(this.next_id, next_id);
+            let session = this.session(1).unwrap();
+            assert_eq!(session.provider, Provider::Codex);
+            assert_eq!(session.model.as_deref(), Some("gpt-5"));
+            assert_eq!(
+                session.reasoning_effort,
+                crate::providers::ReasoningEffort::Medium
+            );
+            assert_eq!(
+                session.permission,
+                crate::domain::PermissionLevel::FullAccess
+            );
+            assert!(session.opencode.variant.is_none());
+            this.update_composer_selection(1, cx, |selection| {
+                selection.set_model(Some("chosen-model".into()));
+            });
+            assert_eq!(
+                this.session(1).unwrap().model.as_deref(),
+                Some("chosen-model")
+            );
+            assert!(this.pending_model_selection.is_none());
+            assert_eq!(this.current_files().unwrap().references.len(), 1);
+            assert_eq!(
+                this.input.read(cx).value().as_ref(),
+                "send from the same conversation"
+            );
+
+            let (release, snapshot) = hold_save(this);
+            this.send_prompt(window, cx);
+            let snapshot = snapshot.recv_timeout(Duration::from_secs(3)).unwrap();
+            assert_eq!(snapshot.workspaces[0].sessions.len(), 1);
+            let sent = &snapshot.workspaces[0].sessions[0];
+            assert_eq!(sent.id, 1);
+            assert_eq!(sent.provider, Provider::Codex);
+            assert_eq!(sent.model.as_deref(), Some("chosen-model"));
+            assert_eq!(sent.messages.len(), 1);
+            assert!(
+                sent.messages[0]
+                    .text
+                    .contains("send from the same conversation")
+            );
+            assert!(sent.messages[0].text.contains("reference.txt"));
+            assert_eq!(this.selected_session, Some(1));
+            assert_eq!(this.next_id, next_id);
+            assert_eq!(this.session_control.runs.len(), 1);
+            assert!(
+                this.session_control.runs[&1]
+                    .pending_save
+                    .as_ref()
+                    .unwrap()
+                    .before
+                    .is_some()
+            );
+            release.send(Ok(())).unwrap();
+            finish_save(this, window, cx);
+            assert!(this.input.read(cx).value().is_empty());
+            assert!(this.current_files().is_none());
+            assert!(matches!(
+                this.session_control.runs[&1]
+                    .runtime
+                    .events
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap(),
+                Event::Finished { .. }
+            ));
+            this.session_control.runs.remove(&1);
+        })
+    });
+}
+
+#[gpui_kit::test]
 fn failed_save_restores_existing_and_new_sessions_without_consuming_drafts(
     cx: &mut TestAppContext,
 ) {

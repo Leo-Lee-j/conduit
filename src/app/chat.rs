@@ -8,6 +8,9 @@ pub(in crate::app) mod profiling;
 pub(super) mod rows;
 mod turn_diff;
 
+#[cfg(all(test, feature = "ui-tests"))]
+mod reasoning_tests;
+
 /// Text segments separated by tools still belong to one user-facing reply.
 /// Derive the bounds from user messages so imported histories work as well.
 pub(super) fn assistant_reply_range(
@@ -708,16 +711,12 @@ impl ConduitApp {
             self.expanded_tools.contains(&detail_key)
         };
         let running = tool_running(item)
-            || (reasoning
-                && self.session_control.runs.contains_key(&session_id)
-                && self.session(session_id).is_some_and(|session| {
-                    session
-                        .messages
-                        .iter()
-                        .rev()
-                        .find(|message| !is_empty_chat_placeholder(message))
-                        .is_some_and(|last| last.key == item.key)
-                }));
+            && (!reasoning
+                || self
+                    .session_control
+                    .runs
+                    .get(&session_id)
+                    .is_some_and(|run| item.key.starts_with(&format!("{}-", run.prefix))));
         let failed = !running && tool_failed(item);
         let category = if running && reasoning {
             conduit::i18n::text_static("chat.thinking").to_string()
@@ -1337,31 +1336,31 @@ impl ConduitApp {
                             .debug_selector(move || format!("reasoning-body-{session_id}-{index}"))
                             .w_full()
                             .min_w_0()
-                            .p_3()
-                            .rounded(px(8.))
-                            .border_1()
+                            .pl_3()
+                            .py_1()
+                            .border_l_1()
                             .border_color(rgb(palette().border))
-                            .bg(rgb(palette().surface))
-                            .text_size(px(typography.body_size))
-                            .line_height(relative(typography.line_height))
-                            .when_some(typography.body_font.clone(), |body, family| {
-                                body.font_family(family)
-                            })
                             .text_color(rgb(palette().muted))
-                            .cursor_text()
-                            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
-                                if event.pressed_button == Some(MouseButton::Left) {
-                                    this.timeline.update(cx, |_, cx| cx.notify());
-                                    cx.notify();
-                                }
-                            }))
-                            .child(gpui_kit::base::SelectableText::new(
-                                SharedString::from(format!(
-                                    "reasoning-text-{session_id}-{}",
-                                    item.key
-                                )),
-                                item.text.clone(),
-                            )),
+                            .child(
+                                chat_markdown_view(
+                                    SharedString::from(format!(
+                                        "reasoning-{session_id}-{}",
+                                        item.key
+                                    )),
+                                    item.text.clone(),
+                                    &typography,
+                                    &format!("reasoning-copy-{session_id}-{}", item.key),
+                                    true,
+                                )
+                                .on_link_click({
+                                    let app = cx.entity().downgrade();
+                                    move |url, _, window, cx| {
+                                        let _ = app.update(cx, |this, cx| {
+                                            this.open_chat_link(session_id, url, window, cx);
+                                        });
+                                    }
+                                }),
+                            ),
                     );
                 }
                 activity_container(content.into_any_element(), tool_group.is_some())
@@ -1559,12 +1558,12 @@ impl ConduitApp {
                 }
                 card.into_any_element()
             }
-            ItemKind::Notice => div()
+            ItemKind::Notice if crate::failure::retry_activity(&item.text).is_none() => div()
                 .text_size(px(11.))
                 .text_color(rgb(palette().muted))
                 .child(item.text.clone())
                 .into_any_element(),
-            ItemKind::Error => {
+            ItemKind::Error | ItemKind::Notice => {
                 let raw_error = if item.detail.trim().is_empty() {
                     item.text.clone()
                 } else {
@@ -1579,20 +1578,35 @@ impl ConduitApp {
                 let recovered = session.messages[index + 1..]
                     .iter()
                     .take_while(|item| item.kind != ItemKind::User)
-                    .any(|item| item.kind == ItemKind::Assistant && !item.text.trim().is_empty());
-                let title = if active {
-                    conduit::i18n::text_static("chat.the_engine_encountered_a_problem_the_task")
+                    .any(|item| {
+                        matches!(
+                            item.kind,
+                            ItemKind::Assistant | ItemKind::Reasoning | ItemKind::Tool
+                        ) && !item.text.trim().is_empty()
+                    });
+                let retry_activity = (active && !recovered)
+                    .then(|| crate::failure::retry_activity(&raw_error))
+                    .flatten();
+                let title = if let Some(label) = &retry_activity {
+                    label.as_str()
                 } else if recovered {
                     conduit::i18n::text_static("chat.the_engine_encountered_a_problem_then_resumed")
+                } else if active {
+                    conduit::i18n::text_static("chat.the_engine_encountered_a_problem_the_task")
                 } else {
-                    failure_title(&item.text)
-                };
-                let guidance = if active {
+                    failure_title(&raw_error)
+                }
+                .to_string();
+                let guidance = if retry_activity.is_some() {
+                    conduit::i18n::text_static("failure.retry_in_progress_guidance")
+                } else if recovered {
+                    conduit::i18n::text_static("failure.recovered_guidance")
+                } else if active {
                     conduit::i18n::text_static("chat.wait_for_the_current_task_to_finish")
                 } else {
                     failure_guidance(&raw_error)
                 };
-                let summary = failure_summary(&item.text);
+                let summary = failure_summary(&raw_error);
                 let error_key = (session_id, item.key.clone());
                 let expanded = self.expanded_errors.contains(&error_key);
                 let copy_text = raw_error.clone();
@@ -1654,9 +1668,21 @@ impl ConduitApp {
                             .items_center()
                             .gap_2()
                             .child(
-                                Icon::new(IconName::TriangleAlert)
-                                    .small()
-                                    .text_color(rgb(palette().error_text)),
+                                Icon::new(if recovered {
+                                    IconName::Check
+                                } else if retry_activity.is_some() {
+                                    IconName::RefreshCw
+                                } else {
+                                    IconName::TriangleAlert
+                                })
+                                .small()
+                                .text_color(rgb(if recovered {
+                                    palette().diff_add_text
+                                } else if retry_activity.is_some() {
+                                    palette().muted
+                                } else {
+                                    palette().error_text
+                                })),
                             )
                             .child(
                                 div()
@@ -1667,7 +1693,7 @@ impl ConduitApp {
                                     .text_color(rgb(palette().text))
                                     .child(title),
                             )
-                            .when(repeats > 1, |row| {
+                            .when(repeats > 1 && retry_activity.is_none(), |row| {
                                 row.child(
                                     div()
                                         .text_size(px(10.))

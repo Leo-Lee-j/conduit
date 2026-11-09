@@ -34,8 +34,7 @@ struct QoderAdapter {
     settings: AcpSettings,
     tools: HashMap<String, Value>,
     reply_index: u64,
-    thought_index: u64,
-    in_thought: bool,
+    thoughts: crate::protocol::ThoughtStream,
     context_window: u64,
     context_tokens: Option<u64>,
     cancellation_requested: std::cell::Cell<bool>,
@@ -51,8 +50,7 @@ impl QoderAdapter {
             settings: Default::default(),
             tools: HashMap::new(),
             reply_index: 0,
-            thought_index: 0,
-            in_thought: false,
+            thoughts: Default::default(),
             context_window: 0,
             context_tokens: None,
             cancellation_requested: std::cell::Cell::new(false),
@@ -198,27 +196,18 @@ impl QoderAdapter {
             return;
         }
         match update["sessionUpdate"].as_str() {
-            Some("agent_thought_chunk") if update["content"]["type"] == "text" => {
-                if let Some(text) = update["content"]["text"]
-                    .as_str()
-                    .filter(|text| !text.is_empty())
+            Some("agent_thought_chunk")
+                if !self.request.text_only && update["content"]["type"] == "text" =>
+            {
+                if let Some(text) = update["content"]["text"].as_str()
+                    && self.thoughts.push("qoder", text, &mut step.events)
                 {
-                    if !self.in_thought {
-                        self.thought_index += 1;
-                        self.reply_index += 1;
-                        self.in_thought = true;
-                    }
-                    step.events.push(Event::ReasoningSummary {
-                        key: format!("qoder-thought-{}", self.thought_index),
-                        text: text.into(),
-                        summary_index: 0,
-                        snapshot: false,
-                    });
+                    self.reply_index += 1;
                 }
             }
             Some("agent_message_chunk") if update["content"]["type"] == "text" => {
+                self.thoughts.finish(&mut step.events);
                 if let Some(text) = update["content"]["text"].as_str() {
-                    self.in_thought = false;
                     step.events.push(Event::Delta {
                         key: format!("qoder-reply-{}", self.reply_index),
                         text: text.into(),
@@ -230,8 +219,8 @@ impl QoderAdapter {
                     return;
                 };
                 if !self.tools.contains_key(id) {
+                    self.thoughts.finish(&mut step.events);
                     self.reply_index += 1;
-                    self.in_thought = false;
                 }
                 let merged = self.tools.entry(id.into()).or_insert_with(|| json!({}));
                 for (k, v) in update.as_object().into_iter().flatten() {
@@ -451,6 +440,7 @@ impl CliAdapter for QoderAdapter {
                 Stage::Model => self.configure_effort(&mut step)?,
                 Stage::Effort => self.prompt(&mut step),
                 Stage::Prompt => {
+                    self.thoughts.finish(&mut step.events);
                     ensure!(
                         matches!(
                             result["stopReason"].as_str(),

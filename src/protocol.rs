@@ -2,6 +2,8 @@
 use crate::domain::{PermissionLevel, Provider, Usage};
 use serde_json::{Value, json};
 mod opencode;
+mod reasoning;
+pub(crate) use reasoning::ThoughtStream;
 mod user_input;
 pub use opencode::AcpSettings;
 pub use user_input::UserQuestion;
@@ -44,8 +46,8 @@ pub enum Event {
         key: String,
         text: String,
     },
-    /// Thinking text or summaries explicitly emitted by the CLI. Opaque,
-    /// encrypted and redacted blocks never enter the transcript.
+    /// Provider-published display text (Codex summaries or CLI thinking blocks).
+    /// Never populated from encrypted, redacted, or undisclosed reasoning.
     ReasoningSummary {
         key: String,
         text: String,
@@ -178,52 +180,10 @@ pub struct Protocol {
 fn text<'a>(v: &'a Value, key: &str) -> &'a str {
     v.get(key).and_then(Value::as_str).unwrap_or("")
 }
-/// Friendly one-line summary for a Codex `"error"` notification. The raw
-/// payload nests `codexErrorInfo` (e.g. `responseStreamDisconnected` with
-/// `httpStatusCode` / `additionalDetails`) and `willRetry`; rendering the
-/// pretty-printed JSON inline buries the actual cause, so we extract the
-/// message, HTTP status and retry hint instead.
-fn codex_error_summary(params: &Value) -> String {
-    let error = &params["error"];
-    let message = text(error, "message");
-    let info = &error["codexErrorInfo"];
-    let mut summary = if let Some(disconnected) = info.get("responseStreamDisconnected") {
-        let mut summary = match disconnected["httpStatusCode"].as_i64() {
-            Some(code) => conduit::i18n::format(
-                "failure.connection_interrupted_http_650cf7",
-                &[("code", format!("{}", code))],
-            ),
-            None => conduit::i18n::text_static("failure.connection_interrupted_3eb19e").to_string(),
-        };
-        let detail = text(disconnected, "additionalDetails");
-        if !detail.is_empty() {
-            // additionalDetails is a proxy/vendor blob; keep the first
-            // sentence so cf-ray / request-id noise stays out of the banner.
-            let brief = detail.split(['\n', ';']).next().unwrap_or(detail).trim();
-            let brief = if brief.chars().count() > 120 {
-                format!("{}…", brief.chars().take(120).collect::<String>())
-            } else {
-                brief.to_string()
-            };
-            summary = format!("{summary}：{brief}");
-        }
-        summary
-    } else if !info.is_null() {
-        pretty(info)
-    } else if !message.is_empty() {
-        message.to_string()
-    } else {
-        pretty(error)
-    };
-    // The CLI is reconnecting by itself, so tell the user instead of making
-    // the banner look like a fatal failure.
-    if error["willRetry"].as_bool().unwrap_or(false) {
-        summary = conduit::i18n::format(
-            "protocol.retrying_automatically",
-            &[("summary", summary.to_string())],
-        );
-    }
-    summary
+/// Keep the native cause and top-level retry flag for localized presentation.
+/// Reducing this to a message string loses retry state and diagnostic details.
+fn codex_error_diagnostic(params: &Value) -> String {
+    pretty(params)
 }
 fn pretty(v: &Value) -> String {
     serde_json::to_string_pretty(v).unwrap_or_default()
@@ -631,6 +591,7 @@ impl Protocol {
                     params["model"] = json!(model);
                 }
                 if !self.text_only {
+                    params["summary"] = json!("auto");
                     params["approvalPolicy"] = json!(self.permission.codex_approval_policy());
                     params["sandboxPolicy"] = match self.permission {
                         PermissionLevel::ReadOnly => json!({"type":"readOnly"}),
@@ -713,14 +674,14 @@ impl Protocol {
                             })
                             .collect::<Vec<_>>()
                             .join("\n");
-                        if !summary.trim().is_empty() {
-                            step.events.push(Event::ReasoningSummary {
-                                key: format!("{key}-summary"),
-                                text: summary,
-                                summary_index: 0,
-                                snapshot: true,
-                            });
-                        }
+                        // Even an empty final snapshot closes a streamed summary.
+                        // Only the public summary is used, never raw reasoning text.
+                        step.events.push(Event::ReasoningSummary {
+                            key: format!("{key}-summary"),
+                            text: summary,
+                            summary_index: 0,
+                            snapshot: true,
+                        });
                     }
                 } else if kind != "userMessage" {
                     let input = match kind {
@@ -815,7 +776,8 @@ impl Protocol {
                 }
             }
             "error" => {
-                step.events.push(Event::ErrorBanner(codex_error_summary(p)));
+                step.events
+                    .push(Event::ErrorBanner(codex_error_diagnostic(p)));
             }
             "serverRequest/resolved" => {
                 if let Some(id) = p
@@ -984,33 +946,44 @@ impl Protocol {
                     let ordinal = self.claude_text_blocks.len();
                     self.claude_text_blocks.insert(block_index, ordinal);
                 }
+                if !self.text_only
+                    && event_type == "content_block_start"
+                    && text(&event["content_block"], "type") == "thinking"
+                {
+                    let ordinal = self.claude_thinking_blocks.len();
+                    self.claude_thinking_blocks.insert(block_index, ordinal);
+                    step.events.push(Event::ReasoningSummary {
+                        key: format!("{}-thinking-{ordinal}", self.claude_message),
+                        text: text(&event["content_block"], "thinking").into(),
+                        summary_index: 0,
+                        snapshot: false,
+                    });
+                }
                 match event_type {
-                    "content_block_start"
-                        if text(&event["content_block"], "type") == "thinking" =>
+                    "content_block_delta"
+                        if !self.text_only && text(&event["delta"], "type") == "thinking_delta" =>
                     {
-                        let ordinal = self.claude_thinking_blocks.len();
-                        self.claude_thinking_blocks.insert(block_index, ordinal);
-                        let thinking = text(&event["content_block"], "thinking");
-                        if !thinking.is_empty() {
-                            step.events.push(Event::ReasoningSummary {
-                                key: format!("{}-thinking-{ordinal}", self.claude_message),
-                                text: thinking.into(),
-                                summary_index: 0,
-                                snapshot: true,
-                            });
-                        }
-                    }
-                    "content_block_delta" if text(&event["delta"], "type") == "thinking_delta" => {
+                        let next = self.claude_thinking_blocks.len();
                         let ordinal = self
                             .claude_thinking_blocks
-                            .get(&block_index)
-                            .copied()
-                            .unwrap_or(block_index as usize);
+                            .entry(block_index)
+                            .or_insert(next);
                         step.events.push(Event::ReasoningSummary {
                             key: format!("{}-thinking-{ordinal}", self.claude_message),
                             text: text(&event["delta"], "thinking").into(),
                             summary_index: 0,
                             snapshot: false,
+                        });
+                    }
+                    "content_block_stop"
+                        if self.claude_thinking_blocks.contains_key(&block_index) =>
+                    {
+                        let ordinal = self.claude_thinking_blocks[&block_index];
+                        step.events.push(Event::ReasoningSummary {
+                            key: format!("{}-thinking-{ordinal}", self.claude_message),
+                            text: String::new(),
+                            summary_index: 0,
+                            snapshot: true,
                         });
                     }
                     "message_delta" if v["parent_tool_use_id"].is_null() => {
@@ -1060,16 +1033,13 @@ impl Protocol {
                     let mut thinking_ordinal = 0usize;
                     for block in blocks.iter() {
                         match text(block, "type") {
-                            "thinking" => {
-                                let thinking = text(block, "thinking");
-                                if !thinking.is_empty() {
-                                    step.events.push(Event::ReasoningSummary {
-                                        key: format!("{id}-thinking-{thinking_ordinal}"),
-                                        text: thinking.into(),
-                                        summary_index: 0,
-                                        snapshot: true,
-                                    });
-                                }
+                            "thinking" if !self.text_only => {
+                                step.events.push(Event::ReasoningSummary {
+                                    key: format!("{id}-thinking-{thinking_ordinal}"),
+                                    text: text(block, "thinking").into(),
+                                    summary_index: 0,
+                                    snapshot: true,
+                                });
                                 thinking_ordinal += 1;
                             }
                             "text" => {
@@ -1587,6 +1557,34 @@ mod tests {
         assert_eq!(step.writes[1]["params"]["model"], "gpt-custom");
     }
     #[test]
+    fn codex_requests_reasoning_summaries_for_new_and_resumed_chat_turns() {
+        for native in [None, Some("existing-thread".into())] {
+            for text_only in [false, true] {
+                let mut p = Protocol::new(
+                    Provider::Codex,
+                    "C:/work".into(),
+                    "hello".into(),
+                    native.clone(),
+                );
+                if text_only {
+                    p = p.text_only();
+                }
+                let step = p.accept(json!({"id":2,"result":{"thread":{"id":"existing-thread"}}}));
+                let turn = step
+                    .writes
+                    .iter()
+                    .find(|v| v["method"] == "turn/start")
+                    .unwrap();
+                if text_only {
+                    assert!(turn["params"].get("summary").is_none());
+                } else {
+                    assert_eq!(turn["params"]["summary"], "auto");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn codex_exposes_only_provider_reasoning_summaries() {
         let _locale = crate::test_support::chinese();
         let mut p = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
@@ -1605,9 +1603,22 @@ mod tests {
             "params":{"item":{"type":"reasoning","id":"reason-hidden","text":"private reasoning"}}
         }));
         assert!(
-            hidden.events.is_empty(),
+            matches!(
+                hidden.events.as_slice(),
+                [Event::ReasoningSummary { text, snapshot: true, .. }] if text.is_empty()
+            ),
             "raw reasoning must never enter the transcript"
         );
+        let complete = p.accept(json!({
+            "method":"item/completed",
+            "params":{"item":{"type":"reasoning","id":"reason-1",
+                "summary":["Inspect the relevant files.", {"text":"Check the tests."}],
+                "content":[{"text":"private reasoning"}]}}
+        }));
+        assert!(matches!(complete.events.as_slice(),
+            [Event::ReasoningSummary { key, text, snapshot: true, .. }]
+            if key == "reason-1-summary" && text == "Inspect the relevant files.\nCheck the tests."
+        ));
     }
 
     #[test]
@@ -1833,21 +1844,41 @@ mod tests {
         assert!(missing.writes.is_empty());
     }
     #[test]
-    fn claude_hidden_thinking_block_does_not_duplicate_visible_text() {
+    fn claude_thinking_and_reply_snapshots_keep_separate_stable_keys() {
         let _locale = crate::test_support::chinese();
         let mut protocol = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None);
         protocol.accept(
             json!({"type":"stream_event","event":{"type":"message_start","message":{"id":"m1"}}}),
         );
-        // A hidden thinking block occupies stream index 0; the visible text is
-        // index 1. The assistant snapshot then lists only the visible block.
+        // Thinking occupies stream index 0, but never shifts the reply's text key.
         protocol.accept(json!({"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}}));
+        let thought = protocol.accept(json!({"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Inspect files."}}}));
+        assert!(
+            matches!(thought.events.as_slice(), [Event::ReasoningSummary {key,text,snapshot:false,..}]
+            if key == "m1-thinking-0" && text == "Inspect files.")
+        );
+        let signature = protocol.accept(json!({"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"opaque"}}}));
+        assert!(signature.events.is_empty());
+        let stopped = protocol
+            .accept(json!({"type":"stream_event","event":{"type":"content_block_stop","index":0}}));
+        assert!(
+            matches!(stopped.events.as_slice(), [Event::ReasoningSummary {key,text,snapshot:true,..}]
+            if key == "m1-thinking-0" && text.is_empty())
+        );
         protocol.accept(json!({"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"text"}}}));
         let delta = protocol.accept(json!({"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Hello"}}}));
         assert!(matches!(&delta.events[0], Event::Delta { key, .. } if key == "m1-0"));
         let snapshot = protocol.accept(json!({"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"Hello"}]}}));
         assert_eq!(snapshot.events.len(), 1);
         assert!(matches!(&snapshot.events[0], Event::Text { key, .. } if key == "m1-0"));
+        let complete = protocol.accept(json!({"type":"assistant","message":{"id":"m1","content":[
+            {"type":"thinking","thinking":"Inspect files.","signature":"opaque"},
+            {"type":"redacted_thinking","data":"opaque"},
+            {"type":"text","text":"Hello"}
+        ]}}));
+        assert!(matches!(complete.events.as_slice(), [
+            Event::ReasoningSummary {key,text,snapshot:true,..}, Event::Text {key:reply,..}
+        ] if key == "m1-thinking-0" && text == "Inspect files." && reply == "m1-0"));
     }
     #[test]
     fn codex_token_usage_notification_maps_to_usage_event() {
