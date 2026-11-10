@@ -1,7 +1,7 @@
 //! Transcript rows, message actions, and turn statistics.
 
 use super::*;
-use std::rc::Rc;
+use std::{borrow::Cow, rc::Rc};
 
 #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
 pub(in crate::app) mod profiling;
@@ -10,6 +10,40 @@ mod turn_diff;
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod reasoning_tests;
+
+/// Older Codex transcripts joined standalone summary headings with soft newlines.
+/// Restore their paragraph boundaries for display, leaving stored text and normal
+/// Markdown (including indented code and detailed summaries) unchanged.
+fn reasoning_markdown(text: &str) -> Cow<'_, str> {
+    let mut previous_heading = false;
+    let mut adjacent_headings = false;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            previous_heading = false;
+            continue;
+        }
+        let Some(heading) = line
+            .strip_prefix("**")
+            .and_then(|line| line.strip_suffix("**"))
+        else {
+            return Cow::Borrowed(text);
+        };
+        if heading.trim().is_empty() || heading.contains("**") {
+            return Cow::Borrowed(text);
+        }
+        adjacent_headings |= previous_heading;
+        previous_heading = true;
+    }
+    if !adjacent_headings {
+        return Cow::Borrowed(text);
+    }
+    Cow::Owned(
+        text.lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+    )
+}
 
 /// Text segments separated by tools still belong to one user-facing reply.
 /// Derive the bounds from user messages so imported histories work as well.
@@ -951,12 +985,19 @@ impl ConduitApp {
                     || (item.kind == ItemKind::Reasoning
                         && self.reasoning_expanded(&(session.id, item.key.clone()))))
                 .then(|| {
+                    let text = if item.kind == ItemKind::Reasoning
+                        && session.provider == Provider::Codex
+                    {
+                        reasoning_markdown(&item.text)
+                    } else {
+                        Cow::Borrowed(item.text.as_str())
+                    };
                     let state = window.use_keyed_state(
                         SharedString::from(format!("chat-markdown-{}-{}", session.id, item.key)),
                         cx,
-                        |_, cx| gpui_kit::base::text::TextViewState::markdown(&item.text, cx),
+                        |_, cx| gpui_kit::base::text::TextViewState::markdown(text.as_ref(), cx),
                     );
-                    state.update(cx, |state, cx| state.set_text(&item.text, cx));
+                    state.update(cx, |state, cx| state.set_text(text.as_ref(), cx));
                     state
                 })
             });

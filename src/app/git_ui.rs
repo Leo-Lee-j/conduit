@@ -874,7 +874,7 @@ impl ConduitApp {
                     Ok(result) => result.error.clone(),
                     Err(error) => Some(error.clone()),
                 };
-                browser.update(cx, |browser, cx| browser.finished(error, cx));
+                browser.update(cx, |browser, cx| browser.finished(error, window, cx));
             }
             match result {
                 Ok(result) => {

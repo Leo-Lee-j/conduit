@@ -22,6 +22,7 @@ fn reasoning_stream_stays_visible_after_reply_and_restoration(cx: &mut TestAppCo
         app.update(cx, |app, _| {
             app.startup = None;
             app.writable = false;
+            app.session_mut(1).unwrap().provider = Provider::Codex;
             app.session_mut(1).unwrap().messages.clear();
             crate::app::queue::tests::running(app, 1)
         })
@@ -56,11 +57,23 @@ fn reasoning_stream_stays_visible_after_reply_and_restoration(cx: &mut TestAppCo
         }
         cx.update(|window, cx| app.update(cx, |app, cx| app.poll_streams(window, cx)));
         draw(cx);
+        draw(cx);
+        cx.debug_bounds("reasoning-body-1-0").unwrap().size.height
     };
-    feed(json!({"method":"item/reasoning/summaryTextDelta",
+    let heading_height = feed(json!({"method":"item/reasoning/summaryTextDelta",
         "params":{"itemId":"r1","summaryIndex":0,"delta":"**Inspect files**"}}));
-    feed(json!({"method":"item/reasoning/summaryTextDelta",
-        "params":{"itemId":"r1","summaryIndex":1,"delta":"Check the implementation."}}));
+    let sections_height = feed(json!({"method":"item/reasoning/summaryTextDelta",
+        "params":{"itemId":"r1","summaryIndex":1,"delta":"**Check tests**"}}));
+    assert!(
+        sections_height > heading_height,
+        "separate summary parts must render on separate lines"
+    );
+    let detailed_height = feed(json!({"method":"item/reasoning/summaryTextDelta",
+        "params":{"itemId":"r1","summaryIndex":1,"delta":"\n\nCheck the implementation.\n\nVerify the result."}}));
+    assert!(
+        detailed_height > sections_height,
+        "later paragraphs must expand the visible reasoning body"
+    );
     assert!(
         cx.debug_bounds("reasoning-body-1-0").is_some(),
         "streamed body must be visible without a click"
@@ -73,7 +86,7 @@ fn reasoning_stream_stays_visible_after_reply_and_restoration(cx: &mut TestAppCo
             conduit::i18n::text_static("stream_events.thinking")
         );
         let item = &app.session(1).unwrap().messages[0];
-        assert_eq!(item.text, "**Inspect files**\nCheck the implementation.");
+        assert_eq!(item.text, "**Inspect files**\n\n**Check tests**\n\nCheck the implementation.\n\nVerify the result.");
         assert_eq!(item.status, crate::message_status::ToolStatus::Running);
         assert!(app.chat_rows.group(0).is_none());
     });
@@ -116,7 +129,7 @@ fn reasoning_stream_stays_visible_after_reply_and_restoration(cx: &mut TestAppCo
         let session = app.session(1).unwrap();
         assert_eq!(
             session.messages[0].text,
-            "**Inspect files**\nCheck the implementation."
+            "**Inspect files**\n\n**Check tests**\n\nCheck the implementation.\n\nVerify the result."
         );
         assert_eq!(
             session.messages[0].status,
@@ -180,6 +193,72 @@ fn reasoning_stream_stays_visible_after_reply_and_restoration(cx: &mut TestAppCo
     cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
     draw(cx);
     assert!(cx.debug_bounds("reasoning-body-1-0").is_some());
+}
+
+#[test]
+fn reasoning_markdown_keeps_prose_and_code_unchanged() {
+    for text in [
+        "**One heading**",
+        "**First heading**\n\n**Second heading**",
+        "**Heading**\nA continuation of the same paragraph.",
+        "**Heading**\n\nFirst paragraph.\n\nSecond paragraph.",
+        "    **Indented code**\n    **More code**",
+        "```\n**Code**\n**More code**\n```",
+        "**Bold** text and **more bold**\n**Heading**",
+    ] {
+        assert!(
+            matches!(super::reasoning_markdown(text), std::borrow::Cow::Borrowed(original) if original == text),
+            "ordinary Markdown must remain unchanged: {text:?}"
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn restored_reasoning_preserves_separate_summary_paragraphs(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx, _) = crate::app::queue::tests::fixture(cx, "reasoning-paragraphs");
+    cx.simulate_resize(gpui_kit::size(px(1200.), px(900.)));
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.startup = None;
+            app.writable = false;
+            app.session_mut(1).unwrap().provider = Provider::Codex;
+            app.store.ui.collapse_reasoning = false;
+            app.session_mut(1).unwrap().messages = serde_json::from_value(json!([
+                {"key":"one", "kind":"Reasoning", "text":"**Inspect files**", "status":"completed"},
+                {"key":"legacy", "kind":"Reasoning", "text":"**Inspect files**\n**Check tests**", "status":"completed"},
+                {"key":"sections", "kind":"Reasoning", "text":"**Inspect files**\n\n**Check tests**", "status":"completed"},
+                {"key":"details", "kind":"Reasoning", "text":"**Inspect files**\n\nRead the implementation.\n\nVerify the result.", "status":"completed"}
+            ])).unwrap();
+            app.sync_chat_rows();
+            cx.notify();
+        });
+    });
+    draw(cx);
+    draw(cx);
+    let one = cx.debug_bounds("reasoning-body-1-0").unwrap().size.height;
+    let legacy = cx.debug_bounds("reasoning-body-1-1").unwrap().size.height;
+    let sections = cx.debug_bounds("reasoning-body-1-2").unwrap().size.height;
+    let details = cx.debug_bounds("reasoning-body-1-3").unwrap().size.height;
+    assert!(
+        legacy > one,
+        "old heading-only parts must not collapse into one visual line"
+    );
+    assert_eq!(
+        legacy, sections,
+        "restored and new summary parts must render consistently"
+    );
+    assert!(
+        details > sections,
+        "the entire detailed summary must remain visible"
+    );
+    cx.update(|_, cx| {
+        assert_eq!(
+            app.read(cx).session(1).unwrap().messages[1].text,
+            "**Inspect files**\n**Check tests**",
+            "display normalization must not rewrite stored text"
+        );
+    });
 }
 
 #[gpui_kit::test]

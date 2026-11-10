@@ -3,6 +3,8 @@ use super::*;
 use git::conflicts::{ConflictFile, Decision, MergeBlock, Resolution, ResolutionContent};
 use gpui_kit::component::input::{Editor, EditorState};
 
+mod view;
+
 fn tr(key: &str) -> String {
     conduit::i18n::text(key)
 }
@@ -41,6 +43,16 @@ impl ConduitApp {
         };
         browser.update(cx, |browser, cx| {
             browser.paths = paths.clone();
+            if browser
+                .selected
+                .as_ref()
+                .is_none_or(|path| !paths.contains(path))
+            {
+                browser.selected = None;
+                if let Some(path) = paths.first() {
+                    browser.open_file(path.clone(), None, window, cx);
+                }
+            }
             cx.notify();
         });
         self.git.announced_conflicts.insert(workspace, paths);
@@ -246,7 +258,7 @@ impl ConflictBrowser {
                                         let mut editor = EditorState::new(window, cx)
                                             .language(language)
                                             .soft_wrap(false)
-                                            .line_number(true);
+                                            .line_number(false);
                                         editor.set_value(text.clone(), window, cx);
                                         editor
                                     })
@@ -279,6 +291,10 @@ impl ConflictBrowser {
                                 });
                             }
                         }
+                        this.current = blocks
+                            .iter()
+                            .position(|editor| editor.block.changed)
+                            .unwrap_or(0);
                         this.drafts.insert(path, Draft { file, blocks });
                         if let Some(content) = quick {
                             this.save(content, cx);
@@ -480,7 +496,12 @@ impl ConflictBrowser {
         }
         cx.notify();
     }
-    pub(super) fn finished(&mut self, error: Option<String>, cx: &mut Context<Self>) {
+    pub(super) fn finished(
+        &mut self,
+        error: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.saving {
             return;
         }
@@ -491,600 +512,17 @@ impl ConflictBrowser {
         {
             self.paths.retain(|p| p != &path);
             self.drafts.remove(&path);
+            if let Some(next) = self.paths.first().cloned() {
+                self.open_file(next, None, window, cx);
+            }
         }
         cx.notify();
-    }
-
-    fn file_list(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut body = v_flex()
-            .id("conflict-files")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .p_3()
-            .gap_1();
-        if self.paths.is_empty() {
-            return body
-                .child(div().p_4().child(tr("git_conflicts.all_resolved")))
-                .into_any_element();
-        }
-        for (index, path) in self.paths.iter().enumerate() {
-            let open = path.clone();
-            let ours = path.clone();
-            let theirs = path.clone();
-            body = body.child(
-                h_flex()
-                    .w_full()
-                    .min_w_0()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_2()
-                    .p_2()
-                    .border_b_1()
-                    .border_color(rgb(palette().border))
-                    .child(
-                        Button::new(SharedString::from(format!("conflict-file-{index}")))
-                            .ghost()
-                            .label(path.clone())
-                            .debug_selector(move || format!("conflict-file-{index}"))
-                            .flex_1()
-                            .min_w_0()
-                            .tooltip(path.clone())
-                            .disabled(self.loading || self.saving)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_file(open.clone(), None, window, cx)
-                            })),
-                    )
-                    .child(
-                        Button::new(SharedString::from(format!("conflict-ours-{index}")))
-                            .small()
-                            .label(tr("git_conflicts.accept_ours"))
-                            .disabled(self.busy(cx))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_file(
-                                    ours.clone(),
-                                    Some(ResolutionContent::Ours),
-                                    window,
-                                    cx,
-                                )
-                            })),
-                    )
-                    .child(
-                        Button::new(SharedString::from(format!("conflict-theirs-{index}")))
-                            .small()
-                            .label(tr("git_conflicts.accept_theirs"))
-                            .disabled(self.busy(cx))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_file(
-                                    theirs.clone(),
-                                    Some(ResolutionContent::Theirs),
-                                    window,
-                                    cx,
-                                )
-                            })),
-                    ),
-            );
-        }
-        body.into_any_element()
-    }
-
-    fn gutter(
-        &self,
-        index: usize,
-        side: usize,
-        editor: &BlockEditor,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let decision = editor.block.decisions[side];
-        let changed = if side == 0 {
-            editor.block.ours != editor.block.base
-        } else {
-            editor.block.theirs != editor.block.base
-        };
-        let disabled = self.busy(cx) || editor.manual || !changed;
-        let label = if decision == Decision::Apply {
-            tr("git_conflicts.undo_apply")
-        } else {
-            tr("git_conflicts.apply_side")
-        };
-        v_flex()
-            .w(px(32.))
-            .flex_shrink_0()
-            .items_center()
-            .gap_1()
-            .py_1()
-            .child(
-                Button::new(SharedString::from(format!("merge-apply-{index}-{side}")))
-                    .ghost()
-                    .small()
-                    .compact()
-                    .icon(if decision == Decision::Apply {
-                        IconName::Undo2
-                    } else if side == 0 {
-                        IconName::ChevronRight
-                    } else {
-                        IconName::ChevronLeft
-                    })
-                    .accessibility_label(label.clone())
-                    .tooltip(label)
-                    .disabled(disabled)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.change(index, side, Decision::Apply, window, cx)
-                    })),
-            )
-            .child(
-                Button::new(SharedString::from(format!("merge-ignore-{index}-{side}")))
-                    .ghost()
-                    .small()
-                    .compact()
-                    .icon(if decision == Decision::Ignore {
-                        IconName::Undo2
-                    } else {
-                        IconName::Close
-                    })
-                    .accessibility_label(tr("git_conflicts.ignore_side"))
-                    .tooltip(tr("git_conflicts.ignore_side"))
-                    .disabled(disabled)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.change(index, side, Decision::Ignore, window, cx)
-                    })),
-            )
-            .into_any_element()
-    }
-
-    fn merge_body(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(draft) = self.draft() else {
-            return div().flex_1().into_any_element();
-        };
-        if let Some(note) = &draft.file.note {
-            return v_flex()
-                .flex_1()
-                .p_4()
-                .gap_3()
-                .child(note.clone())
-                .child(tr("git_conflicts.choose_whole_file"))
-                .into_any_element();
-        }
-        let mut body = v_flex()
-            .id("merge-blocks")
-            .track_scroll(&self.scroll)
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll();
-        for (index, editor) in draft.blocks.iter().enumerate() {
-            if !editor.block.changed
-                && !editor.manual
-                && !self.expanded
-                && editor.block.base.lines().count() > 6
-            {
-                body = body.child(
-                    Button::new(SharedString::from(format!("merge-context-{index}")))
-                        .ghost()
-                        .w_full()
-                        .label(conduit::i18n::format(
-                            "git_conflicts.unchanged_lines",
-                            &[("count", editor.block.base.lines().count().to_string())],
-                        ))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.expanded = true;
-                            cx.notify();
-                        })),
-                );
-                continue;
-            }
-            let result = editor.panes[1].read(cx).value();
-            let lines = [&editor.block.ours, result.as_ref(), &editor.block.theirs]
-                .iter()
-                .map(|s| s.lines().count() + 1)
-                .max()
-                .unwrap_or(1);
-            let height = (lines.clamp(2, 40) as f32 * 20. + 12.).max(54.);
-            let unresolved = if editor.manual {
-                !editor.reviewed
-            } else {
-                editor.block.pending()
-            };
-            let color = if unresolved && editor.block.conflict {
-                palette().danger_border
-            } else if unresolved {
-                palette().warning_border
-            } else {
-                palette().border
-            };
-            let status = if editor.manual {
-                tr("git_conflicts.manual")
-            } else if editor.block.conflict {
-                tr("git_conflicts.conflict")
-            } else {
-                tr("git_conflicts.change")
-            };
-            let pane = |slot: usize| {
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .h(px(height))
-                    .when(editor.block.changed, |pane| {
-                        pane.bg(rgb(if editor.block.conflict && unresolved {
-                            palette().danger_bg
-                        } else {
-                            palette().warning_bg
-                        }))
-                    })
-                    .child(
-                        Editor::new(&editor.panes[slot])
-                            .appearance(false)
-                            .bordered(false)
-                            .h(relative(1.))
-                            .readonly(slot != 1 || self.saving)
-                            .text_size(ui_text_size(12.))
-                            .aria_label(tr(if slot == 0 {
-                                "git_conflicts.ours"
-                            } else if slot == 1 {
-                                "git_conflicts.result"
-                            } else {
-                                "git_conflicts.theirs"
-                            })),
-                    )
-            };
-            let mut block = v_flex()
-                .w_full()
-                .flex_shrink_0()
-                .border_b_1()
-                .border_color(rgb(color));
-            if editor.block.changed || editor.manual {
-                block = block.child(
-                    h_flex()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .h(px(30.))
-                        .bg(rgb(palette().surface_strong))
-                        .child(
-                            div()
-                                .text_size(ui_text_size(11.))
-                                .min_w_0()
-                                .truncate()
-                                .flex_1()
-                                .child(format!(
-                                    "{} · {}:{} / {}:{} / {}:{} · {}",
-                                    status,
-                                    tr("git_conflicts.ours"),
-                                    editor.block.ours_line,
-                                    tr("git_conflicts.base"),
-                                    editor.block.base_line,
-                                    tr("git_conflicts.theirs"),
-                                    editor.block.theirs_line,
-                                    tr(if unresolved {
-                                        "git_conflicts.pending"
-                                    } else {
-                                        "git_conflicts.resolved"
-                                    })
-                                )),
-                        )
-                        .when(editor.manual && !editor.reviewed, |row| {
-                            row.child(
-                                Button::new(SharedString::from(format!("merge-review-{index}")))
-                                    .debug_selector(move || format!("merge-review-{index}"))
-                                    .small()
-                                    .ghost()
-                                    .label(tr("git_conflicts.mark_reviewed"))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if let Some(draft) = this
-                                            .selected
-                                            .as_ref()
-                                            .and_then(|p| this.drafts.get_mut(p))
-                                        {
-                                            draft.blocks[index].reviewed = true;
-                                        }
-                                        cx.notify();
-                                    })),
-                            )
-                        })
-                        .child(
-                            Button::new(SharedString::from(format!("merge-reset-{index}")))
-                                .small()
-                                .ghost()
-                                .icon(IconName::Undo2)
-                                .tooltip(tr("git_conflicts.reset_block"))
-                                .accessibility_label(tr("git_conflicts.reset_block"))
-                                .disabled(self.busy(cx))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    if let Some(draft) =
-                                        this.selected.as_ref().and_then(|p| this.drafts.get_mut(p))
-                                    {
-                                        let editor = &mut draft.blocks[index];
-                                        editor.block.reset();
-                                        Self::sync(editor, window, cx);
-                                    }
-                                    cx.notify();
-                                })),
-                        ),
-                );
-            }
-            block = block.child(
-                h_flex()
-                    .w_full()
-                    .items_start()
-                    .child(pane(0))
-                    .child(self.gutter(index, 0, editor, cx))
-                    .child(pane(1))
-                    .child(self.gutter(index, 1, editor, cx))
-                    .child(pane(2)),
-            );
-            body = body.child(block);
-        }
-        body.into_any_element()
     }
 }
 
 impl Drop for ConflictBrowser {
     fn drop(&mut self) {
         self.cancelled.store(true, Ordering::Relaxed);
-    }
-}
-
-impl Render for ConflictBrowser {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let detail = self.selected.is_some();
-        let mut view = v_flex()
-            .id("git-conflicts-dialog")
-            .debug_selector(|| "git-conflicts-dialog".into())
-            .key_context("GitDiffDialog")
-            .track_focus(&self.focus)
-            .size_full()
-            .min_h_0()
-            .bg(rgb(palette().surface))
-            .overflow_hidden()
-            .on_action(cx.listener(|this, _: &NextDiff, _, cx| this.navigate(true, cx)))
-            .on_action(cx.listener(|this, _: &PreviousDiff, _, cx| this.navigate(false, cx)))
-            .child(
-                h_flex()
-                    .w_full()
-                    .min_w_0()
-                    .p_3()
-                    .gap_2()
-                    .items_center()
-                    .border_b_1()
-                    .border_color(rgb(palette().border))
-                    .when(detail, |row| {
-                        row.child(
-                            Button::new("conflict-back")
-                                .ghost()
-                                .small()
-                                .icon(IconName::ChevronLeft)
-                                .accessibility_label(tr("git_conflicts.back"))
-                                .tooltip(tr("git_conflicts.back"))
-                                .disabled(self.loading || self.saving)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.selected = None;
-                                    this.error = None;
-                                    cx.notify();
-                                })),
-                        )
-                    })
-                    .child(
-                        div().flex_1().min_w_0().truncate().font_semibold().child(
-                            self.selected
-                                .clone()
-                                .unwrap_or_else(|| tr("git_conflicts.title")),
-                        ),
-                    )
-                    .child(
-                        div()
-                            .text_size(ui_text_size(11.))
-                            .child(conduit::i18n::format(
-                                "git_conflicts.files_remaining",
-                                &[("count", self.paths.len().to_string())],
-                            )),
-                    )
-                    .child(
-                        Button::new("conflict-close")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Close)
-                            .accessibility_label(tr("git_conflicts.close"))
-                            .tooltip(tr("git_conflicts.drafts_kept"))
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
-                    ),
-            );
-        if let Some(error) = &self.error {
-            view = view.child(
-                div()
-                    .p_2()
-                    .text_size(ui_text_size(12.))
-                    .bg(rgb(palette().danger_bg))
-                    .text_color(rgb(palette().danger_text))
-                    .child(error.clone()),
-            );
-        }
-        if self.loading {
-            return view.child(div().p_4().child(Spinner::new()));
-        }
-        if !detail {
-            let rebase = self.owner.upgrade().is_some_and(|owner| {
-                owner
-                    .read(cx)
-                    .git
-                    .repository
-                    .as_ref()
-                    .is_some_and(|repo| repo.integration == Some(git::IntegrationState::Rebase))
-            });
-            return view
-                .when(rebase, |view| {
-                    view.child(
-                        div()
-                            .px_3()
-                            .py_2()
-                            .text_size(ui_text_size(11.))
-                            .bg(rgb(palette().warning_bg))
-                            .child(tr("git_conflicts.rebase_hint")),
-                    )
-                })
-                .child(
-                    div()
-                        .px_3()
-                        .py_2()
-                        .text_size(ui_text_size(12.))
-                        .child(tr("git_conflicts.list_hint")),
-                )
-                .child(self.file_list(cx));
-        }
-        let ready = self.draft().is_some();
-        let has_plan = self.draft().is_some_and(|draft| draft.file.plan.is_some());
-        let rebase = self
-            .draft()
-            .is_some_and(|d| d.file.snapshot.integration == Some(git::IntegrationState::Rebase));
-        let mut toolbar = h_flex()
-            .w_full()
-            .flex_wrap()
-            .p_2()
-            .gap_2()
-            .border_b_1()
-            .border_color(rgb(palette().border));
-        toolbar = toolbar.child(
-            Button::new("merge-simple")
-                .debug_selector(|| "merge-simple".into())
-                .small()
-                .label(tr("git_conflicts.apply_simple"))
-                .disabled(self.busy(cx) || !has_plan)
-                .on_click(cx.listener(|this, _, window, cx| this.apply_simple(window, cx))),
-        );
-        for (id, label, forward) in [
-            ("merge-previous", "git_conflicts.previous", false),
-            ("merge-next", "git_conflicts.next", true),
-        ] {
-            toolbar = toolbar.child(
-                Button::new(id)
-                    .small()
-                    .ghost()
-                    .label(tr(label))
-                    .disabled(!has_plan)
-                    .on_click(cx.listener(move |this, _, _, cx| this.navigate(forward, cx))),
-            );
-        }
-        toolbar = toolbar.child(
-            Button::new("merge-context")
-                .small()
-                .ghost()
-                .label(tr("git_conflicts.toggle_context"))
-                .disabled(!has_plan)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.expanded = !this.expanded;
-                    cx.notify();
-                })),
-        );
-        view = view.child(toolbar);
-        if self.draft().is_some_and(|draft| {
-            draft
-                .blocks
-                .iter()
-                .any(|block| block.block.worktree.is_some())
-        }) {
-            view = view.child(
-                div()
-                    .p_2()
-                    .text_size(ui_text_size(11.))
-                    .bg(rgb(palette().warning_bg))
-                    .child(tr("git_conflicts.worktree_preserved")),
-            );
-        }
-        if rebase {
-            view = view.child(
-                div()
-                    .p_2()
-                    .text_size(ui_text_size(11.))
-                    .bg(rgb(palette().warning_bg))
-                    .child(tr("git_conflicts.rebase_hint")),
-            );
-        }
-        if has_plan {
-            view = view.child(
-                h_flex()
-                    .w_full()
-                    .px_2()
-                    .py_2()
-                    .gap_2()
-                    .bg(rgb(palette().surface_strong))
-                    .children(
-                        [
-                            self.side_label(true, false),
-                            tr("git_conflicts.result"),
-                            self.side_label(false, false),
-                        ]
-                        .map(|label| {
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_center()
-                                .text_size(ui_text_size(12.))
-                                .font_semibold()
-                                .child(label)
-                        }),
-                    ),
-            );
-        }
-        view = view.child(self.merge_body(cx));
-        view.child(
-            h_flex()
-                .w_full()
-                .flex_wrap()
-                .p_2()
-                .gap_2()
-                .items_center()
-                .border_t_1()
-                .border_color(rgb(palette().border))
-                .child(
-                    Button::new("merge-accept-ours")
-                        .small()
-                        .label(self.side_label(true, true))
-                        .disabled(self.busy(cx) || !ready)
-                        .on_click(
-                            cx.listener(|this, _, _, cx| this.save(ResolutionContent::Ours, cx)),
-                        ),
-                )
-                .child(
-                    Button::new("merge-accept-theirs")
-                        .small()
-                        .label(self.side_label(false, true))
-                        .disabled(self.busy(cx) || !ready)
-                        .on_click(
-                            cx.listener(|this, _, _, cx| this.save(ResolutionContent::Theirs, cx)),
-                        ),
-                )
-                .child(
-                    Button::new("merge-reload")
-                        .small()
-                        .ghost()
-                        .label(tr("git_conflicts.reload"))
-                        .tooltip(tr("git_conflicts.reload_hint"))
-                        .disabled(self.busy(cx))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            if let Some(path) = this.selected.clone() {
-                                this.drafts.remove(&path);
-                                this.open_file(path, None, window, cx);
-                            }
-                        })),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .text_size(ui_text_size(11.))
-                        .child(conduit::i18n::format(
-                            "git_conflicts.blocks_remaining",
-                            &[("count", self.pending().to_string())],
-                        )),
-                )
-                .child(
-                    Button::new("merge-save")
-                        .debug_selector(|| "merge-save".into())
-                        .primary()
-                        .small()
-                        .label(tr("git_conflicts.save"))
-                        .disabled(self.busy(cx) || !has_plan || self.pending() > 0)
-                        .on_click(cx.listener(|this, _, _, cx| this.save_result(cx))),
-                ),
-        )
     }
 }
 

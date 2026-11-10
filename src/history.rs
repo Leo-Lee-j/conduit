@@ -1223,7 +1223,11 @@ fn codex_reasoning_text(value: &Value) -> String {
                     .or_else(|| part.get("text").and_then(Value::as_str))
             })
             .collect::<Vec<_>>()
-            .join("\n");
+            .join(if matches!(key, "summary_text" | "summary") {
+                "\n\n"
+            } else {
+                "\n"
+            });
         if !text.trim().is_empty() {
             return text;
         }
@@ -1539,7 +1543,7 @@ mod tests {
         });
         let reasoning = serde_json::json!({
             "type":"event_msg",
-            "payload":{"type":"item_completed","item":{"type":"Reasoning","id":"r1","summary_text":["先定位问题"]}}
+            "payload":{"type":"item_completed","item":{"type":"Reasoning","id":"r1","summary_text":["**Inspect files**\n\nRead the implementation.", "**Check tests**\n\nVerify the result."]}}
         });
         let jsonl = [
             meta,
@@ -1584,7 +1588,10 @@ mod tests {
         assert_eq!(changes[0]["diff"], "@@ -1 +1 @@\n-old\n+new");
         assert_eq!(session.messages[4].text, "WebSearch");
         assert!(session.messages[4].input.contains("gpui 列表"));
-        assert_eq!(session.messages[5].text, "先定位问题");
+        assert_eq!(
+            session.messages[5].text,
+            "**Inspect files**\n\nRead the implementation.\n\n**Check tests**\n\nVerify the result."
+        );
     }
 
     #[test]

@@ -732,7 +732,7 @@ impl Protocol {
                                     .or_else(|| part.get("text").and_then(Value::as_str))
                             })
                             .collect::<Vec<_>>()
-                            .join("\n");
+                            .join("\n\n");
                         // Even an empty final snapshot closes a streamed summary.
                         // Only the public summary is used, never raw reasoning text.
                         step.events.push(Event::ReasoningSummary {
@@ -1691,12 +1691,12 @@ mod tests {
         let complete = p.accept(json!({
             "method":"item/completed",
             "params":{"item":{"type":"reasoning","id":"reason-1",
-                "summary":["Inspect the relevant files.", {"text":"Check the tests."}],
+                "summary":["**Inspect files**\n\nRead the implementation.", {"text":"**Check tests**\n\nVerify the result."}],
                 "content":[{"text":"private reasoning"}]}}
         }));
         assert!(matches!(complete.events.as_slice(),
             [Event::ReasoningSummary { key, text, snapshot: true, .. }]
-            if key == "reason-1-summary" && text == "Inspect the relevant files.\nCheck the tests."
+            if key == "reason-1-summary" && text == "**Inspect files**\n\nRead the implementation.\n\n**Check tests**\n\nVerify the result."
         ));
     }
 

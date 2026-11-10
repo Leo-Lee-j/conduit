@@ -193,7 +193,8 @@ pub(super) fn apply_event_indexed(
             } else {
                 let part = summary_index.to_string();
                 if !item.text.is_empty() && item.detail != part {
-                    item.text.push('\n');
+                    // Summary parts are independent Markdown paragraphs.
+                    item.text.push_str("\n\n");
                 }
                 item.detail = part;
                 item.text.push_str(&text);
