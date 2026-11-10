@@ -11,6 +11,7 @@ fn request() -> AdapterRequest {
         .env
         .insert("OPENCODE_CONFIG_CONTENT".into(), "{}".into());
     AdapterRequest {
+        intent: Default::default(),
         cwd: PathBuf::from("C:/fixture work"),
         prompt: "hello".into(),
         native_id: None,

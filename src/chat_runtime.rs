@@ -74,6 +74,7 @@ impl ApprovalBroker {
     }
 }
 pub struct StartRequest {
+    pub intent: crate::commands::RequestIntent,
     pub provider: Provider,
     pub executable: PathBuf,
     pub cwd: PathBuf,
@@ -179,6 +180,7 @@ impl ChatRuntime {
         cwd: PathBuf,
     ) -> Self {
         let adapter = (provider.descriptor().adapter)(AdapterRequest {
+            intent: Default::default(),
             cwd: cwd.clone(),
             prompt,
             native_id: None,
@@ -201,6 +203,7 @@ impl ChatRuntime {
         permission: PermissionLevel,
     ) -> Self {
         Self::start_request(StartRequest {
+            intent: Default::default(),
             provider,
             executable,
             cwd,
@@ -222,6 +225,7 @@ impl ChatRuntime {
     }
     fn start_request_gated(request: StartRequest, gate: Option<Receiver<()>>) -> Self {
         let StartRequest {
+            intent,
             provider,
             executable,
             cwd,
@@ -233,6 +237,7 @@ impl ChatRuntime {
             route,
         } = request;
         let adapter = (provider.descriptor().adapter)(AdapterRequest {
+            intent,
             cwd: cwd.clone(),
             prompt,
             native_id,

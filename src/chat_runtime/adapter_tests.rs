@@ -296,6 +296,7 @@ fn text_input_eof_and_successful_exit_are_explicit_adapter_policies() {
 fn qoder_fixture(script: &str, gate: Option<Receiver<()>>) -> ChatRuntime {
     let cwd = std::env::temp_dir();
     let adapter = (Provider::Qoder.descriptor().adapter)(AdapterRequest {
+        intent: Default::default(),
         cwd: cwd.clone(),
         prompt: "fixture prompt".into(),
         native_id: Some("qoder-original".into()),

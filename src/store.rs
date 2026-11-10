@@ -772,6 +772,7 @@ mod tests {
             models: vec!["local-model".into()],
             source: ProviderSource::Local,
             model_metadata: vec![],
+            claude_models: None,
         });
         let mut session: SessionRecord = serde_json::from_value(serde_json::json!({"id":1,"provider":"Codex","created_at":0,"exit_code":null,"channel":{"ccs":"same-id"}})).unwrap();
         store.workspaces.push(crate::domain::Workspace {
@@ -1221,6 +1222,7 @@ mod tests {
             models: vec!["custom-model".into()],
             source: Default::default(),
             model_metadata: vec![],
+            claude_models: None,
         });
         store.workspaces.push(crate::domain::Workspace {
             path: PathBuf::from("C:\\work"),

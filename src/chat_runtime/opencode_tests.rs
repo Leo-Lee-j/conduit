@@ -277,6 +277,7 @@ fn run(
         .expect("install OpenCode before running this opt-in test")
         .path;
     ChatRuntime::start_request(super::StartRequest {
+        intent: Default::default(),
         provider: Provider::OpenCode,
         executable,
         cwd: root.join("workspace"),
@@ -294,6 +295,126 @@ enum Decision {
     Allow,
     Reject,
     Cancel,
+}
+
+#[test]
+#[ignore = "runs installed OpenCode against an isolated local mock; no model account is used"]
+fn installed_opencode_commands_discover_resume_and_execute_locally() {
+    use crate::commands::{Catalog, CommandContext, RequestIntent};
+    let _locale = crate::test_support::chinese();
+    let root =
+        std::env::temp_dir().join(format!("conduit-opencode-commands-{}", std::process::id()));
+    assert!(!root.exists());
+    std::fs::create_dir_all(root.join("workspace")).unwrap();
+    let server = MockModel::start(root.join("unused.txt"));
+    let mut configured = route(&root, &server);
+    let mut config: Value =
+        serde_json::from_str(&configured.env["OPENCODE_CONFIG_CONTENT"]).unwrap();
+    config["command"] = json!({"conduit-test-review":{"template":"CONDUIT_REMEMBER_ORANGE $ARGUMENTS", "description":"Offline command fixture"}});
+    configured
+        .env
+        .insert("OPENCODE_CONFIG_CONTENT".into(), config.to_string());
+    let launch = |intent, text: String, native, route| {
+        ChatRuntime::start_request(super::StartRequest {
+            intent,
+            provider: Provider::OpenCode,
+            executable: cli::resolve(Provider::OpenCode, &Default::default())
+                .unwrap()
+                .path,
+            cwd: root.join("workspace"),
+            prompt: text,
+            native_id: native,
+            model: Some("conduit-test/mock".into()),
+            permission: PermissionLevel::WorkspaceWrite,
+            effort: Default::default(),
+            route,
+        })
+    };
+    let discovery = launch(
+        RequestIntent::Discover,
+        "never sent".into(),
+        None,
+        configured.clone(),
+    );
+    let mut native = None;
+    let mut items = None;
+    let deadline = Instant::now() + Duration::from_secs(45);
+    loop {
+        assert!(Instant::now() < deadline);
+        match discovery.events.recv_timeout(Duration::from_secs(1)) {
+            Ok(Event::NativeId(id)) => native = Some(id),
+            Ok(Event::CommandCatalog(result)) => items = Some(result.unwrap()),
+            Ok(Event::Finished { error, cancelled }) => {
+                assert!(error.is_none() && !cancelled, "{error:?}");
+                break;
+            }
+            Ok(Event::Approval(_)) => panic!("discovery must not request tool access"),
+            Err(mpsc::RecvTimeoutError::Disconnected) => panic!("missing completion"),
+            _ => {}
+        }
+    }
+    assert!(
+        server.requests.lock().unwrap().is_empty(),
+        "discovery submitted a model prompt"
+    );
+    let native = native.unwrap();
+    let items = items.unwrap();
+    let command = items
+        .iter()
+        .find(|item| item.name == "conduit-test-review")
+        .unwrap()
+        .clone();
+    let context = CommandContext {
+        workspace: root.join("workspace"),
+        session: Some(1),
+        native_id: Some(native.clone()),
+        source: "opencode".into(),
+        registration: 1,
+        configuration: 1,
+    };
+    let mut catalog = Catalog::default();
+    let ticket = catalog.begin(context.clone());
+    catalog.publish(&ticket, Ok(items));
+    let text = "/conduit-test-review 中文 arguments";
+    let call = catalog.prepare(&context, &command, text.into()).unwrap();
+    let invocation = launch(
+        RequestIntent::Command(Box::new(call)),
+        text.into(),
+        Some(native.clone()),
+        configured.clone(),
+    );
+    let (same_native, output, approvals) = finish(&invocation, Decision::Reject);
+    assert_eq!(same_native, native);
+    assert!(output.contains("CONDUIT_LOCAL_OK"));
+    assert_eq!(approvals, 0);
+    let requests = server.requests.lock().unwrap().len();
+    assert!(requests > 0);
+    // Removing a command after discovery must not send its text to the model.
+    config["command"] = json!({});
+    configured
+        .env
+        .insert("OPENCODE_CONFIG_CONTENT".into(), config.to_string());
+    let call = catalog.prepare(&context, &command, text.into()).unwrap();
+    let removed = launch(
+        RequestIntent::Command(Box::new(call)),
+        text.into(),
+        Some(native),
+        configured,
+    );
+    let deadline = Instant::now() + Duration::from_secs(45);
+    loop {
+        assert!(Instant::now() < deadline);
+        match removed.events.recv_timeout(Duration::from_secs(1)) {
+            Ok(Event::Finished { error, cancelled }) => {
+                assert!(error.is_some() && !cancelled);
+                break;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => panic!("missing completion"),
+            _ => {}
+        }
+    }
+    assert_eq!(server.requests.lock().unwrap().len(), requests);
+    std::fs::remove_dir_all(&root).unwrap();
 }
 
 fn finish(runtime: &ChatRuntime, decision: Decision) -> (String, String, usize) {

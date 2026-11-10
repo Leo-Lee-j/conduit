@@ -60,7 +60,7 @@ const DARK_PALETTE: Palette = Palette {
     loading: 0x8fb8e6,
     activity_running: 0x60a5fa,
     activity_completed: 0x4ade80,
-    focus: 0x8ab4f8,
+    focus: 0x8297b5,
     on_text: 0x111113,
     highlight_text: 0xf0d49b,
     highlight_bg: 0x3a3220,
@@ -100,7 +100,7 @@ const LIGHT_PALETTE: Palette = Palette {
     loading: 0x60a5df,
     activity_running: 0x2563eb,
     activity_completed: 0x15803d,
-    focus: 0x356ac3,
+    focus: 0x5e789c,
     on_text: 0xffffff,
     highlight_text: 0x6b4a00,
     highlight_bg: 0xfff0bf,
@@ -158,8 +158,7 @@ const THEME_PACKS: &str = include_str!("../../assets/themes/conduit.json");
 
 /// Installs the built-in theme packs as the light/dark themes, so
 /// `Theme::change` reloads the pack instead of the library defaults. A pack
-/// only overrides the tokens the app owns; every other color falls back to the
-/// library value, which keeps component visuals unchanged.
+/// owns the shared input and focus colors; other tokens fall back to the library.
 pub(crate) fn install_theme_packs(cx: &mut gpui_kit::App) {
     let packs = match serde_json::from_str::<ThemeSet>(THEME_PACKS) {
         Ok(set) => set.themes,
@@ -196,6 +195,10 @@ pub(crate) fn install_theme_packs(cx: &mut gpui_kit::App) {
         );
     }
     Theme::update(cx, |theme| {
+        // Keep the 1px focus border without the library's extra 3px outer band.
+        // Borderless controls retain an inset focus line. This app-level setting
+        // survives Theme::change; the light/dark packs supply its color.
+        theme.focus_ring = false;
         if let Some(light) = light {
             theme.light_theme = light;
         }

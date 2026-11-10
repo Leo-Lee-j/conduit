@@ -65,7 +65,14 @@ fn settings_engine_management_is_readonly_and_disabled_launches_preserve_history
             });
             let before = serde_json::to_value(&app.store.workspaces).unwrap();
             let error = app
-                .start_turn(0, None, Provider::Codex, "offline prompt".into(), true, cx)
+                .start_turn(
+                    0,
+                    None,
+                    Provider::Codex,
+                    "offline prompt".to_string(),
+                    true,
+                    cx,
+                )
                 .unwrap_err();
             assert!(error.contains("已停用"));
             assert_eq!(serde_json::to_value(&app.store.workspaces).unwrap(), before);

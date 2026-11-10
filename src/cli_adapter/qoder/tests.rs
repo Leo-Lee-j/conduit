@@ -2,6 +2,7 @@ use super::*;
 
 fn request() -> AdapterRequest {
     AdapterRequest {
+        intent: Default::default(),
         cwd: PathBuf::from("C:/work"),
         prompt: "hello".into(),
         native_id: None,

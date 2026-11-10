@@ -2,7 +2,7 @@
 
 use super::*;
 
-mod saves;
+pub(super) mod saves;
 pub(super) use saves::{PendingQueueSave, PendingTurn};
 
 /// Only the latest failed exchange can reuse its original prompt.
@@ -16,7 +16,9 @@ pub(super) fn error_retry_prompt(session: &SessionRecord, index: usize) -> Optio
     }
     session.messages[..index]
         .iter()
-        .rfind(|item| item.kind == ItemKind::User)
+        .rev()
+        .take_while(|item| !item.key.ends_with("-command"))
+        .find(|item| item.kind == ItemKind::User)
         .map(|item| item.text.as_str())
 }
 
@@ -162,9 +164,19 @@ impl ConduitApp {
     }
 
     pub(super) fn send_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.composer_is_composing(window, cx) {
+            return;
+        }
         if self.closing || !self.writable || self.composer_save_pending() {
             return;
         }
+        if self.submit_chat_command(window, cx) {
+            return;
+        }
+        self.send_ordinary_prompt(window, cx);
+    }
+
+    pub(super) fn send_ordinary_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let target = self.composer_target();
         let text = self.input.read(cx).value().to_string();
         let references = self
@@ -218,6 +230,17 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.send_input(prompt.into(), append_user, window, cx)
+    }
+
+    pub(super) fn send_input(
+        &mut self,
+        input: crate::commands::TurnInput,
+        append_user: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let prompt = &input.text;
         if self.closing || !self.writable {
             return false;
         }
@@ -252,16 +275,26 @@ impl ConduitApp {
             return false;
         }
         let target = self.send_target(append_user);
-        let composer = append_user.then(|| self.sent_composer(cx)).flatten();
+        let mut composer = append_user.then(|| self.sent_composer(cx)).flatten();
+        if matches!(input.intent, crate::commands::RequestIntent::Discover)
+            && let Some(composer) = &mut composer
+        {
+            composer.preserve = true;
+        }
         match self.start_turn(
             index,
             target,
             self.new_session_provider,
-            prompt,
+            input,
             append_user,
             cx,
         ) {
             Ok(id) => {
+                if let Some(run) = self.session_control.runs.get_mut(&id)
+                    && matches!(run.intent, crate::commands::RequestIntent::Command(_))
+                {
+                    run.command_draft = composer.clone();
+                }
                 if let Some(pending) = self
                     .session_control
                     .runs
@@ -303,10 +336,19 @@ impl ConduitApp {
         index: usize,
         target: Option<u64>,
         provider: Provider,
-        prompt: String,
+        input: impl Into<crate::commands::TurnInput>,
         append_user: bool,
         cx: &mut Context<Self>,
     ) -> Result<u64, String> {
+        let crate::commands::TurnInput {
+            text: prompt,
+            intent,
+        } = input.into();
+        if let crate::commands::RequestIntent::Command(call) = &intent
+            && self.command_context_for(index, target, provider).as_ref() != Some(call.context())
+        {
+            return Err(conduit::i18n::text("commands.stale"));
+        }
         if self.closing || !self.writable {
             return Err(
                 conduit::i18n::text_static("runtime.unable_to_send_a_message_right_now").into(),
@@ -386,6 +428,15 @@ impl ConduitApp {
                 )
             })?
             .path;
+        if provider.descriptor().commands.is_some() {
+            self.remember_command_executable(provider, &executable)?;
+            if let crate::commands::RequestIntent::Command(call) = &intent
+                && self.command_context_for(index, target, provider).as_ref()
+                    != Some(call.context())
+            {
+                return Err(conduit::i18n::text("commands.stale"));
+            }
+        }
         if !cwd.is_dir() {
             return Err(conduit::i18n::text_static(
                 "runtime.the_workspace_directory_has_moved_or_is",
@@ -455,9 +506,20 @@ impl ConduitApp {
                 .messages
                 .push(ChatItem::from(crate::domain::ChatItemData {
                     elapsed_ms: None,
-                    key: format!("{prefix}-user"),
+                    key: format!(
+                        "{prefix}-{}",
+                        if matches!(intent, crate::commands::RequestIntent::Message) {
+                            "user"
+                        } else {
+                            "command"
+                        }
+                    ),
                     created_at: unix_now(),
-                    kind: ItemKind::User,
+                    kind: if matches!(intent, crate::commands::RequestIntent::Message) {
+                        ItemKind::User
+                    } else {
+                        ItemKind::Notice
+                    },
                     text: prompt.clone(),
                     input: String::new(),
                     detail: String::new(),
@@ -482,6 +544,7 @@ impl ConduitApp {
                     .any(|message| message.kind == ItemKind::Assistant)
             });
         let naming_snippet = (self.store.ui.auto_rename
+            && matches!(intent, crate::commands::RequestIntent::Message)
             && self.store.ui.naming_mode == NamingMode::FirstMessage
             && first_turn)
             .then(|| prompt.clone());
@@ -493,7 +556,10 @@ impl ConduitApp {
                 self.usage_context_window_fallback(provider, &session.channel, model.as_deref())
             })
             .unwrap_or(0);
+        let command_executable = matches!(intent, crate::commands::RequestIntent::Command(_))
+            .then(|| (provider, executable.clone()));
         let (runtime, release) = ChatRuntime::start_after_save(crate::chat_runtime::StartRequest {
+            intent: intent.clone(),
             provider,
             executable,
             cwd,
@@ -512,7 +578,14 @@ impl ConduitApp {
             id,
             ActiveRun::new(runtime, worktree, prefix, usage, model, effort),
         );
+        let command_ticket = self
+            .command_context_for(index, Some(id), provider)
+            .filter(|_| provider.descriptor().commands.is_some())
+            .map(|context| self.chat_commands.catalog.begin(context));
         if let Some(run) = self.session_control.runs.get_mut(&id) {
+            run.intent = intent;
+            run.command_executable = command_executable;
+            run.command_ticket = command_ticket;
             run.status = conduit::i18n::text_static("runtime.saving_message").into();
             run.activity = run.status.clone();
             run.pending_save = Some(PendingTurn {
@@ -606,6 +679,12 @@ impl ConduitApp {
         else {
             return;
         };
+        if session.messages[user_index + 1..=index]
+            .iter()
+            .any(|item| item.key.ends_with("-command"))
+        {
+            return;
+        }
         if session.native_id.is_none() {
             self.message = Some(
                 conduit::i18n::text_static("runtime.this_session_has_no_reliable_cli_session")

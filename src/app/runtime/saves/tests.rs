@@ -39,6 +39,135 @@ fn finish_save(app: &mut ConduitApp, window: &mut Window, cx: &mut Context<Condu
 }
 
 #[gpui_kit::test]
+fn commands_revalidate_after_save_and_preserve_drafts_on_failure_or_cancellation(
+    cx: &mut TestAppContext,
+) {
+    use crate::commands::{Arguments, CommandId, Descriptor, Execution};
+    let _locale = crate::test_support::chinese();
+    let (app, cx, root) = fixture(cx, "commands-save-barrier");
+    let marker = root.join("command-launched.txt");
+    std::fs::write(
+        root.join("offline.cmd"),
+        "@echo off\r\n> \"%~dp0command-launched.txt\" echo launched\r\nexit /b 0\r\n",
+    )
+    .unwrap();
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            this.store
+                .cli
+                .set(Provider::OpenCode, Some(root.join("offline.cmd")));
+            this.session_mut(1).unwrap().provider = Provider::OpenCode;
+            this.new_session_provider = Provider::OpenCode;
+            for scenario in 0..3 {
+                this.remember_command_executable(Provider::OpenCode, &root.join("offline.cmd"))
+                    .unwrap();
+                let context = this.session_command_context(1).unwrap();
+                let ticket = this.chat_commands.catalog.begin(context);
+                this.chat_commands.catalog.publish(
+                    &ticket,
+                    Ok(vec![Descriptor {
+                        revision: 1,
+                        unavailable: None,
+                        id: CommandId {
+                            source: "opencode".into(),
+                            local: "review".into(),
+                        },
+                        name: "review".into(),
+                        aliases: vec![],
+                        summary: "Review".into(),
+                        arguments: Arguments::TailText {
+                            required: false,
+                            hint: String::new(),
+                        },
+                        execution: Execution::Engine,
+                    }]),
+                );
+                let (release, snapshot) = hold_save(this);
+                this.input
+                    .update(cx, |input, cx| input.set_value("/review 中文", window, cx));
+                this.send_prompt(window, cx);
+                assert!(
+                    this.session_control.runs.contains_key(&1),
+                    "scenario {scenario}: {:?}; notices: {:?}",
+                    this.message,
+                    this.notifications.center.records()
+                );
+                let saved = snapshot.recv_timeout(Duration::from_secs(3)).unwrap();
+                assert!(
+                    saved.workspaces[0].sessions[0]
+                        .messages
+                        .last()
+                        .unwrap()
+                        .key
+                        .ends_with("-command")
+                );
+                assert_eq!(this.input.read(cx).value().as_ref(), "/review 中文");
+                assert!(!marker.exists());
+                match scenario {
+                    0 => release.send(Err("offline save failure".into())).unwrap(),
+                    1 => {
+                        this.session_mut(1).unwrap().permission =
+                            crate::domain::PermissionLevel::FullAccess;
+                        release.send(Ok(())).unwrap();
+                    }
+                    _ => {
+                        this.session_control.runs.get_mut(&1).unwrap().cancel();
+                        release.send(Ok(())).unwrap();
+                    }
+                }
+                finish_save(this, window, cx);
+                assert!(this.session_control.runs.is_empty());
+                assert!(this.session(1).unwrap().messages.is_empty());
+                assert_eq!(this.input.read(cx).value().as_ref(), "/review 中文");
+                assert!(!marker.exists());
+            }
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn commands_discovery_binds_new_session_after_save_without_consuming_the_draft(
+    cx: &mut TestAppContext,
+) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx, root) = fixture(cx, "commands-connect-save");
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            this.store
+                .cli
+                .set(Provider::OpenCode, Some(root.join("offline.cmd")));
+            this.new_session_provider = Provider::OpenCode;
+            this.selected_session = None;
+            let file = root.join("reference.txt");
+            std::fs::write(&file, "reference").unwrap();
+            this.attach_paths(&[file], window, cx);
+            this.input
+                .update(cx, |input, cx| input.set_value("/review draft", window, cx));
+            let (release, snapshot) = hold_save(this);
+            assert!(this.send_input(
+                crate::commands::TurnInput {
+                    text: "Connect".into(),
+                    intent: crate::commands::RequestIntent::Discover
+                },
+                true,
+                window,
+                cx
+            ));
+            snapshot.recv_timeout(Duration::from_secs(3)).unwrap();
+            assert_eq!(this.selected_session, None);
+            release.send(Ok(())).unwrap();
+            finish_save(this, window, cx);
+            let id = this.selected_session.unwrap();
+            assert_eq!(this.session(id).unwrap().provider, Provider::OpenCode);
+            assert_eq!(this.input.read(cx).value().as_ref(), "/review draft");
+            assert_eq!(this.current_files().unwrap().references.len(), 1);
+            assert!(this.session_control.namings.is_empty());
+            this.session_control.runs.get_mut(&id).unwrap().cancel();
+        })
+    });
+}
+
+#[gpui_kit::test]
 fn slow_save_retains_draft_and_attachments_and_gates_cli(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     let (app, cx, root) = fixture(cx, "send-barrier");

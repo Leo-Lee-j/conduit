@@ -5,7 +5,9 @@ use crate::persistence::SaveReceipt;
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests;
 
+#[derive(Clone)]
 pub(in crate::app) struct SentComposer {
+    pub(in crate::app) preserve: bool,
     target: ComposerTarget,
     text: String,
     references: Vec<FileReference>,
@@ -29,6 +31,7 @@ pub(in crate::app) struct PendingQueueSave {
 impl ConduitApp {
     pub(in crate::app) fn sent_composer(&self, cx: &Context<Self>) -> Option<SentComposer> {
         Some(SentComposer {
+            preserve: false,
             target: self.composer_target()?,
             text: self.input.read(cx).value().to_string(),
             references: self
@@ -70,7 +73,7 @@ impl ConduitApp {
         })
     }
 
-    fn clear_saved_composer(
+    pub(in crate::app) fn clear_saved_composer(
         &mut self,
         sent: &SentComposer,
         window: &mut Window,
@@ -95,6 +98,9 @@ impl ConduitApp {
         if !text_matches || !files_match {
             return false;
         }
+        if sent.preserve {
+            return true;
+        }
         if current {
             self.input
                 .update(cx, |input, cx| input.set_value("", window, cx));
@@ -107,6 +113,30 @@ impl ConduitApp {
             self.workspace_drafts.remove(&sent.target.workspace);
         }
         true
+    }
+
+    pub(in crate::app) fn restore_command_draft(
+        &mut self,
+        id: u64,
+        sent: &SentComposer,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_session == Some(id)
+            && self.composer_target().as_ref() == Some(&sent.target)
+            && self.input.read(cx).value().is_empty()
+            && self
+                .current_files()
+                .is_none_or(|files| files.references.is_empty())
+        {
+            self.input.update(cx, |input, cx| {
+                input.set_value(sent.text.clone(), window, cx)
+            });
+        } else if self.selected_session != Some(id)
+            && self.drafts.get(&id).is_none_or(String::is_empty)
+        {
+            self.drafts.insert(id, sent.text.clone());
+        }
     }
 
     pub(super) fn restore_unsent_turn(&mut self, id: u64, before: Option<SessionRecord>) {
@@ -161,6 +191,20 @@ impl ConduitApp {
                 .take()
                 .unwrap();
             let result = result.and_then(|()| {
+                if let Some((provider, path)) = self
+                    .session_control
+                    .runs
+                    .get(&id)
+                    .and_then(|run| run.command_executable.clone())
+                {
+                    self.remember_command_executable(provider, &path)?;
+                }
+                if let Some(run) = self.session_control.runs.get(&id)
+                    && let crate::commands::RequestIntent::Command(call) = &run.intent
+                    && self.session_command_context(id).as_ref() != Some(call.context())
+                {
+                    return Err(conduit::i18n::text("commands.stale"));
+                }
                 pending.release.send(()).map_err(|_| {
                     conduit::i18n::text_static(
                         "runtime.saves.cli_wait_thread_exited_the_message_was",
@@ -180,7 +224,7 @@ impl ConduitApp {
                         let current = composer_cleared
                             && pending.composer.as_ref().is_some_and(|sent| {
                                 self.composer_target().as_ref() == Some(&sent.target)
-                                    && self.input.read(cx).value().is_empty()
+                                    && (sent.preserve || self.input.read(cx).value().is_empty())
                                     && self.new_session_provider == selection.engine
                                     && self.active_file.is_none()
                                     && self.active_diff.is_none()
@@ -199,6 +243,24 @@ impl ConduitApp {
                                     workspace.sessions.iter().any(|session| session.id == id)
                                 })
                         {
+                            if let Some(sent) =
+                                pending.composer.as_ref().filter(|sent| sent.preserve)
+                            {
+                                if let Some(files) = self.composer_files.remove(&sent.target) {
+                                    self.composer_files.insert(
+                                        ComposerTarget {
+                                            workspace: sent.target.workspace.clone(),
+                                            session: Some(id),
+                                        },
+                                        files,
+                                    );
+                                }
+                                if let Some(old) = sent.target.session {
+                                    self.drafts.remove(&old);
+                                } else {
+                                    self.workspace_drafts.remove(&sent.target.workspace);
+                                }
+                            }
                             self.select_created_session(index, id, selection.engine);
                             self.scroll_to_end();
                         }
@@ -214,6 +276,14 @@ impl ConduitApp {
                     }
                 }
                 Err(error) => {
+                    if let Some(ticket) = self
+                        .session_control
+                        .runs
+                        .get(&id)
+                        .and_then(|run| run.command_ticket.as_ref())
+                    {
+                        self.chat_commands.catalog.finish(ticket);
+                    }
                     let target = if pending.before.is_some() {
                         self.session_notice_target(id)
                     } else {

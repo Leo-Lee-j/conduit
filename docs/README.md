@@ -23,6 +23,7 @@
 | [架构](architecture.md) | 产品边界、模块职责与主要数据流 |
 | [会话与存储](sessions.md) | 并发、发送确认、正文按需加载、历史导入及恢复 |
 | [CLI 适配器](cli-adapters.md) | 接入契约、进程管理、OpenCode 特有行为 |
+| [Chat 命令入口设计](chat-commands.md) | slash 面板、已接入来源及可扩展的发现与执行契约 |
 | [测试与验收](testing.md) | 测试选择、隔离环境、人工验收和结果记录 |
 | [性能与指标](performance.md) | 有界工作、缓存、用量语义与测量边界 |
 | [发布与更新](releasing.md) | 签名密钥、CI、安装包、更新与故障恢复 |

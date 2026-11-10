@@ -62,6 +62,7 @@ use std::{
 
 mod chat;
 mod code_highlight;
+mod commands;
 mod components;
 mod composer;
 mod dock;
@@ -147,6 +148,10 @@ actions!(
         NextFileMention,
         AcceptFileMention,
         DismissFileMention,
+        PreviousChatCommand,
+        NextChatCommand,
+        AcceptChatCommand,
+        DismissChatCommand,
         CloseDocument,
         RecentSessions,
         OpenSessionSearch,
@@ -199,6 +204,7 @@ pub struct ConduitApp {
     prompt_history: Option<usize>,
     composer_files: HashMap<ComposerTarget, ComposerFiles>,
     file_mentions: mentions::FileMentions,
+    chat_commands: commands::ChatCommands,
     queued_messages: HashMap<u64, queue::QueuedMessage>,
     probes: HashMap<Provider, VersionProbe>,
     diagnostics: HashMap<Provider, String>,
@@ -327,6 +333,11 @@ impl ConduitApp {
             KeyBinding::new("down", NextFileMention, Some("FileMention > Input")),
             KeyBinding::new("tab", AcceptFileMention, Some("FileMention > Input")),
             KeyBinding::new("escape", DismissFileMention, Some("FileMention > Input")),
+            KeyBinding::new("up", PreviousChatCommand, Some("ChatCommand > Input")),
+            KeyBinding::new("down", NextChatCommand, Some("ChatCommand > Input")),
+            KeyBinding::new("tab", AcceptChatCommand, Some("ChatCommand > Input")),
+            KeyBinding::new("enter", SendPrompt, Some("ChatCommand > Input")),
+            KeyBinding::new("escape", DismissChatCommand, Some("ChatCommand > Input")),
         ]);
         terminal::init(cx);
         let (mut store, message, writable) = match loaded {
@@ -519,6 +530,7 @@ impl ConduitApp {
         // Selection changes also matter: a query belongs to the caret, not to
         // the last @ somewhere in the draft. Ignore unchanged blink notifications.
         let mention_subscription = cx.observe(&input, |this, _, cx| {
+            this.refresh_chat_commands(cx);
             this.refresh_file_mentions(cx);
         });
         let shift_subscription = cx.observe_window_activation(window, |this, _, _| {
@@ -681,6 +693,7 @@ impl ConduitApp {
             prompt_history: None,
             composer_files: HashMap::new(),
             file_mentions: mentions::FileMentions::default(),
+            chat_commands: commands::ChatCommands::default(),
             queued_messages: HashMap::new(),
             probes: HashMap::new(),
             diagnostics: HashMap::new(),

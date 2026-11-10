@@ -262,6 +262,10 @@ impl QoderAdapter {
 impl CliAdapter for QoderAdapter {
     fn launch(&mut self) -> Result<LaunchSpec> {
         ensure!(
+            matches!(self.request.intent, crate::commands::RequestIntent::Message),
+            conduit::i18n::text("commands.unsupported")
+        );
+        ensure!(
             self.request.route.config.is_empty(),
             conduit::i18n::text("qoder.native_route")
         );

@@ -22,8 +22,34 @@ pub fn endpoint(base: &str) -> Result<url::Url> {
     Ok(url)
 }
 
+/// CLI clients append different resource paths: Claude adds `/v1/messages`,
+/// while Codex adds `/responses`. Normalize once for runtime and discovery.
+pub fn runtime_base_url(base: &str, engine: Provider) -> String {
+    let base = base.trim_end_matches('/');
+    match engine {
+        Provider::Claude => base.strip_suffix("/v1").unwrap_or(base).to_owned(),
+        Provider::Codex => {
+            let path = url::Url::parse(base)
+                .ok()
+                .map(|url| url.path().to_owned())
+                .unwrap_or_default();
+            let last = path.rsplit('/').next().unwrap_or_default();
+            let versioned = last
+                .strip_prefix('v')
+                .is_some_and(|version| version.starts_with(|c: char| c.is_ascii_digit()));
+            if versioned {
+                base.to_owned()
+            } else {
+                format!("{base}/v1")
+            }
+        }
+        _ => base.to_owned(),
+    }
+}
+
 fn models_url(base: &str, engine: Provider) -> Result<url::Url> {
-    let mut url = endpoint(base)?;
+    endpoint(base)?;
+    let mut url = endpoint(&runtime_base_url(base, engine))?;
     let path = url.path().trim_end_matches('/');
     let path = if engine == Provider::Claude && !path.ends_with("/v1") {
         format!("{path}/v1/models")
@@ -104,6 +130,84 @@ pub fn fetch(engine: Provider, base: &str, key: Option<&str>) -> Result<Vec<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn optional_v1_is_consistent_for_discovery_and_runtime() {
+        for prefix in ["", "/proxy", "/gateway/anthropic"] {
+            for suffix in ["", "/", "/v1", "/v1/"] {
+                let base = format!("https://example.com{prefix}{suffix}");
+                for engine in [Provider::Claude, Provider::Codex] {
+                    assert_eq!(
+                        models_url(&base, engine).unwrap().path(),
+                        format!("{prefix}/v1/models")
+                    );
+                    let route = RuntimeRoute::endpoint(engine, "test", &base, None);
+                    if engine == Provider::Claude {
+                        assert_eq!(
+                            route.env["ANTHROPIC_BASE_URL"],
+                            format!("https://example.com{prefix}")
+                        );
+                    } else {
+                        assert_eq!(
+                            route.config["model_providers"]["conduit"]["base_url"],
+                            format!("https://example.com{prefix}/v1")
+                        );
+                    }
+                }
+            }
+        }
+        for version in ["v2", "v1beta", "v1beta1"] {
+            let base = format!("https://example.com/gateway/{version}/");
+            assert_eq!(
+                models_url(&base, Provider::Codex).unwrap().path(),
+                format!("/gateway/{version}/models")
+            );
+        }
+    }
+
+    #[test]
+    fn catalog_fetch_sends_one_version_and_engine_specific_auth() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        for engine in [Provider::Claude, Provider::Codex] {
+            for suffix in ["", "/v1/"] {
+                let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                let address = listener.local_addr().unwrap();
+                let server = std::thread::spawn(move || {
+                    let (mut socket, _) = listener.accept().unwrap();
+                    socket
+                        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                        .unwrap();
+                    let mut request = Vec::new();
+                    while !request.ends_with(b"\r\n\r\n") {
+                        let mut byte = [0];
+                        socket.read_exact(&mut byte).unwrap();
+                        request.push(byte[0]);
+                        assert!(request.len() < 8192);
+                    }
+                    let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
+                    assert!(
+                        request.starts_with("get /gateway/v1/models http/1.1"),
+                        "{request}"
+                    );
+                    if engine == Provider::Claude {
+                        assert!(request.contains("x-api-key: fixture"));
+                        assert!(request.contains("anthropic-version: 2023-06-01"));
+                    } else {
+                        assert!(request.contains("authorization: bearer fixture"));
+                    }
+                    let body = r#"{"data":[{"id":"selected-model"}]}"#;
+                    write!(socket, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                });
+                let result = fetch(
+                    engine,
+                    &format!("http://{address}/gateway{suffix}"),
+                    Some("fixture"),
+                );
+                server.join().unwrap();
+                assert_eq!(result.unwrap(), ["selected-model"]);
+            }
+        }
+    }
     #[test]
     fn catalog_urls_and_untrusted_responses_are_bounded() {
         let _locale = crate::test_support::chinese();

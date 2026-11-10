@@ -8,6 +8,7 @@ mod chat_runtime;
 mod child;
 mod cli;
 mod cli_adapter;
+mod commands;
 mod domain;
 mod engines;
 mod event_queue;

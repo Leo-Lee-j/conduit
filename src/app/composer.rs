@@ -557,7 +557,9 @@ impl ConduitApp {
         let has_workspace = self.selected_workspace.is_some();
         let can_edit = self.writable && !self.closing;
         let input_focused = self.input.read(cx).focus_handle(cx).is_focused(window);
-        let mentions_open = self.file_mentions_open(window, cx);
+        self.refresh_chat_commands(cx);
+        let commands_open = self.chat_commands_open(window, cx);
+        let mentions_open = !commands_open && self.file_mentions_open(window, cx);
         let has_content = !self.input.read(cx).value().trim().is_empty()
             || self
                 .current_files()
@@ -588,7 +590,9 @@ impl ConduitApp {
         let mut composer = v_flex()
             .id("composer")
             .debug_selector(|| "composer".into())
-            .key_context(if mentions_open {
+            .key_context(if commands_open {
+                "ConduitComposer ChatCommand"
+            } else if mentions_open {
                 "ConduitComposer FileMention"
             } else {
                 "ConduitComposer"
@@ -596,6 +600,9 @@ impl ConduitApp {
             .on_action(cx.listener(|this, _: &SendPrompt, window, cx| {
                 cx.stop_propagation();
                 if this.composer_is_composing(window, cx) {
+                    return;
+                }
+                if this.chat_commands_open(window, cx) && this.accept_chat_command(window, cx) {
                     return;
                 }
                 if this.file_mentions_open(window, cx) {
@@ -611,6 +618,24 @@ impl ConduitApp {
             .on_action(cx.listener(|this, _: &PreviousFileMention, window, cx| {
                 cx.stop_propagation();
                 this.move_file_mention(-1, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &PreviousChatCommand, window, cx| {
+                cx.stop_propagation();
+                this.move_chat_command(-1, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NextChatCommand, window, cx| {
+                cx.stop_propagation();
+                this.move_chat_command(1, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &AcceptChatCommand, window, cx| {
+                cx.stop_propagation();
+                this.accept_chat_command(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &DismissChatCommand, window, cx| {
+                cx.stop_propagation();
+                if !this.composer_is_composing(window, cx) {
+                    this.dismiss_chat_commands(cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &NextFileMention, window, cx| {
                 cx.stop_propagation();
@@ -915,6 +940,9 @@ impl ConduitApp {
                         .child(composer)
                         .when(mentions_open, |area| {
                             area.child(self.render_file_mentions(window, cx))
+                        })
+                        .when(commands_open, |area| {
+                            area.child(self.render_chat_commands(window, cx))
                         }),
                 ),
         );

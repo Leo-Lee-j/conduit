@@ -60,6 +60,23 @@ impl ConduitApp {
         let mut structural_change = false;
         let mut completed_turns = Vec::new();
         for (id, prefix, event) in incoming {
+            if self
+                .session_control
+                .runs
+                .get(&id)
+                .is_none_or(|run| run.prefix != prefix)
+            {
+                continue;
+            }
+            if self.session_control.runs.get(&id).is_some_and(|run| {
+                !matches!(run.intent, crate::commands::RequestIntent::Message)
+                    && run.runtime.is_cancelled()
+            }) && matches!(
+                event,
+                Event::CommandCatalog(_) | Event::Delta { .. } | Event::Text { .. }
+            ) {
+                continue;
+            }
             changed = true;
             visible |= Some(id) == self.selected_session;
             if Some(id) == self.selected_session
@@ -75,6 +92,18 @@ impl ConduitApp {
                 structural_change = true;
             }
             match event {
+                Event::CommandCatalog(result) => {
+                    if let Some(ticket) = self
+                        .session_control
+                        .runs
+                        .get(&id)
+                        .and_then(|run| run.command_ticket.clone())
+                        && self.session_command_context(id).as_ref() == Some(&ticket.context)
+                    {
+                        self.chat_commands.catalog.publish(&ticket, result);
+                        self.refresh_chat_commands(cx);
+                    }
+                }
                 Event::AcpConfig(options) => {
                     let variant = if let Some(session) = self.session_mut(id) {
                         session.opencode.options = options;
@@ -257,6 +286,34 @@ impl ConduitApp {
                 }
                 Event::Finished { error, cancelled } => {
                     let finished_run = self.session_control.runs.remove(&id);
+                    if let Some(run) = &finished_run {
+                        if let Some(ticket) = &run.command_ticket {
+                            self.chat_commands.catalog.finish(ticket);
+                        }
+                        if (error.is_some() || cancelled)
+                            && let Some(sent) = &run.command_draft
+                        {
+                            self.restore_command_draft(id, sent, window, cx);
+                        }
+                        if !matches!(run.intent, crate::commands::RequestIntent::Message)
+                            && error.is_none()
+                            && !cancelled
+                            && let Some(session) = self.session_mut(id)
+                        {
+                            let key =
+                                if matches!(run.intent, crate::commands::RequestIntent::Discover) {
+                                    "commands.connected"
+                                } else {
+                                    "commands.completed"
+                                };
+                            apply_event_indexed(
+                                session,
+                                &prefix,
+                                Event::Notice(conduit::i18n::text(key)),
+                                &mut MessageIndex::default(),
+                            );
+                        }
+                    }
                     self.refresh_notifications(cx);
                     self.notifications.center.resolve_session(id, unix_now());
                     if finished_run.is_some()
@@ -431,6 +488,16 @@ impl ConduitApp {
                     self.refresh_notifications(cx);
                 }
                 Event::NativeId(native_id) => {
+                    if let Some(ticket) = self
+                        .session_control
+                        .runs
+                        .get_mut(&id)
+                        .and_then(|run| run.command_ticket.as_mut())
+                    {
+                        self.chat_commands
+                            .catalog
+                            .bind_native(ticket, native_id.clone());
+                    }
                     if let Some(session) = self.session_mut(id) {
                         session.native_id = Some(native_id);
                     }

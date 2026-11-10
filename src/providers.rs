@@ -4,6 +4,7 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+pub mod claude;
 pub mod credentials;
 pub mod discovery;
 
@@ -87,6 +88,8 @@ pub struct ModelProvider {
     pub source: ProviderSource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub model_metadata: Vec<crate::models::ModelOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_models: Option<claude::ClaudeModels>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,7 +109,8 @@ impl ModelProvider {
     }
 
     pub fn catalog(&self) -> Vec<crate::models::ModelOption> {
-        self.models
+        let mut catalog: Vec<_> = self
+            .models
             .iter()
             .map(|id| {
                 self.model_metadata
@@ -120,7 +124,13 @@ impl ModelProvider {
                         context_window: None,
                     })
             })
-            .collect()
+            .collect();
+        if self.engine == Provider::Claude
+            && let Some(mapping) = &self.claude_models
+        {
+            mapping.extend_catalog(&mut catalog);
+        }
+        catalog
     }
 
     pub fn runtime_route(&self, database: &std::path::Path) -> Result<RuntimeRoute> {
@@ -152,7 +162,10 @@ impl ModelProvider {
                 "providers.api_key_environment_variable_names_may_contain"
             ));
         }
-        if self.models.is_empty()
+        if let Some(mapping) = &self.claude_models {
+            mapping.validate()?;
+        }
+        if (self.models.is_empty() && self.claude_models.is_none())
             || self
                 .models
                 .iter()
@@ -168,6 +181,11 @@ impl ModelProvider {
         let key = self.api_key()?;
         let mut route = RuntimeRoute::endpoint(self.engine, &self.name, &self.base_url, key);
         route.default_model = self.models.first().cloned();
+        if self.engine == Provider::Claude
+            && let Some(mapping) = &self.claude_models
+        {
+            mapping.apply(&mut route);
+        }
         Ok(route)
     }
 
@@ -202,11 +220,12 @@ pub struct RuntimeRoute {
 
 impl RuntimeRoute {
     pub fn endpoint(engine: Provider, name: &str, url: &str, key: Option<String>) -> Self {
+        let url = discovery::runtime_base_url(url, engine);
         let mut route = Self::default();
         match engine {
             Provider::OpenCode | Provider::Qoder => {}
             Provider::Claude => {
-                route.env.insert("ANTHROPIC_BASE_URL".into(), url.into());
+                route.env.insert("ANTHROPIC_BASE_URL".into(), url);
                 route
                     .env
                     .insert("CLAUDE_CODE_USE_BEDROCK".into(), "0".into());

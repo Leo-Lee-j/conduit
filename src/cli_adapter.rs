@@ -3,6 +3,7 @@ mod builtin;
 mod opencode;
 mod qoder;
 pub use builtin::{claude, codex};
+pub use opencode::COMMAND_SOURCE as OPENCODE_COMMANDS;
 pub use opencode::opencode;
 pub use qoder::qoder;
 
@@ -15,6 +16,7 @@ use serde_json::Value;
 use std::{collections::BTreeMap, path::PathBuf};
 
 pub struct AdapterRequest {
+    pub intent: crate::commands::RequestIntent,
     pub cwd: PathBuf,
     pub prompt: String,
     pub native_id: Option<String>,

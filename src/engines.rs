@@ -15,6 +15,7 @@ pub struct EngineDescriptor {
     pub guide: &'static str,
     pub capabilities: EngineCapabilities,
     pub adapter: crate::cli_adapter::AdapterFactory,
+    pub commands: Option<crate::commands::Source>,
 }
 
 pub struct EngineCapabilities {
@@ -42,6 +43,7 @@ pub const REGISTRY: &[EngineDescriptor] = &[
             protocol: "Stream JSON",
         },
         adapter: crate::cli_adapter::claude,
+        commands: None,
     },
     EngineDescriptor {
         provider: Provider::Codex,
@@ -61,6 +63,7 @@ pub const REGISTRY: &[EngineDescriptor] = &[
             protocol: "App Server",
         },
         adapter: crate::cli_adapter::codex,
+        commands: None,
     },
     EngineDescriptor {
         provider: Provider::OpenCode,
@@ -80,6 +83,7 @@ pub const REGISTRY: &[EngineDescriptor] = &[
             protocol: "ACP",
         },
         adapter: crate::cli_adapter::opencode,
+        commands: Some(crate::cli_adapter::OPENCODE_COMMANDS),
     },
     EngineDescriptor {
         provider: Provider::Qoder,
@@ -99,6 +103,7 @@ pub const REGISTRY: &[EngineDescriptor] = &[
             protocol: "ACP",
         },
         adapter: crate::cli_adapter::qoder,
+        commands: None,
     },
 ];
 

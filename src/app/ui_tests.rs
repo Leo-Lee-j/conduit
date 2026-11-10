@@ -285,9 +285,7 @@ fn error_retry_clears_cards_before_repeated_failures_and_preserves_output(cx: &m
 }
 
 #[gpui_kit::test]
-fn settings_connections_switch_engines_and_keep_read_only_actions_disabled(
-    cx: &mut TestAppContext,
-) {
+fn settings_connections_switch_engines_and_guard_service_editors(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     use crate::domain::Provider;
     use gpui_kit::{AppContext as _, Modifiers, MouseButton};
@@ -395,6 +393,53 @@ fn settings_connections_switch_engines_and_keep_read_only_actions_disabled(
             app.update(cx, |app, cx| app.close_settings(window, cx));
         });
     }
+
+    for provider in [Provider::Claude, Provider::Codex] {
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.writable = true;
+                app.connection_settings.engine = provider;
+                app.settings_ui.page = 8;
+                app.open_settings(window, cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let add = cx.debug_bounds("settings-add-service").unwrap();
+        cx.simulate_mouse_down(add.center(), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(add.center(), MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(
+            cx.debug_bounds("provider-editor-body").is_some(),
+            "adding a {provider:?} service must open the editor without a cyclic app read"
+        );
+        for expanded in [false, true] {
+            let toggle = cx.debug_bounds("provider-advanced-toggle").unwrap();
+            cx.simulate_mouse_down(toggle.center(), MouseButton::Left, Modifiers::default());
+            cx.simulate_mouse_up(toggle.center(), MouseButton::Left, Modifiers::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            assert_eq!(
+                cx.debug_bounds("provider-advanced-fields").is_some(),
+                expanded
+            );
+        }
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert!(app.read(cx).store.providers.is_empty());
+            app.update(cx, |app, cx| app.close_settings(window, cx));
+        });
+        assert!(cx.debug_bounds("provider-editor-body").is_none());
+    }
 }
 
 #[gpui_kit::test]
@@ -477,6 +522,7 @@ fn model_picker_switches_engine_and_applies_the_full_route_to_a_new_session(
                 models: vec!["step-3.5-flash".into(), "gpt-5".into()],
                 source: ProviderSource::Local,
                 model_metadata: vec![],
+                claude_models: None,
             }];
             app
         });

@@ -61,6 +61,10 @@ pub(crate) fn event_bytes(event: &Event) -> usize {
         Event::Finished { error, .. } => error.as_ref().map_or(0, String::len),
         Event::Plan { steps } => steps.iter().map(|(a, b)| a.len() + b.len() + 64).sum(),
         Event::AcpConfig(value) => value.to_string().len(),
+        Event::CommandCatalog(result) => match result {
+            Ok(items) => items.iter().map(crate::commands::Descriptor::bytes).sum(),
+            Err(error) => error.len(),
+        },
         Event::Usage(_) => 256,
     }
 }

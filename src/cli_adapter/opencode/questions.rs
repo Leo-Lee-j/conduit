@@ -35,6 +35,20 @@ impl QuestionBridge {
         }
     }
 
+    pub(super) fn commands(&self) -> Result<Value> {
+        let mut response = self
+            .agent
+            .get(format!("{}/command", self.base))
+            .header("Authorization", &self.authorization)
+            .query("directory", &self.directory)
+            .call()?;
+        Ok(response
+            .body_mut()
+            .with_config()
+            .limit(2 * 1024 * 1024)
+            .read_json()?)
+    }
+
     pub(super) fn poll(&mut self, session: &str) -> Result<Vec<Value>> {
         let mut response = self
             .agent

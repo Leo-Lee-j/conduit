@@ -295,16 +295,15 @@ impl ConduitApp {
                 let Some(key) = self.files.documents.get(&id).map(|d| d.key.clone()) else {
                     return;
                 };
-                let Some(index) = self
+                let index = self
                     .store
                     .workspaces
                     .iter()
-                    .position(|w| w.path == key.workspace)
-                else {
-                    return;
-                };
+                    .position(|w| w.path == key.workspace);
                 // Switch context only when necessary, preserving drafts and chat scroll on same-workspace browsing.
-                if self.selected_workspace != Some(index) {
+                if let Some(index) = index
+                    && self.selected_workspace != Some(index)
+                {
                     let session = self
                         .open_tabs
                         .iter()
@@ -398,7 +397,13 @@ impl ConduitApp {
                 DocumentTab::Diff(id) => self.files.diffs.get(&id).map(|d| &d.workspace),
                 _ => None,
             })
-            .and_then(|path| self.store.workspaces.iter().position(|w| &w.path == path));
+            .and_then(|path| {
+                self.store
+                    .workspaces
+                    .iter()
+                    .position(|w| &w.path == path)
+                    .or(self.selected_workspace)
+            });
         let closing_settings = tabs.contains(&DocumentTab::Settings);
         if closing_settings {
             self.settings_ui.open = false;
@@ -537,6 +542,16 @@ impl ConduitApp {
         {
             return;
         }
+        self.open_file_preview(key, pinned, window, cx);
+    }
+
+    pub(super) fn open_file_preview(
+        &mut self,
+        key: FileKey,
+        pinned: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(id) = self
             .files
             .documents
@@ -2184,6 +2199,107 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[gpui_kit::test]
+    fn chat_file_previews_cross_workspaces_without_notifications(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
+        cx.update(gpui_kit::init);
+        let fixture = Fixture::new();
+        let outside = fixture.0.join("gamma/docs/notes 100%#1.md");
+        std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
+        std::fs::write(&outside, "# External workspace\n").unwrap();
+        let mut store = fixture.store();
+        for workspace in &mut store.workspaces {
+            workspace.path = workspace.path.canonicalize().unwrap();
+        }
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
+                app.startup = None;
+                app.selected_workspace = Some(0);
+                app.selected_session = Some(1);
+                app.open_tabs = vec![DocumentTab::Chat(1), DocumentTab::Chat(2)];
+                app.input
+                    .update(cx, |input, cx| input.set_value("draft alpha", window, cx));
+                app
+            });
+            *output.borrow_mut() = Some(app.clone());
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        let app = slot.borrow().as_ref().unwrap().clone();
+        cx.run_until_parked();
+        let notices = cx.update(|_, cx| app.read(cx).notifications.center.records().len());
+        let other = fixture.0.join("beta/src/main.rs");
+        let other_url = format!(
+            "file:///{}#L1",
+            super::display_path(&other)
+                .replace('\\', "/")
+                .trim_start_matches('/')
+        );
+        let outside_link = "../gamma/docs/notes%20100%25%231.md#L1";
+        for (link, attachment, registered) in [
+            ("../beta/src/main.rs", false, true),
+            (other_url.as_str(), false, true),
+            (outside_link, false, false),
+            (outside.to_str().unwrap(), true, false),
+        ] {
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    app.select_document(DocumentTab::Chat(1), window, cx);
+                    if attachment {
+                        app.open_chat_file(1, link, window, cx);
+                    } else {
+                        app.open_chat_link(1, link, window, cx);
+                    }
+                    assert!(app.active_file.is_some(), "{link}");
+                    assert_eq!(app.selected_workspace, Some(usize::from(registered)));
+                    assert_eq!(app.store.workspaces.len(), 2);
+                    assert!(app.message.is_none());
+                    assert_eq!(app.notifications.center.records().len(), notices);
+                });
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    let id = app.active_file.unwrap();
+                    let document = &app.files.documents[&id];
+                    assert!(!document.loading);
+                    assert!(document.error.is_none(), "{:?}", document.error);
+                    assert!(document.text.contains(if registered {
+                        "other workspace"
+                    } else {
+                        "External workspace"
+                    }));
+                    if registered {
+                        // Explorer and transcript links must reuse the same tab.
+                        let key = FileKey {
+                            workspace: app.store.workspaces[1].path.clone(),
+                            relative: "src/main.rs".into(),
+                        };
+                        app.open_workspace_file(key, true, window, cx);
+                        assert_eq!(app.active_file, Some(id));
+                    } else {
+                        app.select_document(DocumentTab::Chat(1), window, cx);
+                        app.select_document(DocumentTab::File(id), window, cx);
+                        assert_eq!(app.active_file, Some(id));
+                    }
+                    app.close_documents(&[DocumentTab::File(id)], window, cx);
+                    assert_eq!(app.selected_session, Some(if registered { 2 } else { 1 }));
+                    if !registered {
+                        assert_eq!(app.input.read(cx).value(), "draft alpha");
+                    }
+                    assert!(app.message.is_none());
+                    assert_eq!(app.notifications.center.records().len(), notices);
+                });
+            });
+        }
+        cx.update(|window, _| window.remove_window());
+        slot.borrow_mut().take();
+        drop(app);
+        cx.run_until_parked();
     }
 
     #[gpui_kit::test]

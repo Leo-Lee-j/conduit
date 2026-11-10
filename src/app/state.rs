@@ -234,6 +234,10 @@ pub(super) fn turn_file_stats(session: &SessionRecord) -> TurnFileStats {
 }
 
 pub(super) struct ActiveRun {
+    pub(super) intent: crate::commands::RequestIntent,
+    pub(super) command_ticket: Option<crate::commands::Ticket>,
+    pub(super) command_draft: Option<super::runtime::saves::SentComposer>,
+    pub(super) command_executable: Option<(Provider, PathBuf)>,
     pub(super) runtime: ChatRuntime,
     pub(super) pending_save: Option<super::runtime::PendingTurn>,
     pub(super) cleanup_error: Option<String>,
@@ -298,6 +302,10 @@ impl ActiveRun {
         usage.turn_elapsed_ms = None;
         Self {
             runtime,
+            intent: Default::default(),
+            command_ticket: None,
+            command_draft: None,
+            command_executable: None,
             pending_save: None,
             cleanup_error: None,
             worktree,

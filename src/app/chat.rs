@@ -226,15 +226,7 @@ impl ConduitApp {
             .filter(|m| m.kind == ItemKind::Tool)
             .cloned()
             .collect();
-        let Some((stats, historical_plan)) = self.tool_analysis.turn(session_id, &items, cx) else {
-            return Some(
-                div()
-                    .text_size(px(11.))
-                    .text_color(rgb(palette().muted))
-                    .child(conduit::i18n::text_static("chat.counting_changes"))
-                    .into_any_element(),
-            );
-        };
+        let (stats, historical_plan) = self.tool_analysis.turn(session_id, &items, cx);
         let session = self.session(session_id)?;
         let plan = self
             .session_control

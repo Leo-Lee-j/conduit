@@ -8,6 +8,11 @@ use anyhow::Context;
 mod questions;
 use questions::QuestionBridge;
 
+pub const COMMAND_SOURCE: crate::commands::Source = crate::commands::Source {
+    id: "opencode",
+    registration: 1,
+};
+
 pub fn opencode(request: AdapterRequest) -> Box<dyn CliAdapter> {
     let cwd = request.cwd.clone();
     Box::new(OpenCodeAdapter::new(
@@ -43,6 +48,20 @@ impl CliAdapter for OpenCodeAdapter {
         Ok(launch)
     }
     fn accept(&mut self, value: Value) -> Step {
+        if value["method"] == "session/update"
+            && value["params"]["update"]["sessionUpdate"] == "available_commands_update"
+        {
+            let metadata = self
+                .questions
+                .as_ref()
+                .ok_or_else(|| conduit::i18n::text("commands.no_metadata"))
+                .and_then(|bridge| {
+                    bridge
+                        .commands()
+                        .map_err(|_| conduit::i18n::text("commands.no_metadata"))
+                });
+            self.core.protocol.set_command_metadata(metadata);
+        }
         self.core.accept(value)
     }
     fn startup_pending(&self) -> bool {
@@ -52,6 +71,7 @@ impl CliAdapter for OpenCodeAdapter {
         self.core.cancel_message()
     }
     fn poll(&mut self) -> anyhow::Result<Vec<Value>> {
+        self.core.protocol.check_command_timeout()?;
         match (
             self.core.protocol.opencode_question_session(),
             self.questions.as_mut(),

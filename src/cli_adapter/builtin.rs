@@ -19,7 +19,8 @@ pub(super) fn protocol(provider: Provider, request: AdapterRequest) -> Protocol 
     )
     .with_model(request.model)
     .with_permission(request.permission)
-    .with_options(request.effort, request.route);
+    .with_options(request.effort, request.route)
+    .with_intent(request.intent);
     if request.text_only {
         protocol.text_only()
     } else {

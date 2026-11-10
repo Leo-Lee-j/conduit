@@ -383,6 +383,7 @@ mod tests {
                     models: vec![model.into()],
                     source: ProviderSource::Local,
                     model_metadata: vec![],
+                    claude_models: None,
                 };
                 let store = Store {
                     workspaces: vec![Workspace {
@@ -407,7 +408,7 @@ mod tests {
                 assert_eq!(model.as_deref(), Some("chat-model"));
                 assert_eq!(
                     route.env["ANTHROPIC_BASE_URL"],
-                    "https://chat-route.example/v1"
+                    "https://chat-route.example"
                 );
                 app.set_generation_model(GenerationKind::Naming, Some("fixed-title".into()));
                 assert_eq!(app.store.ui.naming_provider, Some(Provider::Claude));
@@ -445,7 +446,7 @@ mod tests {
                 assert_eq!(route.default_model.as_deref(), Some("title-model"));
                 assert_eq!(
                     route.env["ANTHROPIC_BASE_URL"],
-                    "https://naming-route.example/v1"
+                    "https://naming-route.example"
                 );
                 let (engine, model, route) = app
                     .generation_request(GenerationKind::Git, Some(1))

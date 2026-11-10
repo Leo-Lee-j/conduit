@@ -3,6 +3,7 @@ use super::*;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
+mod commands;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AcpSettings {
@@ -82,6 +83,10 @@ fn push_model(models: &mut Vec<crate::models::ModelOption>, option: &Value) {
 
 #[derive(Default)]
 pub(super) struct State {
+    command_metadata: Option<Result<Value, String>>,
+    commands: Option<Result<Vec<crate::commands::Descriptor>, String>>,
+    pending_commands: Option<(String, Result<Vec<crate::commands::Descriptor>, String>)>,
+    commands_wait: Option<std::time::Instant>,
     question_port: u16,
     pub session_id: Option<String>,
     agent: String,
@@ -105,7 +110,7 @@ impl State {
     pub fn startup_pending(&self) -> bool {
         matches!(
             self.stage,
-            Stage::Initialize | Stage::Session | Stage::Configure
+            Stage::Initialize | Stage::Session | Stage::Configure | Stage::Commands
         )
     }
 }
@@ -125,6 +130,7 @@ enum Stage {
     Initialize,
     Session,
     Configure,
+    Commands,
     Prompt,
     Done,
 }
@@ -364,6 +370,17 @@ impl Protocol {
                 }
             }
             Stage::Session => {
+                if let Some(actual) = result["sessionId"].as_str()
+                    && self
+                        .native_id
+                        .as_deref()
+                        .is_some_and(|expected| actual != expected)
+                {
+                    step.done = true;
+                    step.error = Some(conduit::i18n::text("commands.stale"));
+                    self.acp.stage = Stage::Done;
+                    return step;
+                }
                 if self.native_id.is_none() {
                     self.acp.session_id = result["sessionId"]
                         .as_str()
@@ -381,6 +398,18 @@ impl Protocol {
                     return step;
                 };
                 step.events.push(Event::NativeId(id.clone()));
+                if let Some((pending_id, commands)) = self.acp.pending_commands.take()
+                    && self.acp.session_id.as_ref() == Some(&pending_id)
+                {
+                    self.acp.commands = Some(commands.clone());
+                    step.events.push(Event::CommandCatalog(commands));
+                }
+                if matches!(self.intent, crate::commands::RequestIntent::Discover) {
+                    self.acp.stage = Stage::Commands;
+                    self.acp.commands_wait = Some(std::time::Instant::now());
+                    self.acp_command_ready(&mut step);
+                    return step;
+                }
                 self.acp_catalog(result, &mut step);
                 self.acp
                     .config
@@ -413,7 +442,12 @@ impl Protocol {
                 self.acp.stage = Stage::Done;
                 step.done = true;
                 match result["stopReason"].as_str() {
-                    Some("end_turn" | "cancelled") => {}
+                    Some("end_turn") => {}
+                    Some("cancelled") => {
+                        if matches!(self.intent, crate::commands::RequestIntent::Command(_)) {
+                            step.error = Some(conduit::i18n::text("commands.native_cancelled"));
+                        }
+                    }
                     Some("max_tokens") => {
                         step.error = Some(
                             conduit::i18n::text_static(
@@ -438,7 +472,7 @@ impl Protocol {
                     }
                 }
             }
-            Stage::Done => {}
+            Stage::Commands | Stage::Done => {}
         }
         step
     }
@@ -527,6 +561,16 @@ impl Protocol {
             );
             return;
         }
+        if !matches!(self.intent, crate::commands::RequestIntent::Message) {
+            self.acp.stage = Stage::Commands;
+            self.acp.commands_wait = Some(std::time::Instant::now());
+            self.acp_command_ready(step);
+            return;
+        }
+        self.acp_send_prompt(step);
+    }
+
+    fn acp_send_prompt(&mut self, step: &mut Step) {
         self.acp.stage = Stage::Prompt;
         self.acp_request(
             "session/prompt",
@@ -560,6 +604,13 @@ impl Protocol {
     }
 
     fn acp_update(&mut self, params: &Value, step: &mut Step) {
+        if self.acp.stage == Stage::Done {
+            return;
+        }
+        if params["update"]["sessionUpdate"] == "available_commands_update" {
+            self.acp_commands_update(params, step);
+            return;
+        }
         if params["sessionId"].as_str() != self.acp.session_id.as_deref() {
             return;
         }

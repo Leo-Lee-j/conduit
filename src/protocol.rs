@@ -35,6 +35,7 @@ pub struct Approval {
 }
 #[derive(Clone, Debug)]
 pub enum Event {
+    CommandCatalog(Result<Vec<crate::commands::Descriptor>, String>),
     AcpConfig(Value),
     NativeId(String),
     Usage(Usage),
@@ -147,6 +148,7 @@ impl ClaudeUsage {
 }
 
 pub struct Protocol {
+    intent: crate::commands::RequestIntent,
     provider: Provider,
     initialized: bool,
     acp: opencode::State,
@@ -228,6 +230,7 @@ fn plan_steps(input: &Value) -> Option<Vec<(String, String)>> {
 impl Protocol {
     pub fn new(provider: Provider, cwd: String, prompt: String, native_id: Option<String>) -> Self {
         Self {
+            intent: Default::default(),
             provider,
             initialized: false,
             acp: Default::default(),
@@ -258,6 +261,10 @@ impl Protocol {
     }
     pub fn with_model(mut self, model: Option<String>) -> Self {
         self.model = model;
+        self
+    }
+    pub fn with_intent(mut self, intent: crate::commands::RequestIntent) -> Self {
+        self.intent = intent;
         self
     }
     #[cfg(test)]
@@ -446,6 +453,11 @@ impl Protocol {
         }
     }
     pub fn prepare(&mut self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            matches!(self.intent, crate::commands::RequestIntent::Message)
+                || (!self.text_only && self.provider.descriptor().commands.is_some()),
+            conduit::i18n::text("commands.unsupported")
+        );
         if self.provider == Provider::OpenCode {
             self.prepare_opencode()?;
         }

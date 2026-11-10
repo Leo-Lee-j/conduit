@@ -8,8 +8,10 @@
       "colors": {
         "group_box.background": "#202024",
         "group_box.foreground": "#f3f3f4",
+        "input.border": "#383a42",
         "primary.background": "#3b82f6",
         "primary.foreground": "#ffffff",
+        "ring": "#8297b5",
         "tab.background": "#0e0e10",
         "tab.active.background": "#0e0e10",
         "tab.active.foreground": "#f3f3f4",
@@ -132,8 +134,10 @@
       "colors": {
         "group_box.background": "#e9e9ee",
         "group_box.foreground": "#1c1c20",
+        "input.border": "#d5d7dd",
         "primary.background": "#2563eb",
         "primary.foreground": "#ffffff",
+        "ring": "#5e789c",
         "tab.background": "#f7f7f8",
         "tab.active.background": "#f7f7f8",
         "tab.active.foreground": "#1c1c20",

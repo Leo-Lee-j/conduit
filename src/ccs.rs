@@ -46,6 +46,7 @@ impl CcsCatalog {
                 models: p.models.iter().map(|m| m.id.clone()).collect(),
                 source: crate::providers::ProviderSource::Ccs { id: p.id.clone() },
                 model_metadata: p.models.clone(),
+                claude_models: None,
             })
     }
     pub fn current(&self, provider: Provider) -> Option<&CcsProvider> {
