@@ -2233,16 +2233,20 @@ mod tests {
         cx.run_until_parked();
         let notices = cx.update(|_, cx| app.read(cx).notifications.center.records().len());
         let other = fixture.0.join("beta/src/main.rs");
+        // Exercise the alias explicitly even when TEMP itself uses a long path.
+        // Filesystems without 8.3 aliases return the original long path instead.
+        #[cfg(windows)]
+        let other = short_path(&other);
+        let other_path = super::display_path(&other);
         let other_url = format!(
             "file:///{}#L1",
-            super::display_path(&other)
-                .replace('\\', "/")
-                .trim_start_matches('/')
+            other_path.replace('\\', "/").trim_start_matches('/')
         );
         let outside_link = "../gamma/docs/notes%20100%25%231.md#L1";
         for (link, attachment, registered) in [
             ("../beta/src/main.rs", false, true),
             (other_url.as_str(), false, true),
+            (other_path.as_str(), true, true),
             (outside_link, false, false),
             (outside.to_str().unwrap(), true, false),
         ] {
@@ -2255,7 +2259,11 @@ mod tests {
                         app.open_chat_link(1, link, window, cx);
                     }
                     assert!(app.active_file.is_some(), "{link}");
-                    assert_eq!(app.selected_workspace, Some(usize::from(registered)));
+                    assert_eq!(
+                        app.selected_workspace,
+                        Some(usize::from(registered)),
+                        "{link}"
+                    );
                     assert_eq!(app.store.workspaces.len(), 2);
                     assert!(app.message.is_none());
                     assert_eq!(app.notifications.center.records().len(), notices);
@@ -2300,6 +2308,31 @@ mod tests {
         slot.borrow_mut().take();
         drop(app);
         cx.run_until_parked();
+    }
+
+    #[cfg(windows)]
+    fn short_path(path: &Path) -> PathBuf {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+
+        let path: Vec<u16> = path
+            .canonicalize()
+            .unwrap()
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        // Query the required capacity, including the terminating null.
+        let capacity = unsafe { GetShortPathNameW(path.as_ptr(), std::ptr::null_mut(), 0) };
+        assert_ne!(capacity, 0, "{}", std::io::Error::last_os_error());
+        let mut result = vec![0; capacity as usize];
+        let length = unsafe { GetShortPathNameW(path.as_ptr(), result.as_mut_ptr(), capacity) };
+        assert!(
+            length > 0 && length < capacity,
+            "{}",
+            std::io::Error::last_os_error()
+        );
+        PathBuf::from(std::ffi::OsString::from_wide(&result[..length as usize]))
     }
 
     #[gpui_kit::test]

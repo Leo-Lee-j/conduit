@@ -185,19 +185,31 @@ impl ConduitApp {
         let path = PathBuf::from(display_path(&key.workspace.join(&key.relative)));
         // Reuse the registered workspace identity for tab deduplication and
         // navigation. Unregistered paths stay standalone, read-only previews.
-        let key = self
-            .store
-            .workspaces
-            .iter()
-            .filter_map(|workspace| {
-                let root = normalize(Path::new(&display_path(&workspace.path))).ok()?;
-                let relative = workspace_relative(&root, &path)?;
-                Some(FileKey {
-                    workspace: workspace.path.clone(),
-                    relative,
+        let find_workspace = |path: &Path, canonical: bool| {
+            self.store
+                .workspaces
+                .iter()
+                .filter_map(|workspace| {
+                    let root = if canonical {
+                        workspace.path.canonicalize().ok()?
+                    } else {
+                        normalize(Path::new(&display_path(&workspace.path))).ok()?
+                    };
+                    let relative = workspace_relative(&root, path)?;
+                    Some(FileKey {
+                        workspace: workspace.path.clone(),
+                        relative,
+                    })
                 })
+                .max_by_key(|key| key.workspace.components().count())
+        };
+        let key = find_workspace(&path, false)
+            .or_else(|| {
+                // Windows short names can refer to a registered workspace even
+                // when no path prefix matches. Only resolve filesystem aliases
+                // on a miss so ordinary links need no synchronous filesystem IO.
+                find_workspace(&path.canonicalize().ok()?, true)
             })
-            .max_by_key(|key| key.workspace.components().count())
             .unwrap_or(key);
         self.open_file_preview(key, false, window, cx);
     }
