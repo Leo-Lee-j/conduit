@@ -59,6 +59,8 @@ try {
         "/DAPP_EXE=$taskExe",
         "/DUPDATER_EXE=$taskUpdater",
         "/DAPP_ICON=$(Join-Path $taskRoot 'assets\app-icons\icon.ico')",
+        "/DAPP_LICENSE=$(Join-Path $taskRoot 'LICENSE')",
+        "/DAPP_NOTICE=$(Join-Path $taskRoot 'NOTICE')",
         "/DOUTPUT_FILE=$taskOutput"
     )
     if ($RuntimeDir) {

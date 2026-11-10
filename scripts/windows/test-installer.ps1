@@ -39,6 +39,11 @@ function Invoke-TestInstaller([string]$Path) {
         throw 'Test installer timed out.'
     }
     Assert-Installer ($taskProcess.ExitCode -eq 0) "Installer failed: $($taskProcess.ExitCode)"
+    foreach ($taskLegalFile in @('LICENSE', 'NOTICE')) {
+        $taskInstalledLegalFile = Join-Path $taskInstall $taskLegalFile
+        Assert-Installer (Test-Path -LiteralPath $taskInstalledLegalFile) "Missing installed notice: $taskLegalFile"
+        Assert-Installer ((Get-FileHash -LiteralPath $taskInstalledLegalFile).Hash -eq (Get-FileHash -LiteralPath (Join-Path $taskRoot $taskLegalFile)).Hash) "Installed notice differs from source: $taskLegalFile"
+    }
 }
 
 try {
@@ -60,7 +65,7 @@ SectionEnd
         & $MakeNsis /V2 /INPUTCHARSET UTF8 $taskPayloadScript
         if ($LASTEXITCODE -ne 0) { throw 'Cannot compile test payload.' }
         $taskPackage = Join-Path $taskTestRoot "setup-$taskVersion.exe"
-        & $MakeNsis /V2 /INPUTCHARSET UTF8 "/DAPP_VERSION=$taskVersion" "/DAPP_EXE=$taskPayload" "/DUPDATER_EXE=$taskPayload" "/DAPP_ICON=$taskIcon" "/DOUTPUT_FILE=$taskPackage" $taskScript
+        & $MakeNsis /V2 /INPUTCHARSET UTF8 "/DAPP_VERSION=$taskVersion" "/DAPP_EXE=$taskPayload" "/DUPDATER_EXE=$taskPayload" "/DAPP_ICON=$taskIcon" "/DAPP_LICENSE=$(Join-Path $taskRoot 'LICENSE')" "/DAPP_NOTICE=$(Join-Path $taskRoot 'NOTICE')" "/DOUTPUT_FILE=$taskPackage" $taskScript
         if ($LASTEXITCODE -ne 0) { throw 'Cannot compile test installer.' }
         $taskPackages[$taskVersion] = $taskPackage
     }
@@ -88,7 +93,7 @@ SectionEnd
     Remove-Item -LiteralPath $taskLinkPath
     Invoke-TestInstaller $taskPackages['0.2.0']
     Assert-Installer (-not (Test-Path -LiteralPath $taskLinkPath)) 'Upgrade recreated a deleted desktop shortcut.'
-    Write-Output 'PASS: silent install/upgrade, desktop and Start menu icons, deleted shortcut, Unicode/spaced path.'
+    Write-Output 'PASS: silent install/upgrade, license and source notices, desktop and Start menu icons, deleted shortcut, Unicode/spaced path.'
 } finally {
     # Test artifacts remain under target for inspection; only test keys are removed.
     foreach ($taskKey in @($taskRegistry, $taskUninstallRegistry)) {

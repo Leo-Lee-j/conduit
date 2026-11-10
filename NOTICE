@@ -1,0 +1,39 @@
+Conduit
+Copyright (C) 2026 Leo-Lee-j and Conduit contributors
+Original project: https://github.com/Leo-Lee-j/conduit
+
+Unless a file explicitly states otherwise, Conduit's original code and
+documentation are licensed under the GNU General Public License, version 3
+only (GPL-3.0-only). A verbatim copy of that license is provided in LICENSE.
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the Free
+Software Foundation, version 3 of the License.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE. See LICENSE for details.
+
+Source attribution -- additional term under GPLv3 section 7(b)
+
+For Conduit material to which its copyright holders apply this notice,
+redistributed copies must preserve these reasonable legal notices and
+author attributions:
+
+    Conduit
+    Copyright (C) 2026 Leo-Lee-j and Conduit contributors
+    Original project: https://github.com/Leo-Lee-j/conduit
+
+These notices may be retained in an accompanying NOTICE file or another
+clearly identified legal-notices document supplied with the distribution.
+This term does not require advertising, endorsement, or a notice on every
+application screen. Modified versions must carry the modification notices
+required by GPLv3 section 5(a).
+
+This attribution requirement does not replace the GPL's obligations to
+provide the Corresponding Source for the version you distribute.
+
+Third-party components retain their respective copyrights, licenses, and
+notices. This additional term does not change their licensing terms.
+For the bundled LobeHub icons, see assets/icons/LICENSE.lobe-icons and
+assets/icons/README.md in the source distribution.

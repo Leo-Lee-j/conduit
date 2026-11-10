@@ -12,6 +12,12 @@ Unicode true
 !ifndef APP_ICON
   !error "Pass /DAPP_ICON=<absolute icon path>"
 !endif
+!ifndef APP_LICENSE
+  !error "Pass /DAPP_LICENSE=<absolute license path>"
+!endif
+!ifndef APP_NOTICE
+  !error "Pass /DAPP_NOTICE=<absolute notice path>"
+!endif
 !ifndef UPDATER_EXE
   !error "Pass /DUPDATER_EXE=<absolute update helper path>"
 !endif
@@ -34,7 +40,7 @@ VIAddVersionKey /LANG=1033 "ProductName" "Conduit"
 VIAddVersionKey /LANG=1033 "FileDescription" "Conduit Setup"
 VIAddVersionKey /LANG=1033 "FileVersion" "${APP_VERSION}"
 VIAddVersionKey /LANG=1033 "ProductVersion" "${APP_VERSION}"
-VIAddVersionKey /LANG=1033 "LegalCopyright" ""
+VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright (C) 2026 Leo-Lee-j and Conduit contributors"
 
 !define MUI_ICON "${APP_ICON}"
 !define MUI_UNICON "${APP_ICON}"
@@ -65,6 +71,8 @@ Section "Conduit" SEC_APP
   ClearErrors
   File /oname=conduit.exe "${APP_EXE}"
   File /oname=conduit-updater.exe "${UPDATER_EXE}"
+  File /oname=LICENSE "${APP_LICENSE}"
+  File /oname=NOTICE "${APP_NOTICE}"
   !ifdef RUNTIME_DIR
     File "${RUNTIME_DIR}\*.dll"
   !endif
@@ -111,6 +119,8 @@ FunctionEnd
 Section "Uninstall"
   Delete "$INSTDIR\conduit.exe"
   Delete "$INSTDIR\conduit-updater.exe"
+  Delete "$INSTDIR\LICENSE"
+  Delete "$INSTDIR\NOTICE"
   Delete "$INSTDIR\conduit.install"
   Delete "$INSTDIR\.conduit-running.lock"
   Delete "$INSTDIR\.conduit-update.lock"

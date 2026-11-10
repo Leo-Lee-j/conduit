@@ -90,6 +90,19 @@ Built with **Rust**, **GPUI**, and [GPUI Kit](https://github.com/longbridge/gpui
 
 See [application icon generation](assets/app-icons/README.md) and [third-party icon attribution](assets/icons/README.md) for asset details.
 
+## Friends
+
+- [Linux DO](https://linux.do/)
+
 ## License
 
-This repository does not currently include a project-level `LICENSE` file. Third-party icon license notices are included with the [icon assets](assets/icons/README.md).
+Conduit is licensed under the **GNU General Public License v3.0 only (GPL-3.0-only)**. See [LICENSE](LICENSE) for the full license and [NOTICE](NOTICE) for copyright and source attribution, including the attribution-preservation term permitted by GPLv3 section 7(b).
+
+- **Commercial use is allowed.** You may use, modify, and sell copies of Conduit under these terms.
+- **Distributed modifications remain open source.** If you distribute a modified version, you must license the covered work under GPLv3 and provide recipients with its complete Corresponding Source, including your changes, as required by the GPL.
+- **Preserve copyright and licensing notices.** Retain the original copyright, license, and warranty notices, include the license, and prominently mark modified versions with the relevant modification dates.
+- **Credit the original project.** Preserve the Conduit name, original author attribution, and original repository address from [NOTICE](NOTICE): [Leo-Lee-j/conduit](https://github.com/Leo-Lee-j/conduit).
+
+Private modifications that you do not distribute do not have to be published. A link to the original repository does not replace the obligation to provide the Corresponding Source for your distributed version. This is a summary; [LICENSE](LICENSE) and [NOTICE](NOTICE) govern.
+
+Third-party dependencies and assets retain their own licenses and notices. See the [icon assets](assets/icons/README.md) for third-party icon attribution.

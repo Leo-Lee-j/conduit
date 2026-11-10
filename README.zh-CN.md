@@ -90,6 +90,19 @@ Conduit 使用 **Rust**、**GPUI** 和 [GPUI Kit](https://github.com/longbridge/
 
 资源说明见[应用图标生成](assets/app-icons/README.md)与[第三方图标来源](assets/icons/README.md)。
 
+## 友情链接
+
+- [Linux DO](https://linux.do/)
+
 ## 许可证
 
-仓库目前尚未包含项目级 `LICENSE` 文件。第三方图标的许可声明随[图标资源](assets/icons/README.md)保留。
+Conduit 采用 **GNU 通用公共许可证第 3 版（仅此版本，GPL-3.0-only）**。完整许可证见 [LICENSE](LICENSE)；版权与项目来源声明见 [NOTICE](NOTICE)，其中包含 GPLv3 第 7(b) 条允许的署名保留要求。
+
+- **允许商业使用。** 你可以在遵守许可条款的前提下使用、修改和销售 Conduit 的副本。
+- **分发修改版时保持开源。** 如果分发修改后的版本，必须继续按 GPLv3 授权受该许可证覆盖的作品，并按 GPL 要求向接收者提供包含修改的完整对应源代码。
+- **保留版权和许可声明。** 必须保留原有版权、许可证及免责声明，附带许可证，并显著注明版本已修改及相关修改日期。
+- **注明项目来源。** 必须保留 [NOTICE](NOTICE) 中的 Conduit 项目名称、原作者署名和原始仓库地址：[Leo-Lee-j/conduit](https://github.com/Leo-Lee-j/conduit)。
+
+仅供自己使用、未对外分发的修改无需公开。原始仓库链接不能替代你所分发版本的完整对应源代码。以上为摘要，具体以 [LICENSE](LICENSE) 和 [NOTICE](NOTICE) 为准。
+
+第三方依赖和资源保留各自的许可证与声明。第三方图标的来源与许可说明见[图标资源](assets/icons/README.md)。
