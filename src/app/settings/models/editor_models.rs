@@ -424,14 +424,21 @@ impl ProviderModels {
                     .child(
                         Combobox::new(&row.picker)
                             .w(px(32.))
-                            .px_1()
+                            // Balance Combobox's reserved trailing gap for an icon-only trigger.
+                            .pl_1()
+                            .pr_0()
                             .disabled(self.disabled)
                             .menu_width(px(300.))
                             .menu_max_h(px(260.))
                             .search_placeholder(conduit::i18n::text_static(
                                 "settings.models.search_models",
                             ))
-                            .render_trigger(|_, _, _| Icon::new(IconName::ChevronDown).small())
+                            .render_trigger(|_, _, _| {
+                                h_flex()
+                                    .w_full()
+                                    .justify_center()
+                                    .child(Icon::new(IconName::ChevronDown).small())
+                            })
                             .empty(|_, _| {
                                 div()
                                     .p_3()
