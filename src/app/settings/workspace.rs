@@ -33,7 +33,7 @@ impl ConduitApp {
             .flex_1()
             .min_h_0()
             .w_full()
-            .bg(rgb(palette().canvas))
+            .bg(chrome_background(palette().canvas))
             .text_color(rgb(palette().text))
             .child(
                 h_flex()
@@ -254,7 +254,7 @@ impl ConduitApp {
             .flex_wrap()
             .border_t_1()
             .border_color(rgb(palette().border))
-            .bg(rgb(palette().canvas))
+            .bg(chrome_background(palette().canvas))
             .text_size(ui_text_size(12.))
             .child(Icon::new(icon).small().text_color(rgb(color)))
             .child(div().text_color(rgb(color)).child(message))

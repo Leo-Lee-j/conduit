@@ -212,6 +212,30 @@ impl ConduitApp {
                 engine: None,
             })
             .collect();
+        let background_title = conduit::i18n::text_static("wallpaper.title");
+        let background_description = conduit::i18n::text_static("wallpaper.description");
+        let mut background_search = String::from("Wallhaven wallpaper background");
+        for language in conduit::i18n::languages() {
+            let locale = language.id.clone().into();
+            for key in [
+                "wallpaper.title",
+                "wallpaper.description",
+                "wallpaper.color",
+                "wallpaper.solid_only",
+            ] {
+                background_search.push(' ');
+                background_search.push_str(&conduit::i18n::text_for(&locale, key));
+            }
+        }
+        if matches_search(&background_search, query) {
+            results.push(SettingsResult {
+                page: 1,
+                group: Some(5),
+                title: background_title.into(),
+                description: background_description.into(),
+                engine: None,
+            });
+        }
         for (page, (section, title, keywords)) in PAGES.iter().enumerate() {
             if !results.iter().any(|result| result.page == page)
                 && matches_search(&search_text(&[section, title, keywords]), query)

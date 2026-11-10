@@ -15,7 +15,10 @@ const ROW_HEIGHT: f32 = 36.;
 /// Scrolling and bottom borders remain page-specific rather than being nested
 /// inside a padded frame, so they can extend to the pane edges.
 pub(super) fn navigation_pane() -> Div {
-    v_flex().size_full().min_w_0().bg(rgb(palette().sidebar_bg))
+    v_flex()
+        .size_full()
+        .min_w_0()
+        .bg(chrome_background(palette().sidebar_bg))
 }
 
 pub(super) fn navigation_header() -> Div {
@@ -331,7 +334,7 @@ impl ConduitApp {
                 .min_w_0()
                 .flex_shrink_0()
                 .py_0()
-                .bg(rgb(palette().sidebar_bg))
+                .bg(chrome_background(palette().sidebar_bg))
                 .px_2()
                 .gap_1()
                 .items_center()

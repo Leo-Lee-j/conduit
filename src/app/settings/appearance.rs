@@ -488,7 +488,7 @@ impl ConduitApp {
             |app, value| app.store.ui.code_syntax_highlight = value,
         );
         let auto_collapse = switch_field(
-            view,
+            view.clone(),
             |app| app.store.ui.auto_collapse_inactive_workspaces,
             |app, value| app.store.ui.auto_collapse_inactive_workspaces = value,
         );
@@ -569,6 +569,10 @@ impl ConduitApp {
                     .description(settings_description(conduit::i18n::text_static("settings.appearance.reset_chat_font_size_line_height_and")))
                     .disabled(disabled),
             ]),
+            settings_section(conduit::i18n::text_static("wallpaper.title")).item(
+                SettingItem::render(move |_, _, cx| view.read(cx).background_controls(view.clone()))
+                    .keywords([conduit::i18n::text_static("wallpaper.title"), "Wallhaven", "wallpaper", "background"]),
+            ),
         ])
     }
 }

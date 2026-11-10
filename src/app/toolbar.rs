@@ -166,7 +166,7 @@ impl ConduitApp {
             .px_2()
             .gap_2()
             .items_center()
-            .bg(rgb(palette().canvas))
+            .bg(chrome_background(palette().canvas))
             .border_t_1()
             .border_color(rgb(palette().border))
             .child(statuses)

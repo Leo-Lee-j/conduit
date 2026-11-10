@@ -140,7 +140,7 @@ impl ConduitApp {
     /// moved, and closed while loading.
     fn startup_page(&self) -> AnyElement {
         let title_bar = TitleBar::new()
-            .bg(rgb(palette().canvas))
+            .bg(chrome_background(palette().canvas))
             .border_color(rgb(palette().border))
             .child(
                 h_flex().items_center().gap_2().child(app_icon(20.)).child(
@@ -195,6 +195,7 @@ impl ConduitApp {
 
 impl Render for ConduitApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.release_hidden_background_browser(cx);
         // The startup page owns the window until the initial history scan
         // merges, so the workspace sidebar never renders a half-imported
         // list.
@@ -813,7 +814,7 @@ impl Render for ConduitApp {
             ["toolbar_layout", "toolbar_prepaint", "toolbar_paint"],
         );
         let title_bar = TitleBar::new()
-            .bg(rgb(palette().canvas))
+            .bg(chrome_background(palette().canvas))
             .border_color(rgb(palette().border))
             .child(
                 h_flex().items_center().gap_2().child(app_icon(20.)).child(
@@ -991,6 +992,16 @@ impl Render for ConduitApp {
             .size_full()
             .bg(rgb(palette().canvas))
             .text_color(rgb(palette().text))
+            .when(theme::background_visible(), |view| {
+                view.child(
+                    div().absolute().inset_0().child(
+                        self.background
+                            .layer
+                            .clone()
+                            .cached(StyleRefinement::default().size_full()),
+                    ),
+                )
+            })
             .child(title_bar)
             .child(main_area);
         if self.store.ui.performance_monitor {

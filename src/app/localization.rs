@@ -15,6 +15,7 @@ impl ConduitApp {
         self.store.ui.language = language.clone();
         i18n::set_locale(&language);
         self.refresh_localized_inputs(window, cx);
+        self.refresh_background_language(window, cx);
         self.tool_analysis = Default::default();
         self.files.refresh_language(window, cx);
         if let Some(view) = &self.branch_manager {

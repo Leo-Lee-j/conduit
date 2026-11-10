@@ -213,7 +213,7 @@ impl ConduitApp {
                     .w(px(navigation_width))
                     .h_full()
                     .flex_shrink_0()
-                    .bg(rgb(palette().canvas))
+                    .bg(chrome_background(palette().canvas))
                     .border_r_1()
                     .border_color(rgb(palette().border))
                     .child(

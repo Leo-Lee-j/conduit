@@ -60,6 +60,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+mod background;
 mod chat;
 mod code_highlight;
 mod commands;
@@ -170,6 +171,7 @@ actions!(
 
 pub struct ConduitApp {
     store: Store,
+    background: background::BackgroundState,
     git: git_ui::GitUi,
     branch_manager: Option<Entity<git_log::GitLogView>>,
     persistence: crate::persistence::Persistence,
@@ -345,6 +347,8 @@ impl ConduitApp {
             Err(error) => (Store::default(), Some(error), false),
         };
         shortcuts::sanitize(&mut store.ui.shortcuts);
+        store.ui.background.sanitize();
+        theme::set_background_visible(false);
         shortcuts::install(&store.ui.shortcuts, cx);
         install_theme_packs(cx);
         let initial_mode = match store.ui.appearance {
@@ -648,6 +652,7 @@ impl ConduitApp {
         let sidebar_view = cx.new(|cx| sidebar::SidebarView::new(app.clone(), window, cx));
         let file_view = cx.new(|cx| files::FileDocumentView::new(app, cx));
         let mut app = Self {
+            background: background::BackgroundState::new(cx),
             persistence: crate::persistence::Persistence::new(Store::path()),
             attachments_cleanup_pending: false,
             session_control: session_controller::SessionController::default(),
@@ -798,6 +803,7 @@ impl ConduitApp {
         }
         app.cleanup_attachments();
         app.ensure_selected_transcript(cx);
+        app.restore_background(window, cx);
         app
     }
 

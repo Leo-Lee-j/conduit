@@ -28,6 +28,7 @@ mod providers;
 mod store;
 mod terminal;
 mod transcript;
+mod wallpaper;
 mod workspace_files;
 
 #[cfg(conduit_shell_desktop)]

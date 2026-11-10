@@ -9,7 +9,7 @@ use super::*;
 struct HeaderState {
     branches: bool,
     close_id: &'static str,
-    appearance: (u32, u32, u32),
+    appearance: (u32, u32, u32, bool),
 }
 
 struct DockHeader {
@@ -63,7 +63,12 @@ impl ConduitApp {
             let state = HeaderState {
                 branches: self.branch_navigation_open(),
                 close_id,
-                appearance: (palette().canvas, palette().border, palette().text),
+                appearance: (
+                    palette().canvas,
+                    palette().border,
+                    palette().text,
+                    theme::background_visible(),
+                ),
             };
             header.update(cx, |header, cx| {
                 if header.state.as_ref() != Some(&state)
@@ -243,6 +248,9 @@ impl ConduitApp {
             .flex_shrink_0()
             // Folder tabs use this same token for their selected shape.
             .bg(cx.theme().tokens.tab_active)
+            .when(!narrow && theme::background_visible(), |panel| {
+                panel.bg(chrome_background(palette().canvas))
+            })
             .text_color(rgb(palette().text))
             .border_l_1()
             .border_color(rgb(palette().border))

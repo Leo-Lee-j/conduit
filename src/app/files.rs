@@ -147,7 +147,7 @@ struct FileViewSnapshot {
     session: Option<u64>,
     approvals: Vec<(u64, usize)>,
     errors: Vec<u64>,
-    appearance: (u32, u32, u32, Option<String>, u32),
+    appearance: (u32, u32, u32, Option<String>, u32, bool),
 }
 impl FileViewSnapshot {
     fn new(app: &ConduitApp) -> Self {
@@ -192,6 +192,7 @@ impl FileViewSnapshot {
                 palette().muted,
                 app.store.ui.code_font_family.clone(),
                 app.store.ui.code_font_size.to_bits(),
+                theme::background_visible(),
             ),
         }
     }

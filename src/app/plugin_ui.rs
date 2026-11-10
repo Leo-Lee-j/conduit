@@ -58,7 +58,7 @@ pub(super) struct NavigationRevision {
     selected: ViewId,
     collapsed: bool,
     running: bool,
-    appearance: (u32, u32, u32),
+    appearance: (u32, u32, u32, bool),
 }
 impl PluginUi {
     fn from_registry(registry: Registry) -> Self {
@@ -215,7 +215,12 @@ impl PluginUi {
             selected: self.selected().clone(),
             collapsed: self.collapsed(),
             running: self.snapshot.input().session_running,
-            appearance: (palette().canvas, palette().sidebar_bg, palette().text),
+            appearance: (
+                palette().canvas,
+                palette().sidebar_bg,
+                palette().text,
+                theme::background_visible(),
+            ),
         }
     }
     fn adapter(&self, view: &ViewId) -> Option<NavigationAdapter> {
@@ -556,7 +561,7 @@ impl ConduitApp {
             .flex_shrink_0()
             .pt_1()
             .gap_1()
-            .bg(rgb(palette().sidebar_bg))
+            .bg(chrome_background(palette().sidebar_bg))
             .border_r_1()
             .border_color(rgb(palette().border))
             .children(

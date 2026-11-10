@@ -128,6 +128,25 @@ const LIGHT_PALETTE: Palette = Palette {
 };
 
 static DARK_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+static BACKGROUND_VISIBLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub(super) fn background_visible() -> bool {
+    BACKGROUND_VISIBLE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub(super) fn set_background_visible(visible: bool) -> bool {
+    BACKGROUND_VISIBLE.swap(visible, std::sync::atomic::Ordering::Relaxed) != visible
+}
+
+/// Only large chrome surfaces opt in. Text, menus, code and terminal keep their colors.
+pub(super) fn chrome_background(color: u32) -> gpui_kit::Rgba {
+    let mut color = gpui_kit::rgb(color);
+    if background_visible() {
+        color.a = 0.35;
+    }
+    color
+}
 
 /// The palette every render path reads. Kept as runtime state so a theme pack
 /// can later replace it without touching the call sites.

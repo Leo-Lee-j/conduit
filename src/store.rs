@@ -56,6 +56,8 @@ pub struct UiSettings {
     /// Follow the system appearance or force one of the bundled palettes.
     #[serde(default)]
     pub appearance: AppearanceMode,
+    #[serde(default)]
+    pub background: crate::wallpaper::Settings,
     /// Collapse workspaces with no session activity during the last three days.
     #[serde(default)]
     pub auto_collapse_inactive_workspaces: bool,
@@ -205,6 +207,7 @@ impl Default for UiSettings {
             last_provider: None,
             performance_monitor: default_performance_monitor(),
             appearance: AppearanceMode::default(),
+            background: Default::default(),
             auto_collapse_inactive_workspaces: false,
             full_width_content: default_full_width_content(),
             collapse_reasoning: default_collapse_reasoning(),

@@ -71,7 +71,7 @@ fn settings_actions_style() -> StyleRefinement {
         .py(px(8.))
         .border_0()
         .flex_shrink_0()
-        .bg(rgb(palette().canvas))
+        .bg(chrome_background(palette().canvas))
 }
 
 /// Section headings live in the card. Leaving the library's group title unset
