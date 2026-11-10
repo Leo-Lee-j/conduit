@@ -181,7 +181,7 @@ fn measure(
                 .selected_session
                 .and_then(|id| app.session(id))
                 .and_then(|session| session.messages.get(app.chat_rows.message(index)))
-                .filter(|item| item.kind == ItemKind::Assistant)
+                .filter(|item| matches!(item.kind, ItemKind::Assistant | ItemKind::Reasoning))
                 .map(|item| item.text.clone());
             let (element, markdown) = app.render_message(index, window, cx);
             (element, markdown, text)

@@ -37,7 +37,7 @@ pub(in crate::app) struct Row {
 pub(in crate::app) struct Rows {
     session: Option<u64>,
     entries: Vec<Entry>,
-    expanded: HashSet<String>,
+    expansion: HashMap<String, bool>,
     pub rows: Vec<Row>,
     pub revision: std::cell::Cell<u64>,
     #[cfg(test)]
@@ -65,7 +65,7 @@ impl Rows {
     pub fn refresh(
         &mut self,
         session: Option<&SessionRecord>,
-        expanded: &HashSet<(u64, String)>,
+        expansion: &HashMap<(u64, String), bool>,
     ) -> Option<Vec<Row>> {
         let id = session.map(|session| session.id);
         let mut previous = None;
@@ -80,12 +80,13 @@ impl Rows {
         let Some(session) = session else {
             return previous;
         };
-        let expanded: HashSet<_> = expanded
+        let expansion: HashMap<_, _> = expansion
             .iter()
-            .filter(|(owner, _)| *owner == session.id)
-            .map(|(_, key)| key.clone())
+            .filter(|((owner, _), _)| *owner == session.id)
+            .map(|((_, key), expanded)| (key.clone(), *expanded))
             .collect();
-        let mut rebuild = self.entries.len() != session.messages.len() || self.expanded != expanded;
+        let mut rebuild =
+            self.entries.len() != session.messages.len() || self.expansion != expansion;
         if rebuild {
             self.invalidate();
         }
@@ -136,7 +137,7 @@ impl Rows {
         if !rebuild {
             return previous;
         }
-        self.expanded = expanded;
+        self.expansion = expansion;
         let old = std::mem::take(&mut self.rows);
         if previous.is_none() {
             previous = Some(old);
@@ -187,9 +188,12 @@ impl Rows {
             }
             // replies[end - 1] includes a following assistant but never a later user turn.
             group.replied = replies[group.end - 1];
-            group.expanded = group.running
-                || !group.replied
-                || self.expanded.contains(&session.messages[start].key);
+            // Automatic defaults never override a user's explicit disclosure choice.
+            group.expanded = self
+                .expansion
+                .get(&session.messages[start].key)
+                .copied()
+                .unwrap_or(group.running || !group.replied);
             if group.expanded {
                 for message in start..group.end {
                     if self.entries[message].shape.empty {
@@ -226,7 +230,7 @@ impl ConduitApp {
             .selected_session
             .and_then(|id| self.session_control.locate(&self.store.workspaces, id))
             .map(|(w, s)| &self.store.workspaces[w].sessions[s]);
-        let old = self.chat_rows.refresh(session, &self.expanded_tool_groups);
+        let old = self.chat_rows.refresh(session, &self.tool_group_expansion);
         let rows = &self.chat_rows.rows;
         if self.timeline_session != self.selected_session {
             self.scroll.reset(rows.len());

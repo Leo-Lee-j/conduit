@@ -275,7 +275,7 @@ pub struct ConduitApp {
     /// Scoped by session and tool key, independent of the right detail dock.
     expanded_tools: HashSet<(u64, String)>,
     /// Groups manually pinned open after the assistant starts replying.
-    expanded_tool_groups: HashSet<(u64, String)>,
+    tool_group_expansion: HashMap<(u64, String), bool>,
     /// Explicit choices survive streaming and changes to the default visibility.
     reasoning_expansion: HashMap<(u64, String), bool>,
     expanded_errors: HashSet<(u64, String)>,
@@ -766,7 +766,7 @@ impl ConduitApp {
             reading_positions: HashMap::new(),
             restore_reading_position: false,
             expanded_tools: HashSet::new(),
-            expanded_tool_groups: HashSet::new(),
+            tool_group_expansion: HashMap::new(),
             reasoning_expansion: HashMap::new(),
             expanded_errors: HashSet::new(),
             last_live_tick: Instant::now(),

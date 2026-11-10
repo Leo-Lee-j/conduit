@@ -322,6 +322,11 @@ fn chat_wheel_crosses_async_markdown_without_skipping_it(cx: &mut TestAppContext
             app.store.ui.code_line_numbers = true;
             for index in [1, 39, 59] {
                 let item = &mut app.session_mut(1).unwrap().messages[index];
+                // Reasoning must wait for its full body just like assistant prose;
+                // measuring only the heading skips the thought during scrolling.
+                if index != 1 {
+                    item.kind = crate::domain::ItemKind::Reasoning;
+                }
                 item.text = format!(
                     "## Long reply\n\n{}\n```rust\nfn main() {{}}\n```",
                     "A paragraph that must remain readable in both scroll directions.\n\n"

@@ -590,7 +590,6 @@ impl ConduitApp {
             conduit::i18n::format("chat.tool_calls", &[("count", format!("{}", count))])
         };
         let toggle_key = group_key.clone();
-        let can_collapse = !running && group.replied;
         Button::new(SharedString::from(format!(
             "tool-group-{session_id}-{start}"
         )))
@@ -600,7 +599,8 @@ impl ConduitApp {
         .h(px(28.))
         .px(px(0.))
         .rounded(px(6.))
-        .when(can_collapse, |button| button.cursor_pointer())
+        .cursor_pointer()
+        .focus_ring(true)
         .accessibility_label(format!(
             "{}：{label}",
             if expanded {
@@ -609,17 +609,13 @@ impl ConduitApp {
                 conduit::i18n::text_static("chat.expand")
             }
         ))
-        .when(can_collapse, |button| {
-            button.on_click(cx.listener(move |this, _, _, cx| {
-                let key = (session_id, toggle_key.clone());
-                if !this.expanded_tool_groups.remove(&key) {
-                    this.expanded_tool_groups.insert(key);
-                }
-                this.sync_chat_rows();
-                this.remeasure_message(start);
-                cx.notify();
-            }))
-        })
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.tool_group_expansion
+                .insert((session_id, toggle_key.clone()), !expanded);
+            this.sync_chat_rows();
+            this.remeasure_message(start);
+            cx.notify();
+        }))
         .child(
             h_flex()
                 .w_full()
@@ -636,7 +632,7 @@ impl ConduitApp {
                         .border_1()
                         .border_color(rgb(palette().border))
                         .child(
-                            Icon::new(if expanded || running {
+                            Icon::new(if expanded {
                                 IconName::ChevronDown
                             } else {
                                 IconName::ChevronRight
@@ -686,8 +682,118 @@ impl ConduitApp {
             .into_any_element()
     }
 
-    /// One-line activity row used for tool calls and reasoning, matching the
-    /// compact rows inside "执行工具" groups.
+    fn reasoning_header(
+        &self,
+        session_id: u64,
+        index: usize,
+        item: &ChatItem,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let key = (session_id, item.key.clone());
+        let expanded = self.reasoning_expanded(&key);
+        let run = self.session_control.runs.get(&session_id);
+        let live_elapsed = run.and_then(|run| {
+            run.message_index
+                .reasoning_elapsed(&item.key, Instant::now())
+        });
+        let running = tool_running(item)
+            && live_elapsed.is_some()
+            && run.is_some_and(|run| !run.runtime.is_cancelled());
+        let elapsed = live_elapsed.or_else(|| item.elapsed_ms.map(Duration::from_millis));
+        let label = conduit::i18n::text_static(if running {
+            "chat.thinking"
+        } else {
+            "chat.reasoning"
+        });
+        Button::new(SharedString::from(format!(
+            "reasoning-toggle-{session_id}-{}",
+            item.key
+        )))
+        .ghost()
+        .debug_selector(move || format!("activity-{session_id}-{index}"))
+        .w_full()
+        .h(px(32.))
+        .px_3()
+        .focus_ring(true)
+        .cursor_pointer()
+        .accessibility_label(format!(
+            "{}{}",
+            conduit::i18n::text_static(if expanded {
+                "chat.collapse"
+            } else {
+                "chat.expand"
+            }),
+            label,
+        ))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            let expanded = this.reasoning_expanded(&key);
+            this.reasoning_expansion.insert(key.clone(), !expanded);
+            this.remeasure_message(index);
+            cx.notify();
+        }))
+        .child(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .gap_2()
+                .child(
+                    Icon::new(FullIconName::Lightbulb)
+                        .size(px(15.))
+                        .text_color(rgb(palette().highlight_text)),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_size(px(12.))
+                        .text_color(rgb(palette().muted))
+                        .child(label),
+                )
+                .when_some(elapsed, |row, elapsed| {
+                    row.child(
+                        div()
+                            .debug_selector(move || {
+                                format!("reasoning-elapsed-{session_id}-{index}")
+                            })
+                            .flex_shrink_0()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette().muted))
+                            .child(format_elapsed(elapsed, !running)),
+                    )
+                })
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_left()
+                        .text_size(px(12.))
+                        .text_color(rgb(palette().muted))
+                        .when(!expanded, |preview| {
+                            preview.child(
+                                first_line(&item.text)
+                                    .trim_matches(['*', '#', '`', ' '])
+                                    .to_string(),
+                            )
+                        }),
+                )
+                .when(running, |row| {
+                    row.child(Spinner::new().small().color(rgb(palette().muted).into()))
+                })
+                .child(
+                    Icon::new(if expanded {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })
+                    .small()
+                    .text_color(rgb(palette().muted)),
+                ),
+        )
+        .into_any_element()
+    }
+
+    /// One-line tool activity inside "执行工具" groups.
     pub(super) fn activity_row(
         &self,
         session_id: u64,
@@ -695,30 +801,13 @@ impl ConduitApp {
         item: &ChatItem,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let reasoning = item.kind == ItemKind::Reasoning;
         let detail_key = (session_id, item.key.clone());
-        let expanded = if reasoning {
-            self.reasoning_expanded(&detail_key)
-        } else {
-            self.expanded_tools.contains(&detail_key)
-        };
-        let running = tool_running(item)
-            && (!reasoning
-                || self
-                    .session_control
-                    .runs
-                    .get(&session_id)
-                    .is_some_and(|run| item.key.starts_with(&format!("{}-", run.prefix))));
+        let expanded = self.expanded_tools.contains(&detail_key);
+        let running = tool_running(item);
         let failed = !running && tool_failed(item);
-        let category = if running && reasoning {
-            conduit::i18n::text_static("chat.thinking").to_string()
-        } else if reasoning {
-            conduit::i18n::text_static("chat.reasoning").to_string()
-        } else {
-            tool_category(item)
-        };
+        let category = tool_category(item);
         let summary = tool_summary(item);
-        let show_summary = !summary.is_empty() && !(reasoning && expanded);
+        let show_summary = !summary.is_empty();
         let toggle_key = detail_key.clone();
         Button::new(SharedString::from(format!(
             "activity-{session_id}-{}",
@@ -742,11 +831,7 @@ impl ConduitApp {
         ))
         .on_click(cx.listener(move |this, _, _, cx| {
             this.remeasure_message(index);
-            if reasoning {
-                let expanded = this.reasoning_expanded(&toggle_key);
-                this.reasoning_expansion
-                    .insert(toggle_key.clone(), !expanded);
-            } else if !this.expanded_tools.remove(&toggle_key) {
+            if !this.expanded_tools.remove(&toggle_key) {
                 this.expanded_tools.insert(toggle_key.clone());
             }
             cx.notify();
@@ -793,7 +878,7 @@ impl ConduitApp {
                             .child(approval.status.label().to_string()),
                     )
                 })
-                .when(running && !reasoning, |row| {
+                .when(running, |row| {
                     row.child(
                         h_flex()
                             .flex_shrink_0()
@@ -838,18 +923,6 @@ impl ConduitApp {
                             .text_color(rgb(palette().muted))
                             .child(summary),
                     )
-                })
-                .when(reasoning, |row| {
-                    row.when(!show_summary, |row| row.child(div().flex_1()))
-                        .child(
-                            Icon::new(if expanded {
-                                IconName::ChevronDown
-                            } else {
-                                IconName::ChevronRight
-                            })
-                            .small()
-                            .text_color(rgb(palette().muted)),
-                        )
                 }),
         )
         .into_any_element()
@@ -874,7 +947,10 @@ impl ConduitApp {
             .and_then(|id| self.session(id))
             .and_then(|session| {
                 let item = session.messages.get(index)?;
-                (item.kind == ItemKind::Assistant).then(|| {
+                (item.kind == ItemKind::Assistant
+                    || (item.kind == ItemKind::Reasoning
+                        && self.reasoning_expanded(&(session.id, item.key.clone()))))
+                .then(|| {
                     let state = window.use_keyed_state(
                         SharedString::from(format!("chat-markdown-{}-{}", session.id, item.key)),
                         cx,
@@ -924,12 +1000,8 @@ impl ConduitApp {
         let group = self.chat_rows.group(index);
         let tool_group = group.map(|group| (group.start, group.end));
         let tool_group_expanded = group.is_some_and(|group| group.expanded);
-        let tool_group_running = group.is_some_and(|group| group.running);
-        let assistant_replied = group.is_some_and(|group| group.replied);
         if let Some((start, end)) = tool_group
             && !tool_group_expanded
-            && !tool_group_running
-            && assistant_replied
         {
             if index != start {
                 return div().h(px(0.)).into_any_element();
@@ -1318,31 +1390,33 @@ impl ConduitApp {
                 let detail_key = (session_id, item.key.clone());
                 let expanded = self.reasoning_expanded(&detail_key);
                 let mut content = v_flex()
+                    .debug_selector(move || format!("reasoning-quote-{session_id}-{index}"))
                     .w_full()
                     .min_w_0()
-                    .gap_1()
-                    .child(self.activity_row(session_id, index, item, cx));
+                    .border_l_2()
+                    .border_color(rgb(palette().border))
+                    .rounded(px(6.))
+                    .bg(rgb(palette().surface))
+                    .child(self.reasoning_header(session_id, index, item, cx));
                 if expanded {
                     content = content.child(
                         div()
                             .debug_selector(move || format!("reasoning-body-{session_id}-{index}"))
                             .w_full()
                             .min_w_0()
-                            .pl_3()
-                            .py_1()
-                            .border_l_1()
-                            .border_color(rgb(palette().border))
+                            .flex_shrink_0()
+                            .px_3()
+                            .pb_3()
                             .text_color(rgb(palette().muted))
                             .child(
-                                chat_markdown_view(
-                                    SharedString::from(format!(
-                                        "reasoning-{session_id}-{}",
-                                        item.key
-                                    )),
-                                    item.text.clone(),
+                                styled_markdown_view(
+                                    TextView::new(
+                                        markdown.expect("expanded reasoning Markdown state"),
+                                    ),
                                     &typography,
                                     &format!("reasoning-copy-{session_id}-{}", item.key),
                                     true,
+                                    None,
                                 )
                                 .on_link_click({
                                     let app = cx.entity().downgrade();
@@ -1355,7 +1429,7 @@ impl ConduitApp {
                             ),
                     );
                 }
-                activity_container(content.into_any_element(), tool_group.is_some())
+                content.into_any_element()
             }
             ItemKind::Tool if is_compact_tool(item) => {
                 let detail_key = (session_id, item.key.clone());
@@ -1777,7 +1851,7 @@ impl ConduitApp {
             }
         };
         if let Some((start, end)) = tool_group
-            && (tool_group_expanded || tool_group_running)
+            && tool_group_expanded
             && index == start
         {
             let group_key = session.messages[start].key.clone();
@@ -1793,7 +1867,7 @@ impl ConduitApp {
             .message_focus
             .as_ref()
             .is_some_and(|(id, key, _)| *id == session_id && key == &item.key);
-        let compact_activity = item.kind == ItemKind::Reasoning || is_compact_tool(item);
+        let compact_activity = is_compact_tool(item);
         // One rhythm for the whole transcript: 12px between blocks, dense inside
         // an expanded tool group. `activity_container` already contributes 2px.
         let row = div()
@@ -1801,7 +1875,7 @@ impl ConduitApp {
             .w_full()
             .px_6()
             .when(compact_activity, |row| {
-                row.pb(if tool_group.is_some() {
+                row.pb(if tool_group.is_some_and(|(_, end)| index + 1 < end) {
                     px(0.)
                 } else {
                     px(10.)

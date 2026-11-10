@@ -411,8 +411,8 @@ impl ConduitApp {
         self.composer_files
             .retain(|target, _| target.session != Some(id));
         self.expanded_tools.retain(|(session, _)| *session != id);
-        self.expanded_tool_groups
-            .retain(|(session, _)| *session != id);
+        self.tool_group_expansion
+            .retain(|(session, _), _| *session != id);
         self.reasoning_expansion
             .retain(|(session, _), _| *session != id);
         self.tool_scrolls.retain(|(session, _), _| *session != id);

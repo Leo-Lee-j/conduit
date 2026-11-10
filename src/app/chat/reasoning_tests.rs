@@ -65,6 +65,7 @@ fn reasoning_stream_stays_visible_after_reply_and_restoration(cx: &mut TestAppCo
         cx.debug_bounds("reasoning-body-1-0").is_some(),
         "streamed body must be visible without a click"
     );
+    assert!(cx.debug_bounds("reasoning-elapsed-1-0").is_some());
     cx.update(|_, cx| {
         let app = app.read(cx);
         assert_eq!(
@@ -121,6 +122,7 @@ fn reasoning_stream_stays_visible_after_reply_and_restoration(cx: &mut TestAppCo
             session.messages[0].status,
             crate::message_status::ToolStatus::Completed
         );
+        assert!(session.messages[0].elapsed_ms.is_some());
         assert!(app.chat_rows.group(0).is_none());
         assert_eq!(app.chat_rows.group(1).unwrap().count, 1);
         assert!(!app.chat_rows.group(1).unwrap().expanded);
@@ -161,6 +163,191 @@ fn reasoning_stream_stays_visible_after_reply_and_restoration(cx: &mut TestAppCo
     });
     draw(cx);
     assert!(cx.debug_bounds("reasoning-body-1-0").is_some());
+    // The default-collapse preference still allows the full received body to
+    // be opened, including after restoring a transcript.
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.store.ui.collapse_reasoning = true;
+            app.reasoning_expansion.clear();
+            app.remeasure_message(0);
+            cx.notify();
+        })
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("reasoning-body-1-0").is_none());
+    let point = cx.debug_bounds("activity-1-0").unwrap().center();
+    cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    assert!(cx.debug_bounds("reasoning-body-1-0").is_some());
+}
+
+#[gpui_kit::test]
+fn tool_groups_can_collapse_before_reply_and_while_running(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx, _) = crate::app::queue::tests::fixture(cx, "tool-disclosure");
+    cx.simulate_resize(gpui_kit::size(px(1200.), px(900.)));
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.startup = None;
+            app.writable = false;
+            app.store.ui.collapse_reasoning = false;
+            for id in [1, 2] {
+                app.session_mut(id).unwrap().messages = serde_json::from_value(json!([
+                    {"key":"user", "kind":"User", "text":"Check the implementation"},
+                    {"key":"read", "kind":"Tool", "text":"Read", "status":"completed"},
+                    {"key":"search", "kind":"Tool", "text":"Grep", "status":"completed"},
+                    {"key":"thought", "kind":"Reasoning", "text":"Checking read index"}
+                ]))
+                .unwrap();
+            }
+            app.sync_chat_rows();
+            cx.notify();
+        });
+    });
+    draw(cx);
+    for status in ["completed", "运行中"] {
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.session_mut(1).unwrap().messages[2].status = status.into();
+                app.sync_chat_rows();
+                cx.notify();
+            });
+        });
+        draw(cx);
+        assert!(cx.debug_bounds("activity-1-2").is_some());
+        let point = cx.debug_bounds("tool-group-header-1-1").unwrap().center();
+        cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+        draw(cx);
+        assert!(
+            cx.debug_bounds("activity-1-2").is_none(),
+            "{status} group must collapse"
+        );
+        assert!(cx.debug_bounds("reasoning-body-1-3").is_some());
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.switch(1, Some(2), window, cx);
+                app.sync_chat_rows();
+                assert!(app.chat_rows.group(1).unwrap().expanded);
+                app.switch(0, Some(1), window, cx);
+                app.sync_chat_rows();
+                assert!(!app.chat_rows.group(1).unwrap().expanded);
+            });
+        });
+        draw(cx);
+        let point = cx.debug_bounds("tool-group-header-1-1").unwrap().center();
+        cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+        draw(cx);
+        assert!(cx.debug_bounds("activity-1-2").is_some());
+    }
+}
+
+#[test]
+fn reasoning_times_each_phase_and_preserves_duration_after_completion() {
+    use std::time::{Duration, Instant};
+    let mut session = crate::app::tests::session();
+    session.messages.clear();
+    let mut index = MessageIndex::default();
+    let start = Instant::now();
+    let delta = |key: &str| Event::ReasoningSummary {
+        key: key.into(),
+        text: "Checking the implementation".into(),
+        summary_index: 0,
+        snapshot: false,
+    };
+    let feed =
+        |session: &mut crate::domain::SessionRecord, index: &mut MessageIndex, seconds, event| {
+            index.observe_reasoning(
+                session,
+                "turn",
+                &event,
+                start + Duration::from_secs(seconds),
+            );
+            apply_event_indexed(session, "turn", event, index);
+        };
+    feed(&mut session, &mut index, 0, delta("first"));
+    feed(&mut session, &mut index, 2, delta("first"));
+    assert_eq!(
+        index.reasoning_elapsed("turn-first", start + Duration::from_secs(5)),
+        Some(Duration::from_secs(5))
+    );
+    feed(
+        &mut session,
+        &mut index,
+        7,
+        Event::Tool {
+            key: "tool".into(),
+            title: "Read".into(),
+            detail: String::new(),
+            status: "运行中".into(),
+        },
+    );
+    assert_eq!(session.messages[0].elapsed_ms, Some(7000));
+    assert!(
+        index
+            .reasoning_elapsed("turn-first", start + Duration::from_secs(30))
+            .is_none()
+    );
+    // A late completion snapshot must not include the intervening tool time.
+    feed(
+        &mut session,
+        &mut index,
+        30,
+        Event::ReasoningSummary {
+            key: "first".into(),
+            text: String::new(),
+            summary_index: 0,
+            snapshot: true,
+        },
+    );
+    assert_eq!(session.messages[0].elapsed_ms, Some(7000));
+    feed(&mut session, &mut index, 40, delta("second"));
+    feed(
+        &mut session,
+        &mut index,
+        43,
+        Event::Text {
+            key: "reply".into(),
+            text: "Answer".into(),
+        },
+    );
+    assert_eq!(session.messages[2].elapsed_ms, Some(3000));
+    feed(&mut session, &mut index, 50, delta("third"));
+    feed(&mut session, &mut index, 52, delta("fourth"));
+    assert_eq!(session.messages[4].elapsed_ms, Some(2000));
+    index.stop_reasoning(start + Duration::from_secs(55));
+    feed(
+        &mut session,
+        &mut index,
+        90,
+        Event::Finished {
+            error: None,
+            cancelled: true,
+        },
+    );
+    assert_eq!(
+        session.messages[5].elapsed_ms,
+        Some(3000),
+        "cleanup is not thinking time"
+    );
+    feed(
+        &mut session,
+        &mut index,
+        100,
+        Event::ReasoningSummary {
+            key: "snapshot-only".into(),
+            text: "Published summary".into(),
+            summary_index: 0,
+            snapshot: true,
+        },
+    );
+    assert_eq!(session.messages[6].elapsed_ms, None);
+    let saved = serde_json::to_string(&session.messages).unwrap();
+    let restored: Vec<crate::domain::ChatItem> = serde_json::from_str(&saved).unwrap();
+    assert_eq!(restored[0].elapsed_ms, Some(7000));
+    assert_eq!(restored[5].elapsed_ms, Some(3000));
 }
 
 #[test]

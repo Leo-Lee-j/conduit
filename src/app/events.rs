@@ -7,6 +7,92 @@ pub(super) use crate::failure::{
 };
 use crate::failure::{is_engine_error_text, record_failure};
 
+impl MessageIndex {
+    pub(super) fn reasoning_elapsed(&self, key: &str, now: Instant) -> Option<Duration> {
+        self.reasoning
+            .as_ref()
+            .filter(|timer| timer.key == key)
+            .map(|timer| timer.elapsed(now))
+    }
+
+    pub(super) fn stop_reasoning(&mut self, now: Instant) {
+        if let Some(timer) = &mut self.reasoning {
+            timer.stopped.get_or_insert(now);
+        }
+    }
+
+    /// Measure each visible thinking phase, excluding tools, replies and cleanup.
+    /// Completion-only/imported summaries have no observed start, so no duration.
+    pub(super) fn observe_reasoning(
+        &mut self,
+        session: &mut SessionRecord,
+        prefix: &str,
+        event: &Event,
+        now: Instant,
+    ) -> Option<usize> {
+        let next = match event {
+            Event::ReasoningSummary {
+                key,
+                text,
+                snapshot: false,
+                ..
+            } if !text.trim().is_empty() => Some(format!("{prefix}-{key}")),
+            _ => None,
+        };
+        let closes = match event {
+            Event::ReasoningSummary {
+                key,
+                snapshot: true,
+                ..
+            } => self
+                .reasoning
+                .as_ref()
+                .is_some_and(|timer| timer.key == format!("{prefix}-{key}")),
+            Event::ReasoningSummary { .. } => next.as_ref().is_some_and(|key| {
+                self.reasoning
+                    .as_ref()
+                    .is_some_and(|timer| &timer.key != key)
+            }),
+            Event::Delta { text, .. } | Event::Text { text, .. } => !text.trim().is_empty(),
+            Event::Tool { .. }
+            | Event::ToolInput { .. }
+            | Event::Approval(_)
+            | Event::Finished { .. }
+            | Event::CleanupBlocked(_)
+            | Event::ErrorBanner(_) => true,
+            _ => false,
+        };
+        let changed = if closes {
+            self.reasoning.take().and_then(|timer| {
+                let position = self.find(&session.messages, &timer.key)?;
+                let item = &mut session.messages[position];
+                if item.kind != ItemKind::Reasoning {
+                    return None;
+                }
+                item.elapsed_ms = Some(timer.elapsed(now).as_millis().min(u64::MAX as u128) as u64);
+                Some(position)
+            })
+        } else {
+            None
+        };
+        if let Some(key) = next
+            && self.reasoning.is_none()
+        {
+            let previous = self
+                .find(&session.messages, &key)
+                .and_then(|position| session.messages[position].elapsed_ms)
+                .unwrap_or_default();
+            self.reasoning = Some(super::state::ReasoningTimer {
+                key,
+                started: now,
+                previous: Duration::from_millis(previous),
+                stopped: None,
+            });
+        }
+        changed
+    }
+}
+
 pub(super) fn finish_tool_cards(session: &mut SessionRecord, prefix: &str, status: &str) {
     let prefix = format!("{prefix}-");
     for item in &mut session.messages {

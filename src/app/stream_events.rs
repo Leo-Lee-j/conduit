@@ -79,6 +79,19 @@ impl ConduitApp {
             }
             changed = true;
             visible |= Some(id) == self.selected_session;
+            if let Some((workspace, session)) =
+                self.session_control.locate(&self.store.workspaces, id)
+                && let Some(run) = self.session_control.runs.get_mut(&id)
+                && let Some(position) = run.message_index.observe_reasoning(
+                    &mut self.store.workspaces[workspace].sessions[session],
+                    &prefix,
+                    &event,
+                    Instant::now(),
+                )
+                && Some(id) == self.selected_session
+            {
+                dirty_messages.push(position);
+            }
             if Some(id) == self.selected_session
                 && matches!(
                     event,

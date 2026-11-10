@@ -329,6 +329,7 @@ impl ActiveRun {
     }
 
     pub(super) fn cancel(&mut self) {
+        self.message_index.stop_reasoning(Instant::now());
         self.runtime.cancel();
         self.approvals.clear();
         self.expanded_approvals.clear();
@@ -348,6 +349,24 @@ impl ActiveRun {
 pub(super) struct MessageIndex {
     pub(super) keys: HashMap<String, usize>,
     pub(super) indexed_len: usize,
+    pub(super) reasoning: Option<ReasoningTimer>,
+}
+
+pub(super) struct ReasoningTimer {
+    pub(super) key: String,
+    pub(super) started: Instant,
+    pub(super) previous: Duration,
+    pub(super) stopped: Option<Instant>,
+}
+
+impl ReasoningTimer {
+    pub(super) fn elapsed(&self, now: Instant) -> Duration {
+        self.previous.saturating_add(
+            self.stopped
+                .unwrap_or(now)
+                .saturating_duration_since(self.started),
+        )
+    }
 }
 
 impl MessageIndex {

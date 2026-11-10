@@ -224,7 +224,8 @@ impl std::ops::DerefMut for ChatItem {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatItemData {
-    /// Total wall time of the CLI turn, recorded when it finishes.
+    /// Assistant: total CLI turn time. Reasoning: observed thinking phase time,
+    /// excluding tool execution and replies. Absent when timing is unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elapsed_ms: Option<u64>,
     pub key: String,
