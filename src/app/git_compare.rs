@@ -19,8 +19,10 @@ impl ConduitApp {
             cx.notify();
             return;
         }
+        let host = cx.weak_entity();
         let browser = cx.new(|cx| {
             let mut browser = ComparisonBrowser {
+                host,
                 workspace,
                 request,
                 result: None,
@@ -56,6 +58,7 @@ impl ConduitApp {
 }
 
 struct ComparisonBrowser {
+    host: WeakEntity<ConduitApp>,
     workspace: PathBuf,
     request: git::ComparisonRequest,
     result: Option<git::Comparison>,
@@ -116,6 +119,7 @@ impl ComparisonBrowser {
                 window,
                 cx,
             )
+            .with_review(self.host.clone(), cx)
         }));
         cx.notify();
     }
@@ -384,6 +388,7 @@ mod tests {
         let _locale = crate::test_support::chinese();
         cx.update(gpui_kit::init);
         let (_, cx) = cx.add_window_view(|window, cx| {
+            let host = cx.new(|cx| super::ConduitApp::with_store(window, cx, Ok(Default::default()), false, false));
             let browser = cx.new(|_| {
                 let request = git::ComparisonRequest {
                     selected: git::BranchInfo {
@@ -420,6 +425,7 @@ mod tests {
                     ],
                 };
                 ComparisonBrowser {
+                    host: host.downgrade(),
                     workspace: std::env::temp_dir(),
                     request,
                     result: Some(result),

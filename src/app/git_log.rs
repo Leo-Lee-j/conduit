@@ -302,7 +302,10 @@ impl GitLogView {
             oid: details.oid.clone(),
             parent: details.parent.clone(),
         };
-        let viewer = cx.new(|cx| GitDiffDialog::new_commit(workspace, file, request, window, cx));
+        let host = self.app.clone();
+        let viewer = cx.new(|cx| {
+            GitDiffDialog::new_commit(workspace, file, request, window, cx).with_review(host, cx)
+        });
         window.open_dialog(cx, move |dialog, window, _| {
             let viewport = window.viewport_size();
             let width = (f32::from(viewport.width) - 48.).clamp(320., 1360.);

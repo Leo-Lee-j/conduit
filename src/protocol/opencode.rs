@@ -702,6 +702,9 @@ impl Protocol {
 
     fn acp_usage(&self, usage: &Value, step: &mut Step) {
         step.events.push(Event::Usage(Usage {
+            input_tokens_known: usage["inputTokens"].as_u64().is_some(),
+            cached_input_tokens_known: usage["cachedReadTokens"].as_u64().is_some(),
+            output_tokens_known: usage["outputTokens"].as_u64().is_some(),
             input_tokens: usage["inputTokens"].as_u64().unwrap_or(0),
             cached_input_tokens: usage["cachedReadTokens"].as_u64().unwrap_or(0),
             output_tokens: usage["outputTokens"].as_u64().unwrap_or(0),

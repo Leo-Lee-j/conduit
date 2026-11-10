@@ -205,6 +205,19 @@ impl ConduitApp {
                 {
                     return Err(conduit::i18n::text("commands.stale"));
                 }
+                if let Some(run) = self.session_control.runs.get(&id)
+                    && let crate::commands::RequestIntent::Fork(request) = &run.intent
+                {
+                    let session = self
+                        .session(id)
+                        .ok_or_else(|| conduit::i18n::text("branching.changed"))?;
+                    if crate::branching::request(session).as_ref() != Ok(request)
+                        || run.command_ticket.as_ref().map(|ticket| &ticket.context)
+                            != self.session_command_context(id).as_ref()
+                    {
+                        return Err(conduit::i18n::text("branching.changed"));
+                    }
+                }
                 pending.release.send(()).map_err(|_| {
                     conduit::i18n::text_static(
                         "runtime.saves.cli_wait_thread_exited_the_message_was",

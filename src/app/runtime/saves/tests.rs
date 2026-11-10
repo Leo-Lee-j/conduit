@@ -39,6 +39,115 @@ fn finish_save(app: &mut ConduitApp, window: &mut Window, cx: &mut Context<Condu
 }
 
 #[gpui_kit::test]
+fn native_forks_preserve_drafts_and_require_a_saved_unchanged_request(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx, root) = fixture(cx, "native-fork-barrier");
+    let marker = root.join("fork-launched.txt");
+    let launcher = root.join("fork.cmd");
+    std::fs::write(
+        &launcher,
+        "@echo off\r\n> \"%~dp0fork-launched.txt\" echo launched\r\nexit /b 0\r\n",
+    )
+    .unwrap();
+    let attachment = root.join("reference.txt");
+    std::fs::write(&attachment, "source attachment").unwrap();
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            this.store.cli.codex_path = Some(launcher.clone());
+            let source = this.session_mut(1).unwrap();
+            source.provider = Provider::Codex;
+            source.messages = serde_json::from_value(serde_json::json!([
+                {"key":"first-user","kind":"User","text":"first"},
+                {"key":"first-reply","kind":"Assistant","text":"answer"}
+            ]))
+            .unwrap();
+            crate::branching::record(source, "queue-first".into(), "first-turn".into());
+            source.messages.push(
+                serde_json::from_value(serde_json::json!({
+                    "key":"later-user","kind":"User","text":"later"
+                }))
+                .unwrap(),
+            );
+            let original = serde_json::to_value(this.session(1).unwrap()).unwrap();
+            for scenario in 0..4 {
+                this.switch(0, Some(1), window, cx);
+                this.input
+                    .update(cx, |input, cx| input.set_value("source draft", window, cx));
+                if scenario == 0 {
+                    this.attach_paths(std::slice::from_ref(&attachment), window, cx);
+                }
+                let (release, snapshot) = hold_save(this);
+                let id = this.create_native_fork(1, 2, window, cx).unwrap();
+                let saved = snapshot.recv_timeout(Duration::from_secs(3)).unwrap();
+                let fork = saved.workspaces[0]
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == id)
+                    .unwrap();
+                assert!(fork.native_id.is_none());
+                assert_eq!(
+                    fork.branching
+                        .origin
+                        .as_ref()
+                        .unwrap()
+                        .point
+                        .request
+                        .last_turn_id,
+                    "first-turn"
+                );
+                assert_eq!(fork.messages[1].text, "answer");
+                assert_eq!(this.drafts[&1], "source draft");
+                assert!(this.session_fork_pending(id));
+                this.input
+                    .update(cx, |input, cx| input.set_value("branch draft", window, cx));
+                this.send_prompt(window, cx);
+                assert!(this.queued_messages.is_empty());
+                assert_eq!(this.input.read(cx).value().as_ref(), "branch draft");
+                assert!(!marker.exists());
+                match scenario {
+                    0 => release.send(Err("save failed".into())).unwrap(),
+                    1 => {
+                        this.session_mut(id).unwrap().permission =
+                            crate::domain::PermissionLevel::FullAccess;
+                        release.send(Ok(())).unwrap();
+                    }
+                    2 => {
+                        std::fs::write(&launcher, "@echo off\r\nexit /b 1\r\n").unwrap();
+                        release.send(Ok(())).unwrap();
+                    }
+                    _ => {
+                        this.session_control.runs.get_mut(&id).unwrap().cancel();
+                        release.send(Ok(())).unwrap();
+                    }
+                }
+                finish_save(this, window, cx);
+                assert!(!this.session_control.runs.contains_key(&id));
+                assert!(crate::branching::request(this.session(id).unwrap()).is_ok());
+                assert_eq!(this.session(id).unwrap().messages.len(), 2);
+                assert_eq!(
+                    serde_json::to_value(this.session(1).unwrap()).unwrap(),
+                    original
+                );
+                assert!(!marker.exists());
+                this.send_prompt(window, cx);
+                assert!(!this.session_control.runs.contains_key(&id));
+                assert_eq!(this.input.read(cx).value().as_ref(), "branch draft");
+                let (release, snapshot) = hold_save(this);
+                this.retry_native_fork(id, cx).unwrap();
+                snapshot.recv_timeout(Duration::from_secs(3)).unwrap();
+                this.session_control.runs.get_mut(&id).unwrap().cancel();
+                release.send(Ok(())).unwrap();
+                finish_save(this, window, cx);
+                assert!(!marker.exists());
+                this.switch(0, Some(1), window, cx);
+                assert_eq!(this.input.read(cx).value().as_ref(), "source draft");
+                assert_eq!(this.current_files().unwrap().references.len(), 1);
+            }
+        })
+    });
+}
+
+#[gpui_kit::test]
 fn commands_revalidate_after_save_and_preserve_drafts_on_failure_or_cancellation(
     cx: &mut TestAppContext,
 ) {

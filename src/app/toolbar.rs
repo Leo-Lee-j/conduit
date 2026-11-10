@@ -2,7 +2,70 @@
 
 use super::*;
 
+struct WorkspaceTools {
+    host: WeakEntity<ConduitApp>,
+}
+impl Render for WorkspaceTools {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(host) = self.host.upgrade() else {
+            return div().into_any_element();
+        };
+        host.update(cx, |app, cx| {
+            let items = [
+                ("workflow.title", app.workflow_button(cx).into_any_element()),
+                (
+                    "review.inbox",
+                    app.review_inbox_button(cx).into_any_element(),
+                ),
+                ("github.title", app.github_button(cx).into_any_element()),
+                ("usage.title", app.usage_button(cx).into_any_element()),
+                (
+                    "automation.title",
+                    app.automation_button(cx).into_any_element(),
+                ),
+                (
+                    "artifact.title",
+                    app.project_files_button(cx).into_any_element(),
+                ),
+                (
+                    "environment.title",
+                    app.environments_button(cx).into_any_element(),
+                ),
+            ];
+            v_flex()
+                .debug_selector(|| "workspace-tool-list".into())
+                .p_2()
+                .gap_1()
+                .children(items.into_iter().map(|(key, button)| {
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(button)
+                        .child(conduit::i18n::text(key))
+                }))
+                .into_any_element()
+        })
+    }
+}
+
 impl ConduitApp {
+    fn workspace_tools_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let host = cx.weak_entity();
+        Popover::new("workspace-tools")
+            .anchor(Anchor::BottomRight)
+            .trigger(
+                Button::new("workspace-tools-button")
+                    .debug_selector(|| "workspace-tools-button".into())
+                    .small()
+                    .compact()
+                    .ghost()
+                    .icon(FullIconName::PanelsTopLeft)
+                    .tooltip(conduit::i18n::text_static("workflow.tools"))
+                    .accessibility_label(conduit::i18n::text_static("workflow.tools"))
+                    .disabled(self.selected_workspace_path().is_none()),
+            )
+            .content(move |_, _, cx| cx.new(|_| WorkspaceTools { host: host.clone() }))
+    }
     pub(super) fn render_toolbar(
         &mut self,
         window: &mut Window,
@@ -148,6 +211,7 @@ impl ConduitApp {
                         )
                 })
             })
+            .child(self.workspace_tools_button(cx))
             .child(self.terminal_button(cx))
             .child(self.notification_bell(cx));
         let statuses = self.render_status_contributions(window, cx);
@@ -173,5 +237,46 @@ impl ConduitApp {
             .when(has_hints, |bar| bar.child(hints))
             .child(controls);
         toolbar.into_any_element()
+    }
+}
+
+#[cfg(all(test, feature = "ui-tests"))]
+mod tests {
+    use gpui_kit::{Modifiers, MouseButton, TestAppContext, VisualTestContext, px, size};
+    fn draw(cx: &mut VisualTestContext) {
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.run_until_parked();
+    }
+    #[gpui_kit::test]
+    fn workspace_tools_render_inside_the_minimum_window_without_borrowing_the_host_twice(
+        cx: &mut TestAppContext,
+    ) {
+        let _locale = crate::test_support::chinese();
+        let (app, cx, _) = crate::app::queue::tests::fixture(cx, "workspace-tools");
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.startup = None;
+                app.writable = false;
+                cx.notify();
+            })
+        });
+        for (width, height) in [(850., 500.), (1200., 800.)] {
+            cx.simulate_resize(size(px(width), px(height)));
+            draw(cx);
+            let button = cx.debug_bounds("workspace-tools-button").unwrap();
+            assert!(button.right() <= px(width) && button.bottom() <= px(height));
+            cx.simulate_mouse_down(button.center(), MouseButton::Left, Modifiers::default());
+            cx.simulate_mouse_up(button.center(), MouseButton::Left, Modifiers::default());
+            draw(cx);
+            let menu = cx.debug_bounds("workspace-tool-list").unwrap();
+            assert!(menu.left() >= px(0.) && menu.top() >= px(0.));
+            assert!(menu.right() <= px(width) && menu.bottom() <= px(height));
+            cx.simulate_keystrokes("escape");
+            draw(cx);
+            assert!(cx.debug_bounds("workspace-tool-list").is_none());
+        }
     }
 }

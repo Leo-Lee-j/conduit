@@ -866,6 +866,8 @@ impl ConduitApp {
         });
         if let Some(result) = completed {
             let operation = self.git.operation.take().unwrap();
+            let task_worktree = self.git.task_worktree.take();
+            let task_cleanup = self.git.task_cleanup.take();
             let path = operation.probe.path.clone();
             if let Some(browser) = self.git.conflict_browsers.get(&path) {
                 let error = match &result {
@@ -876,6 +878,32 @@ impl ConduitApp {
             }
             match result {
                 Ok(result) => {
+                    if let Some(created) = &result.worktree_created
+                        && let Some(mut task) = task_worktree
+                    {
+                        task.origin = Some(task.workspace.clone());
+                        task.workspace = created.clone();
+                        task.id = 0;
+                        task.sessions.clear();
+                        task.status = crate::workflow::TaskStatus::Planned;
+                        task.archived = false;
+                        task.created_at = unix_now();
+                        task.branch = None;
+                        for criterion in &mut task.criteria {
+                            criterion.done = false;
+                        }
+                        if let Err(error) = self.store.workflow.save_task(task) {
+                            self.message = Some(error);
+                        }
+                        self.persist();
+                    }
+                    if result.error.is_none()
+                        && let Some(target) = task_cleanup
+                        && let Some(index) =
+                            self.store.workspaces.iter().position(|w| w.path == target)
+                    {
+                        self.remove_workspace(index, cx);
+                    }
                     let tags_changed = result.retry_completed
                         || result.retry_tag.is_some()
                         || (result.committed

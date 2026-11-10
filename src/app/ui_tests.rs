@@ -747,6 +747,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
     use gpui_kit::AppContext as _;
 
     let session = |id, provider, native: &str| SessionRecord {
+        branching: Default::default(),
         transcript: Default::default(),
         id,
         provider,
@@ -1215,6 +1216,7 @@ fn composer_files_paste_drafts_removal_and_failed_send(cx: &mut TestAppContext) 
     std::fs::write(&first, b"fn first() {}").unwrap();
     std::fs::write(&second, b"fn second() {}").unwrap();
     let session = |id| SessionRecord {
+        branching: Default::default(),
         transcript: Default::default(),
         id,
         provider: Provider::Claude,

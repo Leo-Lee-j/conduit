@@ -77,6 +77,12 @@ impl PermissionLevel {
 /// Cumulative consumption and an independent latest-request context snapshot.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
+    #[serde(default)]
+    pub input_tokens_known: bool,
+    #[serde(default)]
+    pub cached_input_tokens_known: bool,
+    #[serde(default)]
+    pub output_tokens_known: bool,
     pub input_tokens: u64,
     pub cached_input_tokens: u64,
     pub output_tokens: u64,
@@ -156,6 +162,8 @@ pub struct SessionRecord {
     pub pinned: bool,
     #[serde(default)]
     pub native_id: Option<String>,
+    #[serde(default)]
+    pub branching: crate::branching::Branching,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]

@@ -546,6 +546,12 @@ impl ConduitApp {
         self.open_file_preview(key, pinned, window, cx);
     }
 
+    pub(super) fn current_file_key(&self) -> Option<FileKey> {
+        self.active_file
+            .and_then(|id| self.files.documents.get(&id))
+            .map(|d| d.key.clone())
+    }
+
     pub(super) fn open_file_preview(
         &mut self,
         key: FileKey,
@@ -1953,8 +1959,11 @@ impl ConduitApp {
         }
         self.files.next_id += 1;
         let id = self.files.next_id;
-        let view =
-            cx.new(|cx| GitDiffDialog::new_document(workspace.clone(), file.clone(), window, cx));
+        let host = cx.weak_entity();
+        let view = cx.new(|cx| {
+            GitDiffDialog::new_document(workspace.clone(), file.clone(), window, cx)
+                .with_review(host, cx)
+        });
         self.files.diffs.insert(
             id,
             DiffDocument {

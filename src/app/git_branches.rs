@@ -558,6 +558,155 @@ fn fs_canonical(path: &Path) -> PathBuf {
 }
 
 impl ConduitApp {
+    pub(super) fn task_worktree(
+        &mut self,
+        id: u64,
+        workspace: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if self.selected_workspace_path().as_deref() != Some(workspace) {
+            return Err(conduit::i18n::text("workflow.missing"));
+        }
+        if let Some(reason) = self.branch_operation_blocked(workspace) {
+            return Err(reason.into());
+        }
+        let task = self
+            .store
+            .workflow
+            .tasks
+            .iter()
+            .find(|t| t.id == id && t.workspace == workspace && !t.archived)
+            .cloned()
+            .ok_or_else(|| conduit::i18n::text("workflow.missing"))?;
+        if self.store.workflow.tasks.len() >= 500 {
+            return Err(conduit::i18n::text("workflow.limit"));
+        }
+        let repository = self
+            .git
+            .repository
+            .clone()
+            .filter(|_| self.git.workspace.as_deref() == Some(workspace))
+            .ok_or_else(|| conduit::i18n::text("workflow.refresh_git"))?;
+        let selected = repository
+            .branch_info
+            .iter()
+            .find(|b| Some(&b.full_ref) == repository.context.current_ref.as_ref())
+            .cloned()
+            .ok_or_else(|| conduit::i18n::text("workflow.refresh_git"))?;
+        let request = git::BranchRequest {
+            expected: repository.context.clone(),
+            selected: Some(selected),
+            action: git::BranchAction::Worktree {
+                path: PathBuf::new(),
+                new_branch: None,
+            },
+        };
+        window.close_dialog(cx);
+        let (title, form) = make_form(
+            cx.entity(),
+            workspace.into(),
+            repository,
+            request,
+            FormKind::Worktree,
+            window,
+            cx,
+        );
+        form.update(cx, |form, cx| {
+            form.task = Some(task);
+            form.fields[1].1.update(cx, |input, cx| {
+                input.set_value(format!("task/{id}"), window, cx)
+            });
+            let path = git::worktree_root(workspace)
+                .parent()
+                .unwrap_or(workspace)
+                .join(format!("task-{id}"));
+            form.fields[0].1.update(cx, |input, cx| {
+                input.set_value(path.display().to_string(), window, cx)
+            });
+        });
+        window.open_dialog(cx, move |dialog, _, _| {
+            let confirm = form.clone();
+            let content = form.clone();
+            dialog
+                .title(title)
+                .w(px(560.))
+                .on_ok(move |_, _, cx| confirm.update(cx, |form, cx| form.submit(cx)))
+                .content(move |body, _, _| body.child(content.clone()))
+        });
+        Ok(())
+    }
+
+    pub(super) fn cleanup_task_worktree(
+        &mut self,
+        id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(task) = self
+            .store
+            .workflow
+            .tasks
+            .iter()
+            .find(|t| t.id == id && t.archived && t.origin.is_some())
+            .cloned()
+        else {
+            return;
+        };
+        let parent = task.origin.unwrap();
+        let target = task.workspace;
+        let host = cx.weak_entity();
+        window.close_dialog(cx);
+        window.open_dialog(cx, move |dialog, _, _| {
+            let target = target.clone();
+            let parent = parent.clone();
+            let host = host.clone();
+            let displayed = target.display().to_string();
+            dialog
+                .title(conduit::i18n::text_static("workflow.cleanup"))
+                .content(move |body, _, _| {
+                    body.child(conduit::i18n::text_static("workflow.cleanup_hint"))
+                        .child(displayed.clone())
+                })
+                .on_ok(move |_, _, cx| {
+                    host.update(cx, |app, cx| {
+                        if app.selected_workspace_path().as_ref() != Some(&target)
+                            || app.terminals.workspace_busy(&target)
+                            || app
+                                .store
+                                .workflow
+                                .tasks
+                                .iter()
+                                .any(|t| t.workspace == target && !t.archived)
+                        {
+                            return false;
+                        }
+                        let Some(repository) = app
+                            .git
+                            .repository
+                            .as_ref()
+                            .filter(|_| app.git.workspace.as_ref() == Some(&target))
+                        else {
+                            return false;
+                        };
+                        let request = git::BranchRequest {
+                            expected: repository.context.clone(),
+                            selected: None,
+                            action: git::BranchAction::RemoveWorktree {
+                                parent: parent.clone(),
+                            },
+                        };
+                        let started = app.start_branch_operation(target.clone(), request, cx);
+                        if started {
+                            app.git.task_cleanup = Some(target.clone());
+                        }
+                        started
+                    })
+                    .unwrap_or(false)
+                })
+        });
+    }
+
     pub(super) fn branch_operation_blocked(&self, path: &Path) -> Option<&'static str> {
         if self.closing || !self.writable {
             Some(conduit::i18n::text_static(
@@ -614,6 +763,8 @@ impl ConduitApp {
             commit_push: None,
             automatic_stage: false,
         });
+        self.git.task_worktree = None;
+        self.git.task_cleanup = None;
         self.git_feedback(
             path,
             conduit::i18n::text_static("git_branches.running_git_branch_operation"),
@@ -735,6 +886,7 @@ impl ConduitApp {
 }
 
 struct BranchForm {
+    task: Option<crate::workflow::WorkItem>,
     app: WeakEntity<ConduitApp>,
     workspace: PathBuf,
     request: git::BranchRequest,
@@ -979,6 +1131,7 @@ fn make_form(
             })
             .collect();
         BranchForm {
+            task: None,
             app: app.downgrade(),
             workspace,
             request,
@@ -1066,7 +1219,11 @@ impl BranchForm {
         let started = self
             .app
             .update(cx, |this, cx| {
-                this.start_branch_operation(self.workspace.clone(), request, cx)
+                let started = this.start_branch_operation(self.workspace.clone(), request, cx);
+                if started {
+                    this.git.task_worktree = self.task.clone();
+                }
+                started
             })
             .unwrap_or(false);
         if !started {

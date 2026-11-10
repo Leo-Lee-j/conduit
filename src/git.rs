@@ -2460,6 +2460,52 @@ mod tests {
     }
 
     #[test]
+    fn task_worktree_cleanup_refuses_dirty_or_primary_worktrees_and_retains_branch() {
+        let Some(repo) = TestRepository::new() else {
+            return;
+        };
+        repo.stage("baseline\n");
+        assert!(repo.commit("baseline", false).error.is_none());
+        let path = repo.path.join("task-worktree");
+        repo.run(&["worktree", "add", "-b", "task-one", path.to_str().unwrap()]);
+        let cancel = AtomicBool::new(false);
+        let request = || BranchRequest {
+            expected: load_repository(&path, &cancel).unwrap().context,
+            selected: None,
+            action: BranchAction::RemoveWorktree {
+                parent: repo.path.clone(),
+            },
+        };
+        fs::write(path.join("untracked"), "keep me").unwrap();
+        let result = branches::operate_branch(&path, request(), &cancel);
+        assert!(result.error.is_some());
+        assert!(path.join("untracked").exists());
+        fs::remove_file(path.join("untracked")).unwrap();
+        let result = branches::operate_branch(&path, request(), &cancel);
+        assert!(result.error.is_none(), "{:?}", result.error);
+        assert!(!path.exists());
+        assert!(
+            !repo
+                .run(&["rev-parse", "refs/heads/task-one"])
+                .trim()
+                .is_empty()
+        );
+        let result = branches::operate_branch(
+            &repo.path,
+            BranchRequest {
+                expected: repo.metadata().context,
+                selected: None,
+                action: BranchAction::RemoveWorktree {
+                    parent: repo.path.clone(),
+                },
+            },
+            &cancel,
+        );
+        assert!(result.error.is_some());
+        assert!(repo.path.join("tracked.txt").exists());
+    }
+
+    #[test]
     fn discard_restores_only_the_selected_file_and_handles_renames_and_deletions() {
         let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {

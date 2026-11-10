@@ -132,6 +132,7 @@ fn merge_session(
     let id = *next_id;
     *next_id += 1;
     workspace.sessions.push(crate::domain::SessionRecord {
+        branching: Default::default(),
         transcript: Default::default(),
         id,
         provider: session.provider,
@@ -1699,6 +1700,7 @@ mod tests {
         // Simulate an existing GUI session that shares a native id with one
         // imported session plus one completely new import.
         workspace.sessions.push(crate::domain::SessionRecord {
+            branching: Default::default(),
             transcript: Default::default(),
             id: 7,
             provider: Provider::Claude,

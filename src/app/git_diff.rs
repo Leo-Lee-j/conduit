@@ -13,9 +13,10 @@ pub(super) fn git_change_color(kind: git::ChangeKind) -> u32 {
 /// Read-only diff window for one Git change, modelled on JetBrains' diff
 /// viewer: a version bar, navigation and folding tools, and a split view.
 pub(super) struct GitDiffDialog {
-    embedded: bool,
+    pub(super) embedded: bool,
     focus: FocusHandle,
-    last_patch: Option<String>,
+    pub(super) last_patch: Option<String>,
+    pub(super) review: super::git_review::ReviewUi,
     pub(super) comparison: Option<git::ComparisonRequest>,
     pub(super) commit: Option<git::CommitDiffRequest>,
     pub(super) workspace: PathBuf,
@@ -91,6 +92,7 @@ impl GitDiffDialog {
             embedded: false,
             focus: cx.focus_handle(),
             last_patch: None,
+            review: Default::default(),
             comparison,
             commit,
             workspace,
@@ -174,6 +176,7 @@ impl GitDiffDialog {
             }
             Ok(diff) => match DiffFile::parse(&diff.patch) {
                 Ok(files) => {
+                    self.review.fingerprint = crate::review::fingerprint(&diff.patch);
                     self.last_patch = Some(diff.patch);
                     self.unchanged_expanded = false;
                     self.notes = diff.notes;
@@ -755,15 +758,15 @@ impl GitDiffDialog {
         // Split columns are each half the viewport; a long line would push the
         // right column out of view, so wrap instead of scrolling horizontally.
         let split = self.state.read(cx).mode() == DiffMode::Split;
-        Diff::new(&self.state)
+        let diff = Diff::new(&self.state)
             .header_visible(false)
             .line_number(true)
             .syntax_highlight(true)
             .change_indicator(DiffChangeIndicator::Bars)
             .hunk_separator(DiffHunkSeparator::LineInfo)
             .hover_highlight(DiffHoverHighlight::Line)
-            .soft_wrap(split)
-            .into_any_element()
+            .soft_wrap(split);
+        self.review_diff(diff, cx).into_any_element()
     }
 
     pub(super) fn notes_banner(&self) -> AnyElement {
@@ -847,7 +850,7 @@ impl Drop for GitDiffDialog {
 }
 
 impl Render for GitDiffDialog {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .id("git-diff-dialog")
             .debug_selector(|| "git-diff-dialog".into())
@@ -866,11 +869,13 @@ impl Render for GitDiffDialog {
             }))
             .child(self.header(cx))
             .child(self.toolbar(cx))
+            .child(self.review_toolbar(cx))
             .when(!self.notes.is_empty(), |dialog| {
                 dialog.child(self.notes_banner())
             })
             .child(self.split_titles(cx))
             .child(div().flex_1().min_h_0().w_full().child(self.body(cx)))
+            .child(self.review_panel(window, cx))
             .child(self.footer(cx))
     }
 }

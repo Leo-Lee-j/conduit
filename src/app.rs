@@ -60,6 +60,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+mod automation;
 mod background;
 mod chat;
 mod code_highlight;
@@ -67,6 +68,7 @@ mod commands;
 mod components;
 mod composer;
 mod dock;
+mod environments;
 mod events;
 mod file_links;
 mod file_picker;
@@ -78,8 +80,10 @@ mod git_compare;
 mod git_conflicts;
 mod git_diff;
 mod git_log;
+mod git_review;
 mod git_state;
 mod git_ui;
+mod github;
 mod localization;
 mod mentions;
 mod mermaid;
@@ -91,6 +95,7 @@ mod opencode_models;
 mod outline;
 mod performance_view;
 mod plugin_ui;
+mod project_files;
 mod queue;
 mod runtime;
 mod search;
@@ -112,7 +117,9 @@ mod tools;
 mod transcripts;
 mod typography;
 mod update;
+mod usage;
 mod user_input;
+mod workflow;
 
 use components::*;
 use composer::*;
@@ -172,6 +179,7 @@ actions!(
 pub struct ConduitApp {
     store: Store,
     background: background::BackgroundState,
+    automation: automation::AutomationUi,
     git: git_ui::GitUi,
     branch_manager: Option<Entity<git_log::GitLogView>>,
     persistence: crate::persistence::Persistence,
@@ -653,6 +661,7 @@ impl ConduitApp {
         let file_view = cx.new(|cx| files::FileDocumentView::new(app, cx));
         let mut app = Self {
             background: background::BackgroundState::new(cx),
+            automation: Default::default(),
             persistence: crate::persistence::Persistence::new(Store::path()),
             attachments_cleanup_pending: false,
             session_control: session_controller::SessionController::default(),

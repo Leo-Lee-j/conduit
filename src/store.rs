@@ -327,6 +327,14 @@ pub struct QueuedMessage {
 pub struct Store {
     pub version: u32,
     pub workspaces: Vec<Workspace>,
+    #[serde(default)]
+    pub reviews: crate::review::Reviews,
+    #[serde(default)]
+    pub workflow: crate::workflow::Workflow,
+    #[serde(default)]
+    pub usage_ledger: crate::usage_ledger::Ledger,
+    #[serde(default)]
+    pub scheduler: crate::automation::Scheduler,
     #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
     pub queued_messages: std::collections::HashMap<u64, QueuedMessage>,
     #[serde(default)]
@@ -448,6 +456,10 @@ impl Store {
             return Ok(Self {
                 version: 2,
                 workspaces: vec![],
+                scheduler: Default::default(),
+                usage_ledger: Default::default(),
+                workflow: Default::default(),
+                reviews: Default::default(),
                 queued_messages: Default::default(),
                 cli: Default::default(),
                 ui: Default::default(),
@@ -878,6 +890,10 @@ mod tests {
         let path = directory.join("state.json");
         let mut store = Store {
             version: 2,
+            scheduler: Default::default(),
+            usage_ledger: Default::default(),
+            workflow: Default::default(),
+            reviews: Default::default(),
             queued_messages: Default::default(),
             cli: Default::default(),
             ui: Default::default(),
@@ -892,6 +908,7 @@ mod tests {
         };
         store.save_to(&path).unwrap();
         store.workspaces[0].sessions.push(SessionRecord {
+            branching: Default::default(),
             transcript: Default::default(),
             id: 1,
             provider: Provider::Codex,

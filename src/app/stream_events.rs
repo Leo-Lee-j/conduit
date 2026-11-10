@@ -105,6 +105,11 @@ impl ConduitApp {
                 structural_change = true;
             }
             match event {
+                Event::NativeTurnCompleted { thread_id, turn_id } => {
+                    if let Some(session) = self.session_mut(id) {
+                        crate::branching::record(session, thread_id, turn_id);
+                    }
+                }
                 Event::CommandCatalog(result) => {
                     if let Some(ticket) = self
                         .session_control
@@ -149,6 +154,14 @@ impl ConduitApp {
                 }
                 Event::Usage(mut usage) => {
                     if let Some(run) = self.session_control.runs.get_mut(&id) {
+                        if usage.input_tokens_known && usage.input_tokens < run.usage.input_tokens {
+                            run.usage_input_baseline = None;
+                        }
+                        if usage.cached_input_tokens_known
+                            && usage.cached_input_tokens < run.usage.cached_input_tokens
+                        {
+                            run.usage_cached_baseline = None;
+                        }
                         if (usage.output_tokens < run.output_tokens_at_start.unwrap_or(0)
                             || usage.output_tokens < run.usage.output_tokens)
                             && usage.turn_output_tokens.is_none()
@@ -299,6 +312,32 @@ impl ConduitApp {
                 }
                 Event::Finished { error, cancelled } => {
                     let finished_run = self.session_control.runs.remove(&id);
+                    if let Some(run) = &finished_run
+                        && matches!(run.intent, crate::commands::RequestIntent::Message)
+                    {
+                        self.finish_ai_review(
+                            id,
+                            &prefix,
+                            error.is_some() || cancelled || run.runtime.is_cancelled(),
+                            cx,
+                        );
+                    }
+                    if let Some(run) = &finished_run
+                        && !matches!(run.intent, crate::commands::RequestIntent::Fork(_))
+                    {
+                        self.completion_automations(
+                            id,
+                            &run.usage_key,
+                            error.is_some(),
+                            cancelled,
+                            cx,
+                        );
+                    }
+                    if let Some(run) = &finished_run
+                        && !matches!(run.intent, crate::commands::RequestIntent::Fork(_))
+                    {
+                        self.record_turn_usage(id, run, error.is_some() || cancelled, cx);
+                    }
                     if let Some(run) = &finished_run {
                         if let Some(ticket) = &run.command_ticket {
                             self.chat_commands.catalog.finish(ticket);
@@ -316,6 +355,11 @@ impl ConduitApp {
                             let key =
                                 if matches!(run.intent, crate::commands::RequestIntent::Discover) {
                                     "commands.connected"
+                                } else if matches!(
+                                    run.intent,
+                                    crate::commands::RequestIntent::Fork(_)
+                                ) {
+                                    "branching.created"
                                 } else {
                                     "commands.completed"
                                 };
@@ -394,7 +438,11 @@ impl ConduitApp {
                         self.session_control.unread_completed.insert(id);
                     }
                     if error.is_none() && !cancelled {
-                        completed_turns.push(id);
+                        if finished_run.as_ref().is_some_and(|run| {
+                            !matches!(run.intent, crate::commands::RequestIntent::Fork(_))
+                        }) {
+                            completed_turns.push(id);
+                        }
                         if self.selected_session != Some(id)
                             || (self.active_file.is_some() || self.active_diff.is_some())
                         {
@@ -512,14 +560,20 @@ impl ConduitApp {
                             .bind_native(ticket, native_id.clone());
                     }
                     if let Some(session) = self.session_mut(id) {
+                        crate::branching::bound(session, &native_id);
                         session.native_id = Some(native_id);
                     }
                     if let Some(run) = self.session_control.runs.get_mut(&id) {
                         run.status = conduit::i18n::text_static("stream_events.running").into();
                         // A thread ID only confirms the CLI handshake, not model output.
-                        run.activity =
-                            conduit::i18n::text_static("stream_events.waiting_for_model_response")
-                                .into();
+                        run.activity = conduit::i18n::text_static(
+                            if matches!(run.intent, crate::commands::RequestIntent::Fork(_)) {
+                                "branching.created"
+                            } else {
+                                "stream_events.waiting_for_model_response"
+                            },
+                        )
+                        .into();
                         run.activity_message = None;
                     }
                     self.dirty = true;

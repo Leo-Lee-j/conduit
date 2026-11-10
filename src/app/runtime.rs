@@ -115,6 +115,12 @@ impl ConduitApp {
 
     /// Shared by keyboard sends and the composer button.
     pub(super) fn send_blocked(&self, append_user: bool) -> Option<&'static str> {
+        if self
+            .send_target(append_user)
+            .is_some_and(|id| self.session_fork_pending(id))
+        {
+            return Some(conduit::i18n::text_static("branching.pending"));
+        }
         if self.cli_installing() {
             return Some(conduit::i18n::text_static(
                 "runtime.cli_update_in_progress_wait_for_it",
@@ -177,6 +183,14 @@ impl ConduitApp {
     }
 
     pub(super) fn send_ordinary_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .send_target(true)
+            .is_some_and(|id| self.session_fork_pending(id))
+        {
+            self.message = Some(conduit::i18n::text("branching.pending"));
+            cx.notify();
+            return;
+        }
         let target = self.composer_target();
         let text = self.input.read(cx).value().to_string();
         let references = self
@@ -397,7 +411,15 @@ impl ConduitApp {
             let session = self.session(id).ok_or(conduit::i18n::text_static(
                 "runtime.the_session_no_longer_exists",
             ))?;
+            if let crate::commands::RequestIntent::Fork(request) = &intent {
+                if crate::branching::request(session).as_ref() != Ok(request) {
+                    return Err(conduit::i18n::text("branching.changed"));
+                }
+            } else if crate::branching::pending(session) {
+                return Err(conduit::i18n::text("branching.pending"));
+            }
             if session.native_id.is_none()
+                && !matches!(intent, crate::commands::RequestIntent::Fork(_))
                 && session
                     .messages
                     .iter()
@@ -556,8 +578,11 @@ impl ConduitApp {
                 self.usage_context_window_fallback(provider, &session.channel, model.as_deref())
             })
             .unwrap_or(0);
-        let command_executable = matches!(intent, crate::commands::RequestIntent::Command(_))
-            .then(|| (provider, executable.clone()));
+        let command_executable = matches!(
+            intent,
+            crate::commands::RequestIntent::Command(_) | crate::commands::RequestIntent::Fork(_)
+        )
+        .then(|| (provider, executable.clone()));
         let (runtime, release) = ChatRuntime::start_after_save(crate::chat_runtime::StartRequest {
             intent: intent.clone(),
             provider,
@@ -574,6 +599,14 @@ impl ConduitApp {
             .session(id)
             .map(|session| session.usage)
             .unwrap_or_default();
+        let usage_service = self
+            .session(id)
+            .map(|s| match &s.channel {
+                ModelChannel::Cli => "cli".to_owned(),
+                ModelChannel::Provider(id) => format!("provider:{id}"),
+                ModelChannel::Ccs(id) => format!("ccs:{id}"),
+            })
+            .unwrap_or_default();
         self.session_control.runs.insert(
             id,
             ActiveRun::new(runtime, worktree, prefix, usage, model, effort),
@@ -583,6 +616,7 @@ impl ConduitApp {
             .filter(|_| provider.descriptor().commands.is_some())
             .map(|context| self.chat_commands.catalog.begin(context));
         if let Some(run) = self.session_control.runs.get_mut(&id) {
+            run.usage_service = usage_service;
             run.intent = intent;
             run.command_executable = command_executable;
             run.command_ticket = command_ticket;
@@ -601,6 +635,8 @@ impl ConduitApp {
             run.context_window_fallback = context_window_fallback;
             if fresh_session && provider == Provider::Codex {
                 run.output_tokens_at_start = Some(0);
+                run.usage_input_baseline = Some(0);
+                run.usage_cached_baseline = Some(0);
             }
         }
         Ok(id)
@@ -758,6 +794,7 @@ impl ConduitApp {
         if self.updater.exiting || self.updater.preparing() {
             return;
         }
+        self.poll_automations(cx);
         self.poll_files(cx);
         self.poll_git_navigation(cx);
         // Release the startup page once the initial history import merged

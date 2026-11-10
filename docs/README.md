@@ -9,6 +9,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [使用指南](usage.md) | 安装后的配置、对话、快捷键、文件、Git、终端与更新 |
+| [项目工具](project-tools.md) | 任务与 worktree、模板与交接、PR/CI、用量、自动任务、检查点及产物 |
 | [设置与 AI 连接](settings.md) | CLI、模型服务、Skills、MCP 的管理和保存边界 |
 | [文件与内容预览](files.md) | 文件引用、文件内查找、Markdown 和 Mermaid |
 | [Git 工作流](git.md) | 提交范围、暂存、分支、日志、标签与失败恢复 |
@@ -40,6 +41,7 @@
 
 ## 工具与资源
 
+- [宣传截图示例](../examples/screenshot-demo/README.md)：独立演示配置、虚构会话与可交互的 Orbit 示例应用。
 - [Shell 原型运行与命令](../tools/shell-prototype/README.md)、[上游补丁维护](../tools/shell-prototype/patches/README.md)。
 - [应用图标生成](../assets/app-icons/README.md)、[引擎与模型图标来源](../assets/icons/README.md)。资源来源和许可说明随资源保留。
 

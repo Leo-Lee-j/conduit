@@ -162,7 +162,6 @@ impl Runtime {
     pub fn start(profile: ShellProfile, cwd: PathBuf) -> Self {
         Self::launch(move || profile.resolve().map(|(exe, args)| (exe, args, cwd)))
     }
-    #[cfg(test)]
     pub fn command(exe: PathBuf, args: Vec<String>, cwd: PathBuf) -> Self {
         Self::launch(move || Ok((exe, args, cwd)))
     }

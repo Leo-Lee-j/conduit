@@ -1,7 +1,10 @@
 //! Provider-specific wire formats translated into presentation events.
 use crate::domain::{PermissionLevel, Provider, Usage};
 use serde_json::{Value, json};
+mod codex_commands;
+mod codex_fork;
 mod opencode;
+pub use codex_commands::SOURCE as CODEX_COMMANDS;
 mod reasoning;
 pub(crate) use reasoning::ThoughtStream;
 mod user_input;
@@ -35,6 +38,10 @@ pub struct Approval {
 }
 #[derive(Clone, Debug)]
 pub enum Event {
+    NativeTurnCompleted {
+        thread_id: String,
+        turn_id: String,
+    },
     CommandCatalog(Result<Vec<crate::commands::Descriptor>, String>),
     AcpConfig(Value),
     NativeId(String),
@@ -109,6 +116,8 @@ impl Step {
 struct ClaudeUsage {
     input: u64,
     input_reported: bool,
+    cache_reported: bool,
+    output_reported: bool,
     model: Option<String>,
     cache_read: u64,
     cache_write: u64,
@@ -117,6 +126,8 @@ struct ClaudeUsage {
 impl ClaudeUsage {
     fn merge(&mut self, value: &Value) {
         self.input_reported |= value["input_tokens"].as_u64().is_some();
+        self.cache_reported |= value["cache_read_input_tokens"].as_u64().is_some();
+        self.output_reported |= value["output_tokens"].as_u64().is_some();
         for (field, target) in [
             ("input_tokens", &mut self.input),
             ("cache_read_input_tokens", &mut self.cache_read),
@@ -137,6 +148,9 @@ impl ClaudeUsage {
             .saturating_add(self.cache_read)
             .saturating_add(self.cache_write);
         Usage {
+            input_tokens_known: self.input_reported,
+            cached_input_tokens_known: self.cache_reported,
+            output_tokens_known: self.output_reported,
             input_tokens: input,
             cached_input_tokens: self.cache_read,
             output_tokens: self.output,
@@ -453,6 +467,15 @@ impl Protocol {
         }
     }
     pub fn prepare(&mut self) -> anyhow::Result<()> {
+        if let crate::commands::RequestIntent::Fork(request) = &self.intent {
+            anyhow::ensure!(
+                self.provider == Provider::Codex
+                    && self.native_id.is_none()
+                    && !self.text_only
+                    && request.valid(),
+                conduit::i18n::text("branching.unsupported")
+            );
+        }
         anyhow::ensure!(
             matches!(self.intent, crate::commands::RequestIntent::Message)
                 || (!self.text_only && self.provider.descriptor().commands.is_some()),
@@ -523,6 +546,9 @@ impl Protocol {
         }
     }
     fn codex(&mut self, v: Value) -> Step {
+        if matches!(self.intent, crate::commands::RequestIntent::Fork(_)) {
+            return self.codex_fork(v);
+        }
         let mut step = Step::new();
         if let Some(error) = v.get("error")
             && v.get("id").is_some()
@@ -598,6 +624,9 @@ impl Protocol {
                 }
                 self.thread_id = Some(id.into());
                 step.events.push(Event::NativeId(id.into()));
+                if self.codex_command_ready(&mut step) {
+                    return step;
+                }
                 let mut params = json!({"threadId":id,"input":[{"type":"text","text":self.prompt,"text_elements":[]}]});
                 if let Some(model) = &self.model {
                     params["model"] = json!(model);
@@ -653,6 +682,19 @@ impl Protocol {
             return step;
         }
         match method {
+            "turn/started" if self.codex_compacting() => {
+                self.turn_id = p
+                    .pointer("/turn/id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+            }
+            "item/completed"
+                if self.codex_compacting() && p["item"]["type"] == "contextCompaction" =>
+            {
+                step.done = true;
+                step.events
+                    .push(Event::Notice(conduit::i18n::text("commands.compacted")));
+            }
             "item/agentMessage/delta" => step.events.push(Event::Delta {
                 key: text(p, "itemId").into(),
                 text: text(p, "delta").into(),
@@ -674,6 +716,11 @@ impl Protocol {
                             text: text(item, "text").into(),
                         });
                     }
+                } else if kind == "exitedReviewMode" && method == "item/completed" {
+                    step.events.push(Event::Text {
+                        key,
+                        text: text(item, "review").into(),
+                    });
                 } else if kind == "reasoning" {
                     if method == "item/completed" {
                         let summary = item["summary"]
@@ -766,6 +813,9 @@ impl Protocol {
                 let number = |value: &Value| value.as_u64().unwrap_or(0);
                 let total = &usage["total"];
                 step.events.push(Event::Usage(Usage {
+                    input_tokens_known: total["inputTokens"].as_u64().is_some(),
+                    cached_input_tokens_known: total["cachedInputTokens"].as_u64().is_some(),
+                    output_tokens_known: total["outputTokens"].as_u64().is_some(),
                     input_tokens: number(&total["inputTokens"]),
                     cached_input_tokens: number(&total["cachedInputTokens"]),
                     output_tokens: number(&total["outputTokens"]),
@@ -776,6 +826,9 @@ impl Protocol {
                 }));
             }
             "turn/completed" => {
+                if self.codex_compacting() && self.turn_id.is_none() {
+                    return step;
+                }
                 step.done = true;
                 if text(&p["turn"], "status") != "completed" {
                     step.error = Some(
@@ -785,6 +838,15 @@ impl Protocol {
                             .map(pretty)
                             .unwrap_or_else(|| text(&p["turn"], "status").into()),
                     );
+                } else if let (Some(thread_id), Some(turn_id)) =
+                    (p.get("threadId").and_then(Value::as_str), notification_turn)
+                    && self.thread_id.as_deref() == Some(thread_id)
+                    && self.turn_id.as_deref() == Some(turn_id)
+                {
+                    step.events.push(Event::NativeTurnCompleted {
+                        thread_id: thread_id.into(),
+                        turn_id: turn_id.into(),
+                    });
                 }
             }
             "error" => {
@@ -1210,7 +1272,12 @@ impl Protocol {
             self.claude_latest_usage = Some(id.into());
         }
         self.claude_usage.entry(id.into()).or_default().merge(value);
-        let mut total = Usage::default();
+        let mut total = Usage {
+            input_tokens_known: self.claude_usage.values().all(|u| u.input_reported),
+            cached_input_tokens_known: self.claude_usage.values().all(|u| u.cache_reported),
+            output_tokens_known: self.claude_usage.values().all(|u| u.output_reported),
+            ..Default::default()
+        };
         for response in self.claude_usage.values() {
             let usage = response.snapshot();
             total.input_tokens = total.input_tokens.saturating_add(usage.input_tokens);

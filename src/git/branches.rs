@@ -65,6 +65,9 @@ pub enum BranchAction {
         path: PathBuf,
         new_branch: Option<String>,
     },
+    RemoveWorktree {
+        parent: PathBuf,
+    },
     Merge,
     Rebase,
     CheckoutRebase,
@@ -561,6 +564,30 @@ pub(super) fn operate_branch(
                     "git.branches.worktree_created_and_added_to_the_workspace",
                 )
                 .into())
+            }
+            BranchAction::RemoveWorktree { parent } => {
+                let target = fs::canonicalize(worktree_root(workspace))?;
+                let parent = fs::canonicalize(parent)?;
+                if target == parent
+                    || !target.join(".git").is_file()
+                    || repository_scope(&target) != repository_scope(&parent)
+                {
+                    bail!(conduit::i18n::text("workflow.cleanup_invalid"));
+                }
+                // Git rejects dirty, locked and unregistered worktrees. Never use --force.
+                run_git_with_timeout(
+                    &git,
+                    &parent,
+                    &[
+                        "worktree",
+                        "remove",
+                        "--",
+                        target.to_str().context("Invalid path")?,
+                    ],
+                    cancel,
+                    Duration::from_secs(120),
+                )?;
+                Ok(conduit::i18n::text("workflow.cleaned"))
             }
             BranchAction::Merge | BranchAction::Rebase => {
                 if actual.current_ref.is_none() {

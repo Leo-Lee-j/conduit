@@ -10,6 +10,7 @@ struct Session {
     id: u64,
     workspace: WorkspaceKey,
     profile: ShellProfile,
+    environment: Option<crate::environments::Environment>,
     runtime: Arc<Runtime>,
     view: Entity<view::TerminalView>,
     last_state: RunState,
@@ -154,6 +155,28 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.launch_terminal(profile, None, window, cx);
+    }
+
+    pub(super) fn environment_terminal(
+        &mut self,
+        environment: crate::environments::Environment,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_workspace_path().as_ref() != Some(&environment.workspace) {
+            return;
+        }
+        self.launch_terminal(ShellProfile::Auto, Some(environment), window, cx);
+    }
+
+    fn launch_terminal(
+        &mut self,
+        profile: ShellProfile,
+        environment: Option<crate::environments::Environment>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.writable || self.closing || self.updater.preparing() {
             return;
         }
@@ -185,7 +208,18 @@ impl ConduitApp {
         self.terminals.close_confirmed = false;
         self.terminals.next_id += 1;
         let id = self.terminals.next_id;
-        let runtime = Arc::new(Runtime::start(profile, key.path().into()));
+        let runtime = Arc::new(if let Some(environment) = &environment {
+            match environment.command() {
+                Ok((exe, args)) => Runtime::command(exe, args, key.path().into()),
+                Err(error) => {
+                    self.terminals.feedback = Some(format!("{error:#}"));
+                    cx.notify();
+                    return;
+                }
+            }
+        } else {
+            Runtime::start(profile, key.path().into())
+        });
         let view = cx.new(|cx| view::TerminalView::new(runtime.clone(), cx));
         view.read(cx).focus.clone().focus(window, cx);
         self.terminals.selected.insert(key.clone(), id);
@@ -193,6 +227,7 @@ impl ConduitApp {
             id,
             workspace: key,
             profile,
+            environment,
             runtime,
             view,
             last_state: RunState::Starting,
@@ -320,8 +355,9 @@ impl ConduitApp {
             return;
         };
         let profile = s.profile;
+        let environment = s.environment.clone();
         self.terminals.sessions.retain(|s| s.id != id);
-        self.new_terminal(profile, window, cx);
+        self.launch_terminal(profile, environment, window, cx);
     }
     pub(super) fn poll_terminals(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let key = self.terminal_key();
@@ -511,7 +547,9 @@ impl ConduitApp {
             let s = self.terminals.sessions.iter().find(|s| s.id == id).unwrap();
             let title = format!(
                 "{} {}{}",
-                s.profile.label(),
+                s.environment
+                    .as_ref()
+                    .map_or(s.profile.label(), |e| e.name.as_str()),
                 id,
                 if s.runtime.active() {
                     ""
@@ -587,6 +625,60 @@ impl ConduitApp {
                     .child(conduit::i18n::text_static("shortcuts.terminal")),
             )
             .child(tabs)
+            .child(
+                Button::new("terminal-attach-selection")
+                    .small()
+                    .compact()
+                    .ghost()
+                    .icon(FullIconName::MessageSquarePlus)
+                    .tooltip(conduit::i18n::text_static("artifact.terminal_attach"))
+                    .accessibility_label(conduit::i18n::text_static("artifact.terminal_attach"))
+                    .disabled(!can_create)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let Some(workspace) = this.selected_workspace_path() else {
+                            return;
+                        };
+                        let Some(session) = this.terminals.current(&workspace) else {
+                            return;
+                        };
+                        let Some(text) = session
+                            .runtime
+                            .selected_text()
+                            .filter(|text| !text.trim().is_empty())
+                        else {
+                            return;
+                        };
+                        if text.len() > 64 * 1024 {
+                            this.terminals.feedback =
+                                Some(conduit::i18n::text("workflow.context_limit"));
+                            cx.notify();
+                            return;
+                        }
+                        let source = session.environment.as_ref().map_or_else(
+                            || session.profile.label().to_string(),
+                            |e| format!("{}:{}", e.host, e.directory),
+                        );
+                        let context = conduit::i18n::format(
+                            "artifact.terminal_context",
+                            &[
+                                ("workspace", workspace.display().to_string()),
+                                ("source", source),
+                                ("text", text),
+                            ],
+                        );
+                        if let Err(error) = this.append_review_draft(
+                            &workspace,
+                            this.selected_session,
+                            None,
+                            &context,
+                            window,
+                            cx,
+                        ) {
+                            this.terminals.feedback = Some(error);
+                        }
+                        cx.notify();
+                    })),
+            )
             .child(
                 Button::new("terminal-new")
                     .debug_selector(|| "terminal-new".into())

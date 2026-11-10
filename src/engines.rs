@@ -63,7 +63,7 @@ pub const REGISTRY: &[EngineDescriptor] = &[
             protocol: "App Server",
         },
         adapter: crate::cli_adapter::codex,
-        commands: None,
+        commands: Some(crate::protocol::CODEX_COMMANDS),
     },
     EngineDescriptor {
         provider: Provider::OpenCode,

@@ -378,6 +378,7 @@ pub enum RequestIntent {
     Message,
     Command(Box<CommandCall>),
     Discover,
+    Fork(crate::branching::ForkRequest),
 }
 
 pub struct TurnInput {

@@ -234,6 +234,10 @@ pub(super) fn turn_file_stats(session: &SessionRecord) -> TurnFileStats {
 }
 
 pub(super) struct ActiveRun {
+    pub(super) usage_key: String,
+    pub(super) usage_service: String,
+    pub(super) usage_input_baseline: Option<u64>,
+    pub(super) usage_cached_baseline: Option<u64>,
     pub(super) intent: crate::commands::RequestIntent,
     pub(super) command_ticket: Option<crate::commands::Ticket>,
     pub(super) command_draft: Option<super::runtime::saves::SentComposer>,
@@ -294,6 +298,7 @@ impl ActiveRun {
         model: Option<String>,
         reasoning_effort: ReasoningEffort,
     ) -> Self {
+        static NEXT_USAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let now = Instant::now();
         let output_tokens_at_start = usage.context_tokens.map(|_| usage.output_tokens);
         let completed_usage = usage;
@@ -302,6 +307,22 @@ impl ActiveRun {
         usage.turn_elapsed_ms = None;
         Self {
             runtime,
+            usage_key: format!(
+                "{}-{}-{}",
+                NEXT_USAGE.fetch_add(1, Ordering::Relaxed),
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ),
+            usage_service: "cli".into(),
+            usage_input_baseline: completed_usage
+                .input_tokens_known
+                .then_some(completed_usage.input_tokens),
+            usage_cached_baseline: completed_usage
+                .cached_input_tokens_known
+                .then_some(completed_usage.cached_input_tokens),
             intent: Default::default(),
             command_ticket: None,
             command_draft: None,

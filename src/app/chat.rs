@@ -1238,7 +1238,7 @@ impl ConduitApp {
                 let mut controls = h_flex()
                     .debug_selector(move || format!("reply-controls-{index}"))
                     // Include both hit targets in layout even when metadata is long.
-                    .w(px(if regenerable { 45. } else { 19. }))
+                    .w(px(if regenerable { 71. } else { 45. }))
                     .flex_shrink_0()
                     .gap(px(2.))
                     .child(
@@ -1267,6 +1267,16 @@ impl ConduitApp {
                             },
                         )),
                     );
+                controls = controls.child(
+                    message_action_button(
+                        SharedString::from(format!("reply-branch-{session_id}-{index}")),
+                        Icon::new(FullIconName::GitFork),
+                        conduit::i18n::text_static("workflow.branch_here"),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_handoff_at(session_id, index, window, cx)
+                    })),
+                );
                 if regenerable {
                     controls = controls.child(
                         message_action_button(

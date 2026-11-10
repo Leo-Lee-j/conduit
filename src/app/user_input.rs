@@ -34,6 +34,7 @@ mod tests {
                     workspaces: vec![Workspace {
                         path: std::env::temp_dir(),
                         sessions: vec![SessionRecord {
+                            branching: Default::default(),
                             transcript: Default::default(),
                             id: 1,
                             provider: crate::domain::Provider::Codex,

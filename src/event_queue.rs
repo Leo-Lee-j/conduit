@@ -41,6 +41,7 @@ pub(crate) fn channel() -> (Sender, Receiver) {
 }
 pub(crate) fn event_bytes(event: &Event) -> usize {
     128 + match event {
+        Event::NativeTurnCompleted { thread_id, turn_id } => thread_id.len() + turn_id.len(),
         Event::Delta { key, text }
         | Event::Text { key, text }
         | Event::ReasoningSummary { key, text, .. } => key.len() + text.len(),

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Orbit · 把想法变成下一步</title>
+  <link rel="icon" href="assets/orbit.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="src/styles.css">
+  <script src="src/board.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">跳到内容</a>
+  <aside class="sidebar">
+    <a class="brand" href="#board"><img src="assets/orbit.svg" width="34" height="34" alt="">Orbit<span>studio</span></a>
+    <div class="workspace"><span class="workspace-logo">O</span><div><strong>Orbit Studio</strong><small>产品与设计工作空间</small></div></div>
+    <p class="nav-label">工作空间</p>
+    <nav aria-label="主导航">
+      <a href="#board" data-view="board" class="active"><span aria-hidden="true">▦</span>工作看板<span class="nav-count">09</span></a>
+      <a href="#milestones" data-view="milestones"><span aria-hidden="true">◷</span>里程碑</a>
+      <a href="#docs" data-view="docs"><span aria-hidden="true">▤</span>项目文档</a>
+    </nav>
+    <p class="nav-label">当前项目</p>
+    <div class="project-label"><span class="project-dot"></span>Orbit 1.0 发布</div>
+    <div class="sprint-note"><span>本期目标</span><strong>让每个想法，都有下一步。</strong><p>从灵感到交付，给小团队一个清晰的工作节奏。</p><div class="mini-track"><i></i></div><small>产品构建中 · Sprint 08</small></div>
+    <div class="sidebar-bottom"><span class="avatar teal">林</span><div><strong>林夏</strong><small>示例工作空间</small></div><button id="theme-toggle" class="icon-button" aria-label="切换深浅主题" title="切换深浅主题">◐</button></div>
+  </aside>
+  <main id="main">
+    <header class="topbar"><span>项目 <span class="slash">/</span> <strong>Orbit 1.0</strong></span><span class="local-label"><i></i>本地演示</span></header>
+    <section class="intro"><div><p class="eyebrow">小团队，大想法</p><h1 id="page-title">把想法变成下一步<span>。</span></h1><p>清晰的优先级，专注的协作，让好作品按时发生。</p></div><div class="team" aria-label="示例团队：林夏、周宁、陈一"><span class="avatar teal">林</span><span class="avatar amber">周</span><span class="avatar blue">陈</span><span class="team-label">一起构建</span></div></section>
+    <section class="overview" aria-label="项目概览"><div><span>发布进度</span><strong id="progress-number">0<span>%</span></strong><div class="progress-track"><i id="progress-bar"></i></div></div><div><span>本期任务</span><strong id="total-count">0</strong><small>从设计到交付</small></div><div><span>进行中</span><strong id="active-count">0</strong><small>保持专注，持续推进</small></div><div class="release"><span>下个里程碑</span><strong>公开预览</strong><small>11 月 18 日 · Orbit 1.0</small></div></section>
+    <section id="board-view">
+      <div class="toolbar"><div class="view-label"><span aria-hidden="true">▦</span><strong>项目看板</strong></div><div class="board-actions"><label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="搜索任务…" aria-label="搜索任务"></label><label class="sr-only" for="owner-filter">筛选负责人</label><select id="owner-filter"><option value="all">所有成员</option><option>林夏</option><option>周宁</option><option>陈一</option></select><button class="primary" id="new-task">＋ 新建任务</button></div></div>
+      <div class="board" id="board" aria-label="任务看板"></div>
+      <p id="empty-search" class="empty" hidden>没有匹配的任务，试试其他关键词或成员。</p>
+    </section>
+    <section id="milestones-view" class="panel" hidden><h2>每一步都算数</h2><p class="muted">Orbit 1.0 · 发布计划</p><ol class="milestones"><li><span>11.04</span><div><strong>定义产品方向</strong><p>明确核心场景、信息结构和视觉语言。</p></div><b>已完成</b></li><li><span>11.10</span><div><strong>完成核心体验</strong><p>任务看板、成员筛选、任务详情与深色主题。</p></div><b>进行中</b></li><li><span>11.18</span><div><strong>开放产品预览</strong><p>打磨细节，发布演示并收集第一轮反馈。</p></div><b>下一步</b></li></ol></section>
+    <section id="docs-view" class="panel" hidden><h2>好协作，从共识开始</h2><p class="muted">项目的决定、规范与计划，都在这里。</p><div class="doc-grid"><a href="README.md"><span>01</span><h3>项目介绍</h3><p>产品定位、运行方式与演示说明</p><b>打开文档 ↗</b></a><a href="docs/design-notes.md"><span>02</span><h3>设计笔记</h3><p>颜色、排版与交互细节</p><b>打开文档 ↗</b></a><a href="docs/release-checklist.md"><span>03</span><h3>发布清单</h3><p>从本地预览到公开展示</p><b>打开文档 ↗</b></a></div></section>
+    <footer><span>少一点切换，多一点创造。</span><span>Orbit Studio · 所有项目、成员与任务均为虚构示例</span></footer>
+  </main>
+  <dialog id="task-dialog" aria-labelledby="dialog-title"><form id="task-form"><div class="dialog-heading"><span class="eyebrow">Orbit / 任务</span><button type="button" id="close-dialog" class="icon-button" aria-label="关闭">×</button></div><h2 id="dialog-title">新建任务</h2><label for="task-title">任务名称</label><input id="task-title" required maxlength="80" placeholder="下一步，想完成什么？"><label for="task-description">任务说明</label><textarea id="task-description" rows="3" maxlength="400" placeholder="补充目标与完成标准"></textarea><div class="form-row"><div><label for="task-owner">负责人</label><select id="task-owner"><option>林夏</option><option>周宁</option><option>陈一</option></select></div><div><label for="task-status">状态</label><select id="task-status"><option value="backlog">待开始</option><option value="progress">进行中</option><option value="review">待验收</option><option value="done">已完成</option></select></div></div><div class="dialog-footer"><button type="button" id="cancel-dialog" class="secondary">取消</button><button type="submit" class="primary">保存任务</button></div></form></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
