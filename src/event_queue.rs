@@ -107,15 +107,21 @@ impl Sender {
                 text,
                 summary_index,
                 snapshot: false,
+                replace: false,
+                summary,
+                ..
             } = &event
             && let Some(Event::ReasoningSummary {
                 key: old_key,
                 text: old_text,
                 summary_index: old_index,
                 snapshot: false,
+                summary: old_summary,
+                ..
             }) = queue.events.back_mut()
             && old_key == key
             && old_index == summary_index
+            && old_summary == summary
             && old_text.len() + text.len() <= 256 * 1024
         {
             old_text.push_str(text);
@@ -227,6 +233,9 @@ mod tests {
             text: text.into(),
             summary_index,
             snapshot,
+            replace: false,
+            summary: false,
+            elapsed_ms: None,
         };
         // Many tiny tokens must not exhaust the event budget before a UI tick.
         for _ in 0..MAX_EVENTS * 2 {
@@ -251,6 +260,33 @@ mod tests {
         assert!(
             matches!(rx.try_recv(), Ok(Event::ReasoningSummary {key, text,..}) if key == "two" && text == "d")
         );
+        assert_eq!(tx.0.queue.lock().unwrap().bytes, 0);
+    }
+
+    #[test]
+    fn reasoning_body_replacement_does_not_merge_with_a_queued_summary() {
+        let (tx, rx) = channel();
+        for (text, replace) in [
+            ("**Summary**", false),
+            ("Read the ", true),
+            ("files.", false),
+        ] {
+            tx.send(Event::ReasoningSummary {
+                key: "reason".into(),
+                text: text.into(),
+                summary_index: 0,
+                snapshot: false,
+                replace,
+                summary: text == "**Summary**",
+                elapsed_ms: None,
+            })
+            .unwrap();
+        }
+        assert!(matches!(rx.try_recv(),
+            Ok(Event::ReasoningSummary {text, replace:false, ..}) if text == "**Summary**"));
+        assert!(matches!(rx.try_recv(),
+            Ok(Event::ReasoningSummary {text, replace:true, ..}) if text == "Read the files."));
+        assert!(rx.try_recv().is_err());
         assert_eq!(tx.0.queue.lock().unwrap().bytes, 0);
     }
 

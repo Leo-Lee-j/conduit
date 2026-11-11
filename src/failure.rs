@@ -196,6 +196,7 @@ pub(crate) fn record_failure(
     session
         .messages
         .push(ChatItem::from(crate::domain::ChatItemData {
+            reasoning_summary: None,
             elapsed_ms: None,
             key,
             created_at,

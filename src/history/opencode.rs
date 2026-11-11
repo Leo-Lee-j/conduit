@@ -228,6 +228,7 @@ fn part_item(id: &str, message: &Value, part: Value, timestamp: i64) -> Option<C
         _ => return None,
     };
     let mut item = ChatItemData {
+        reasoning_summary: None,
         key: format!("import-opencode-{id}"),
         created_at: timestamp.max(0) as u64 / 1000,
         kind: kind.clone(),

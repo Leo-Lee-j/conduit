@@ -35,8 +35,14 @@ impl MessageIndex {
                 key,
                 text,
                 snapshot: false,
+                summary,
+                elapsed_ms,
                 ..
-            } if !text.trim().is_empty() => Some(format!("{prefix}-{key}")),
+            } if !text.trim().is_empty()
+                && (!summary || session.provider != Provider::Codex || elapsed_ms.is_some()) =>
+            {
+                Some(format!("{prefix}-{key}"))
+            }
             _ => None,
         };
         let closes = match event {
@@ -85,7 +91,13 @@ impl MessageIndex {
             self.reasoning = Some(super::state::ReasoningTimer {
                 key,
                 started: now,
-                previous: Duration::from_millis(previous),
+                previous: Duration::from_millis(match event {
+                    Event::ReasoningSummary {
+                        elapsed_ms: Some(elapsed),
+                        ..
+                    } => *elapsed,
+                    _ => previous,
+                }),
                 stopped: None,
             });
         }
@@ -173,6 +185,9 @@ pub(super) fn apply_event_indexed(
         text,
         summary_index,
         snapshot,
+        replace,
+        summary,
+        elapsed_ms,
     } = event
     {
         let key = format!("{prefix}-{key}");
@@ -183,14 +198,27 @@ pub(super) fn apply_event_indexed(
         };
         if let Some(position) = index.find(&session.messages, &key) {
             let item = &mut session.messages[position];
+            // A completion may contain only the heading/prefix of a summary
+            // whose details already arrived. Keep that streamed tail, while
+            // still accepting corrected snapshots and source replacements.
+            let keep_streamed =
+                item.reasoning_summary == Some(summary) && item.text.starts_with(text.trim_end());
             item.status = status;
+            item.reasoning_summary = Some(summary);
             if snapshot {
+                if elapsed_ms.is_some() {
+                    item.elapsed_ms = elapsed_ms;
+                }
                 // Some engines omit the body on completion. Preserve the deltas.
-                if !text.trim().is_empty() {
+                if !text.trim().is_empty() && !keep_streamed {
                     item.text = text;
                 }
                 item.detail.clear();
             } else {
+                if replace {
+                    item.text.clear();
+                    item.detail.clear();
+                }
                 let part = summary_index.to_string();
                 if !item.text.is_empty() && item.detail != part {
                     // Summary parts are independent Markdown paragraphs.
@@ -207,7 +235,8 @@ pub(super) fn apply_event_indexed(
         session
             .messages
             .push(ChatItem::from(crate::domain::ChatItemData {
-                elapsed_ms: None,
+                reasoning_summary: Some(summary),
+                elapsed_ms: if snapshot { elapsed_ms } else { None },
                 key,
                 created_at: unix_now(),
                 kind: ItemKind::Reasoning,
@@ -233,6 +262,7 @@ pub(super) fn apply_event_indexed(
             session
                 .messages
                 .push(ChatItem::from(crate::domain::ChatItemData {
+                    reasoning_summary: None,
                     elapsed_ms: None,
                     key,
                     created_at: 0,
@@ -345,6 +375,7 @@ pub(super) fn apply_event_indexed(
             session
                 .messages
                 .push(ChatItem::from(crate::domain::ChatItemData {
+                    reasoning_summary: None,
                     elapsed_ms: None,
                     key,
                     created_at: unix_now(),

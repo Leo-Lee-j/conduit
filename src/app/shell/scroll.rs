@@ -39,11 +39,12 @@ struct Pending {
 pub(super) struct Wheel {
     pending: Option<Pending>,
     context: Option<(Option<u64>, u64)>,
+    toward_bottom: bool,
 }
 
 impl Wheel {
     pub(super) fn is_pending(&self, app: &ConduitApp) -> bool {
-        self.context == Some((app.selected_session, app.chat_rows.revision.get()))
+        self.context == Some((app.selected_session, app.chat_rows.mapping_revision))
             && app.pending_message_jump.is_none()
             && self
                 .pending
@@ -51,18 +52,28 @@ impl Wheel {
                 .is_some_and(|pending| same(pending.displayed, app.scroll.logical_scroll_top()))
     }
 
+    pub(super) fn resume_follow(&self, app: &ConduitApp) -> bool {
+        self.toward_bottom
+            && self.context == Some((app.selected_session, app.chat_rows.mapping_revision))
+            && self.pending.is_none()
+            && app.pending_message_jump.is_none()
+            && app.scroll.logical_scroll_top().item_ix >= app.scroll.item_count()
+    }
+
     // A session switch or a rebuilt row map can reuse the same numeric offset.
     // Never carry a deferred gesture into that new transcript.
     pub(super) fn sync(&mut self, app: &ConduitApp) {
-        let context = (app.selected_session, app.chat_rows.revision.get());
+        let context = (app.selected_session, app.chat_rows.mapping_revision);
         if self.context != Some(context) || app.pending_message_jump.is_some() {
             self.pending = None;
+            self.toward_bottom = false;
             self.context = Some(context);
         }
     }
 
     /// Return whether a downward packet leaves an already-settled bottom alone.
     pub(super) fn apply(&mut self, scroll: &ListState, origin: ListOffset, delta: Pixels) -> bool {
+        self.toward_bottom = delta < px(0.);
         let pending = self.pending.take().filter(|p| same(p.displayed, origin));
         // The built-in handler has already changed the list. Test the captured
         // anchor, not that handler's result or an unresolved wheel target.
@@ -140,12 +151,11 @@ impl Wheel {
         }
         if waiting {
             // The keyed Markdown state notifies the timeline when its parser
-            // finishes. Keep the remaining distance, but present a valid row
-            // anchor in the meantime; negative offsets leave a blank viewport.
-            let displayed = ListOffset {
-                item_ix: top.item_ix,
-                offset_in_item: px(0.),
-            };
+            // finishes. Keep the remaining distance and the last valid anchor.
+            // Retain the painted viewport until every crossed row is ready.
+            // Showing the partially resolved target would jump to an empty
+            // Markdown row and then jump again when its parser finishes.
+            let displayed = pending.displayed;
             self.pending = Some(Pending {
                 target: top,
                 displayed,
@@ -180,9 +190,11 @@ fn measure(
             let text = app
                 .selected_session
                 .and_then(|id| app.session(id))
-                .and_then(|session| session.messages.get(app.chat_rows.message(index)))
-                .filter(|item| matches!(item.kind, ItemKind::Assistant | ItemKind::Reasoning))
-                .map(|item| item.text.clone());
+                .and_then(|session| {
+                    let item = session.messages.get(app.chat_rows.message(index))?;
+                    matches!(item.kind, ItemKind::Assistant | ItemKind::Reasoning)
+                        .then(|| chat::message_markdown(item, session.provider).into_owned())
+                });
             let (element, markdown) = app.render_message(index, window, cx);
             (element, markdown, text)
         })

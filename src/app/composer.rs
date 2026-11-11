@@ -570,12 +570,6 @@ impl ConduitApp {
             .and_then(|id| self.session_control.runs.get(&id));
         let show_stop = selected_run.is_some();
         let stopping = selected_run.is_some_and(|run| run.runtime.is_cancelled());
-        // The latest-message arrow appears
-        // only when the user has scrolled away from the end of the message list.
-        let show_latest_button = !self.at_bottom
-            && selected
-                .as_ref()
-                .is_some_and(|session| session.message_count > 0);
         let session_id = selected
             .as_ref()
             .map(|session| session.id)
@@ -846,15 +840,16 @@ impl ConduitApp {
             composer = composer.max_w(px(840.)).mx_auto();
         }
         let composer: AnyElement = composer.into_any_element();
-        // Live engine activity stays on the left; the step/file tags and the
-        // latest-message button share a row above the composer on the right.
+        // Engine activity and step/file tags reserve their own status row.
+        // The latest-message control floats over the transcript, so showing it
+        // never changes the viewport during a wheel gesture.
         let turn_activity = self
             .selected_session
             .and_then(|id| self.turn_activity_strip(id));
         let turn_stats = self
             .selected_session
             .and_then(|id| self.turn_stats_tags(id, cx));
-        let has_status_row = turn_activity.is_some() || turn_stats.is_some() || show_latest_button;
+        let has_status_row = turn_activity.is_some() || turn_stats.is_some();
         // Live engine activity and the step/file tags share the transcription's
         // content width: the same 24px gutter message rows add inside the 8px
         // list padding, so the hint never looks wider than the chat content.
@@ -872,42 +867,7 @@ impl ConduitApp {
                 .gap(px(6.))
                 .pb(px(8.))
                 .when_some(turn_activity, |row, activity| row.child(activity))
-                .when_some(turn_stats, |row, tags| row.child(tags))
-                .when(show_latest_button, |row| {
-                    row.child(
-                        Button::new("scroll-to-latest")
-                            .debug_selector(|| "scroll-to-latest".into())
-                            .ghost()
-                            .tooltip(conduit::i18n::text_static(
-                                "composer.jump_to_latest_message",
-                            ))
-                            .accessibility_label(conduit::i18n::text_static(
-                                "composer.jump_to_latest_message",
-                            ))
-                            .size(px(24.))
-                            .p_0()
-                            .flex_shrink_0()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(6.))
-                            .border_1()
-                            .border_color(rgb(palette().border))
-                            .bg(rgb(palette().surface_strong))
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.scroll_to_end();
-                                this.at_bottom = true;
-                                this.message_focus = None;
-                                this.pending_message_jump = None;
-                                cx.notify();
-                            }))
-                            .child(
-                                Icon::new(gpui_kit::assets::IconName::ArrowDown)
-                                    .size(px(12.))
-                                    .text_color(rgb(palette().muted)),
-                            ),
-                    )
-                }),
+                .when_some(turn_stats, |row, tags| row.child(tags)),
         );
         let area = div().px_2().pt(px(12.)).pb_4().child(
             v_flex()
@@ -947,5 +907,36 @@ impl ConduitApp {
                 ),
         );
         area.into_any_element()
+    }
+
+    pub(super) fn scroll_to_latest_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        Button::new("scroll-to-latest")
+            .debug_selector(|| "scroll-to-latest".into())
+            .ghost()
+            .tooltip(conduit::i18n::text_static(
+                "composer.jump_to_latest_message",
+            ))
+            .accessibility_label(conduit::i18n::text_static(
+                "composer.jump_to_latest_message",
+            ))
+            .size(px(28.))
+            .p_0()
+            .rounded(px(6.))
+            .border_1()
+            .border_color(rgb(palette().border))
+            .bg(rgb(palette().surface_strong))
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.scroll_to_end();
+                this.at_bottom = true;
+                this.message_focus = None;
+                this.pending_message_jump = None;
+                cx.notify();
+            }))
+            .child(
+                Icon::new(IconName::ArrowDown)
+                    .size(px(14.))
+                    .text_color(rgb(palette().muted)),
+            )
     }
 }

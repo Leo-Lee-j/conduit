@@ -101,6 +101,7 @@
   "chat.expand": "展开",
   "chat.thinking": "思考中",
   "chat.reasoning": "思考过程",
+  "chat.reasoning_summary": "思考摘要",
   "chat.elapsed": "已运行",
   "chat.failed": "运行失败",
   "chat.copied": "已复制",

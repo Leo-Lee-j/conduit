@@ -520,6 +520,7 @@ impl Store {
                     );
                     session.messages.push(crate::domain::ChatItem::from(
                         crate::domain::ChatItemData {
+                            reasoning_summary: None,
                             elapsed_ms: None,
                             key: "legacy-migration".into(),
                             created_at: 0,
@@ -623,6 +624,7 @@ pub(crate) fn restore_session(session: &mut crate::domain::SessionRecord) {
         session
             .messages
             .push(crate::domain::ChatItem::from(crate::domain::ChatItemData {
+                reasoning_summary: None,
                 elapsed_ms: None,
                 key: format!("restart-{}", session.messages.len()),
                 created_at: 0,

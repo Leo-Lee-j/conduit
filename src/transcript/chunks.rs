@@ -78,6 +78,7 @@ impl Writer<'_> {
     fn message(&mut self, item: &ChatItem) -> Result<Arc<Message>> {
         // Copy metadata explicitly so large input/output strings are never cloned here.
         let metadata = ChatItemData {
+            reasoning_summary: item.reasoning_summary,
             key: item.key.clone(),
             kind: item.kind.clone(),
             created_at: item.created_at,

@@ -17,7 +17,7 @@ pub(crate) use scan::Scanner;
 
 use crate::domain::{ChatItem, ItemKind, Provider};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// A CLI-side session discovered on disk, ready to become a `SessionRecord`.
@@ -393,6 +393,7 @@ fn extend_claude(lines: impl Iterator<Item = String>, state: ClaudeState) -> Cla
                         title = truncate_title(&text);
                     }
                     messages.push(ChatItem::from(crate::domain::ChatItemData {
+                        reasoning_summary: None,
                         elapsed_ms: None,
                         key: format!("import-{index}"),
                         created_at: event_created_at,
@@ -428,6 +429,7 @@ fn extend_claude(lines: impl Iterator<Item = String>, state: ClaudeState) -> Cla
                                 continue;
                             }
                             messages.push(ChatItem::from(crate::domain::ChatItemData {
+                                reasoning_summary: None,
                                 elapsed_ms: None,
                                 key: format!("import-{index}-{part_index}"),
                                 created_at: event_created_at,
@@ -447,6 +449,7 @@ fn extend_claude(lines: impl Iterator<Item = String>, state: ClaudeState) -> Cla
                         Some("tool_use") => {
                             let name = part.get("name").and_then(Value::as_str).unwrap_or("tool");
                             messages.push(ChatItem::from(crate::domain::ChatItemData {
+                                reasoning_summary: None,
                                 elapsed_ms: None,
                                 key: format!(
                                     "import-{index}-{part_index}-{}",
@@ -574,8 +577,8 @@ struct CodexState {
     current_model: Option<String>,
     event_rows: Vec<(usize, usize, ChatItem)>,
     response_rows: Vec<(usize, usize, ChatItem)>,
-    event_reasoning: Vec<(usize, String, String)>,
-    response_reasoning: Vec<(usize, String, String)>,
+    event_reasoning: Vec<CodexReasoningItem>,
+    response_reasoning: Vec<CodexReasoningItem>,
     event_users: usize,
     event_assistants: usize,
     event_tools: usize,
@@ -747,6 +750,7 @@ fn extend_codex(
                                 index,
                                 part_index,
                                 ChatItem::from(crate::domain::ChatItemData {
+                                    reasoning_summary: None,
                                     elapsed_ms: None,
                                     key: format!("import-{index}-{part_index}"),
                                     created_at: event_created_at,
@@ -782,6 +786,7 @@ fn extend_codex(
                             index,
                             0,
                             ChatItem::from(crate::domain::ChatItemData {
+                                reasoning_summary: None,
                                 elapsed_ms: None,
                                 key: format!("import-{index}-call"),
                                 created_at: event_created_at,
@@ -808,6 +813,7 @@ fn extend_codex(
                             index,
                             0,
                             ChatItem::from(crate::domain::ChatItemData {
+                                reasoning_summary: None,
                                 elapsed_ms: None,
                                 key: format!("import-{index}-call"),
                                 created_at: event_created_at,
@@ -826,17 +832,8 @@ fn extend_codex(
                         ));
                     }
                     Some("reasoning") => {
-                        let text = codex_reasoning_text(payload);
-                        if !text.is_empty() {
-                            response_reasoning.push((
-                                index,
-                                payload
-                                    .get("id")
-                                    .and_then(Value::as_str)
-                                    .map(str::to_owned)
-                                    .unwrap_or_else(|| format!("reasoning-{index}")),
-                                text,
-                            ));
+                        if let Some(reasoning) = codex_reasoning_item(index, payload, None) {
+                            response_reasoning.push(reasoning);
                         }
                     }
                     _ => {}
@@ -864,6 +861,7 @@ fn extend_codex(
                             index,
                             0,
                             ChatItem::from(crate::domain::ChatItemData {
+                                reasoning_summary: None,
                                 elapsed_ms: None,
                                 key,
                                 created_at: event_created_at,
@@ -886,6 +884,7 @@ fn extend_codex(
                             index,
                             0,
                             ChatItem::from(crate::domain::ChatItemData {
+                                reasoning_summary: None,
                                 elapsed_ms: None,
                                 key,
                                 created_at: event_created_at,
@@ -915,6 +914,7 @@ fn extend_codex(
                             index,
                             0,
                             ChatItem::from(crate::domain::ChatItemData {
+                                reasoning_summary: None,
                                 elapsed_ms: None,
                                 key,
                                 created_at: event_created_at,
@@ -967,6 +967,7 @@ fn extend_codex(
                             index,
                             0,
                             ChatItem::from(crate::domain::ChatItemData {
+                                reasoning_summary: None,
                                 elapsed_ms: None,
                                 key,
                                 created_at: event_created_at,
@@ -998,6 +999,7 @@ fn extend_codex(
                             index,
                             0,
                             ChatItem::from(crate::domain::ChatItemData {
+                                reasoning_summary: None,
                                 elapsed_ms: None,
                                 key,
                                 created_at: event_created_at,
@@ -1031,6 +1033,7 @@ fn extend_codex(
                             index,
                             0,
                             ChatItem::from(crate::domain::ChatItemData {
+                                reasoning_summary: None,
                                 elapsed_ms: None,
                                 key,
                                 created_at: event_created_at,
@@ -1049,18 +1052,13 @@ fn extend_codex(
                         ));
                     }
                     "Reasoning" => {
-                        let text = codex_reasoning_text(item);
-                        if text.is_empty() {
-                            continue;
+                        let elapsed_ms = payload["completed_at_ms"]
+                            .as_u64()
+                            .zip(payload["started_at_ms"].as_u64())
+                            .and_then(|(end, start)| end.checked_sub(start));
+                        if let Some(reasoning) = codex_reasoning_item(index, item, elapsed_ms) {
+                            event_reasoning.push(reasoning);
                         }
-                        event_reasoning.push((
-                            index,
-                            item.get("id")
-                                .and_then(Value::as_str)
-                                .map(str::to_owned)
-                                .unwrap_or_else(|| format!("reasoning-{index}")),
-                            text,
-                        ));
                     }
                     _ => {}
                 }
@@ -1122,22 +1120,37 @@ impl CodexState {
                 }),
         );
 
-        let known_reasoning: HashSet<String> = event_reasoning
+        let known_reasoning: HashMap<String, usize> = event_reasoning
             .iter()
-            .map(|(_, id, _)| id.clone())
+            .enumerate()
+            .map(|(index, item)| (item.id.clone(), index))
             .collect();
         let mut reasoning = event_reasoning;
-        reasoning.extend(
-            response_reasoning
-                .into_iter()
-                .filter(|(_, id, _)| !known_reasoning.contains(id)),
-        );
-        for (index, id, text) in reasoning {
+        for item in response_reasoning {
+            if let Some(&index) = known_reasoning.get(&item.id) {
+                // A short event summary must not hide a published response body.
+                if reasoning[index].summary && !item.summary {
+                    reasoning[index].text = item.text;
+                    reasoning[index].summary = false;
+                }
+            } else {
+                reasoning.push(item);
+            }
+        }
+        for CodexReasoningItem {
+            index,
+            id,
+            text,
+            summary,
+            elapsed_ms,
+        } in reasoning
+        {
             rows.push((
                 index,
                 0,
                 ChatItem::from(crate::domain::ChatItemData {
-                    elapsed_ms: None,
+                    reasoning_summary: Some(summary),
+                    elapsed_ms,
                     key: format!("import-{index}-{id}"),
                     created_at: timestamps.get(index).copied().unwrap_or(created_at),
                     kind: ItemKind::Reasoning,
@@ -1211,8 +1224,21 @@ fn codex_event_text(item: &Value) -> Option<String> {
     (!text.trim().is_empty()).then_some(text)
 }
 
-fn codex_reasoning_text(value: &Value) -> String {
-    for key in ["summary_text", "summary", "content", "raw_content"] {
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct CodexReasoningItem {
+    index: usize,
+    id: String,
+    text: String,
+    summary: bool,
+    elapsed_ms: Option<u64>,
+}
+
+fn codex_reasoning_item(
+    index: usize,
+    value: &Value,
+    elapsed_ms: Option<u64>,
+) -> Option<CodexReasoningItem> {
+    for key in ["content", "raw_content", "summary_text", "summary"] {
         let Some(parts) = value.get(key).and_then(Value::as_array) else {
             continue;
         };
@@ -1229,10 +1255,19 @@ fn codex_reasoning_text(value: &Value) -> String {
                 "\n"
             });
         if !text.trim().is_empty() {
-            return text;
+            return Some(CodexReasoningItem {
+                index,
+                id: value["id"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("reasoning-{index}")),
+                text,
+                summary: matches!(key, "summary_text" | "summary"),
+                elapsed_ms,
+            });
         }
     }
-    String::new()
+    None
 }
 
 fn codex_command(item: &Value) -> String {
@@ -1640,6 +1675,41 @@ mod tests {
     }
 
     #[test]
+    fn codex_reasoning_import_preserves_summary_source_body_and_native_timing() {
+        let workspace = tmpdir("codex-reasoning-source");
+        let values = [
+            serde_json::json!({"type":"session_meta","payload":{"id":"reasoning-source","cwd":workspace.to_string_lossy()}}),
+            serde_json::json!({"type":"event_msg","payload":{"type":"item_completed","started_at_ms":1000,"completed_at_ms":4380,"item":{"type":"Reasoning","id":"r1","summary_text":["**Capping output length**"],"raw_content":[]}}}),
+            serde_json::json!({"type":"response_item","payload":{"type":"reasoning","id":"r1","summary":[{"type":"summary_text","text":"**Capping output length**"}],"encrypted_content":"opaque"}}),
+            serde_json::json!({"type":"event_msg","payload":{"type":"item_completed","started_at_ms":5000,"completed_at_ms":6398,"item":{"type":"Reasoning","id":"r2","summary_text":["**Searching specific files**"],"raw_content":[]}}}),
+            serde_json::json!({"type":"response_item","payload":{"type":"reasoning","id":"r2","summary":[{"text":"**Searching specific files**"}],"content":[{"type":"reasoning_text","text":"Search the relevant implementation."}]}}),
+            serde_json::json!({"type":"event_msg","payload":{"type":"item_completed","item":{"type":"Reasoning","id":"r3","summary_text":["Unknown timing"]}}}),
+            serde_json::json!({"type":"event_msg","payload":{"type":"item_completed","started_at_ms":9000,"completed_at_ms":8000,"item":{"type":"Reasoning","id":"r4","summary_text":["Invalid timing"]}}}),
+        ];
+        let state = extend_codex(
+            values.iter().map(Value::to_string),
+            None,
+            CodexState::default(),
+        );
+        // The incremental history cache must preserve both source and timing.
+        let saved = serde_json::to_string(&state).unwrap();
+        let restored: CodexState = serde_json::from_str(&saved).unwrap();
+        let (_, session) = restored.finish().unwrap();
+        assert_eq!(session.messages.len(), 4);
+        assert_eq!(session.messages[0].text, "**Capping output length**");
+        assert_eq!(session.messages[0].reasoning_summary, Some(true));
+        assert_eq!(session.messages[0].elapsed_ms, Some(3380));
+        assert_eq!(
+            session.messages[1].text,
+            "Search the relevant implementation."
+        );
+        assert_eq!(session.messages[1].reasoning_summary, Some(false));
+        assert_eq!(session.messages[1].elapsed_ms, Some(1398));
+        assert_eq!(session.messages[2].elapsed_ms, None);
+        assert_eq!(session.messages[3].elapsed_ms, None);
+    }
+
+    #[test]
     fn codex_foreign_workspace_is_rejected() {
         let _locale = crate::test_support::chinese();
         let workspace = tmpdir("codex-other").canonicalize().unwrap();
@@ -1724,6 +1794,7 @@ mod tests {
             permission: crate::domain::PermissionLevel::default(),
             usage: crate::domain::Usage::default(),
             messages: vec![ChatItem::from(crate::domain::ChatItemData {
+                reasoning_summary: None,
                 elapsed_ms: None,
                 key: "old".into(),
                 created_at: 0,
@@ -1747,6 +1818,7 @@ mod tests {
                 title: "新标题".into(),
                 model: Some("m1".into()),
                 messages: vec![ChatItem::from(crate::domain::ChatItemData {
+                    reasoning_summary: None,
                     elapsed_ms: None,
                     key: "a".into(),
                     created_at: 0,
@@ -1766,6 +1838,7 @@ mod tests {
                 title: "终端会话".into(),
                 model: None,
                 messages: vec![ChatItem::from(crate::domain::ChatItemData {
+                    reasoning_summary: None,
                     elapsed_ms: None,
                     key: "b".into(),
                     created_at: 0,

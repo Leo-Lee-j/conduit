@@ -35,6 +35,7 @@ pub(super) fn dataset() -> (crate::store::Store, Value) {
                         longest = longest.max(text.len());
                         digest.update(text.as_bytes());
                         ChatItemData {
+                            reasoning_summary: None,
                             key: format!("stress-{}-{message}", session.id),
                             created_at: message as u64 + 1,
                             kind: if message % 2 == 0 {

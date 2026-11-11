@@ -320,6 +320,7 @@ mod tests {
     use crate::domain::{ChatItem, ChatItemData, ItemKind};
     fn tool(lines: usize) -> ChatItem {
         ChatItemData {
+            reasoning_summary: None,
             key: "tool".into(),
             kind: ItemKind::Tool,
             text: "Write".into(),

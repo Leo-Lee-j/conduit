@@ -3,16 +3,14 @@ use super::*;
 impl ConduitApp {
     pub(super) fn poll_streams(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let navigating = self.pending_message_jump.is_some();
-        let follow = !self.timeline.read(cx).wheel_pending(self)
-            && self.scroll.is_scrolled_to_end().unwrap_or_else(|| {
-                self.scroll.logical_scroll_top().item_ix >= self.scroll.item_count()
-            });
-        // Re-render when the scroll position crosses the "at the end" threshold
-        // so the floating arrow appears/disappears without polling every frame.
-        if !navigating && follow != self.at_bottom {
-            self.at_bottom = follow;
+        // Follow is reader intent, not a measurement of a changing document.
+        // Unknown heights and parser completion must not toggle it. Only a
+        // downward wheel gesture that actually landed at the end resumes it.
+        if !navigating && !self.at_bottom && self.timeline.read(cx).resume_follow(self) {
+            self.at_bottom = true;
             cx.notify();
         }
+        let follow = self.at_bottom && !self.timeline.read(cx).wheel_pending(self);
         // A global fair budget limits both concurrent streams and large events.
         let mut incoming = Vec::new();
         let mut ids = self
@@ -501,6 +499,7 @@ impl ConduitApp {
                             session
                                 .messages
                                 .push(ChatItem::from(crate::domain::ChatItemData {
+                                    reasoning_summary: None,
                                     elapsed_ms: None,
                                     key: format!("{prefix}-finish"),
                                     created_at: unix_now(),
@@ -714,7 +713,7 @@ impl ConduitApp {
         if changed {
             self.sync_chat_rows();
             if structural_change {
-                self.scroll.remeasure();
+                self.scroll.remeasure_items(0..self.scroll.item_count());
             } else {
                 dirty_messages.sort_unstable();
                 dirty_messages.dedup();

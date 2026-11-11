@@ -232,6 +232,9 @@ impl std::ops::DerefMut for ChatItem {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatItemData {
+    /// Whether published reasoning is a summary. None identifies older records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_summary: Option<bool>,
     /// Assistant: total CLI turn time. Reasoning: observed thinking phase time,
     /// excluding tool execution and replies. Absent when timing is unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -360,6 +363,7 @@ impl SessionRecord {
             .unwrap_or_else(|| {
                 self.messages
                     .push(ChatItem::from(crate::domain::ChatItemData {
+                        reasoning_summary: None,
                         elapsed_ms: None,
                         key: key.unwrap_or_else(|| format!("{turn}permission-{request}")),
                         created_at: 0,

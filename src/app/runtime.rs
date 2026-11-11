@@ -527,6 +527,7 @@ impl ConduitApp {
             session
                 .messages
                 .push(ChatItem::from(crate::domain::ChatItemData {
+                    reasoning_summary: None,
                     elapsed_ms: None,
                     key: format!(
                         "{prefix}-{}",

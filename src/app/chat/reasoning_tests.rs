@@ -13,6 +13,28 @@ fn draw(cx: &mut VisualTestContext) {
     });
 }
 
+#[test]
+fn codex_heading_only_completion_keeps_streamed_summary_details() {
+    let mut session = crate::app::tests::session();
+    session.messages.clear();
+    session.provider = Provider::Codex;
+    let mut index = MessageIndex::default();
+    let mut protocol =
+        crate::protocol::Protocol::new(Provider::Codex, "C:/work".into(), "inspect".into(), None);
+    for value in [
+        json!({"method":"item/reasoning/summaryTextDelta", "params":{"itemId":"r1","summaryIndex":0,"delta":"**Inspect files**\n\nRead the implementation as it arrives."}}),
+        json!({"method":"item/completed", "params":{"item":{"id":"r1","type":"reasoning","summary":["**Inspect files**"],"content":[]}}}),
+    ] {
+        for event in protocol.accept(value).events {
+            apply_event_indexed(&mut session, "turn", event, &mut index);
+        }
+    }
+    assert_eq!(
+        session.messages[0].text,
+        "**Inspect files**\n\nRead the implementation as it arrives."
+    );
+}
+
 #[gpui_kit::test]
 fn reasoning_stream_stays_visible_after_reply_and_restoration(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
@@ -37,6 +59,9 @@ fn reasoning_stream_stays_visible_after_reply_and_restoration(cx: &mut TestAppCo
             text: "  ".into(),
             summary_index: 0,
             snapshot: false,
+            replace: false,
+            summary: false,
+            elapsed_ms: None,
         })
         .unwrap();
     cx.update(|window, cx| app.update(cx, |app, cx| app.poll_streams(window, cx)));
@@ -51,6 +76,13 @@ fn reasoning_stream_stays_visible_after_reply_and_restoration(cx: &mut TestAppCo
     });
     let mut protocol =
         crate::protocol::Protocol::new(Provider::Codex, "C:/work".into(), "inspect".into(), None);
+    assert!(
+        protocol
+            .accept(json!({"method":"item/started",
+        "params":{"item":{"id":"r1","type":"reasoning","summary":[],"content":[]}}}))
+            .events
+            .is_empty()
+    );
     let mut feed = |value| {
         for event in protocol.accept(value).events {
             sender.send(event).unwrap();
@@ -58,18 +90,26 @@ fn reasoning_stream_stays_visible_after_reply_and_restoration(cx: &mut TestAppCo
         cx.update(|window, cx| app.update(cx, |app, cx| app.poll_streams(window, cx)));
         draw(cx);
         draw(cx);
-        cx.debug_bounds("reasoning-body-1-0").unwrap().size.height
+        cx.debug_bounds("reasoning-quote-1-0").unwrap().size.height
     };
+    let partial_heading_height = feed(json!({"method":"item/reasoning/summaryTextDelta",
+        "params":{"itemId":"r1","summaryIndex":0,"delta":"**Inspect"}}));
     let heading_height = feed(json!({"method":"item/reasoning/summaryTextDelta",
-        "params":{"itemId":"r1","summaryIndex":0,"delta":"**Inspect files**"}}));
+        "params":{"itemId":"r1","summaryIndex":0,"delta":" files**"}}));
+    assert_eq!(
+        partial_heading_height, heading_height,
+        "streaming a heading must keep one compact row"
+    );
     let sections_height = feed(json!({"method":"item/reasoning/summaryTextDelta",
         "params":{"itemId":"r1","summaryIndex":1,"delta":"**Check tests**"}}));
     assert!(
         sections_height > heading_height,
         "separate summary parts must render on separate lines"
     );
-    let detailed_height = feed(json!({"method":"item/reasoning/summaryTextDelta",
-        "params":{"itemId":"r1","summaryIndex":1,"delta":"\n\nCheck the implementation.\n\nVerify the result."}}));
+    feed(json!({"method":"item/reasoning/textDelta",
+        "params":{"itemId":"r1","contentIndex":0,"delta":"Read the implementation."}}));
+    let detailed_height = feed(json!({"method":"item/reasoning/textDelta",
+        "params":{"itemId":"r1","contentIndex":0,"delta":"\n\nCheck the implementation.\n\nVerify the result."}}));
     assert!(
         detailed_height > sections_height,
         "later paragraphs must expand the visible reasoning body"
@@ -86,14 +126,18 @@ fn reasoning_stream_stays_visible_after_reply_and_restoration(cx: &mut TestAppCo
             conduit::i18n::text_static("stream_events.thinking")
         );
         let item = &app.session(1).unwrap().messages[0];
-        assert_eq!(item.text, "**Inspect files**\n\n**Check tests**\n\nCheck the implementation.\n\nVerify the result.");
+        assert_eq!(
+            item.text,
+            "Read the implementation.\n\nCheck the implementation.\n\nVerify the result."
+        );
         assert_eq!(item.status, crate::message_status::ToolStatus::Running);
+        assert_eq!(item.reasoning_summary, Some(false));
         assert!(app.chat_rows.group(0).is_none());
     });
-    // Empty completion closes the activity without erasing the accumulated text.
+    // A late heading-only snapshot must not erase the streamed body.
     for event in protocol
         .accept(json!({"method":"item/completed",
-        "params":{"item":{"id":"r1","type":"reasoning","summary":[]}}}))
+        "params":{"item":{"id":"r1","type":"reasoning","summary":["**Inspect files**"]}}}))
         .events
     {
         sender.send(event).unwrap();
@@ -129,7 +173,7 @@ fn reasoning_stream_stays_visible_after_reply_and_restoration(cx: &mut TestAppCo
         let session = app.session(1).unwrap();
         assert_eq!(
             session.messages[0].text,
-            "**Inspect files**\n\n**Check tests**\n\nCheck the implementation.\n\nVerify the result."
+            "Read the implementation.\n\nCheck the implementation.\n\nVerify the result."
         );
         assert_eq!(
             session.messages[0].status,
@@ -225,7 +269,7 @@ fn restored_reasoning_preserves_separate_summary_paragraphs(cx: &mut TestAppCont
             app.session_mut(1).unwrap().provider = Provider::Codex;
             app.store.ui.collapse_reasoning = false;
             app.session_mut(1).unwrap().messages = serde_json::from_value(json!([
-                {"key":"one", "kind":"Reasoning", "text":"**Inspect files**", "status":"completed"},
+                {"key":"one", "kind":"Reasoning", "text":"**Inspect files**", "status":"completed", "elapsed_ms":46},
                 {"key":"legacy", "kind":"Reasoning", "text":"**Inspect files**\n**Check tests**", "status":"completed"},
                 {"key":"sections", "kind":"Reasoning", "text":"**Inspect files**\n\n**Check tests**", "status":"completed"},
                 {"key":"details", "kind":"Reasoning", "text":"**Inspect files**\n\nRead the implementation.\n\nVerify the result.", "status":"completed"}
@@ -236,10 +280,18 @@ fn restored_reasoning_preserves_separate_summary_paragraphs(cx: &mut TestAppCont
     });
     draw(cx);
     draw(cx);
-    let one = cx.debug_bounds("reasoning-body-1-0").unwrap().size.height;
-    let legacy = cx.debug_bounds("reasoning-body-1-1").unwrap().size.height;
-    let sections = cx.debug_bounds("reasoning-body-1-2").unwrap().size.height;
-    let details = cx.debug_bounds("reasoning-body-1-3").unwrap().size.height;
+    assert!(
+        cx.debug_bounds("reasoning-body-1-0").is_none(),
+        "a heading alone must not pretend to have an expandable body"
+    );
+    let one = cx.debug_bounds("reasoning-quote-1-0").unwrap().size.height;
+    assert!(
+        cx.debug_bounds("reasoning-elapsed-1-0").is_none(),
+        "legacy summary delivery duration is not a reliable reasoning timer"
+    );
+    let legacy = cx.debug_bounds("reasoning-quote-1-1").unwrap().size.height;
+    let sections = cx.debug_bounds("reasoning-quote-1-2").unwrap().size.height;
+    let details = cx.debug_bounds("reasoning-quote-1-3").unwrap().size.height;
     assert!(
         legacy > one,
         "old heading-only parts must not collapse into one visual line"
@@ -335,6 +387,9 @@ fn reasoning_times_each_phase_and_preserves_duration_after_completion() {
         text: "Checking the implementation".into(),
         summary_index: 0,
         snapshot: false,
+        replace: false,
+        summary: false,
+        elapsed_ms: None,
     };
     let feed =
         |session: &mut crate::domain::SessionRecord, index: &mut MessageIndex, seconds, event| {
@@ -379,6 +434,9 @@ fn reasoning_times_each_phase_and_preserves_duration_after_completion() {
             text: String::new(),
             summary_index: 0,
             snapshot: true,
+            replace: false,
+            summary: false,
+            elapsed_ms: None,
         },
     );
     assert_eq!(session.messages[0].elapsed_ms, Some(7000));
@@ -420,6 +478,9 @@ fn reasoning_times_each_phase_and_preserves_duration_after_completion() {
             text: "Published summary".into(),
             summary_index: 0,
             snapshot: true,
+            replace: false,
+            summary: false,
+            elapsed_ms: None,
         },
     );
     assert_eq!(session.messages[6].elapsed_ms, None);
@@ -427,6 +488,66 @@ fn reasoning_times_each_phase_and_preserves_duration_after_completion() {
     let restored: Vec<crate::domain::ChatItem> = serde_json::from_str(&saved).unwrap();
     assert_eq!(restored[0].elapsed_ms, Some(7000));
     assert_eq!(restored[5].elapsed_ms, Some(3000));
+}
+
+#[test]
+fn codex_reasoning_summary_uses_native_timing_or_keeps_it_unknown() {
+    use std::time::{Duration, Instant};
+    let mut session = crate::app::tests::session();
+    session.provider = Provider::Codex;
+    session.messages.clear();
+    let now = Instant::now();
+    let mut index = MessageIndex::default();
+    for (key, native) in [("known", Some(3380)), ("unknown", None)] {
+        for snapshot in [false, true] {
+            let event = Event::ReasoningSummary {
+                key: key.into(),
+                text: "**Capping output length**".into(),
+                summary_index: 0,
+                snapshot,
+                replace: false,
+                summary: true,
+                elapsed_ms: native,
+            };
+            index.observe_reasoning(&mut session, "turn", &event, now);
+            apply_event_indexed(&mut session, "turn", event, &mut index);
+        }
+    }
+    assert_eq!(session.messages[0].elapsed_ms, Some(3380));
+    assert_eq!(session.messages[1].elapsed_ms, None);
+    assert!(
+        index
+            .reasoning_elapsed("turn-unknown", now + Duration::from_secs(30))
+            .is_none()
+    );
+    let saved = serde_json::to_string(&session.messages).unwrap();
+    let restored: Vec<crate::domain::ChatItem> = serde_json::from_str(&saved).unwrap();
+    assert_eq!(restored[0].reasoning_summary, Some(true));
+    assert_eq!(
+        super::reasoning_label_key(&restored[0], true, false),
+        "chat.reasoning_summary"
+    );
+    assert_eq!(restored[0].elapsed_ms, Some(3380));
+    assert_eq!(restored[1].elapsed_ms, None);
+    let mut item = restored[0].clone();
+    item.reasoning_summary = Some(false);
+    assert_eq!(
+        super::reasoning_label_key(&item, true, false),
+        "chat.reasoning"
+    );
+    assert_eq!(
+        super::reasoning_label_key(&item, true, true),
+        "chat.thinking"
+    );
+    item.reasoning_summary = None;
+    assert_eq!(
+        super::reasoning_label_key(&item, true, false),
+        "chat.reasoning_summary"
+    );
+    assert_eq!(
+        super::reasoning_label_key(&item, false, false),
+        "chat.reasoning"
+    );
 }
 
 #[test]
@@ -446,6 +567,9 @@ fn reasoning_completion_and_cancellation_preserve_received_text() {
                     text: "First part".into(),
                     summary_index: 0,
                     snapshot: false,
+                    replace: false,
+                    summary: false,
+                    elapsed_ms: None,
                 },
                 &mut index,
             );
@@ -458,6 +582,9 @@ fn reasoning_completion_and_cancellation_preserve_received_text() {
                 text: "Final summary".into(),
                 summary_index: 0,
                 snapshot: true,
+                replace: false,
+                summary: false,
+                elapsed_ms: None,
             },
             &mut index,
         );
@@ -475,6 +602,9 @@ fn reasoning_completion_and_cancellation_preserve_received_text() {
                 text: "Partial summary".into(),
                 summary_index: 0,
                 snapshot: false,
+                replace: false,
+                summary: false,
+                elapsed_ms: None,
             },
             &mut index,
         );
@@ -495,6 +625,9 @@ fn reasoning_completion_and_cancellation_preserve_received_text() {
                     text: String::new(),
                     summary_index: 0,
                     snapshot: true,
+                    replace: false,
+                    summary: false,
+                    elapsed_ms: None,
                 },
                 &mut index
             )

@@ -3,8 +3,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 
-// Reparse cached Codex summaries to preserve their Markdown paragraph boundaries.
-const PARSER_VERSION: u32 = 3;
+// Reparse Codex reasoning to retain its source and native phase duration.
+const PARSER_VERSION: u32 = 4;
 const MAX_ENTRY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_INDEX_BYTES: i64 = 256 * 1024 * 1024;
 

@@ -40,6 +40,7 @@ pub(in crate::app) struct Rows {
     expansion: HashMap<String, bool>,
     pub rows: Vec<Row>,
     pub revision: std::cell::Cell<u64>,
+    pub mapping_revision: u64,
     #[cfg(test)]
     pub classifications: usize,
 }
@@ -74,6 +75,7 @@ impl Rows {
             *self = Self {
                 session: id,
                 revision: std::cell::Cell::new(self.revision.get().wrapping_add(1)),
+                mapping_revision: self.mapping_revision.wrapping_add(1),
                 ..Default::default()
             };
         }
@@ -212,6 +214,15 @@ impl Rows {
                     group: Some(group),
                 });
             }
+        }
+        if previous.as_ref().is_some_and(|old| {
+            old.len() != self.rows.len()
+                || old
+                    .iter()
+                    .zip(&self.rows)
+                    .any(|(a, b)| a.message != b.message || a.key != b.key)
+        }) {
+            self.mapping_revision = self.mapping_revision.wrapping_add(1);
         }
         previous
     }

@@ -602,3 +602,140 @@ fn measured(
     draw(cx);
     crate::app::chat::profiling::finish()
 }
+
+#[gpui_kit::test]
+fn streaming_structure_change_keeps_absolute_offset_inside_reading_row(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx) = fixture(cx);
+    let (runtime, sender) = ChatRuntime::test_channel();
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.session_mut(1).unwrap().messages[79].text =
+                "A paragraph in a long answer.\n\n".repeat(180);
+            app.session_control.runs.insert(
+                1,
+                ActiveRun::new(
+                    runtime,
+                    app.store.workspaces[0].path.clone(),
+                    "scroll".into(),
+                    Default::default(),
+                    None,
+                    Default::default(),
+                ),
+            );
+            app.sync_chat_rows();
+            cx.notify();
+        });
+    });
+    settle(cx);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.at_bottom = false;
+            app.pending_message_jump = Some(79);
+            app.scroll.scroll_to(gpui_kit::ListOffset {
+                item_ix: 79,
+                offset_in_item: px(220.),
+            });
+            cx.notify();
+        })
+    });
+    settle(cx);
+    let before = position(&app, cx);
+    assert_eq!(before.0, 79);
+    assert_eq!(before.1, px(220.));
+    cx.update(|_, cx| app.update(cx, |app, _| app.pending_message_jump = None));
+    sender
+        .send(Event::Delta {
+            key: "79".into(),
+            text: "More of this answer.\n\n".repeat(100),
+        })
+        .unwrap();
+    sender
+        .send(Event::Tool {
+            key: "next-tool".into(),
+            title: "Read".into(),
+            detail: String::new(),
+            status: "running".into(),
+        })
+        .unwrap();
+    cx.update(|window, cx| app.update(cx, |app, cx| app.poll_streams(window, cx)));
+    for _ in 0..5 {
+        draw(cx);
+        assert_eq!(
+            position(&app, cx),
+            before,
+            "a streamed layout change must preserve pixels, not a percentage of the growing answer"
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn latest_button_does_not_resize_transcript_when_leaving_bottom(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx) = fixture(cx);
+    let before = cx.update(|_, cx| app.read(cx).scroll.viewport_bounds());
+    cx.simulate_event(ScrollWheelEvent {
+        position: before.center(),
+        delta: pixels(30.),
+        ..Default::default()
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("scroll-to-latest").is_some());
+    let after = cx.update(|_, cx| app.read(cx).scroll.viewport_bounds());
+    assert_eq!(
+        before, after,
+        "the latest-message control must not change the viewport during a wheel gesture"
+    );
+}
+
+#[gpui_kit::test]
+fn streaming_text_does_not_cancel_a_pending_wheel_packet(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx) = fixture(cx);
+    let (runtime, sender) = ChatRuntime::test_channel();
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.session_control.runs.insert(
+                1,
+                ActiveRun::new(
+                    runtime,
+                    app.store.workspaces[0].path.clone(),
+                    "scroll".into(),
+                    Default::default(),
+                    None,
+                    Default::default(),
+                ),
+            );
+            app.jump_to_message(1, "scroll-40", cx);
+        })
+    });
+    settle(cx);
+    cx.update(|window, cx| {
+        let pointer = app.read(cx).scroll.viewport_bounds().center();
+        window.dispatch_event(
+            ScrollWheelEvent {
+                position: pointer,
+                delta: pixels(-20.),
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+        assert!(app.read(cx).timeline.read(cx).wheel_pending(app.read(cx)));
+        sender
+            .send(Event::Delta {
+                key: "79".into(),
+                text: " More streamed text.".into(),
+            })
+            .unwrap();
+        app.update(cx, |app, cx| app.poll_streams(window, cx));
+        assert!(
+            app.read(cx).timeline.read(cx).wheel_pending(app.read(cx)),
+            "text growth must not discard the pending gesture"
+        );
+    });
+    settle(cx);
+    let (row, offset) = position(&app, cx);
+    assert_eq!(row, 40);
+    assert_eq!(offset, px(20.));
+}

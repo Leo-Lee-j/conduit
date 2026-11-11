@@ -27,6 +27,10 @@ impl ChatTimeline {
         self.wheel.borrow().is_pending(app)
     }
 
+    pub(super) fn resume_follow(&self, app: &ConduitApp) -> bool {
+        self.wheel.borrow().resume_follow(app)
+    }
+
     pub(super) fn new(app: WeakEntity<ConduitApp>, scroll: ListState) -> Self {
         Self {
             app,
@@ -431,6 +435,7 @@ impl Render for ConduitApp {
                 if session.message_count > 0 {
                     messages = div()
                         .id("messages")
+                        .relative()
                         .flex_1()
                         .min_h_0()
                         .min_w_0()
@@ -450,7 +455,16 @@ impl Render for ConduitApp {
                             self.timeline
                                 .clone()
                                 .cached(StyleRefinement::default().size_full()),
-                        );
+                        )
+                        .when(!self.at_bottom, |messages| {
+                            messages.child(
+                                div()
+                                    .absolute()
+                                    .bottom(px(12.))
+                                    .right(px(24.))
+                                    .child(self.scroll_to_latest_button(cx)),
+                            )
+                        });
                 }
             } else if has_workspace {
                 messages = messages.child(

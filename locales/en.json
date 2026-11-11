@@ -101,6 +101,7 @@
   "chat.expand": "Expand",
   "chat.thinking": "Thinking",
   "chat.reasoning": "Thinking process",
+  "chat.reasoning_summary": "Reasoning summary",
   "chat.elapsed": "Elapsed",
   "chat.failed": "Failed",
   "chat.copied": "Copied",

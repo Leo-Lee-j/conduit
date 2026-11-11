@@ -64,6 +64,9 @@ fn thinking_disclosure_preserves_manual_choices_across_streaming_and_sessions(
                     text: " and checking again".into(),
                     summary_index: 0,
                     snapshot: false,
+                    replace: false,
+                    summary: false,
+                    elapsed_ms: None,
                 },
             );
             app.sync_chat_rows();

@@ -11,6 +11,45 @@ mod turn_diff;
 #[cfg(all(test, feature = "ui-tests"))]
 mod reasoning_tests;
 
+/// A short provider heading belongs on the disclosure line. Keep its body on
+/// one stable Markdown surface, rather than parsing/painting the title twice.
+fn reasoning_parts(text: &str) -> (Option<&str>, &str) {
+    let source = text.trim_start_matches(['\r', '\n']);
+    let (line, remaining) = source.split_once('\n').unwrap_or((source, ""));
+    if line.starts_with("    ") || line.starts_with('\t') {
+        return (None, text);
+    }
+    let line = line.trim();
+    let heading = line.strip_prefix("**").and_then(|title| {
+        let title = if let Some(title) = title.strip_suffix("**") {
+            title
+        } else if remaining.is_empty() {
+            title
+        } else {
+            return None;
+        };
+        (!title.trim().is_empty() && !title.contains("**") && title.chars().count() <= 160)
+            .then_some(title.trim())
+    });
+    match heading {
+        Some(title) => (Some(title), remaining.trim_start_matches(['\r', '\n'])),
+        None => (None, text),
+    }
+}
+
+pub(super) fn message_markdown(item: &ChatItem, provider: Provider) -> Cow<'_, str> {
+    if item.kind == ItemKind::Reasoning {
+        let (_, body) = reasoning_parts(&item.text);
+        if provider == Provider::Codex {
+            reasoning_markdown(body)
+        } else {
+            Cow::Borrowed(body)
+        }
+    } else {
+        Cow::Borrowed(&item.text)
+    }
+}
+
 /// Older Codex transcripts joined standalone summary headings with soft newlines.
 /// Restore their paragraph boundaries for display, leaving stored text and normal
 /// Markdown (including indented code and detailed summaries) unchanged.
@@ -69,6 +108,17 @@ pub(super) fn assistant_reply_text(session: &SessionRecord, index: usize) -> Str
         .map(|item| item.text.as_str())
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+/// Describe the provider's published source, including legacy Codex summaries.
+fn reasoning_label_key(item: &ChatItem, codex: bool, running: bool) -> &'static str {
+    if item.reasoning_summary.unwrap_or(codex) {
+        "chat.reasoning_summary"
+    } else if running {
+        "chat.thinking"
+    } else {
+        "chat.reasoning"
+    }
 }
 
 /// Keep short counters in seconds and longer turns readable as minutes/seconds.
@@ -724,21 +774,25 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let key = (session_id, item.key.clone());
+        let (heading, body) = reasoning_parts(&item.text);
+        let has_body = !body.trim().is_empty();
         let expanded = self.reasoning_expanded(&key);
         let run = self.session_control.runs.get(&session_id);
         let live_elapsed = run.and_then(|run| {
             run.message_index
                 .reasoning_elapsed(&item.key, Instant::now())
         });
-        let running = tool_running(item)
-            && live_elapsed.is_some()
-            && run.is_some_and(|run| !run.runtime.is_cancelled());
-        let elapsed = live_elapsed.or_else(|| item.elapsed_ms.map(Duration::from_millis));
-        let label = conduit::i18n::text_static(if running {
-            "chat.thinking"
-        } else {
-            "chat.reasoning"
+        let running = tool_running(item) && run.is_some_and(|run| !run.runtime.is_cancelled());
+        let codex = self
+            .session(session_id)
+            .is_some_and(|session| session.provider == Provider::Codex);
+        // Older Codex records timed summary delivery, not the underlying phase.
+        let elapsed = live_elapsed.or_else(|| {
+            item.elapsed_ms
+                .filter(|_| !codex || item.reasoning_summary.is_some())
+                .map(Duration::from_millis)
         });
+        let label = conduit::i18n::text_static(reasoning_label_key(item, codex, running));
         Button::new(SharedString::from(format!(
             "reasoning-toggle-{session_id}-{}",
             item.key
@@ -748,18 +802,25 @@ impl ConduitApp {
         .w_full()
         .h(px(32.))
         .px_3()
-        .focus_ring(true)
-        .cursor_pointer()
-        .accessibility_label(format!(
-            "{}{}",
-            conduit::i18n::text_static(if expanded {
-                "chat.collapse"
-            } else {
-                "chat.expand"
-            }),
-            label,
-        ))
+        .focus_ring(has_body)
+        .when(has_body, |button| button.cursor_pointer())
+        .accessibility_label(if has_body {
+            format!(
+                "{}{}",
+                conduit::i18n::text_static(if expanded {
+                    "chat.collapse"
+                } else {
+                    "chat.expand"
+                }),
+                label,
+            )
+        } else {
+            format!("{label}: {}", heading.unwrap_or_default())
+        })
         .on_click(cx.listener(move |this, _, _, cx| {
+            if !has_body {
+                return;
+            }
             let expanded = this.reasoning_expanded(&key);
             this.reasoning_expansion.insert(key.clone(), !expanded);
             this.remeasure_message(index);
@@ -803,9 +864,11 @@ impl ConduitApp {
                         .text_left()
                         .text_size(px(12.))
                         .text_color(rgb(palette().muted))
-                        .when(!expanded, |preview| {
+                        .when(heading.is_some() || !expanded, |preview| {
                             preview.child(
-                                first_line(&item.text)
+                                heading
+                                    .map(str::to_owned)
+                                    .unwrap_or_else(|| first_line(&item.text))
                                     .trim_matches(['*', '#', '`', ' '])
                                     .to_string(),
                             )
@@ -814,15 +877,17 @@ impl ConduitApp {
                 .when(running, |row| {
                     row.child(Spinner::new().small().color(rgb(palette().muted).into()))
                 })
-                .child(
-                    Icon::new(if expanded {
-                        IconName::ChevronDown
-                    } else {
-                        IconName::ChevronRight
-                    })
-                    .small()
-                    .text_color(rgb(palette().muted)),
-                ),
+                .when(has_body, |row| {
+                    row.child(
+                        Icon::new(if expanded {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .small()
+                        .text_color(rgb(palette().muted)),
+                    )
+                }),
         )
         .into_any_element()
     }
@@ -983,15 +1048,10 @@ impl ConduitApp {
                 let item = session.messages.get(index)?;
                 (item.kind == ItemKind::Assistant
                     || (item.kind == ItemKind::Reasoning
-                        && self.reasoning_expanded(&(session.id, item.key.clone()))))
+                        && self.reasoning_expanded(&(session.id, item.key.clone()))
+                        && !reasoning_parts(&item.text).1.trim().is_empty()))
                 .then(|| {
-                    let text = if item.kind == ItemKind::Reasoning
-                        && session.provider == Provider::Codex
-                    {
-                        reasoning_markdown(&item.text)
-                    } else {
-                        Cow::Borrowed(item.text.as_str())
-                    };
+                    let text = message_markdown(item, session.provider);
                     let state = window.use_keyed_state(
                         SharedString::from(format!("chat-markdown-{}-{}", session.id, item.key)),
                         cx,
@@ -1440,16 +1500,20 @@ impl ConduitApp {
             ItemKind::Reasoning => {
                 let detail_key = (session_id, item.key.clone());
                 let expanded = self.reasoning_expanded(&detail_key);
+                let has_body = !reasoning_parts(&item.text).1.trim().is_empty();
                 let mut content = v_flex()
                     .debug_selector(move || format!("reasoning-quote-{session_id}-{index}"))
                     .w_full()
                     .min_w_0()
-                    .border_l_2()
-                    .border_color(rgb(palette().border))
-                    .rounded(px(6.))
-                    .bg(rgb(palette().surface))
+                    .when(has_body, |content| {
+                        content
+                            .border_l_2()
+                            .border_color(rgb(palette().border))
+                            .rounded(px(6.))
+                            .bg(rgb(palette().surface))
+                    })
                     .child(self.reasoning_header(session_id, index, item, cx));
-                if expanded {
+                if expanded && has_body {
                     content = content.child(
                         div()
                             .debug_selector(move || format!("reasoning-body-{session_id}-{index}"))

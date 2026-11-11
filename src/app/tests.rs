@@ -12,6 +12,7 @@ fn error_retry_clears_errors_and_preserves_partial_output_across_restore() {
     let _locale = crate::test_support::chinese();
     let mut s = session();
     let user = ChatItem::from(crate::domain::ChatItemData {
+        reasoning_summary: None,
         elapsed_ms: None,
         key: "turn-0-user".into(),
         created_at: 0,
@@ -235,6 +236,7 @@ fn assistant_reply_combines_text_across_tools_within_user_boundaries() {
         ("next", ItemKind::Assistant, "下一轮回复"),
     ] {
         s.messages.push(ChatItem::from(crate::domain::ChatItemData {
+            reasoning_summary: None,
             elapsed_ms: None,
             key: key.into(),
             created_at: 0,
@@ -347,6 +349,7 @@ fn message_outline_keeps_real_indices_and_keys_amid_tools_and_replies() {
         ("user-3", ItemKind::User, ""),
     ] {
         s.messages.push(ChatItem::from(crate::domain::ChatItemData {
+            reasoning_summary: None,
             elapsed_ms: None,
             key: key.into(),
             created_at: 0,
@@ -382,6 +385,7 @@ fn message_outline_cache_only_indexes_appends_and_resets_with_session() {
     let mut cache = super::MessageOutlineCache::default();
     let item = |key: &str, kind| {
         ChatItem::from(crate::domain::ChatItemData {
+            reasoning_summary: None,
             elapsed_ms: None,
             key: key.into(),
             created_at: 0,
@@ -650,6 +654,7 @@ fn contiguous_tool_groups_keep_reasoning_independently_visible() {
     let _locale = crate::test_support::chinese();
     let activity = |key: &str, kind: ItemKind, title: &str, status: &str| {
         ChatItem::from(crate::domain::ChatItemData {
+            reasoning_summary: None,
             elapsed_ms: None,
             key: key.into(),
             created_at: 0,
@@ -824,6 +829,7 @@ fn tool_groups_skip_file_edits() {
     let _locale = crate::test_support::chinese();
     let tool = |key: &str, title: &str, input: &str| {
         ChatItem::from(crate::domain::ChatItemData {
+            reasoning_summary: None,
             elapsed_ms: None,
             key: key.into(),
             created_at: 0,
@@ -909,6 +915,7 @@ fn activity_rows_classify_failures_and_summaries() {
     let _locale = crate::test_support::chinese();
     let item = |kind: ItemKind, title: &str, input: &str, status: &str, detail: &str| {
         ChatItem::from(crate::domain::ChatItemData {
+            reasoning_summary: None,
             elapsed_ms: None,
             key: "activity".into(),
             created_at: 0,
@@ -952,6 +959,7 @@ fn edit_diffs_parse_old_new_pairs_and_codex_patches() {
     let _locale = crate::test_support::chinese();
     let item = |title: &str, input: &str| {
         ChatItem::from(crate::domain::ChatItemData {
+            reasoning_summary: None,
             elapsed_ms: None,
             key: "edit".into(),
             created_at: 0,
@@ -997,6 +1005,7 @@ fn turn_file_stats_merge_repeated_edits_of_the_latest_turn() {
     let _locale = crate::test_support::chinese();
     let item = |kind: ItemKind, title: &str, input: &str| {
         ChatItem::from(crate::domain::ChatItemData {
+            reasoning_summary: None,
             elapsed_ms: None,
             key: format!("{title}-{}", input.len()),
             created_at: 0,
@@ -1054,6 +1063,7 @@ fn plan_steps_follow_either_provider_shape_in_the_latest_turn() {
 
     let item = |title: &str, input: &str| {
         ChatItem::from(crate::domain::ChatItemData {
+            reasoning_summary: None,
             elapsed_ms: None,
             key: title.into(),
             created_at: 0,
@@ -1073,6 +1083,7 @@ fn plan_steps_follow_either_provider_shape_in_the_latest_turn() {
             r#"{"plan":[{"step":"old step","status":"completed"}]}"#,
         ),
         ChatItem::from(crate::domain::ChatItemData {
+            reasoning_summary: None,
             elapsed_ms: None,
             key: "prompt".into(),
             created_at: 0,
@@ -1251,6 +1262,7 @@ fn latest_naming_excerpt_prefers_recent_turns() {
     .enumerate()
     {
         s.messages.push(ChatItem::from(crate::domain::ChatItemData {
+            reasoning_summary: None,
             elapsed_ms: None,
             key: format!("m{index}"),
             created_at: 0,
@@ -1268,6 +1280,7 @@ fn latest_naming_excerpt_prefers_recent_turns() {
         Some("旧问题\n\n旧回答\n\n新问题\n\n新回答")
     );
     s.messages.push(ChatItem::from(crate::domain::ChatItemData {
+        reasoning_summary: None,
         elapsed_ms: None,
         key: "long".into(),
         created_at: 0,
@@ -1314,6 +1327,7 @@ fn session_search_matches_title_and_message_text() {
     let mut s = session();
     s.title = "Rust 重构计划".into();
     s.messages.push(ChatItem::from(crate::domain::ChatItemData {
+        reasoning_summary: None,
         elapsed_ms: None,
         key: "m1".into(),
         created_at: 0,
@@ -1385,6 +1399,7 @@ fn historical_reply_timing_prefers_recorded_duration_and_bounds_estimates_to_a_t
         session
             .messages
             .push(ChatItem::from(crate::domain::ChatItemData {
+                reasoning_summary: None,
                 elapsed_ms: None,
                 key: format!("timed-{index}"),
                 created_at,

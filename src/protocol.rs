@@ -54,13 +54,19 @@ pub enum Event {
         key: String,
         text: String,
     },
-    /// Provider-published display text (Codex summaries or CLI thinking blocks).
+    /// Provider-published display text (reasoning text, summaries or CLI thinking blocks).
     /// Never populated from encrypted, redacted, or undisclosed reasoning.
     ReasoningSummary {
         key: String,
         text: String,
         summary_index: u64,
         snapshot: bool,
+        /// Distinguish a provider summary from its published reasoning text.
+        summary: bool,
+        /// Time since the native reasoning item started, when observed.
+        elapsed_ms: Option<u64>,
+        /// Replace a streamed summary when the provider starts publishing its body.
+        replace: bool,
     },
     /// Step list of the current turn, as reported by the provider's plan tool.
     Plan {
@@ -172,6 +178,7 @@ pub struct Protocol {
     model: Option<String>,
     permission: PermissionLevel,
     reasoning_effort: crate::providers::ReasoningEffort,
+    codex_reasoning: reasoning::CodexReasoning,
     route: crate::providers::RuntimeRoute,
     text_only: bool,
     thread_id: Option<String>,
@@ -253,6 +260,7 @@ impl Protocol {
             native_id,
             model: None,
             reasoning_effort: Default::default(),
+            codex_reasoning: Default::default(),
             route: Default::default(),
             permission: PermissionLevel::default(),
             text_only: false,
@@ -632,7 +640,7 @@ impl Protocol {
                     params["model"] = json!(model);
                 }
                 if !self.text_only {
-                    params["summary"] = json!("auto");
+                    params["summary"] = json!("detailed");
                     params["approvalPolicy"] = json!(self.permission.codex_approval_policy());
                     params["sandboxPolicy"] = match self.permission {
                         PermissionLevel::ReadOnly => json!({"type":"readOnly"}),
@@ -699,12 +707,13 @@ impl Protocol {
                 key: text(p, "itemId").into(),
                 text: text(p, "delta").into(),
             }),
-            "item/reasoning/summaryTextDelta" => step.events.push(Event::ReasoningSummary {
-                key: format!("{}-summary", text(p, "itemId")),
-                text: text(p, "delta").into(),
-                summary_index: p["summaryIndex"].as_u64().unwrap_or(0),
-                snapshot: false,
-            }),
+            "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta" => {
+                self.codex_reasoning.delta(
+                    p,
+                    method == "item/reasoning/textDelta",
+                    &mut step.events,
+                );
+            }
             "item/started" | "item/completed" => {
                 let item = &p["item"];
                 let key = text(item, "id").to_string();
@@ -723,24 +732,9 @@ impl Protocol {
                     });
                 } else if kind == "reasoning" {
                     if method == "item/completed" {
-                        let summary = item["summary"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|part| {
-                                part.as_str()
-                                    .or_else(|| part.get("text").and_then(Value::as_str))
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n\n");
-                        // Even an empty final snapshot closes a streamed summary.
-                        // Only the public summary is used, never raw reasoning text.
-                        step.events.push(Event::ReasoningSummary {
-                            key: format!("{key}-summary"),
-                            text: summary,
-                            summary_index: 0,
-                            snapshot: true,
-                        });
+                        self.codex_reasoning.complete(item, &mut step.events);
+                    } else {
+                        self.codex_reasoning.start(item);
                     }
                 } else if kind != "userMessage" {
                     let input = match kind {
@@ -1031,6 +1025,9 @@ impl Protocol {
                         text: text(&event["content_block"], "thinking").into(),
                         summary_index: 0,
                         snapshot: false,
+                        replace: false,
+                        summary: false,
+                        elapsed_ms: None,
                     });
                 }
                 match event_type {
@@ -1047,6 +1044,9 @@ impl Protocol {
                             text: text(&event["delta"], "thinking").into(),
                             summary_index: 0,
                             snapshot: false,
+                            replace: false,
+                            summary: false,
+                            elapsed_ms: None,
                         });
                     }
                     "content_block_stop"
@@ -1058,6 +1058,9 @@ impl Protocol {
                             text: String::new(),
                             summary_index: 0,
                             snapshot: true,
+                            replace: false,
+                            summary: false,
+                            elapsed_ms: None,
                         });
                     }
                     "message_delta" if v["parent_tool_use_id"].is_null() => {
@@ -1113,6 +1116,9 @@ impl Protocol {
                                     text: text(block, "thinking").into(),
                                     summary_index: 0,
                                     snapshot: true,
+                                    replace: false,
+                                    summary: false,
+                                    elapsed_ms: None,
                                 });
                                 thinking_ordinal += 1;
                             }
@@ -1657,14 +1663,14 @@ mod tests {
                 if text_only {
                     assert!(turn["params"].get("summary").is_none());
                 } else {
-                    assert_eq!(turn["params"]["summary"], "auto");
+                    assert_eq!(turn["params"]["summary"], "detailed");
                 }
             }
         }
     }
 
     #[test]
-    fn codex_exposes_only_provider_reasoning_summaries() {
+    fn codex_uses_published_reasoning_and_preserves_summary_fallback() {
         let _locale = crate::test_support::chinese();
         let mut p = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
         let delta = p.accept(json!({
@@ -1679,25 +1685,53 @@ mod tests {
 
         let hidden = p.accept(json!({
             "method":"item/completed",
-            "params":{"item":{"type":"reasoning","id":"reason-hidden","text":"private reasoning"}}
+            "params":{"item":{"type":"reasoning","id":"reason-hidden",
+                "text":"undisclosed text", "encrypted_content":"opaque", "redacted_content":"opaque"}}
         }));
         assert!(
             matches!(
                 hidden.events.as_slice(),
                 [Event::ReasoningSummary { text, snapshot: true, .. }] if text.is_empty()
             ),
-            "raw reasoning must never enter the transcript"
+            "encrypted and undisclosed fields must never enter the transcript"
         );
         let complete = p.accept(json!({
             "method":"item/completed",
             "params":{"item":{"type":"reasoning","id":"reason-1",
                 "summary":["**Inspect files**\n\nRead the implementation.", {"text":"**Check tests**\n\nVerify the result."}],
-                "content":[{"text":"private reasoning"}]}}
+                "content":[]}}
         }));
         assert!(matches!(complete.events.as_slice(),
             [Event::ReasoningSummary { key, text, snapshot: true, .. }]
             if key == "reason-1-summary" && text == "**Inspect files**\n\nRead the implementation.\n\n**Check tests**\n\nVerify the result."
         ));
+    }
+
+    #[test]
+    fn codex_streams_reasoning_body_and_keeps_it_over_late_summaries() {
+        let mut p = Protocol::new(Provider::Codex, "C:/work".into(), "hello".into(), None);
+        for (delta, replace) in [("Read the ", true), ("implementation.", false)] {
+            let step = p.accept(json!({"method":"item/reasoning/textDelta",
+                "params":{"itemId":"reason-body","contentIndex":0,"delta":delta}}));
+            assert!(matches!(step.events.as_slice(),
+                [Event::ReasoningSummary {key, text, snapshot:false, replace: actual, ..}]
+                if key == "reason-body-summary" && text == delta && *actual == replace));
+        }
+        let summary = p.accept(json!({"method":"item/reasoning/summaryTextDelta",
+            "params":{"itemId":"reason-body","summaryIndex":0,"delta":"**Inspect files**"}}));
+        assert!(summary.events.is_empty());
+        let complete = p.accept(json!({"method":"item/completed", "params":{"item":{
+            "id":"reason-body","type":"reasoning","content":[],"summary":["**Inspect files**"]}}}));
+        assert!(matches!(complete.events.as_slice(),
+            [Event::ReasoningSummary {text, snapshot:true, ..}] if text.is_empty()));
+
+        // Content published only at completion is still more useful than its heading.
+        let complete = p.accept(json!({"method":"item/completed", "params":{"item":{
+            "id":"snapshot","type":"reasoning","summary":["**Inspect files**"],
+            "content":["Read the implementation.",{"text":"Verify the tests."}]}}}));
+        assert!(matches!(complete.events.as_slice(),
+            [Event::ReasoningSummary {text, snapshot:true, ..}]
+            if text == "Read the implementation.\n\nVerify the tests."));
     }
 
     #[test]
