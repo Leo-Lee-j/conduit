@@ -1,5 +1,6 @@
 //! A workspace-bound PR/CI snapshot. Reading or attaching never publishes comments.
 use super::*;
+mod checks;
 mod threads;
 pub(in crate::app) use threads::thread_body;
 #[cfg(all(test, feature = "ui-tests"))]
@@ -233,6 +234,31 @@ impl Render for PullRequestPanel {
                                 this.attach(feedback.clone(), window, cx)
                             })),
                     );
+                if let Some(source) = pr.check_source(index) {
+                    let existing = self.host.upgrade().and_then(|host| {
+                        host.read(cx)
+                            .store
+                            .workflow
+                            .check_task_id(&self.workspace, &source)
+                    });
+                    if existing.is_some() || check.needs_attention() {
+                        row = row.child(
+                            Button::new(("github-check-task", index))
+                                .debug_selector(move || format!("github-check-task-{index}"))
+                                .small()
+                                .ghost()
+                                .label(label(if existing.is_some() {
+                                    "github.open_check_task"
+                                } else {
+                                    "github.create_check_task"
+                                }))
+                                .disabled(self.loading || (!writable && existing.is_none()))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.open_check_task(&source, window, cx)
+                                })),
+                        );
+                    }
+                }
                 if let Some(url) = &check.url {
                     let url = url.clone();
                     row = row.child(

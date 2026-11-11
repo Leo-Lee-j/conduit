@@ -1,0 +1,28 @@
+%% Proposed architecture; not implemented. Research date: 2026-11-10.
+%%{init: {"theme":"base","themeVariables":{"background":"#ffffff","fontFamily":"Arial, sans-serif","fontSize":"16px","clusterBkg":"#f8fafc","clusterBorder":"#cbd5e1","lineColor":"#475569"},"flowchart":{"nodeSpacing":28,"rankSpacing":32,"wrappingWidth":230}}}%%
+flowchart TB
+    PHONE["Mobile Web / PWA"]
+    NETWORK["Private HTTPS<br/>or managed tunnel"]
+    subgraph HOST["Desktop application — proposed architecture"]
+        GATEWAY["Remote gateway<br/>Pairing and access"]
+        COMMANDS["Targeted commands<br/>Session, run, ticket"]
+        DESKTOP["Existing desktop UI"]
+        CORE["Session runtime<br/>Save, approve, cancel"]
+        EVENTS["State projection<br/>Snapshot and replay"]
+        STORE[("Local storage<br/>One writer")]
+        CLI["CLI adapters<br/>Local execution"]
+    end
+    PHONE <-->|"Same-origin HTTPS"| NETWORK
+    NETWORK <-->|"Authenticated connection"| GATEWAY
+    GATEWAY -->|"Typed commands"| COMMANDS
+    DESKTOP --> COMMANDS
+    COMMANDS --> CORE
+    CORE <-->|"Save before launch"| STORE
+    CORE <-->|"Existing engine protocols"| CLI
+    CORE -->|"Merged state"| DESKTOP
+    CORE --> EVENTS
+    EVENTS -->|"SSE and snapshots"| GATEWAY
+    classDef proposed fill:#e8f4ff,stroke:#2563a6,color:#172b4d;
+    classDef existing fill:#f1f5f9,stroke:#64748b,color:#172b4d;
+    class GATEWAY,COMMANDS,EVENTS,PHONE,NETWORK proposed;
+    class CORE,DESKTOP,STORE,CLI existing;

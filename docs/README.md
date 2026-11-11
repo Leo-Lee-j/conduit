@@ -32,6 +32,8 @@
 
 ## 实验扩展
 
+[手机操控会话调研](mobile-session-control-research-2026-11-10.md)：手机 Web/PWA、会话控制边界、网络接入、投入与验收建议；尚未实现。
+
 [插件文档](plugins/README.md)区分已接入的原生贡献机制、开发态 Shell 运行时和后续安装管理方案。Shell 生产准入尚未完成。
 
 - [原生贡献契约](plugins/contributions.md)

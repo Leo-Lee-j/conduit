@@ -11,6 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub mod checks;
 pub mod threads;
 
 #[derive(Clone, Debug)]

@@ -53,6 +53,8 @@ pub struct WorkItem {
     pub created_at: u64,
     #[serde(default)]
     pub origin: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_source: Option<crate::github::checks::CheckSource>,
 }
 
 impl WorkItem {
@@ -341,6 +343,7 @@ mod tests {
             archived: false,
             created_at: 1,
             origin: None,
+            check_source: None,
         };
         let id = workflow.save_task(item).unwrap();
         assert!(workflow.tasks[0].set_status(TaskStatus::Done).is_err());

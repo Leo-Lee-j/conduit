@@ -58,7 +58,16 @@ impl ConduitApp {
     }
 
     fn open_workflow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_workflow_at(None, window, cx);
+        self.open_workflow_at(None, None, window, cx);
+    }
+
+    pub(super) fn open_workflow_task(
+        &mut self,
+        id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_workflow_at(None, Some(id), window, cx);
     }
 
     pub(super) fn open_handoff_at(
@@ -71,19 +80,33 @@ impl ConduitApp {
         if self.selected_session != Some(session) {
             return;
         }
-        self.open_workflow_at(Some(index), window, cx);
+        self.open_workflow_at(Some(index), None, window, cx);
     }
 
     fn open_workflow_at(
         &mut self,
         message: Option<usize>,
+        task: Option<u64>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(workspace) = self.selected_workspace_path() else {
+        let selected_task = task
+            .and_then(|id| self.store.workflow.tasks.iter().find(|t| t.id == id))
+            .cloned();
+        if task.is_some() && selected_task.is_none() {
+            return;
+        }
+        let Some(workspace) = selected_task
+            .as_ref()
+            .map(|task| task.workspace.clone())
+            .or_else(|| self.selected_workspace_path())
+        else {
             return;
         };
-        let source_session = self.selected_session;
+        let archived = selected_task.as_ref().is_some_and(|task| task.archived);
+        let source_session = (self.selected_workspace_path().as_ref() == Some(&workspace))
+            .then_some(self.selected_session)
+            .flatten();
         let through = source_session
             .and_then(|id| self.session(id))
             .map_or(0, |s| message.map_or(s.messages.len(), |i| i + 1));
@@ -126,7 +149,7 @@ impl ConduitApp {
                 context,
                 source_session,
                 editing: None,
-                show_archived: false,
+                show_archived: archived,
                 error: None,
                 shown: 30,
                 _subscriptions: subscriptions,
@@ -134,6 +157,9 @@ impl ConduitApp {
         });
         if message.is_some() {
             view.update(cx, |panel, cx| panel.prepare_handoff(window, cx));
+        }
+        if selected_task.is_some() {
+            view.update(cx, |panel, cx| panel.fill_task(selected_task, window, cx));
         }
         window.open_dialog(cx, move |dialog, window, _| {
             let view = view.clone();
@@ -291,6 +317,7 @@ impl WorkflowPanel {
                 archived: false,
                 created_at: unix_now(),
                 origin: None,
+                check_source: None,
             });
             let criteria = criteria
                 .into_iter()
@@ -323,6 +350,10 @@ impl WorkflowPanel {
                 .find(|t| Some(t.id) == id && t.workspace == self.workspace)
                 .cloned()
         });
+        self.fill_task(task, window, cx);
+    }
+
+    fn fill_task(&mut self, task: Option<WorkItem>, window: &mut Window, cx: &mut Context<Self>) {
         self.editing = task.as_ref().map(|t| t.id);
         self.error = None;
         self.title.update(cx, |input, cx| {
@@ -546,7 +577,7 @@ impl WorkflowPanel {
     }
 
     fn task_page(&self, writable: bool, cx: &mut Context<Self>) -> AnyElement {
-        let tasks = self
+        let mut tasks = self
             .host()
             .ok()
             .map(|host| {
@@ -561,6 +592,7 @@ impl WorkflowPanel {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        tasks.sort_by_key(|task| Some(task.id) != self.editing);
         let mut page = v_flex()
             .gap_2()
             .child(Input::new(&self.title))
