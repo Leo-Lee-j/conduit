@@ -1,6 +1,7 @@
 //! Provider-specific wire formats translated into presentation events.
 use crate::domain::{PermissionLevel, Provider, Usage};
 use serde_json::{Value, json};
+mod claude_blocks;
 mod codex_commands;
 mod codex_fork;
 mod opencode;
@@ -65,7 +66,7 @@ pub enum Event {
         summary: bool,
         /// Time since the native reasoning item started, when observed.
         elapsed_ms: Option<u64>,
-        /// Replace a streamed summary when the provider starts publishing its body.
+        /// Replace the current display text, including an empty authoritative snapshot.
         replace: bool,
     },
     /// Step list of the current turn, as reported by the provider's plan tool.
@@ -187,11 +188,8 @@ pub struct Protocol {
     claude_usage: std::collections::HashMap<String, ClaudeUsage>,
     claude_latest_usage: Option<String>,
     claude_usage_message: Option<String>,
-    /// Stream block index → ordinal among text blocks of the current Claude
-    /// message. Hidden blocks (for example extended thinking) shift the raw
-    /// stream index, while the assistant snapshot only lists visible blocks.
-    claude_text_blocks: std::collections::HashMap<u64, usize>,
-    claude_thinking_blocks: std::collections::HashMap<u64, usize>,
+    claude_text_blocks: claude_blocks::Blocks,
+    claude_thinking_blocks: claude_blocks::Blocks,
     tool_inputs: std::collections::HashMap<String, Value>,
     #[cfg(test)]
     pub approval_test: bool,
@@ -640,7 +638,7 @@ impl Protocol {
                     params["model"] = json!(model);
                 }
                 if !self.text_only {
-                    params["summary"] = json!("detailed");
+                    params["summary"] = json!("auto");
                     params["approvalPolicy"] = json!(self.permission.codex_approval_policy());
                     params["sandboxPolicy"] = match self.permission {
                         PermissionLevel::ReadOnly => json!({"type":"readOnly"}),
@@ -714,6 +712,7 @@ impl Protocol {
                     &mut step.events,
                 );
             }
+            "item/reasoning/summaryPartAdded" => self.codex_reasoning.summary_part(p),
             "item/started" | "item/completed" => {
                 let item = &p["item"];
                 let key = text(item, "id").to_string();
@@ -999,8 +998,6 @@ impl Protocol {
                 let block_index = event["index"].as_u64().unwrap_or(0);
                 if event_type == "message_start" {
                     self.claude_message = text(&event["message"], "id").into();
-                    self.claude_text_blocks.clear();
-                    self.claude_thinking_blocks.clear();
                     if v["parent_tool_use_id"].is_null() {
                         let id = self.claude_message.clone();
                         self.claude_usage_message = Some(id.clone());
@@ -1011,15 +1008,16 @@ impl Protocol {
                 if event_type == "content_block_start"
                     && text(&event["content_block"], "type") == "text"
                 {
-                    let ordinal = self.claude_text_blocks.len();
-                    self.claude_text_blocks.insert(block_index, ordinal);
+                    self.claude_text_blocks
+                        .stream(&self.claude_message, block_index);
                 }
                 if !self.text_only
                     && event_type == "content_block_start"
                     && text(&event["content_block"], "type") == "thinking"
                 {
-                    let ordinal = self.claude_thinking_blocks.len();
-                    self.claude_thinking_blocks.insert(block_index, ordinal);
+                    let ordinal = self
+                        .claude_thinking_blocks
+                        .stream(&self.claude_message, block_index);
                     step.events.push(Event::ReasoningSummary {
                         key: format!("{}-thinking-{ordinal}", self.claude_message),
                         text: text(&event["content_block"], "thinking").into(),
@@ -1034,11 +1032,9 @@ impl Protocol {
                     "content_block_delta"
                         if !self.text_only && text(&event["delta"], "type") == "thinking_delta" =>
                     {
-                        let next = self.claude_thinking_blocks.len();
                         let ordinal = self
                             .claude_thinking_blocks
-                            .entry(block_index)
-                            .or_insert(next);
+                            .stream(&self.claude_message, block_index);
                         step.events.push(Event::ReasoningSummary {
                             key: format!("{}-thinking-{ordinal}", self.claude_message),
                             text: text(&event["delta"], "thinking").into(),
@@ -1049,19 +1045,21 @@ impl Protocol {
                             elapsed_ms: None,
                         });
                     }
-                    "content_block_stop"
-                        if self.claude_thinking_blocks.contains_key(&block_index) =>
-                    {
-                        let ordinal = self.claude_thinking_blocks[&block_index];
-                        step.events.push(Event::ReasoningSummary {
-                            key: format!("{}-thinking-{ordinal}", self.claude_message),
-                            text: String::new(),
-                            summary_index: 0,
-                            snapshot: true,
-                            replace: false,
-                            summary: false,
-                            elapsed_ms: None,
-                        });
+                    "content_block_stop" => {
+                        if let Some(ordinal) = self
+                            .claude_thinking_blocks
+                            .streamed(&self.claude_message, block_index)
+                        {
+                            step.events.push(Event::ReasoningSummary {
+                                key: format!("{}-thinking-{ordinal}", self.claude_message),
+                                text: String::new(),
+                                summary_index: 0,
+                                snapshot: true,
+                                replace: false,
+                                summary: false,
+                                elapsed_ms: None,
+                            });
+                        }
                     }
                     "message_delta" if v["parent_tool_use_id"].is_null() => {
                         if let Some(id) = self.claude_usage_message.clone() {
@@ -1069,16 +1067,9 @@ impl Protocol {
                         }
                     }
                     "content_block_delta" if text(&event["delta"], "type") == "text_delta" => {
-                        // Key by the ordinal among text blocks, not the raw
-                        // stream index: hidden blocks (thinking) occupy earlier
-                        // indices, while the assistant snapshot only lists the
-                        // visible blocks, which would otherwise create a second
-                        // message for the same text.
                         let ordinal = self
                             .claude_text_blocks
-                            .get(&block_index)
-                            .copied()
-                            .unwrap_or(block_index as usize);
+                            .stream(&self.claude_message, block_index);
                         step.events.push(Event::Delta {
                             key: format!("{}-{}", self.claude_message, ordinal),
                             text: text(&event["delta"], "text").into(),
@@ -1106,25 +1097,39 @@ impl Protocol {
                     self.claude_usage_model(id, message);
                 }
                 if let Some(blocks) = message["content"].as_array() {
+                    let uuid = text(&v, "uuid");
+                    let aggregate = blocks.len() > 1;
                     let mut text_ordinal = 0usize;
                     let mut thinking_ordinal = 0usize;
                     for block in blocks.iter() {
                         match text(block, "type") {
                             "thinking" if !self.text_only => {
+                                let ordinal = self.claude_thinking_blocks.snapshot(
+                                    id,
+                                    uuid,
+                                    thinking_ordinal,
+                                    aggregate,
+                                );
                                 step.events.push(Event::ReasoningSummary {
-                                    key: format!("{id}-thinking-{thinking_ordinal}"),
+                                    key: format!("{id}-thinking-{ordinal}"),
                                     text: text(block, "thinking").into(),
                                     summary_index: 0,
                                     snapshot: true,
-                                    replace: false,
+                                    replace: true,
                                     summary: false,
                                     elapsed_ms: None,
                                 });
                                 thinking_ordinal += 1;
                             }
                             "text" => {
+                                let ordinal = self.claude_text_blocks.snapshot(
+                                    id,
+                                    uuid,
+                                    text_ordinal,
+                                    aggregate,
+                                );
                                 step.events.push(Event::Text {
-                                    key: format!("{id}-{text_ordinal}"),
+                                    key: format!("{id}-{ordinal}"),
                                     text: text(block, "text").into(),
                                 });
                                 text_ordinal += 1;
@@ -1663,7 +1668,7 @@ mod tests {
                 if text_only {
                     assert!(turn["params"].get("summary").is_none());
                 } else {
-                    assert_eq!(turn["params"]["summary"], "detailed");
+                    assert_eq!(turn["params"]["summary"], "auto");
                 }
             }
         }
@@ -1708,7 +1713,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_streams_reasoning_body_and_keeps_it_over_late_summaries() {
+    fn codex_streams_reasoning_body_separately_and_uses_completed_source() {
         let mut p = Protocol::new(Provider::Codex, "C:/work".into(), "hello".into(), None);
         for (delta, replace) in [("Read the ", true), ("implementation.", false)] {
             let step = p.accept(json!({"method":"item/reasoning/textDelta",
@@ -1723,7 +1728,8 @@ mod tests {
         let complete = p.accept(json!({"method":"item/completed", "params":{"item":{
             "id":"reason-body","type":"reasoning","content":[],"summary":["**Inspect files**"]}}}));
         assert!(matches!(complete.events.as_slice(),
-            [Event::ReasoningSummary {text, snapshot:true, ..}] if text.is_empty()));
+            [Event::ReasoningSummary {text, snapshot:true, summary:true, replace:true, ..}]
+            if text == "**Inspect files**"));
 
         // Content published only at completion is still more useful than its heading.
         let complete = p.accept(json!({"method":"item/completed", "params":{"item":{

@@ -132,6 +132,45 @@ fn opencode_thinking_chunks_preserve_order_and_filter_replays_and_foreign_sessio
 }
 
 #[test]
+fn opencode_thought_message_ids_split_cards_and_completion_keeps_their_text() {
+    let _locale = crate::test_support::chinese();
+    let mut protocol = Protocol::new(Provider::OpenCode, "C:/work".into(), "hello".into(), None);
+    protocol.acp.session_id = Some("session".into());
+    protocol.acp.stage = Stage::Prompt;
+    protocol.acp.pending_id = 7;
+    let mut session = crate::app::tests::session();
+    for (message_id, text) in [
+        (Some("first"), "First"),
+        (Some("first"), " thought"),
+        (None, " continues"),
+        (Some("second"), "Second thought"),
+    ] {
+        let step = protocol.accept(json!({
+            "method":"session/update","params":{"sessionId":"session","update":{
+                "sessionUpdate":"agent_thought_chunk","messageId":message_id,
+                "content":{"type":"text","text":text}
+            }}
+        }));
+        for event in step.events {
+            crate::app::apply_event(&mut session, "turn", event);
+        }
+    }
+    let done = protocol.accept(json!({"id":7,"result":{"stopReason":"end_turn"}}));
+    assert!(done.done && done.error.is_none());
+    assert!(matches!(done.events.as_slice(), [Event::ReasoningSummary {
+        key, text, snapshot:true, replace:false, ..
+    }] if key == "acp-thought-1" && text.is_empty()));
+    for event in done.events {
+        crate::app::apply_event(&mut session, "turn", event);
+    }
+    assert_eq!(session.messages.len(), 2);
+    assert_eq!(session.messages[0].key, "turn-acp-thought-0");
+    assert_eq!(session.messages[0].text, "First thought continues");
+    assert_eq!(session.messages[1].key, "turn-acp-thought-1");
+    assert_eq!(session.messages[1].text, "Second thought");
+}
+
+#[test]
 fn opencode_new_load_and_resume_apply_model_and_variant_before_prompt() {
     let _locale = crate::test_support::chinese();
     for (native, resume) in [

@@ -2844,6 +2844,108 @@ mod git_navigation_tests {
     }
 
     #[gpui_kit::test]
+    fn git_stages_whole_files_after_idle_and_requires_manual_additions(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
+        cx.update(gpui_kit::init);
+        let repo = Repo::new();
+        std::fs::write(repo.0.join("added.txt"), "manually staged\n").unwrap();
+        repo.git(&["add", "--", "src/main.rs", "added.txt"]);
+        std::fs::write(repo.0.join("src/main.rs"), "latest tracked edit\n").unwrap();
+        std::fs::write(repo.0.join("added.txt"), "latest manually added edit\n").unwrap();
+        let store = repo.store();
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
+                app.writable = false;
+                app.startup = None;
+                app.selected_workspace = Some(0);
+                app.selected_session = Some(1);
+                app.open_tabs = vec![DocumentTab::Chat(1)];
+                app
+            });
+            *output.borrow_mut() = Some(app.clone());
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        let app = slot.borrow().as_ref().unwrap().clone();
+        draw(cx);
+        click(cx, "nav-git");
+        wait_git(cx, &app);
+        cx.update(|window, cx| {
+            app.update(cx, |a, cx| {
+                let snapshot = a.git.snapshot.as_ref().unwrap();
+                assert_eq!(snapshot.staged_count(), 0);
+                assert_eq!(snapshot.unstaged_count(), 2);
+                assert_eq!(snapshot.untracked_count(), 1);
+                assert!(a.git.auto_stage_after_refresh);
+                // Resume the pending request without requesting another snapshot.
+                a.writable = true;
+                a.poll_git(window, cx);
+            });
+        });
+        wait_git(cx, &app);
+        cx.update(|_, cx| {
+            let a = app.read(cx);
+            let snapshot = a.git.snapshot.as_ref().unwrap();
+            assert_eq!(snapshot.staged_count(), 2);
+            assert_eq!(snapshot.unstaged_count(), 0);
+            assert_eq!(snapshot.untracked_count(), 1);
+            assert!(snapshot.staged_diff.contains("+latest tracked edit"));
+            assert!(snapshot.staged_diff.contains("+latest manually added edit"));
+            assert!(!a.git.auto_stage_after_refresh);
+        });
+        cx.update(|_, cx| {
+            app.update(cx, |a, cx| {
+                a.unstage_git_files(vec!["added.txt".into()], cx)
+            });
+        });
+        wait_git(cx, &app);
+        cx.update(|_, cx| app.update(cx, |a, cx| a.refresh_git(cx)));
+        wait_git(cx, &app);
+        cx.update(|_, cx| {
+            app.update(cx, |a, cx| {
+                let snapshot = a.git.snapshot.as_ref().unwrap();
+                assert_eq!(snapshot.staged_count(), 1);
+                assert_eq!(snapshot.untracked_count(), 2);
+                assert!(
+                    snapshot
+                        .files
+                        .iter()
+                        .any(|f| f.path == "added.txt" && f.untracked())
+                );
+                a.stage_git_files(vec!["new file.txt".into()], cx);
+            });
+        });
+        wait_git(cx, &app);
+        std::fs::write(repo.0.join("new file.txt"), "edited after manual staging\n").unwrap();
+        cx.update(|_, cx| app.update(cx, |a, cx| a.refresh_git(cx)));
+        wait_git(cx, &app);
+        cx.update(|_, cx| {
+            let a = app.read(cx);
+            let snapshot = a.git.snapshot.as_ref().unwrap();
+            assert_eq!(snapshot.staged_count(), 2);
+            assert_eq!(snapshot.unstaged_count(), 0);
+            assert_eq!(snapshot.untracked_count(), 1);
+            assert!(
+                snapshot
+                    .staged_diff
+                    .contains("+edited after manual staging")
+            );
+            assert!(
+                snapshot
+                    .files
+                    .iter()
+                    .any(|f| f.path == "added.txt" && f.untracked())
+            );
+        });
+        cx.update(|window, _| window.remove_window());
+        slot.borrow_mut().take();
+        drop(app);
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
     fn commit_button_requires_checks_and_commits_only_checked_staged_files(
         cx: &mut TestAppContext,
     ) {

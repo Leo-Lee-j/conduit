@@ -14,7 +14,7 @@ fn draw(cx: &mut VisualTestContext) {
 }
 
 #[test]
-fn codex_heading_only_completion_keeps_streamed_summary_details() {
+fn codex_heading_only_completion_replaces_streamed_summary_details() {
     let mut session = crate::app::tests::session();
     session.messages.clear();
     session.provider = Provider::Codex;
@@ -29,14 +29,12 @@ fn codex_heading_only_completion_keeps_streamed_summary_details() {
             apply_event_indexed(&mut session, "turn", event, &mut index);
         }
     }
-    assert_eq!(
-        session.messages[0].text,
-        "**Inspect files**\n\nRead the implementation as it arrives."
-    );
+    assert_eq!(session.messages[0].text, "**Inspect files**");
+    assert!(super::reasoning_body(&session.messages[0], Provider::Codex).is_empty());
 }
 
 #[test]
-fn codex_multi_section_completion_keeps_each_streamed_summary_body() {
+fn codex_multi_section_completion_matches_the_restored_final_item() {
     let mut session = crate::app::tests::session();
     session.messages.clear();
     session.provider = Provider::Codex;
@@ -55,8 +53,67 @@ fn codex_multi_section_completion_keeps_each_streamed_summary_body() {
     }
     assert_eq!(
         session.messages[0].text,
-        "**Checking GMV routing scope**\n\nRead the routing implementation.\n\n**Inspecting GMV sync paths**\n\nCheck the mapper and its tests."
+        "**Checking GMV routing scope**\n\n**Inspecting GMV sync paths**"
     );
+    let saved = serde_json::to_string(&session.messages).unwrap();
+    let restored: Vec<crate::domain::ChatItem> = serde_json::from_str(&saved).unwrap();
+    assert_eq!(
+        super::message_markdown(&restored[0], Provider::Codex),
+        super::message_markdown(&session.messages[0], Provider::Codex)
+    );
+}
+
+#[test]
+fn codex_reasoning_parts_keep_order_and_empty_completion_clears_the_row() {
+    let mut session = crate::app::tests::session();
+    session.messages.clear();
+    session.provider = Provider::Codex;
+    let mut index = MessageIndex::default();
+    let mut protocol =
+        crate::protocol::Protocol::new(Provider::Codex, "C:/work".into(), "inspect".into(), None);
+    let mut feed = |value, session: &mut crate::domain::SessionRecord| {
+        for event in protocol.accept(value).events {
+            apply_event_indexed(session, "turn", event, &mut index);
+        }
+    };
+    feed(
+        json!({"method":"item/reasoning/summaryPartAdded","params":{"itemId":"r1","summaryIndex":0}}),
+        &mut session,
+    );
+    assert!(
+        session.messages.is_empty(),
+        "a boundary is not display text"
+    );
+    for value in [
+        json!({"method":"item/reasoning/summaryTextDelta","params":{"itemId":"r1","summaryIndex":0,"delta":"First"}}),
+        json!({"method":"item/reasoning/summaryPartAdded","params":{"itemId":"r1","summaryIndex":1}}),
+        json!({"method":"item/reasoning/summaryTextDelta","params":{"itemId":"r1","summaryIndex":1,"delta":"Second"}}),
+        json!({"method":"item/reasoning/summaryTextDelta","params":{"itemId":"r1","summaryIndex":0,"delta":" section."}}),
+        json!({"method":"item/reasoning/summaryPartAdded","params":{"itemId":"r1","summaryIndex":1}}),
+        json!({"method":"item/reasoning/summaryTextDelta","params":{"itemId":"r1","summaryIndex":1,"delta":" section."}}),
+    ] {
+        feed(value, &mut session);
+    }
+    assert_eq!(session.messages.len(), 1);
+    assert_eq!(
+        session.messages[0].text,
+        "First section.\n\nSecond section."
+    );
+    for value in [
+        json!({"method":"item/reasoning/textDelta","params":{"itemId":"r1","contentIndex":1,"delta":"Second body."}}),
+        json!({"method":"item/reasoning/textDelta","params":{"itemId":"r1","contentIndex":0,"delta":"First body."}}),
+        json!({"method":"item/reasoning/summaryTextDelta","params":{"itemId":"r1","summaryIndex":0,"delta":" Summary only."}}),
+    ] {
+        feed(value, &mut session);
+    }
+    assert_eq!(session.messages[0].text, "First body.\n\nSecond body.");
+    assert_eq!(session.messages[0].reasoning_summary, Some(false));
+    feed(
+        json!({"method":"item/completed","params":{"item":{"id":"r1","type":"reasoning","content":[],"summary":[]}}}),
+        &mut session,
+    );
+    assert!(crate::app::is_empty_chat_placeholder(&session.messages[0]));
+    assert!(!tool_running(&session.messages[0]));
 }
 
 #[test]
@@ -117,9 +174,18 @@ fn reasoning_live_deltas_show_before_completion_with_collapse_default(cx: &mut T
         cx,
     );
     assert!(cx.debug_bounds("reasoning-body-1-0").is_none());
+    assert!(cx.debug_bounds("activity-1-0").is_none());
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert!(app.chat_rows.rows.is_empty());
+        assert_ne!(
+            app.session_control.runs[&1].activity_label(),
+            conduit::i18n::text_static("stream_events.thinking")
+        );
+    });
     feed(
-        json!({"method":"item/reasoning/summaryTextDelta",
-        "params":{"itemId":"r1","summaryIndex":0,"delta":"\n\nRead the implementation."}}),
+        json!({"method":"item/reasoning/textDelta",
+        "params":{"itemId":"r1","contentIndex":0,"delta":"Read the implementation."}}),
         cx,
     );
     assert!(
@@ -128,8 +194,8 @@ fn reasoning_live_deltas_show_before_completion_with_collapse_default(cx: &mut T
     );
     let before = cx.debug_bounds("reasoning-body-1-0").unwrap().size.height;
     feed(
-        json!({"method":"item/reasoning/summaryTextDelta",
-        "params":{"itemId":"r1","summaryIndex":0,"delta":"\n\nCheck the mapper."}}),
+        json!({"method":"item/reasoning/textDelta",
+        "params":{"itemId":"r1","contentIndex":0,"delta":"\n\nCheck the mapper."}}),
         cx,
     );
     assert!(cx.debug_bounds("reasoning-body-1-0").unwrap().size.height > before);
@@ -144,8 +210,8 @@ fn reasoning_live_deltas_show_before_completion_with_collapse_default(cx: &mut T
     cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
     draw(cx);
     feed(
-        json!({"method":"item/reasoning/summaryTextDelta",
-        "params":{"itemId":"r1","summaryIndex":1,"delta":"**Inspecting GMV"}}),
+        json!({"method":"item/reasoning/textDelta",
+        "params":{"itemId":"r1","contentIndex":1,"delta":"**Inspecting GMV"}}),
         cx,
     );
     assert!(cx.debug_bounds("reasoning-body-1-0").is_none());
@@ -158,13 +224,13 @@ fn reasoning_live_deltas_show_before_completion_with_collapse_default(cx: &mut T
         );
     });
     feed(
-        json!({"method":"item/reasoning/summaryTextDelta",
-        "params":{"itemId":"r1","summaryIndex":1,"delta":" sync paths**"}}),
+        json!({"method":"item/reasoning/textDelta",
+        "params":{"itemId":"r1","contentIndex":1,"delta":" sync paths**"}}),
         cx,
     );
     feed(
         json!({"method":"item/completed", "params":{"item":{
-        "id":"r1","type":"reasoning","summary":["**Checking GMV routing scope**","**Inspecting GMV sync paths**"],"content":[]}}}),
+        "id":"r1","type":"reasoning","summary":["Summary stays hidden"],"content":["Read the implementation.\n\nCheck the mapper.","**Inspecting GMV sync paths**"]}}}),
         cx,
     );
     assert!(cx.debug_bounds("reasoning-body-1-0").is_none());
@@ -179,7 +245,7 @@ fn reasoning_live_deltas_show_before_completion_with_collapse_default(cx: &mut T
         assert!(!tool_running(item));
         assert_eq!(
             super::message_markdown(item, Provider::Codex),
-            "**Checking GMV routing scope**\n\nRead the implementation.\n\nCheck the mapper.\n\n**Inspecting GMV sync paths**"
+            "Read the implementation.\n\nCheck the mapper.\n\n**Inspecting GMV sync paths**"
         );
     });
 }
@@ -232,6 +298,17 @@ fn reasoning_stream_stays_visible_after_reply_and_restoration(cx: &mut TestAppCo
             .events
             .is_empty()
     );
+    for event in protocol
+        .accept(json!({"method":"item/reasoning/summaryTextDelta",
+        "params":{"itemId":"r1","summaryIndex":0,"delta":"**Inspect files**\n\n**Check tests**"}}))
+        .events
+    {
+        sender.send(event).unwrap();
+    }
+    cx.update(|window, cx| app.update(cx, |app, cx| app.poll_streams(window, cx)));
+    draw(cx);
+    assert!(cx.debug_bounds("reasoning-quote-1-0").is_none());
+    cx.update(|_, cx| assert!(app.read(cx).chat_rows.rows.is_empty()));
     let mut feed = |value| {
         for event in protocol.accept(value).events {
             sender.send(event).unwrap();
@@ -241,26 +318,12 @@ fn reasoning_stream_stays_visible_after_reply_and_restoration(cx: &mut TestAppCo
         draw(cx);
         cx.debug_bounds("reasoning-quote-1-0").unwrap().size.height
     };
-    let partial_heading_height = feed(json!({"method":"item/reasoning/summaryTextDelta",
-        "params":{"itemId":"r1","summaryIndex":0,"delta":"**Inspect"}}));
-    let heading_height = feed(json!({"method":"item/reasoning/summaryTextDelta",
-        "params":{"itemId":"r1","summaryIndex":0,"delta":" files**"}}));
-    assert_eq!(
-        partial_heading_height, heading_height,
-        "streaming a heading must keep one compact row"
-    );
-    let sections_height = feed(json!({"method":"item/reasoning/summaryTextDelta",
-        "params":{"itemId":"r1","summaryIndex":1,"delta":"**Check tests**"}}));
-    assert!(
-        sections_height > heading_height,
-        "separate summary parts must render on separate lines"
-    );
-    feed(json!({"method":"item/reasoning/textDelta",
+    let first_height = feed(json!({"method":"item/reasoning/textDelta",
         "params":{"itemId":"r1","contentIndex":0,"delta":"Read the implementation."}}));
     let detailed_height = feed(json!({"method":"item/reasoning/textDelta",
         "params":{"itemId":"r1","contentIndex":0,"delta":"\n\nCheck the implementation.\n\nVerify the result."}}));
     assert!(
-        detailed_height > sections_height,
+        detailed_height > first_height,
         "later paragraphs must expand the visible reasoning body"
     );
     assert!(
@@ -283,10 +346,11 @@ fn reasoning_stream_stays_visible_after_reply_and_restoration(cx: &mut TestAppCo
         assert_eq!(item.reasoning_summary, Some(false));
         assert!(app.chat_rows.group(0).is_none());
     });
-    // A late heading-only snapshot must not erase the streamed body.
+    // The final published body remains visible after completion and reload.
     for event in protocol
         .accept(json!({"method":"item/completed",
-        "params":{"item":{"id":"r1","type":"reasoning","summary":["**Inspect files**"]}}}))
+        "params":{"item":{"id":"r1","type":"reasoning","summary":["**Inspect files**"],
+        "content":["Read the implementation.\n\nCheck the implementation.\n\nVerify the result."]}}}))
         .events
     {
         sender.send(event).unwrap();
@@ -407,7 +471,7 @@ fn reasoning_markdown_keeps_prose_and_code_unchanged() {
 }
 
 #[gpui_kit::test]
-fn restored_reasoning_preserves_separate_summary_paragraphs(cx: &mut TestAppContext) {
+fn restored_reasoning_hides_summaries_and_keeps_bodies(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     let (app, cx, _) = crate::app::queue::tests::fixture(cx, "reasoning-paragraphs");
     cx.simulate_resize(gpui_kit::size(px(1200.), px(900.)));
@@ -420,39 +484,25 @@ fn restored_reasoning_preserves_separate_summary_paragraphs(cx: &mut TestAppCont
             app.session_mut(1).unwrap().messages = serde_json::from_value(json!([
                 {"key":"one", "kind":"Reasoning", "text":"**Inspect files**", "status":"completed", "elapsed_ms":46},
                 {"key":"legacy", "kind":"Reasoning", "text":"**Inspect files**\n**Check tests**", "status":"completed"},
-                {"key":"sections", "kind":"Reasoning", "text":"**Inspect files**\n\n**Check tests**", "status":"completed"},
-                {"key":"details", "kind":"Reasoning", "text":"**Inspect files**\n\nRead the implementation.\n\nVerify the result.", "status":"completed"}
+                {"key":"sections", "kind":"Reasoning", "text":"**Inspect files**\n\n**Check tests**", "reasoning_summary":true, "status":"completed"},
+                {"key":"details", "kind":"Reasoning", "text":"**Inspect files**\n\nRead the implementation.\n\nVerify the result.", "reasoning_summary":false, "status":"completed"}
             ])).unwrap();
             app.sync_chat_rows();
+            assert_eq!(app.chat_rows.rows.len(), 1);
+            assert_eq!(app.chat_rows.rows[0].message, 3);
             cx.notify();
         });
     });
     draw(cx);
     draw(cx);
-    assert!(
-        cx.debug_bounds("reasoning-body-1-0").is_none(),
-        "a heading alone must not pretend to have an expandable body"
-    );
-    let one = cx.debug_bounds("reasoning-quote-1-0").unwrap().size.height;
-    assert!(
-        cx.debug_bounds("reasoning-elapsed-1-0").is_none(),
-        "legacy summary delivery duration is not a reliable reasoning timer"
-    );
-    let legacy = cx.debug_bounds("reasoning-quote-1-1").unwrap().size.height;
-    let sections = cx.debug_bounds("reasoning-quote-1-2").unwrap().size.height;
-    let details = cx.debug_bounds("reasoning-quote-1-3").unwrap().size.height;
-    assert!(
-        legacy > one,
-        "old heading-only parts must not collapse into one visual line"
-    );
-    assert_eq!(
-        legacy, sections,
-        "restored and new summary parts must render consistently"
-    );
-    assert!(
-        details > sections,
-        "the entire detailed summary must remain visible"
-    );
+    for selector in [
+        "reasoning-quote-1-0",
+        "reasoning-quote-1-1",
+        "reasoning-quote-1-2",
+    ] {
+        assert!(cx.debug_bounds(selector).is_none());
+    }
+    assert!(cx.debug_bounds("reasoning-body-1-3").is_some());
     cx.update(|_, cx| {
         assert_eq!(
             app.read(cx).session(1).unwrap().messages[1].text,
@@ -477,7 +527,7 @@ fn tool_groups_can_collapse_before_reply_and_while_running(cx: &mut TestAppConte
                     {"key":"user", "kind":"User", "text":"Check the implementation"},
                     {"key":"read", "kind":"Tool", "text":"Read", "status":"completed"},
                     {"key":"search", "kind":"Tool", "text":"Grep", "status":"completed"},
-                    {"key":"thought", "kind":"Reasoning", "text":"Checking read index"}
+                    {"key":"thought", "kind":"Reasoning", "text":"Checking read index", "reasoning_summary":false}
                 ]))
                 .unwrap();
             }

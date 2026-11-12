@@ -96,10 +96,10 @@ impl GitDiffDialog {
             comparison,
             commit,
             workspace,
-            scope: if file.staged() {
+            scope: if file.fully_staged() {
                 git::FileDiffScope::Staged
             } else {
-                git::FileDiffScope::Unstaged
+                git::FileDiffScope::All
             },
             file,
             state,

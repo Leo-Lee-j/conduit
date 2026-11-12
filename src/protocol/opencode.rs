@@ -628,11 +628,12 @@ impl Protocol {
             Some("agent_thought_chunk")
                 if !self.text_only && update["content"]["type"] == "text" =>
             {
-                if self
-                    .acp
-                    .thoughts
-                    .push("acp", text(&update["content"], "text"), &mut step.events)
-                {
+                if self.acp.thoughts.push_with_id(
+                    "acp",
+                    update["messageId"].as_str(),
+                    text(&update["content"], "text"),
+                    &mut step.events,
+                ) {
                     self.acp.reply_index += 1;
                 }
             }

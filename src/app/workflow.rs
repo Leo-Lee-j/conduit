@@ -110,6 +110,14 @@ impl ConduitApp {
         let through = source_session
             .and_then(|id| self.session(id))
             .map_or(0, |s| message.map_or(s.messages.len(), |i| i + 1));
+        // The app entity is already being updated by the message click handler.
+        // Prepare the initial preview from `self` before the panel reads its host.
+        let handoff = message.map(|index| {
+            let session = source_session
+                .and_then(|id| self.session(id))
+                .ok_or_else(|| label("workflow.select_session").to_owned())?;
+            workflow::handoff(&workspace, session, index)
+        });
         let host = cx.entity();
         let view = cx.new(|cx| {
             let title =
@@ -155,8 +163,8 @@ impl ConduitApp {
                 _subscriptions: subscriptions,
             }
         });
-        if message.is_some() {
-            view.update(cx, |panel, cx| panel.prepare_handoff(window, cx));
+        if let Some(handoff) = handoff {
+            view.update(cx, |panel, cx| panel.apply_handoff(handoff, window, cx));
         }
         if selected_task.is_some() {
             view.update(cx, |panel, cx| panel.fill_task(selected_task, window, cx));
@@ -548,6 +556,15 @@ impl WorkflowPanel {
                 .ok_or_else(|| label("workflow.invalid_message").to_owned())?;
             workflow::handoff(&self.workspace, session, index)
         });
+        self.apply_handoff(result, window, cx);
+    }
+
+    fn apply_handoff(
+        &mut self,
+        result: Result<String, String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Ok(text) = &result {
             self.context
                 .update(cx, |input, cx| input.set_value(text.clone(), window, cx));

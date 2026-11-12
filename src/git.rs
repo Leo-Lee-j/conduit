@@ -96,6 +96,11 @@ impl ChangedFile {
         self.index != ' ' && self.index != '?'
     }
 
+    /// A file is ready to commit only when all of its changes are staged.
+    pub fn fully_staged(&self) -> bool {
+        self.staged() && !self.unstaged() && !self.conflicted()
+    }
+
     pub fn unstaged(&self) -> bool {
         self.worktree != ' ' && self.worktree != '?'
     }
@@ -154,7 +159,7 @@ pub fn selected_staged_patch(snapshot: &Snapshot, selected: &[String]) -> String
     for file in snapshot
         .files
         .iter()
-        .filter(|file| file.staged() && selected.contains(&file.path))
+        .filter(|file| file.fully_staged() && selected.contains(&file.path))
     {
         let original = file.original.as_deref().unwrap_or(&file.path);
         for quote_unicode in [false, true] {
@@ -275,7 +280,7 @@ pub enum Operation {
         files: Vec<String>,
         target: CommitTarget,
     },
-    /// Refresh only paths already in the index; never add untracked files.
+    /// Refresh existing index entries, including manually staged new files.
     StageTracked {
         files: Vec<String>,
         target: CommitTarget,
@@ -330,7 +335,7 @@ pub struct OperationResult {
 
 impl Snapshot {
     pub fn staged_count(&self) -> usize {
-        self.files.iter().filter(|file| file.staged()).count()
+        self.files.iter().filter(|file| file.fully_staged()).count()
     }
 
     pub fn unstaged_count(&self) -> usize {
@@ -1123,7 +1128,7 @@ fn update_index(
     target: &CommitTarget,
     action: IndexAction,
     cancel: &AtomicBool,
-) -> Result<()> {
+) -> Result<usize> {
     if files.is_empty() {
         bail!(conduit::i18n::text("git.select_files_to_operate_on"));
     }
@@ -1150,6 +1155,58 @@ fn update_index(
         }
     }
     let root = run_git(git, workspace, &["rev-parse", "--show-toplevel"], cancel)?;
+    let root = Path::new(root.trim());
+    let mut files: Vec<_> = files.iter().collect();
+    if matches!(action, IndexAction::StageTracked) {
+        // Require exact index entries so directory pathspecs cannot sweep in
+        // children. Manually staged additions qualify even before the first
+        // commit; intent-to-add entries still need their first explicit stage.
+        let mut indexed = std::collections::HashSet::new();
+        let mut intent_to_add = std::collections::HashSet::new();
+        for batch in files.chunks(64) {
+            let mut args = vec!["--literal-pathspecs", "ls-files", "-z", "--"];
+            args.extend(batch.iter().map(|path| path.as_str()));
+            let entries = run_git(git, root, &args, cancel)?;
+            if entries.len() >= MAX_COMMAND_BYTES {
+                bail!(conduit::i18n::text(
+                    "git.selected.staged_file_list_exceeds_the_limit_commit"
+                ));
+            }
+            indexed.extend(
+                entries
+                    .split('\0')
+                    .filter(|path| !path.is_empty())
+                    .map(str::to_string),
+            );
+            let mut args = vec![
+                "--literal-pathspecs",
+                "diff-files",
+                "--name-only",
+                "--diff-filter=A",
+                "-z",
+                "--",
+            ];
+            args.extend(batch.iter().map(|path| path.as_str()));
+            let entries = run_git(git, root, &args, cancel)?;
+            if entries.len() >= MAX_COMMAND_BYTES {
+                bail!(conduit::i18n::text(
+                    "git.selected.staged_file_list_exceeds_the_limit_commit"
+                ));
+            }
+            intent_to_add.extend(
+                entries
+                    .split('\0')
+                    .filter(|path| !path.is_empty())
+                    .map(str::to_string),
+            );
+        }
+        files.retain(|path| {
+            indexed.contains(path.as_str()) && !intent_to_add.contains(path.as_str())
+        });
+        if files.is_empty() {
+            return Ok(0);
+        }
+    }
     let spec = std::env::temp_dir().join(format!(
         "conduit-index-{}-{}.paths",
         std::process::id(),
@@ -1157,13 +1214,13 @@ fn update_index(
             .duration_since(std::time::UNIX_EPOCH)?
             .as_nanos()
     ));
-    let result = (|| -> Result<()> {
+    let result = (|| -> Result<usize> {
         use std::io::Write as _;
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&spec)?;
-        for path in files {
+        for path in &files {
             file.write_all(path.as_bytes())?;
             file.write_all(&[0])?;
         }
@@ -1176,14 +1233,13 @@ fn update_index(
             IndexAction::Unstage => args.extend(["restore", "--staged"]),
         }
         args.extend([from.as_str(), "--pathspec-file-nul"]);
-        run_git_with_timeout(
-            git,
-            Path::new(root.trim()),
-            &args,
-            cancel,
-            Duration::from_secs(120),
-        )?;
-        Ok(())
+        if commit_target(git, root, cancel)? != *target {
+            bail!(conduit::i18n::text(
+                "git.branch_head_or_staging_area_changed_refresh"
+            ));
+        }
+        run_git_with_timeout(git, root, &args, cancel, Duration::from_secs(120))?;
+        Ok(files.len())
     })();
     let _ = std::fs::remove_file(spec);
     result
@@ -1243,7 +1299,7 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                         "git.unresolved_conflicts_found_automatic_staging_paused"
                     ));
                 }
-                update_index(
+                let staged = update_index(
                     &git,
                     workspace,
                     &files,
@@ -1253,7 +1309,7 @@ fn operate(workspace: &Path, operation: Operation, cancel: &AtomicBool) -> Opera
                 )?;
                 Ok(conduit::i18n::format(
                     "git.automatically_staged_tracked_files",
-                    &[("arg0", format!("{}", files.len()))],
+                    &[("arg0", format!("{}", staged))],
                 ))
             }
             Operation::Unstage { files, target } => {
@@ -2206,7 +2262,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_commit_preserves_unchecked_index_and_unstaged_content() {
+    fn selected_commit_requires_whole_files_and_preserves_unchecked_changes() {
         let _locale = crate::test_support::chinese();
         let Some(repo) = TestRepository::new() else {
             return;
@@ -2217,10 +2273,23 @@ mod tests {
         std::fs::write(repo.path.join("tracked.txt"), "unstaged version\n").unwrap();
         std::fs::write(repo.path.join("other.txt"), "unchecked\n").unwrap();
         repo.run(&["add", "other.txt"]);
+        std::fs::write(repo.path.join("other.txt"), "unchecked later edit\n").unwrap();
+        let index = std::fs::read(repo.path.join(".git/index")).unwrap();
+        let head = repo.run(&["rev-parse", "HEAD"]);
+        let result = commit_selection(&repo, &["tracked.txt"]);
+        assert!(!result.committed);
+        assert!(result.error.unwrap().contains("未暂存"));
+        assert_eq!(repo.run(&["rev-parse", "HEAD"]), head);
+        assert_eq!(std::fs::read(repo.path.join(".git/index")).unwrap(), index);
+        assert!(!repo.path.join(".git/index.lock").exists());
+        repo.run(&["add", "tracked.txt"]);
         let index = std::fs::read(repo.path.join(".git/index")).unwrap();
         let result = commit_selection(&repo, &["tracked.txt"]);
         assert!(result.committed, "{:?}", result.error);
-        assert_eq!(repo.run(&["show", "HEAD:tracked.txt"]), "staged version\n");
+        assert_eq!(
+            repo.run(&["show", "HEAD:tracked.txt"]),
+            "unstaged version\n"
+        );
         assert_eq!(
             repo.run(&["diff", "--cached", "--name-only"]).trim(),
             "other.txt"
@@ -2230,6 +2299,10 @@ mod tests {
             "unstaged version\n"
         );
         assert_eq!(std::fs::read(repo.path.join(".git/index")).unwrap(), index);
+        assert_eq!(
+            std::fs::read_to_string(repo.path.join("other.txt")).unwrap(),
+            "unchecked later edit\n"
+        );
         assert!(!repo.path.join(".git/index.lock").exists());
     }
 
@@ -2358,6 +2431,9 @@ mod tests {
             assert!(!patch.contains("+file1.txt content"), "{patch}");
             assert!(selected_staged_patch(&snapshot, &[]).is_empty());
         }
+        fs::write(repo.path.join("file[1].txt"), "edited after staging\n").unwrap();
+        let snapshot = load(&repo.path, &AtomicBool::new(false)).unwrap();
+        assert!(selected_staged_patch(&snapshot, &["file[1].txt".into()]).is_empty());
     }
 
     struct TestRepository {
@@ -2684,15 +2760,17 @@ mod tests {
     }
 
     #[test]
-    fn auto_stage_tracked_updates_modifications_deletions_and_manually_added_files() {
+    fn auto_stage_tracked_updates_versioned_and_manually_added_files() {
         let _locale = crate::test_support::chinese();
         let repo = TestRepository::new().expect("Git required for automatic staging");
         repo.stage("initial\n");
+        fs::create_dir(repo.path.join("nested")).unwrap();
         for name in [
             "deleted.txt",
             "literal[1].txt",
             "literal1.txt",
             "中文 文件.txt",
+            "nested/versioned.txt",
         ] {
             fs::write(repo.path.join(name), "before\n").unwrap();
         }
@@ -2701,14 +2779,18 @@ mod tests {
         repo.stage("partially staged\n");
         fs::write(repo.path.join("tracked.txt"), "latest\n").unwrap();
         fs::remove_file(repo.path.join("deleted.txt")).unwrap();
-        for name in ["literal[1].txt", "literal1.txt", "中文 文件.txt"] {
+        for name in [
+            "literal[1].txt",
+            "literal1.txt",
+            "中文 文件.txt",
+            "nested/versioned.txt",
+        ] {
             fs::write(repo.path.join(name), "after\n").unwrap();
         }
         fs::write(repo.path.join("added.txt"), "added\n").unwrap();
         repo.run(&["add", "added.txt"]);
         fs::write(repo.path.join("added.txt"), "edited after adding\n").unwrap();
         fs::write(repo.path.join("untracked.txt"), "manual only\n").unwrap();
-        fs::create_dir(repo.path.join("nested")).unwrap();
         let cancel = AtomicBool::new(false);
         let result = operate(
             &repo.path.join("nested"),
@@ -2718,6 +2800,7 @@ mod tests {
                     "deleted.txt",
                     "literal[1].txt",
                     "中文 文件.txt",
+                    "nested/versioned.txt",
                     "added.txt",
                 ]
                 .map(str::to_string)
@@ -2728,7 +2811,7 @@ mod tests {
         );
         assert_eq!(result.error, None, "{result:?}");
         let snapshot = load(&repo.path, &cancel).unwrap();
-        assert_eq!(snapshot.staged_count(), 5);
+        assert_eq!(snapshot.staged_count(), 6);
         assert_eq!(snapshot.untracked_count(), 1);
         assert_eq!(snapshot.unstaged_count(), 1);
         assert!(
@@ -2738,8 +2821,175 @@ mod tests {
                 .any(|f| f.path == "literal1.txt" && f.unstaged())
         );
         assert_eq!(repo.run(&["show", ":tracked.txt"]), "latest\n");
+        assert_eq!(repo.run(&["show", ":nested/versioned.txt"]), "after\n");
         assert_eq!(repo.run(&["show", ":added.txt"]), "edited after adding\n");
         assert!(repo.run(&["ls-files", "--", "untracked.txt"]).is_empty());
+    }
+
+    #[test]
+    fn auto_stage_tracked_respects_excludes_and_preserves_intent_to_add() {
+        let _locale = crate::test_support::chinese();
+        let repo = TestRepository::new().expect("Git required for automatic staging");
+        repo.run(&["config", "core.autocrlf", "false"]);
+        repo.stage("initial\n");
+        repo.run(&["commit", "-qm", "initial"]);
+        for name in ["added.txt", "intent.txt"] {
+            fs::write(repo.path.join(name), "manually added\n").unwrap();
+        }
+        repo.run(&["add", "--", "added.txt"]);
+        repo.run(&["add", "-N", "--", "intent.txt"]);
+        fs::write(
+            repo.path.join(".gitignore"),
+            "project.private\nadded.txt\ntracked.txt\n",
+        )
+        .unwrap();
+        fs::write(repo.path.join(".git/info/exclude"), "local.private\n").unwrap();
+        let excludes = repo.path.join(".git/global-ignore");
+        fs::write(&excludes, "global.private\nintent.txt\n").unwrap();
+        // Exercise core.excludesFile without changing the user's global config.
+        repo.run(&["config", "core.excludesFile", excludes.to_str().unwrap()]);
+        fs::create_dir(repo.path.join("nested")).unwrap();
+        fs::write(repo.path.join("nested/.gitignore"), "nested.private\n").unwrap();
+        let new_files = [
+            "project.private",
+            "local.private",
+            "global.private",
+            "nested/nested.private",
+            "untracked.txt",
+            "added.txt",
+            "intent.txt",
+        ];
+        for name in new_files {
+            fs::write(repo.path.join(name), "new worktree content\n").unwrap();
+        }
+        fs::write(repo.path.join("tracked.txt"), "versioned edit\n").unwrap();
+        let cancel = AtomicBool::new(false);
+        let snapshot = load(&repo.path, &cancel).unwrap();
+        for name in &new_files[..4] {
+            assert!(!snapshot.files.iter().any(|file| file.path == *name));
+            // Explicit staging must still be rejected by Git's exclude rules.
+            let result = operate(
+                &repo.path,
+                Operation::Stage {
+                    files: vec![name.to_string()],
+                    target: snapshot.target.clone(),
+                },
+                &cancel,
+            );
+            assert!(result.error.is_some(), "{name}: {result:?}");
+        }
+        let result = operate(
+            &repo.path,
+            Operation::StageTracked {
+                files: std::iter::once("tracked.txt")
+                    .chain(new_files)
+                    .map(str::to_string)
+                    .collect(),
+                target: snapshot.target,
+            },
+            &cancel,
+        );
+        assert_eq!(result.error, None, "{result:?}");
+        assert_eq!(repo.run(&["show", ":tracked.txt"]), "versioned edit\n");
+        assert_eq!(repo.run(&["show", ":added.txt"]), "new worktree content\n");
+        assert!(repo.run(&["show", ":intent.txt"]).is_empty());
+        for name in &new_files[..5] {
+            assert!(repo.run(&["ls-files", "--", name]).is_empty(), "{name}");
+        }
+        let index = fs::read(repo.path.join(".git/index")).unwrap();
+        let result = operate(
+            &repo.path,
+            Operation::StageTracked {
+                files: new_files
+                    .into_iter()
+                    .filter(|name| *name != "added.txt")
+                    .map(str::to_string)
+                    .collect(),
+                target: load(&repo.path, &cancel).unwrap().target,
+            },
+            &cancel,
+        );
+        assert_eq!(result.error, None, "{result:?}");
+        assert_eq!(fs::read(repo.path.join(".git/index")).unwrap(), index);
+    }
+
+    #[test]
+    fn auto_stage_tracked_updates_manually_added_files_before_the_first_commit() {
+        let _locale = crate::test_support::chinese();
+        let repo = TestRepository::new().expect("Git required for automatic staging");
+        fs::write(repo.path.join("new.txt"), "manual snapshot\n").unwrap();
+        fs::write(repo.path.join("empty.txt"), "").unwrap();
+        fs::write(repo.path.join("deleted.txt"), "manual snapshot\n").unwrap();
+        repo.run(&["add", "--", "new.txt", "empty.txt", "deleted.txt"]);
+        fs::write(repo.path.join("new.txt"), "later edit\n").unwrap();
+        fs::write(repo.path.join("empty.txt"), "no longer empty\n").unwrap();
+        fs::remove_file(repo.path.join("deleted.txt")).unwrap();
+        fs::write(repo.path.join("untracked.txt"), "manual only\n").unwrap();
+        fs::write(repo.path.join("intent.txt"), "not staged yet\n").unwrap();
+        repo.run(&["add", "-N", "--", "intent.txt"]);
+        let cancel = AtomicBool::new(false);
+        let target = load(&repo.path, &cancel).unwrap().target;
+        assert_eq!(target.head, None);
+        let result = operate(
+            &repo.path,
+            Operation::StageTracked {
+                files: [
+                    "new.txt",
+                    "empty.txt",
+                    "deleted.txt",
+                    "untracked.txt",
+                    "intent.txt",
+                ]
+                .map(str::to_string)
+                .to_vec(),
+                target,
+            },
+            &cancel,
+        );
+        assert_eq!(result.error, None, "{result:?}");
+        assert_eq!(repo.run(&["show", ":new.txt"]), "later edit\n");
+        assert_eq!(repo.run(&["show", ":empty.txt"]), "no longer empty\n");
+        assert!(repo.run(&["ls-files", "--", "deleted.txt"]).is_empty());
+        assert!(repo.run(&["ls-files", "--", "untracked.txt"]).is_empty());
+        assert!(repo.run(&["show", ":intent.txt"]).is_empty());
+    }
+
+    #[test]
+    fn auto_stage_tracked_does_not_expand_replaced_files_into_new_children() {
+        let _locale = crate::test_support::chinese();
+        let repo = TestRepository::new().expect("Git required for automatic staging");
+        repo.stage("initial\n");
+        fs::write(repo.path.join("node"), "versioned file\n").unwrap();
+        repo.run(&["add", "--", "node"]);
+        repo.run(&["commit", "-qm", "initial"]);
+        fs::remove_file(repo.path.join("node")).unwrap();
+        fs::create_dir(repo.path.join("node")).unwrap();
+        fs::write(repo.path.join("node/new.txt"), "manual snapshot\n").unwrap();
+        repo.run(&["add", "--all", "--", "node"]);
+        fs::write(repo.path.join("node/new.txt"), "later edit\n").unwrap();
+        fs::write(repo.path.join("tracked.txt"), "versioned edit\n").unwrap();
+        let cancel = AtomicBool::new(false);
+        let result = operate(
+            &repo.path,
+            Operation::StageTracked {
+                files: ["tracked.txt", "node"].map(str::to_string).to_vec(),
+                target: load(&repo.path, &cancel).unwrap().target,
+            },
+            &cancel,
+        );
+        assert_eq!(result.error, None, "{result:?}");
+        assert_eq!(repo.run(&["show", ":tracked.txt"]), "versioned edit\n");
+        assert_eq!(repo.run(&["show", ":node/new.txt"]), "manual snapshot\n");
+        let result = operate(
+            &repo.path,
+            Operation::StageTracked {
+                files: vec!["node/new.txt".into()],
+                target: load(&repo.path, &cancel).unwrap().target,
+            },
+            &cancel,
+        );
+        assert_eq!(result.error, None, "{result:?}");
+        assert_eq!(repo.run(&["show", ":node/new.txt"]), "later edit\n");
     }
 
     #[test]
@@ -3535,10 +3785,12 @@ mod tests {
             target: CommitTarget::default(),
         };
         assert_eq!(snapshot.files.len(), 4);
-        // M ,  M and MM carry one status each: staged 2, unstaged 2.
-        assert_eq!(snapshot.staged_count(), 2);
+        // Mixed index/worktree edits belong only to the unstaged file count.
+        assert_eq!(snapshot.staged_count(), 1);
         assert_eq!(snapshot.unstaged_count(), 2);
         assert_eq!(snapshot.untracked_count(), 1);
+        assert!(snapshot.files[0].fully_staged());
+        assert!(!snapshot.files[2].fully_staged());
         assert!(!snapshot.is_clean());
         assert!(
             Snapshot {

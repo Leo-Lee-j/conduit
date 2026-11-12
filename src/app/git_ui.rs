@@ -126,11 +126,15 @@ impl ConduitApp {
     }
 
     fn auto_stage_tracked_files(&mut self, cx: &mut Context<Self>) {
-        if !self.can_stage_files()
-            || self.git.repository.as_ref().is_some_and(|repository| {
-                repository.integration.is_some() || !repository.conflicts.is_empty()
-            })
-        {
+        if !self.can_stage_files() {
+            // Keep the request until the current task or generation releases Git.
+            return;
+        }
+        // Attempt each refresh once, including failures and dirty submodules.
+        self.git.auto_stage_after_refresh = false;
+        if self.git.repository.as_ref().is_some_and(|repository| {
+            repository.integration.is_some() || !repository.conflicts.is_empty()
+        }) {
             return;
         }
         let Some(path) = self.selected_workspace_path() else {
@@ -150,7 +154,10 @@ impl ConduitApp {
         let files: Vec<_> = snapshot
             .files
             .iter()
-            .filter(|file| !file.untracked() && file.unstaged())
+            // Refresh manually staged additions and rename/copy destinations
+            // too. Intent-to-add has no staged content yet; the worker also
+            // verifies exact index membership before writing.
+            .filter(|file| file.unstaged() && file.index != '?' && file.worktree != 'A')
             .map(|file| file.path.clone())
             .collect();
         if files.is_empty() {
@@ -468,7 +475,9 @@ impl ConduitApp {
         snapshot
             .files
             .iter()
-            .filter(|file| file.staged() && selected.is_some_and(|set| set.contains(&file.path)))
+            .filter(|file| {
+                file.fully_staged() && selected.is_some_and(|set| set.contains(&file.path))
+            })
             .map(|file| file.path.clone())
             .collect()
     }
@@ -1660,6 +1669,7 @@ impl ConduitApp {
         self.git.branch_probe = None;
         self.git.repository = None;
         self.git.probe = None;
+        self.git.auto_stage_after_refresh = false;
         self.git.snapshot = None;
         self.clear_tree_git_status();
         self.git.error = None;
@@ -1755,6 +1765,7 @@ impl ConduitApp {
         self.mark_git_refresh();
         self.git.probe = None;
         let Some(path) = self.selected_workspace_path() else {
+            self.git.auto_stage_after_refresh = false;
             self.git.error =
                 Some(conduit::i18n::text_static("git_ui.no_workspace_selected").into());
             cx.notify();
@@ -1786,11 +1797,15 @@ impl ConduitApp {
                 Err(std::sync::mpsc::TryRecvError::Empty) => None,
             });
         let Some((path, result)) = update else {
+            if self.git.probe.is_none() && self.git.auto_stage_after_refresh {
+                self.auto_stage_tracked_files(cx);
+            }
             return;
         };
         self.git.probe = None;
-        let auto_stage = std::mem::take(&mut self.git.auto_stage_after_refresh);
+        let auto_stage = self.git.auto_stage_after_refresh;
         if self.selected_workspace_path().as_deref() != Some(path.as_path()) {
+            self.git.auto_stage_after_refresh = false;
             return;
         }
         match result {
@@ -1816,6 +1831,7 @@ impl ConduitApp {
                 }
             }
             Err(error) => {
+                self.git.auto_stage_after_refresh = false;
                 self.git.snapshot = None;
                 self.clear_tree_git_status();
                 self.git.error = Some(error);
@@ -2396,18 +2412,20 @@ impl ConduitApp {
                                                 file.index.to_string()
                                             }),
                                     )
-                                    .when(file.staged(), |row| {
+                                    .when(!file.conflicted(), |row| {
                                         row.child(
                                             div()
                                                 .flex_shrink_0()
                                                 .text_size(ui_text_size(10.))
-                                                .text_color(rgb(palette().highlight_text))
-                                                .child(if file.unstaged() {
-                                                    conduit::i18n::text_static(
-                                                        "git_ui.partially_staged",
-                                                    )
+                                                .text_color(rgb(if file.fully_staged() {
+                                                    palette().highlight_text
                                                 } else {
+                                                    palette().muted
+                                                }))
+                                                .child(if file.fully_staged() {
                                                     conduit::i18n::text_static("git_ui.staged")
+                                                } else {
+                                                    conduit::i18n::text_static("git.unstaged")
                                                 }),
                                         )
                                     })

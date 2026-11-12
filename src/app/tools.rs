@@ -44,9 +44,17 @@ pub(super) fn is_empty_chat_placeholder(item: &ChatItem) -> bool {
     matches!(item.kind, ItemKind::Assistant | ItemKind::Reasoning) && item.text.trim().is_empty()
 }
 
+/// Only published thinking bodies get transcript rows. Old Codex records
+/// without source metadata were treated as summaries by the importer/UI.
+pub(super) fn is_hidden_reasoning(item: &ChatItem, provider: Provider) -> bool {
+    item.kind == ItemKind::Reasoning
+        && item
+            .reasoning_summary
+            .unwrap_or(provider == Provider::Codex)
+}
+
 pub(super) fn is_groupable_activity(item: &ChatItem) -> bool {
-    // Reasoning summaries stay as their own transcript rows. Grouping them with
-    // tools makes the completed tool group hide the only visible reasoning row.
+    // Thinking bodies stay visible independently of collapsed tool groups.
     item.kind == ItemKind::Tool && is_compact_tool(item)
 }
 

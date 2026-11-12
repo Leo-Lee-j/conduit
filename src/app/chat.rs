@@ -1128,7 +1128,7 @@ impl ConduitApp {
         let Some(item) = session.messages.get(index) else {
             return div().into_any_element();
         };
-        if is_empty_chat_placeholder(item) {
+        if is_empty_chat_placeholder(item) || is_hidden_reasoning(item, session.provider) {
             return div()
                 .debug_selector(move || format!("empty-message-{index}"))
                 .h(px(0.))
@@ -1412,6 +1412,7 @@ impl ConduitApp {
                         Icon::new(FullIconName::GitFork),
                         conduit::i18n::text_static("workflow.branch_here"),
                     )
+                    .debug_selector(move || format!("reply-branch-button-{index}"))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_handoff_at(session_id, index, window, cx)
                     })),

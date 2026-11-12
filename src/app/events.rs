@@ -35,14 +35,9 @@ impl MessageIndex {
                 key,
                 text,
                 snapshot: false,
-                summary,
-                elapsed_ms,
+                summary: false,
                 ..
-            } if !text.trim().is_empty()
-                && (!summary || session.provider != Provider::Codex || elapsed_ms.is_some()) =>
-            {
-                Some(format!("{prefix}-{key}"))
-            }
+            } if !text.trim().is_empty() => Some(format!("{prefix}-{key}")),
             _ => None,
         };
         let closes = match event {
@@ -198,19 +193,20 @@ pub(super) fn apply_event_indexed(
         };
         if let Some(position) = index.find(&session.messages, &key) {
             let item = &mut session.messages[position];
-            // A completion may contain only the heading/prefix of a summary
-            // whose details already arrived. Keep that streamed tail, while
-            // still accepting corrected snapshots and source replacements.
-            let keep_streamed =
-                item.reasoning_summary == Some(summary) && item.text.starts_with(text.trim_end());
+            // Preserve legacy markers that only repeat a prefix. An explicit
+            // replacement (including every Codex final item) is authoritative.
+            let keep_streamed = !replace
+                && item.reasoning_summary == Some(summary)
+                && item.text.starts_with(text.trim_end());
             item.status = status;
             item.reasoning_summary = Some(summary);
             if snapshot {
                 if elapsed_ms.is_some() {
                     item.elapsed_ms = elapsed_ms;
                 }
-                // Some engines omit the body on completion. Preserve the deltas.
-                if !text.trim().is_empty() && !keep_streamed {
+                // Codex final items replace even with empty text. Other engines
+                // can send a completion marker without repeating their body.
+                if replace || (!text.trim().is_empty() && !keep_streamed) {
                     item.text = text;
                 }
                 item.detail.clear();

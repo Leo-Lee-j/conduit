@@ -64,9 +64,37 @@
 
 应用权限约束只针对 CLI 实际支持并上报的请求；经过批准的命令仍可能访问工作区外文件，不将“工作区内修改”描述为文件系统沙箱。
 
+## Codex 思考内容
+
+按 [App Server 官方文档](https://developers.openai.com/codex/app-server/) 的 item 生命周期处理思考内容：
+
+| 通知 / 字段 | 含义与显示规则 |
+| --- | --- |
+| `item/reasoning/summaryTextDelta` | 可读摘要；内部按 `itemId` 与 `summaryIndex` 累积，不展示卡片、正文或占位行 |
+| `item/reasoning/summaryPartAdded` | 摘要分段边界；不生成正文，不清空已收到的同索引文本 |
+| `item/reasoning/textDelta` | 模型实际公开的推理文本，按 `contentIndex` 累积；不能与摘要直接拼接 |
+| `item/completed` 的 `summary` / `content` | 权威最终状态，替换流式临时文本；最终内容缩短或为空时也必须接受 |
+| `item/agentMessage/delta` | 助手回复，与思考内容分别保存和展示 |
+
+只展示 CLI 实际公开的非空思考正文，收到正文增量即可流式显示；摘要无论长短都不展示，也不触发界面“思考中”状态或思考计时。此规则同时适用于实时消息和保存、导入的历史；旧版 Codex 历史缺少来源标记时沿用摘要语义并隐藏。只有摘要或加密内容时不出现思考卡片。结束标记不重复正文的其他 CLI 仍保留已收到的文本，不套用 Codex 的最终快照规则。
+
+普通对话通过 `turn/start.summary = "auto"` 请求模型支持的最详细摘要；纯文本辅助任务不覆盖摘要设置。[官方推理指南](https://developers.openai.com/api/docs/guides/reasoning#reasoning-summaries) 将摘要与原始推理区分，`auto` / `detailed` 不保证长正文，也不会解密 `encrypted_content`。[配置说明](https://developers.openai.com/codex/config-reference/) 中的 `show_raw_agent_reasoning` 仅在模型实际输出该内容时生效，不能用它要求服务返回未公开推理。
+
+排查时先比较原生 item 的公开字段、适配器事件和保存后的消息，避免把摘要长度当作渲染缺陷。回归覆盖分段交错、摘要/正文切换、最终内容修订与清空、保存恢复，以及助手回复分离。
+
+## Claude Code 思考内容
+
+按 [流式输出官方文档](https://code.claude.com/docs/en/agent-sdk/streaming-output) 处理 `stream-json`：同一个 API `message.id` 下，每个非空内容块分别产生完整 `assistant` 消息；启用增量消息时，它在对应 `content_block_stop` 之前到达，不能把每次快照都当作整个回复并从第 0 块覆盖。
+
+思考和回复分别按块保存，流式索引与最终快照使用同一个卡片标识；无增量事件的消息按外层 `uuid` 区分内容块，重放同一 UUID 不新增卡片。兼容旧版包含多个内容块的聚合快照。[消息类型定义](https://code.claude.com/docs/en/agent-sdk/typescript#sdkassistantmessage) 区分外层 UUID 与内层 API message ID。
+
+`thinking_delta` 追加公开思考文本，完整 `thinking` 块替换该块的临时正文，允许最终修订、缩短或清空。`content_block_stop` 只是结束标记，保留正文；`signature_delta`、签名和 `redacted_thinking.data` 不进入展示或消息保存。模型也可能返回摘要思考，不能保证 CLI 提供完整原始推理，参见 [Extended thinking 官方说明](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)。
+
 ## OpenCode
 
 普通对话使用 ACP 新建/恢复会话，核对恢复目标并避免把回放内容重复追加。模型 ID 使用 `provider/model`，动态思考档位从原生配置目录读取；不支持的档位应拒绝，不能默默改用其他设置。
+
+思考使用 `agent_thought_chunk`，回复使用 `agent_message_chunk`，二者独立保存。按 [ACP schema](https://agentclientprotocol.com/protocol/schema#sessionupdate) 的可选 `messageId` 区分思考消息：同 ID 持续追加，新 ID 结束上一张思考卡片并创建下一张；未提供 ID 的块继续当前片段，兼容旧版代理。回复、工具边界及 `session/prompt` 的 `stopReason` 结束当前片段，结束通知没有最终正文，不能清空已累积文本。协议依据见 [OpenCode ACP 接入说明](https://opencode.ai/docs/acp/) 与 [ACP prompt turn](https://agentclientprotocol.com/protocol/prompt-turn)。
 
 - 允许/拒绝根据 ACP option 的 `kind` 选择实际 `optionId`。应用审批票据、工具 ID 和 RPC ID 分别管理；未知反向请求返回明确错误。
 - 用户问答通过 `OpenCodeAdapter` 的旁路轮询与响应处理，按原生会话过滤，取消后撤销待答请求。它不复用工具审批的“允许/拒绝”按钮。

@@ -126,6 +126,29 @@ pub(super) fn commit(
             "git.selected.branch_head_or_staging_area_changed_refresh"
         ));
     }
+    // A worktree edit can arrive without changing HEAD or the index. Never
+    // commit an older staged portion of a selected file as a complete file.
+    let unstaged = run_git(
+        git,
+        root,
+        &[
+            "--no-optional-locks",
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            "--no-ext-diff",
+            "--no-textconv",
+        ],
+        cancel,
+    )?;
+    if unstaged.len() >= MAX_COMMAND_BYTES
+        || unstaged.split('\0').any(|path| selected.contains(path))
+    {
+        bail!(conduit::i18n::text(
+            "git.selected.files_have_unstaged_changes"
+        ));
+    }
     run(
         git,
         root,

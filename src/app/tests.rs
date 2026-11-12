@@ -650,6 +650,66 @@ fn claude_thinking_stream_and_snapshot_restore_without_duplicate_reply_or_opaque
 }
 
 #[test]
+fn claude_per_block_snapshots_preserve_order_and_accept_final_revisions() {
+    let _locale = crate::test_support::chinese();
+    let mut protocol =
+        crate::protocol::Protocol::new(Provider::Claude, "C:/work".into(), "hello".into(), None);
+    let mut s = session();
+    protocol.accept(serde_json::json!({"type":"stream_event","event":{"type":"message_start","message":{"id":"m"}}}));
+    let mut snapshots = vec![];
+    for (index, (kind, partial, final_text)) in [
+        ("thinking", "Checking obsolete details", "Checking"),
+        ("text", "First reply draft", "First reply"),
+        ("thinking", "Withdraw this thought", ""),
+        ("text", "Second reply draft", "Second reply"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut block = serde_json::json!({"type":kind});
+        block[kind] = serde_json::json!(final_text);
+        let mut delta = serde_json::json!({"type":format!("{kind}_delta")});
+        delta[kind] = serde_json::json!(partial);
+        let snapshot = serde_json::json!({
+            "type":"assistant","uuid":format!("block-{index}"),
+            "message":{"id":"m","content":[block]}
+        });
+        for value in [
+            serde_json::json!({"type":"stream_event","event":{"type":"content_block_start","index":index,"content_block":{"type":kind}}}),
+            serde_json::json!({"type":"stream_event","event":{"type":"content_block_delta","index":index,"delta":delta}}),
+            snapshot.clone(),
+            serde_json::json!({"type":"stream_event","event":{"type":"content_block_stop","index":index}}),
+        ] {
+            for event in protocol.accept(value).events {
+                apply_event(&mut s, "turn", event);
+            }
+        }
+        snapshots.push(snapshot);
+    }
+    // Replayed UUIDs update the original cards, even after later blocks arrived.
+    for value in snapshots {
+        for event in protocol.accept(value).events {
+            apply_event(&mut s, "turn", event);
+        }
+    }
+    assert_eq!(s.messages.len(), 4);
+    for (item, (key, kind, text)) in s.messages.iter().zip([
+        ("turn-m-thinking-0", ItemKind::Reasoning, "Checking"),
+        ("turn-m-0", ItemKind::Assistant, "First reply"),
+        ("turn-m-thinking-1", ItemKind::Reasoning, ""),
+        ("turn-m-1", ItemKind::Assistant, "Second reply"),
+    ]) {
+        assert_eq!(item.key, key);
+        assert_eq!(item.kind, kind);
+        assert_eq!(item.text, text);
+    }
+    let saved = serde_json::to_string(&s.messages).unwrap();
+    let restored: Vec<ChatItem> = serde_json::from_str(&saved).unwrap();
+    assert_eq!(restored[0].text, "Checking");
+    assert_eq!(restored[2].text, "");
+}
+
+#[test]
 fn contiguous_tool_groups_keep_reasoning_independently_visible() {
     let _locale = crate::test_support::chinese();
     let activity = |key: &str, kind: ItemKind, title: &str, status: &str| {

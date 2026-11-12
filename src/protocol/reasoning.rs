@@ -1,33 +1,52 @@
 //! Provider reasoning chunks form one visible activity between replies/tools.
 use super::Event;
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 
 #[derive(Default)]
 pub(super) struct CodexReasoning {
-    content: HashSet<String>,
-    summaries: HashMap<String, BTreeMap<u64, String>>,
-    started: HashMap<String, Instant>,
+    items: HashMap<String, CodexReasoningItem>,
+}
+
+#[derive(Default)]
+struct CodexReasoningItem {
+    content: BTreeMap<u64, String>,
+    summaries: BTreeMap<u64, String>,
+    started: Option<Instant>,
+    visible: Option<(bool, u64)>,
 }
 
 impl CodexReasoning {
     pub(super) fn start(&mut self, item: &Value) {
         let id = super::text(item, "id");
         if !id.is_empty() {
-            self.started
+            self.items
                 .entry(id.to_owned())
-                .or_insert_with(Instant::now);
+                .or_default()
+                .started
+                .get_or_insert_with(Instant::now);
+        }
+    }
+
+    pub(super) fn summary_part(&mut self, params: &Value) {
+        let id = super::text(params, "itemId");
+        if !id.is_empty() {
+            self.items
+                .entry(id.to_owned())
+                .or_default()
+                .summaries
+                .entry(params["summaryIndex"].as_u64().unwrap_or_default())
+                .or_default();
         }
     }
 
     pub(super) fn delta(&mut self, params: &Value, content: bool, events: &mut Vec<Event>) {
         let id = super::text(params, "itemId");
         let delta = super::text(params, "delta");
-        if delta.is_empty() || (!content && self.content.contains(id)) {
+        if id.is_empty() || delta.is_empty() {
             return;
         }
-        let replace = content && self.content.insert(id.to_owned());
         let summary_index = params[if content {
             "contentIndex"
         } else {
@@ -35,32 +54,65 @@ impl CodexReasoning {
         }]
         .as_u64()
         .unwrap_or_default();
-        if content {
-            self.summaries.remove(id);
+        let item = self.items.entry(id.to_owned()).or_default();
+        let parts = if content {
+            &mut item.content
         } else {
-            self.summaries
-                .entry(id.to_owned())
-                .or_default()
-                .entry(summary_index)
-                .or_default()
-                .push_str(delta);
+            &mut item.summaries
+        };
+        parts.entry(summary_index).or_default().push_str(delta);
+        // Keep the two published sources separate. A summary delta must never
+        // append to a raw reasoning block already being displayed.
+        if !content && !item.content.is_empty() {
+            return;
         }
+        let replace = item.visible.map_or(content, |(was_content, last)| {
+            was_content != content || summary_index < last
+        });
+        let parts = if content {
+            &item.content
+        } else {
+            &item.summaries
+        };
+        // Usually append one delta. An update to an earlier part needs an
+        // ordered replacement, rather than another paragraph at the end.
+        let (text, summary_index) = if replace {
+            let mut visible = parts.iter().filter(|(_, text)| !text.is_empty());
+            (
+                visible
+                    .clone()
+                    .map(|(_, text)| text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+                visible
+                    .next_back()
+                    .map_or(summary_index, |(index, _)| *index),
+            )
+        } else {
+            (delta.to_owned(), summary_index)
+        };
+        item.visible = Some((content, summary_index));
         events.push(Event::ReasoningSummary {
             key: format!("{id}-summary"),
-            text: delta.into(),
+            text,
             summary_index,
             snapshot: false,
             summary: !content,
-            elapsed_ms: self.started.get(id).map(|start| elapsed_ms(*start)),
+            elapsed_ms: item.started.map(elapsed_ms),
             replace,
         });
     }
 
     pub(super) fn complete(&mut self, item: &Value, events: &mut Vec<Event>) {
         let id = super::text(item, "id");
-        let streamed_content = self.content.remove(id);
-        let mut summaries = self.summaries.remove(id).unwrap_or_default();
-        let elapsed_ms = self.started.remove(id).map(elapsed_ms);
+        if id.is_empty() {
+            return;
+        }
+        let elapsed_ms = self
+            .items
+            .remove(id)
+            .and_then(|item| item.started)
+            .map(elapsed_ms);
         let parts = |field: &str| {
             item[field]
                 .as_array()
@@ -74,32 +126,10 @@ impl CodexReasoning {
                 .join("\n\n")
         };
         let content = parts("content");
-        let summary = content.trim().is_empty() && !streamed_content;
-        // A summary-only completion must not erase an already streamed body.
-        // Encrypted/redacted fields and untyped item-level text are never read.
-        let text = if !content.trim().is_empty() {
-            content
-        } else if streamed_content {
-            String::new()
-        } else {
-            // Completion may repeat only each section's heading. Compare the
-            // structured sections before joining, so their streamed paragraphs
-            // survive while genuinely revised section text can still replace it.
-            for (index, part) in item["summary"].as_array().into_iter().flatten().enumerate() {
-                let Some(text) = part
-                    .as_str()
-                    .or_else(|| part.get("text").and_then(Value::as_str))
-                    .filter(|text| !text.trim().is_empty())
-                else {
-                    continue;
-                };
-                let streamed = summaries.entry(index as u64).or_default();
-                if !streamed.starts_with(text.trim_end()) {
-                    *streamed = text.to_owned();
-                }
-            }
-            summaries.into_values().collect::<Vec<_>>().join("\n\n")
-        };
+        let summary = content.trim().is_empty();
+        // App-server documents item/completed as authoritative, even when it
+        // shortens or clears the streamed text. Only published fields are read.
+        let text = if summary { parts("summary") } else { content };
         events.push(Event::ReasoningSummary {
             key: format!("{id}-summary"),
             text,
@@ -107,7 +137,7 @@ impl CodexReasoning {
             snapshot: true,
             summary,
             elapsed_ms,
-            replace: false,
+            replace: true,
         });
     }
 }
@@ -126,7 +156,7 @@ mod tests {
     fn codex_reasoning_times_native_phase_before_late_summary_delivery() {
         let mut reasoning = CodexReasoning::default();
         let started = Instant::now() - Duration::from_millis(3380);
-        reasoning.started.insert("r1".into(), started);
+        reasoning.items.entry("r1".into()).or_default().started = Some(started);
         // A repeated start must not reset the native phase.
         reasoning.start(&json!({"id":"r1"}));
         let mut events = Vec::new();
@@ -144,8 +174,7 @@ mod tests {
                 matches!(event, Event::ReasoningSummary {summary:true,elapsed_ms:Some(ms), ..} if *ms >= 3380)
             );
         }
-        assert!(reasoning.started.is_empty());
-        assert!(reasoning.summaries.is_empty());
+        assert!(reasoning.items.is_empty());
         events.clear();
         reasoning.complete(
             &json!({"id":"missing-start","summary":["**Searching specific files**"]}),
@@ -162,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_reasoning_reconciles_corrected_and_new_summary_sections() {
+    fn codex_reasoning_completion_replaces_shortened_and_corrected_sections() {
         let mut reasoning = CodexReasoning::default();
         let mut events = Vec::new();
         for (index, text) in [
@@ -188,9 +217,37 @@ mod tests {
         );
         assert!(
             matches!(events.last(), Some(Event::ReasoningSummary { text, snapshot: true, .. })
-            if text == "**Corrected title**\n\nCorrected details.\n\n**Second title**\n\nKeep these streamed details.\n\n**Final section**")
+            if text == "**Corrected title**\n\nCorrected details.\n\n**Second title**\n\n**Final section**")
         );
-        assert!(reasoning.summaries.is_empty());
+        assert!(reasoning.items.is_empty());
+    }
+
+    #[test]
+    fn thought_message_ids_end_segments_without_replacing_their_body() {
+        let mut stream = ThoughtStream::default();
+        let mut events = vec![];
+        assert!(stream.push_with_id("acp", Some("one"), "First", &mut events));
+        assert!(!stream.push_with_id("acp", Some("one"), " thought", &mut events));
+        assert!(!stream.push_with_id("acp", None, " continues", &mut events));
+        // Even an empty first chunk can announce a new message boundary.
+        assert!(!stream.push_with_id("acp", Some("two"), "", &mut events));
+        assert!(matches!(events.last(), Some(Event::ReasoningSummary {
+            key, text, snapshot:true, replace:false, ..
+        }) if key == "acp-thought-0" && text.is_empty()));
+        assert!(stream.push_with_id("acp", Some("two"), "Second", &mut events));
+        assert!(matches!(events.last(), Some(Event::ReasoningSummary {
+            key, text, snapshot:false, replace:false, ..
+        }) if key == "acp-thought-1" && text == "Second"));
+        stream.finish(&mut events);
+        assert!(matches!(events.last(), Some(Event::ReasoningSummary {
+            key, text, snapshot:true, replace:false, ..
+        }) if key == "acp-thought-1" && text.is_empty()));
+        let count = events.len();
+        stream.finish(&mut events);
+        assert_eq!(events.len(), count);
+        // Callers without message IDs retain the original segment behavior.
+        assert!(stream.push("acp", "Third", &mut events));
+        assert!(!stream.push("acp", " thought", &mut events));
     }
 }
 
@@ -198,10 +255,26 @@ mod tests {
 pub(crate) struct ThoughtStream {
     next: u64,
     key: Option<String>,
+    message_id: Option<String>,
 }
 impl ThoughtStream {
     /// Returns true when this chunk starts a new thought segment.
     pub(crate) fn push(&mut self, prefix: &str, text: &str, events: &mut Vec<Event>) -> bool {
+        self.push_with_id(prefix, None, text, events)
+    }
+    pub(crate) fn push_with_id(
+        &mut self,
+        prefix: &str,
+        message_id: Option<&str>,
+        text: &str,
+        events: &mut Vec<Event>,
+    ) -> bool {
+        if let Some(id) = message_id {
+            if self.message_id.as_deref().is_some_and(|old| old != id) {
+                self.finish(events);
+            }
+            self.message_id = Some(id.into());
+        }
         if text.is_empty() {
             return false;
         }
@@ -223,6 +296,7 @@ impl ThoughtStream {
         started
     }
     pub(crate) fn finish(&mut self, events: &mut Vec<Event>) {
+        self.message_id = None;
         if let Some(key) = self.key.take() {
             events.push(Event::ReasoningSummary {
                 key,

@@ -588,6 +588,7 @@ impl ConduitApp {
                             Event::ReasoningSummary {
                                 text,
                                 snapshot: false,
+                                summary: false,
                                 ..
                             } if !text.trim().is_empty() => {
                                 conduit::i18n::text_static("stream_events.thinking").to_string()

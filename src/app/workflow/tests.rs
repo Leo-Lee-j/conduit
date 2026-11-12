@@ -5,6 +5,43 @@ use super::{
 use gpui_kit::{AppContext as _, TestAppContext};
 
 #[gpui_kit::test]
+fn reply_branch_opens_handoff_without_reentering_the_app(cx: &mut TestAppContext) {
+    use crate::app::queue::tests::fixture;
+    use gpui_kit::{Modifiers, MouseButton};
+
+    let _locale = crate::test_support::chinese();
+    let (app, cx, _) = fixture(cx, "reply-branch-open");
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.session_mut(1).unwrap().messages = serde_json::from_value(serde_json::json!([
+                {"key":"user","kind":"User","text":"first"},
+                {"key":"reply","kind":"Assistant","text":"answer"},
+                {"key":"later","kind":"User","text":"later"}
+            ]))
+            .unwrap();
+            cx.notify();
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let point = cx.debug_bounds("reply-branch-button-1").unwrap().center();
+    cx.simulate_mouse_move(point, None, Modifiers::default());
+    cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    cx.update(|window, _| {
+        assert!(
+            gpui_kit::base::test_support::find(window, &[], &"native-fork-create".into()).is_some()
+        );
+    });
+}
+
+#[gpui_kit::test]
 fn native_branch_completion_binds_history_without_dispatching_work(cx: &mut TestAppContext) {
     use crate::app::queue::tests::{fixture, running};
     use crate::{branching, commands::RequestIntent, protocol::Event};

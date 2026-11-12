@@ -36,6 +36,7 @@ pub(in crate::app) struct Row {
 #[derive(Default)]
 pub(in crate::app) struct Rows {
     session: Option<u64>,
+    provider: Option<Provider>,
     entries: Vec<Entry>,
     expansion: HashMap<String, bool>,
     pub rows: Vec<Row>,
@@ -69,11 +70,13 @@ impl Rows {
         expansion: &HashMap<(u64, String), bool>,
     ) -> Option<Vec<Row>> {
         let id = session.map(|session| session.id);
+        let provider = session.map(|session| session.provider);
         let mut previous = None;
-        if self.session != id {
+        if self.session != id || self.provider != provider {
             previous = Some(std::mem::take(&mut self.rows));
             *self = Self {
                 session: id,
+                provider,
                 revision: std::cell::Cell::new(self.revision.get().wrapping_add(1)),
                 mapping_revision: self.mapping_revision.wrapping_add(1),
                 ..Default::default()
@@ -108,7 +111,8 @@ impl Rows {
                 self.classifications += 1;
             }
             let shape = Shape {
-                empty: is_empty_chat_placeholder(item),
+                empty: is_empty_chat_placeholder(item)
+                    || is_hidden_reasoning(item, session.provider),
                 activity: is_groupable_activity(item),
                 running: tool_running(item),
                 failed: matches!(item.kind, ItemKind::Tool | ItemKind::Reasoning)
@@ -318,6 +322,49 @@ impl ConduitApp {
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests {
     use super::ChatItem;
+
+    #[test]
+    fn summaries_have_no_rows_and_body_updates_rebuild_visibility() {
+        use crate::app::Provider;
+        let mut session = crate::app::tests::session();
+        session.messages = serde_json::from_value(serde_json::json!([
+            {"key":"summary", "kind":"Reasoning", "text":"Summary paragraphs", "reasoning_summary":true},
+            {"key":"legacy", "kind":"Reasoning", "text":"Legacy thinking"},
+            {"key":"body", "kind":"Reasoning", "text":"Thinking body", "reasoning_summary":false},
+            {"key":"empty", "kind":"Reasoning", "text":" ", "reasoning_summary":false},
+            {"key":"reply", "kind":"Assistant", "text":"Answer"}
+        ])).unwrap();
+        let mut rows = super::Rows::default();
+        for provider in Provider::ALL {
+            session.provider = provider;
+            rows.refresh(Some(&session), &Default::default());
+            let visible: Vec<_> = rows.rows.iter().map(|row| row.message).collect();
+            assert_eq!(
+                visible,
+                if provider == Provider::Codex {
+                    vec![2, 4]
+                } else {
+                    vec![1, 2, 4]
+                }
+            );
+        }
+        session.provider = Provider::Codex;
+        rows.refresh(Some(&session), &Default::default());
+        session.messages[0].reasoning_summary = Some(false);
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(rows.rows[0].message, 0);
+        session.messages[0].text.clear();
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(rows.rows[0].message, 2);
+        let saved = serde_json::to_string(&session.messages).unwrap();
+        session.messages = serde_json::from_str(&saved).unwrap();
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(
+            rows.rows.iter().map(|row| row.message).collect::<Vec<_>>(),
+            vec![2, 4]
+        );
+    }
+
     fn message(index: usize, kind: &str, text: &str) -> ChatItem {
         serde_json::from_value(serde_json::json!({
             "key":format!("m-{index}"),"kind":kind,"text":text,"status":"已完成",
