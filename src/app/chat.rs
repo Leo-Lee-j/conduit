@@ -39,7 +39,7 @@ fn reasoning_parts(text: &str) -> (Option<&str>, &str) {
 
 pub(super) fn message_markdown(item: &ChatItem, provider: Provider) -> Cow<'_, str> {
     if item.kind == ItemKind::Reasoning {
-        let (_, body) = reasoning_parts(&item.text);
+        let body = reasoning_body(item, provider);
         if provider == Provider::Codex {
             reasoning_markdown(body)
         } else {
@@ -48,6 +48,30 @@ pub(super) fn message_markdown(item: &ChatItem, provider: Provider) -> Cow<'_, s
     } else {
         Cow::Borrowed(&item.text)
     }
+}
+
+fn reasoning_body(item: &ChatItem, provider: Provider) -> &str {
+    let (_, body) = reasoning_parts(&item.text);
+    // A summary's sections are peer updates, not a title followed by details.
+    // Keep every section in the disclosure; a single heading stays compact.
+    if provider == Provider::Codex
+        && item.reasoning_summary.unwrap_or(true)
+        && !body.trim().is_empty()
+    {
+        &item.text
+    } else {
+        body
+    }
+}
+
+fn reasoning_preview(text: &str) -> &str {
+    text.lines()
+        .rev()
+        .map(str::trim)
+        .filter(|line| !line.starts_with("<!--"))
+        .map(|line| line.trim_matches(['*', '#', '`', ' ']))
+        .find(|line| !line.is_empty())
+        .unwrap_or_default()
 }
 
 /// Older Codex transcripts joined standalone summary headings with soft newlines.
@@ -631,11 +655,22 @@ impl ConduitApp {
         self.scroll.remeasure_items(0..self.scroll.item_count());
     }
 
-    fn reasoning_expanded(&self, key: &(u64, String)) -> bool {
+    fn reasoning_running(&self, session_id: u64, item: &ChatItem) -> bool {
+        tool_running(item)
+            && self
+                .session_control
+                .runs
+                .get(&session_id)
+                .is_some_and(|run| !run.runtime.is_cancelled())
+    }
+
+    fn reasoning_expanded(&self, session_id: u64, item: &ChatItem) -> bool {
         self.reasoning_expansion
-            .get(key)
+            .get(&(session_id, item.key.clone()))
             .copied()
-            .unwrap_or(!self.store.ui.collapse_reasoning)
+            .unwrap_or_else(|| {
+                self.reasoning_running(session_id, item) || !self.store.ui.collapse_reasoning
+            })
     }
 
     pub(super) fn tool_group_header(
@@ -771,21 +806,30 @@ impl ConduitApp {
         session_id: u64,
         index: usize,
         item: &ChatItem,
+        provider: Provider,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let key = (session_id, item.key.clone());
-        let (heading, body) = reasoning_parts(&item.text);
-        let has_body = !body.trim().is_empty();
-        let expanded = self.reasoning_expanded(&key);
+        let (heading, _) = reasoning_parts(&item.text);
+        let expanded = self.reasoning_expanded(session_id, item);
         let run = self.session_control.runs.get(&session_id);
         let live_elapsed = run.and_then(|run| {
             run.message_index
                 .reasoning_elapsed(&item.key, Instant::now())
         });
-        let running = tool_running(item) && run.is_some_and(|run| !run.runtime.is_cancelled());
-        let codex = self
-            .session(session_id)
-            .is_some_and(|session| session.provider == Provider::Codex);
+        let running = self.reasoning_running(session_id, item);
+        let codex = provider == Provider::Codex;
+        let summary = codex && item.reasoning_summary.unwrap_or(true);
+        let has_body = !reasoning_body(item, provider).trim().is_empty();
+        let preview = if summary {
+            reasoning_preview(&item.text).to_owned()
+        } else {
+            heading
+                .map(str::to_owned)
+                .unwrap_or_else(|| first_line(&item.text))
+                .trim_matches(['*', '#', '`', ' '])
+                .to_owned()
+        };
         // Older Codex records timed summary delivery, not the underlying phase.
         let elapsed = live_elapsed.or_else(|| {
             item.elapsed_ms
@@ -815,13 +859,12 @@ impl ConduitApp {
                 label,
             )
         } else {
-            format!("{label}: {}", heading.unwrap_or_default())
+            format!("{label}: {preview}")
         })
         .on_click(cx.listener(move |this, _, _, cx| {
             if !has_body {
                 return;
             }
-            let expanded = this.reasoning_expanded(&key);
             this.reasoning_expansion.insert(key.clone(), !expanded);
             this.remeasure_message(index);
             cx.notify();
@@ -864,15 +907,10 @@ impl ConduitApp {
                         .text_left()
                         .text_size(px(12.))
                         .text_color(rgb(palette().muted))
-                        .when(heading.is_some() || !expanded, |preview| {
-                            preview.child(
-                                heading
-                                    .map(str::to_owned)
-                                    .unwrap_or_else(|| first_line(&item.text))
-                                    .trim_matches(['*', '#', '`', ' '])
-                                    .to_string(),
-                            )
-                        }),
+                        .when(
+                            !expanded || !has_body || (!summary && heading.is_some()),
+                            |row| row.child(preview),
+                        ),
                 )
                 .when(running, |row| {
                     row.child(Spinner::new().small().color(rgb(palette().muted).into()))
@@ -1048,8 +1086,8 @@ impl ConduitApp {
                 let item = session.messages.get(index)?;
                 (item.kind == ItemKind::Assistant
                     || (item.kind == ItemKind::Reasoning
-                        && self.reasoning_expanded(&(session.id, item.key.clone()))
-                        && !reasoning_parts(&item.text).1.trim().is_empty()))
+                        && self.reasoning_expanded(session.id, item)
+                        && !reasoning_body(item, session.provider).trim().is_empty()))
                 .then(|| {
                     let text = message_markdown(item, session.provider);
                     let state = window.use_keyed_state(
@@ -1498,9 +1536,8 @@ impl ConduitApp {
                     .into_any_element()
             }
             ItemKind::Reasoning => {
-                let detail_key = (session_id, item.key.clone());
-                let expanded = self.reasoning_expanded(&detail_key);
-                let has_body = !reasoning_parts(&item.text).1.trim().is_empty();
+                let expanded = self.reasoning_expanded(session_id, item);
+                let has_body = !reasoning_body(item, session.provider).trim().is_empty();
                 let mut content = v_flex()
                     .debug_selector(move || format!("reasoning-quote-{session_id}-{index}"))
                     .w_full()
@@ -1512,7 +1549,7 @@ impl ConduitApp {
                             .rounded(px(6.))
                             .bg(rgb(palette().surface))
                     })
-                    .child(self.reasoning_header(session_id, index, item, cx));
+                    .child(self.reasoning_header(session_id, index, item, session.provider, cx));
                 if expanded && has_body {
                     content = content.child(
                         div()

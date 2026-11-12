@@ -1,12 +1,13 @@
 //! Provider reasoning chunks form one visible activity between replies/tools.
 use super::Event;
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Instant;
 
 #[derive(Default)]
 pub(super) struct CodexReasoning {
     content: HashSet<String>,
+    summaries: HashMap<String, BTreeMap<u64, String>>,
     started: HashMap<String, Instant>,
 }
 
@@ -27,16 +28,27 @@ impl CodexReasoning {
             return;
         }
         let replace = content && self.content.insert(id.to_owned());
+        let summary_index = params[if content {
+            "contentIndex"
+        } else {
+            "summaryIndex"
+        }]
+        .as_u64()
+        .unwrap_or_default();
+        if content {
+            self.summaries.remove(id);
+        } else {
+            self.summaries
+                .entry(id.to_owned())
+                .or_default()
+                .entry(summary_index)
+                .or_default()
+                .push_str(delta);
+        }
         events.push(Event::ReasoningSummary {
             key: format!("{id}-summary"),
             text: delta.into(),
-            summary_index: params[if content {
-                "contentIndex"
-            } else {
-                "summaryIndex"
-            }]
-            .as_u64()
-            .unwrap_or_default(),
+            summary_index,
             snapshot: false,
             summary: !content,
             elapsed_ms: self.started.get(id).map(|start| elapsed_ms(*start)),
@@ -47,6 +59,7 @@ impl CodexReasoning {
     pub(super) fn complete(&mut self, item: &Value, events: &mut Vec<Event>) {
         let id = super::text(item, "id");
         let streamed_content = self.content.remove(id);
+        let mut summaries = self.summaries.remove(id).unwrap_or_default();
         let elapsed_ms = self.started.remove(id).map(elapsed_ms);
         let parts = |field: &str| {
             item[field]
@@ -69,7 +82,23 @@ impl CodexReasoning {
         } else if streamed_content {
             String::new()
         } else {
-            parts("summary")
+            // Completion may repeat only each section's heading. Compare the
+            // structured sections before joining, so their streamed paragraphs
+            // survive while genuinely revised section text can still replace it.
+            for (index, part) in item["summary"].as_array().into_iter().flatten().enumerate() {
+                let Some(text) = part
+                    .as_str()
+                    .or_else(|| part.get("text").and_then(Value::as_str))
+                    .filter(|text| !text.trim().is_empty())
+                else {
+                    continue;
+                };
+                let streamed = summaries.entry(index as u64).or_default();
+                if !streamed.starts_with(text.trim_end()) {
+                    *streamed = text.to_owned();
+                }
+            }
+            summaries.into_values().collect::<Vec<_>>().join("\n\n")
         };
         events.push(Event::ReasoningSummary {
             key: format!("{id}-summary"),
@@ -116,6 +145,7 @@ mod tests {
             );
         }
         assert!(reasoning.started.is_empty());
+        assert!(reasoning.summaries.is_empty());
         events.clear();
         reasoning.complete(
             &json!({"id":"missing-start","summary":["**Searching specific files**"]}),
@@ -129,6 +159,38 @@ mod tests {
                 ..
             }]
         ));
+    }
+
+    #[test]
+    fn codex_reasoning_reconciles_corrected_and_new_summary_sections() {
+        let mut reasoning = CodexReasoning::default();
+        let mut events = Vec::new();
+        for (index, text) in [
+            "**Old title**\n\nOriginal details.",
+            "**Second title**\n\nKeep these streamed details.",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            reasoning.delta(
+                &json!({"itemId":"r1","summaryIndex":index,"delta":text}),
+                false,
+                &mut events,
+            );
+        }
+        reasoning.complete(
+            &json!({"id":"r1","summary":[
+                "**Corrected title**\n\nCorrected details.",
+                "**Second title**",
+                "**Final section**"
+            ]}),
+            &mut events,
+        );
+        assert!(
+            matches!(events.last(), Some(Event::ReasoningSummary { text, snapshot: true, .. })
+            if text == "**Corrected title**\n\nCorrected details.\n\n**Second title**\n\nKeep these streamed details.\n\n**Final section**")
+        );
+        assert!(reasoning.summaries.is_empty());
     }
 }
 

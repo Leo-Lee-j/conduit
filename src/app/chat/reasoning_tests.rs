@@ -35,6 +35,155 @@ fn codex_heading_only_completion_keeps_streamed_summary_details() {
     );
 }
 
+#[test]
+fn codex_multi_section_completion_keeps_each_streamed_summary_body() {
+    let mut session = crate::app::tests::session();
+    session.messages.clear();
+    session.provider = Provider::Codex;
+    let mut index = MessageIndex::default();
+    let mut protocol =
+        crate::protocol::Protocol::new(Provider::Codex, "C:/work".into(), "inspect".into(), None);
+    for value in [
+        json!({"method":"item/reasoning/summaryTextDelta", "params":{"itemId":"r1","summaryIndex":0,"delta":"**Checking GMV routing scope**\n\nRead the routing implementation."}}),
+        json!({"method":"item/reasoning/summaryTextDelta", "params":{"itemId":"r1","summaryIndex":1,"delta":"**Inspecting GMV sync paths**\n\nCheck the mapper and its tests."}}),
+        // Completion shape observed in the user's native rollout.
+        json!({"method":"item/completed", "params":{"item":{"id":"r1","type":"reasoning","summary":["**Checking GMV routing scope**","**Inspecting GMV sync paths**"],"content":[]}}}),
+    ] {
+        for event in protocol.accept(value).events {
+            apply_event_indexed(&mut session, "turn", event, &mut index);
+        }
+    }
+    assert_eq!(
+        session.messages[0].text,
+        "**Checking GMV routing scope**\n\nRead the routing implementation.\n\n**Inspecting GMV sync paths**\n\nCheck the mapper and its tests."
+    );
+}
+
+#[test]
+fn codex_summary_preview_follows_latest_update_and_disclosure_keeps_all_sections() {
+    for text in [
+        "**Checking GMV routing scope**\n\n**Inspecting GMV sync paths**",
+        "**Checking GMV routing scope**\n**Inspecting GMV sync paths**",
+    ] {
+        let item = serde_json::from_value(json!({
+            "key":"summary","kind":"Reasoning","text":text,"reasoning_summary":true
+        }))
+        .unwrap();
+        assert_eq!(super::reasoning_preview(text), "Inspecting GMV sync paths");
+        assert_eq!(
+            super::message_markdown(&item, Provider::Codex),
+            "**Checking GMV routing scope**\n\n**Inspecting GMV sync paths**",
+            "opening a summary must include its first section too"
+        );
+    }
+    for (text, expected) in [
+        ("**First**\n\n**Inspecting GMV", "Inspecting GMV"),
+        ("**First**\n\n**", "First"),
+        ("**First**\n\nReading the mapper.\n", "Reading the mapper."),
+        ("**First**\n<!-- progress -->", "First"),
+    ] {
+        assert_eq!(super::reasoning_preview(text), expected);
+    }
+}
+
+#[gpui_kit::test]
+fn reasoning_live_deltas_show_before_completion_with_collapse_default(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx, _) = crate::app::queue::tests::fixture(cx, "reasoning-live-default");
+    cx.simulate_resize(gpui_kit::size(px(1200.), px(900.)));
+    let sender = cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            app.startup = None;
+            app.writable = false;
+            app.store.ui.collapse_reasoning = true;
+            app.session_mut(1).unwrap().provider = Provider::Codex;
+            app.session_mut(1).unwrap().messages.clear();
+            crate::app::queue::tests::running(app, 1)
+        })
+    });
+    let mut protocol =
+        crate::protocol::Protocol::new(Provider::Codex, "C:/work".into(), "inspect".into(), None);
+    let mut feed = |value, cx: &mut VisualTestContext| {
+        for event in protocol.accept(value).events {
+            sender.send(event).unwrap();
+        }
+        cx.update(|window, cx| app.update(cx, |app, cx| app.poll_streams(window, cx)));
+        draw(cx);
+        draw(cx);
+    };
+    feed(
+        json!({"method":"item/reasoning/summaryTextDelta",
+        "params":{"itemId":"r1","summaryIndex":0,"delta":"**Checking GMV routing scope**"}}),
+        cx,
+    );
+    assert!(cx.debug_bounds("reasoning-body-1-0").is_none());
+    feed(
+        json!({"method":"item/reasoning/summaryTextDelta",
+        "params":{"itemId":"r1","summaryIndex":0,"delta":"\n\nRead the implementation."}}),
+        cx,
+    );
+    assert!(
+        cx.debug_bounds("reasoning-body-1-0").is_some(),
+        "collapse-by-default must not hide a live stream"
+    );
+    let before = cx.debug_bounds("reasoning-body-1-0").unwrap().size.height;
+    feed(
+        json!({"method":"item/reasoning/summaryTextDelta",
+        "params":{"itemId":"r1","summaryIndex":0,"delta":"\n\nCheck the mapper."}}),
+        cx,
+    );
+    assert!(cx.debug_bounds("reasoning-body-1-0").unwrap().size.height > before);
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        let item = &app.session(1).unwrap().messages[0];
+        assert!(tool_running(item), "no completion was sent");
+        assert_eq!(super::reasoning_preview(&item.text), "Check the mapper.");
+    });
+    let point = cx.debug_bounds("activity-1-0").unwrap().center();
+    cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    feed(
+        json!({"method":"item/reasoning/summaryTextDelta",
+        "params":{"itemId":"r1","summaryIndex":1,"delta":"**Inspecting GMV"}}),
+        cx,
+    );
+    assert!(cx.debug_bounds("reasoning-body-1-0").is_none());
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert_eq!(
+            super::reasoning_preview(&app.session(1).unwrap().messages[0].text),
+            "Inspecting GMV",
+            "a manually collapsed stream still updates its current status"
+        );
+    });
+    feed(
+        json!({"method":"item/reasoning/summaryTextDelta",
+        "params":{"itemId":"r1","summaryIndex":1,"delta":" sync paths**"}}),
+        cx,
+    );
+    feed(
+        json!({"method":"item/completed", "params":{"item":{
+        "id":"r1","type":"reasoning","summary":["**Checking GMV routing scope**","**Inspecting GMV sync paths**"],"content":[]}}}),
+        cx,
+    );
+    assert!(cx.debug_bounds("reasoning-body-1-0").is_none());
+    let point = cx.debug_bounds("activity-1-0").unwrap().center();
+    cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    assert!(cx.debug_bounds("reasoning-body-1-0").is_some());
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        let item = &app.session(1).unwrap().messages[0];
+        assert!(!tool_running(item));
+        assert_eq!(
+            super::message_markdown(item, Provider::Codex),
+            "**Checking GMV routing scope**\n\nRead the implementation.\n\nCheck the mapper.\n\n**Inspecting GMV sync paths**"
+        );
+    });
+}
+
 #[gpui_kit::test]
 fn reasoning_stream_stays_visible_after_reply_and_restoration(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
