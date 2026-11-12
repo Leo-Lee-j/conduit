@@ -281,6 +281,58 @@ fn qoder_permissions_preserve_wire_ids_one_shot_choices_and_helper_restrictions(
 }
 
 #[test]
+fn qoder_mcp_tools_bypass_every_chat_permission_and_preserve_helper_restrictions() {
+    for level in [
+        PermissionLevel::ReadOnly,
+        PermissionLevel::WorkspaceWrite,
+        PermissionLevel::FullAccess,
+    ] {
+        for text_only in [false, true] {
+            let mut req = request();
+            req.permission = level;
+            req.text_only = text_only;
+            let (mut adapter, _) = ready(req, true);
+            let launch = adapter.launch().unwrap();
+            assert_eq!(
+                launch.args.iter().any(|arg| arg == "--strict-mcp-config"),
+                text_only
+            );
+            if level == PermissionLevel::ReadOnly && !text_only {
+                assert!(
+                    launch
+                        .args
+                        .windows(2)
+                        .any(|args| args == ["--tools", "Read,Grep,Glob"])
+                );
+            }
+            for once in [true, false] {
+                let mut request = permission("original");
+                request["params"]["toolCall"]["title"] = json!("Update remote record");
+                request["params"]["toolCall"]["_meta"] =
+                    json!({"qoder":{"toolName":"mcp__service__write"}});
+                if !once {
+                    request["params"]["options"][0]["kind"] = json!("allow_always");
+                }
+                let step = adapter.accept(request.clone());
+                let Event::Approval(approval) = &step.events[0] else {
+                    panic!("missing MCP approval")
+                };
+                assert_eq!(approval.kind, ApprovalKind::McpTool);
+                assert_eq!(adapter.automatic_approval(approval), Some(!text_only));
+                assert_eq!(
+                    adapter.approval_response(approval, true)["result"]["outcome"]["optionId"],
+                    if text_only { "no-7" } else { "yes-7" }
+                );
+                request["params"]["sessionId"] = json!("foreign");
+                let wrong = adapter.accept(request);
+                assert!(wrong.events.is_empty());
+                assert_ne!(wrong.writes[0]["result"]["outcome"]["optionId"], "yes-7");
+            }
+        }
+    }
+}
+
+#[test]
 fn qoder_elicitation_supports_choices_multi_select_validation_and_cancellation() {
     let mut req = request();
     req.permission = PermissionLevel::FullAccess;

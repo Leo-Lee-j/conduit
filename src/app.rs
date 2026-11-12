@@ -123,6 +123,8 @@ mod workflow;
 
 use components::*;
 use composer::*;
+#[cfg(test)]
+pub(crate) use events::apply_event;
 use events::*;
 use files::DocumentTab;
 use git_diff::*;

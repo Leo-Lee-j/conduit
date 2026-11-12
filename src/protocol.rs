@@ -22,6 +22,8 @@ pub enum ApprovalKind {
     ClaudeTool,
     OpenCodeTool,
     QoderTool,
+    /// A native CLI MCP call, independent of the chat filesystem permission.
+    McpTool,
     CodexUserInput,
     ClaudeUserInput,
     OpenCodeUserInput,
@@ -209,6 +211,13 @@ fn codex_error_diagnostic(params: &Value) -> String {
 fn pretty(v: &Value) -> String {
     serde_json::to_string_pretty(v).unwrap_or_default()
 }
+
+pub(crate) fn is_mcp_tool_name(name: &str) -> bool {
+    name.strip_prefix("mcp__")
+        .and_then(|name| name.split_once("__"))
+        .is_some_and(|(server, tool)| !server.is_empty() && !tool.is_empty())
+}
+
 fn id_text(v: &Value) -> String {
     v.as_str()
         .map(str::to_owned)
@@ -321,7 +330,14 @@ impl Protocol {
         if approval.is_user_input() {
             return self.text_only.then_some(false);
         }
-        if self.text_only || self.permission == PermissionLevel::ReadOnly {
+        if self.text_only {
+            Some(false)
+        } else if approval.kind == ApprovalKind::McpTool {
+            Some(
+                approval.allow_once
+                    || opencode::permission_option(approval, "allow_always").is_some(),
+            )
+        } else if self.permission == PermissionLevel::ReadOnly {
             Some(false)
         } else if self.permission == PermissionLevel::FullAccess {
             // Fully authorized runs never fall back to a UI permission gate.
@@ -342,7 +358,9 @@ impl Protocol {
                         ApprovalKind::OpenCodeTool | ApprovalKind::QoderTool => {
                             opencode::permission_option(approval, "allow_always").is_some()
                         }
-                        ApprovalKind::Permissions | ApprovalKind::ClaudeTool => false,
+                        ApprovalKind::Permissions
+                        | ApprovalKind::ClaudeTool
+                        | ApprovalKind::McpTool => false,
                         ApprovalKind::CodexUserInput
                         | ApprovalKind::ClaudeUserInput
                         | ApprovalKind::OpenCodeUserInput
@@ -431,7 +449,6 @@ impl Protocol {
                         [
                             "--tools",
                             "Read,Glob,Grep,AskUserQuestion",
-                            "--strict-mcp-config",
                             "--disable-slash-commands",
                             "--settings",
                             "{\"disableAllHooks\":true}",
@@ -1212,7 +1229,11 @@ impl Protocol {
                         detail: pretty(request),
                         input: request["input"].clone(),
                         allow_once: true,
-                        kind: ApprovalKind::ClaudeTool,
+                        kind: if is_mcp_tool_name(text(request, "tool_name")) {
+                            ApprovalKind::McpTool
+                        } else {
+                            ApprovalKind::ClaudeTool
+                        },
                     }));
                 } else {
                     step.writes.push(json!({"type":"control_response","response":{"subtype":"error","request_id":id,"error":"Unsupported control request"}}));
@@ -1313,7 +1334,9 @@ impl Protocol {
             Provider::OpenCode => opencode::approval_response_with_fallback(
                 approval,
                 allow,
-                self.permission == PermissionLevel::FullAccess && !self.text_only,
+                !self.text_only
+                    && (self.permission == PermissionLevel::FullAccess
+                        || approval.kind == ApprovalKind::McpTool),
             ),
             Provider::Codex => match approval.kind {
                 ApprovalKind::Command | ApprovalKind::FileChange => {
@@ -1346,6 +1369,7 @@ impl Protocol {
                 }
                 ApprovalKind::OpenCodeTool
                 | ApprovalKind::QoderTool
+                | ApprovalKind::McpTool
                 | ApprovalKind::ClaudeTool
                 | ApprovalKind::CodexUserInput
                 | ApprovalKind::ClaudeUserInput
@@ -1542,6 +1566,44 @@ mod tests {
                     }
                 );
                 assert_eq!(full.text_only().automatic_approval(approval), Some(false));
+            }
+        }
+    }
+
+    #[test]
+    fn mcp_tools_bypass_all_chat_permission_levels_but_not_text_helpers() {
+        let _locale = crate::test_support::chinese();
+        for permission in [
+            PermissionLevel::ReadOnly,
+            PermissionLevel::WorkspaceWrite,
+            PermissionLevel::FullAccess,
+        ] {
+            for native in [None, Some("resumed-session".into())] {
+                let mut protocol =
+                    Protocol::new(Provider::Claude, "C:/work".into(), "hello".into(), native)
+                        .with_permission(permission);
+                let args = protocol.args();
+                assert!(!args.iter().any(|arg| arg == "--strict-mcp-config"));
+                if permission == PermissionLevel::ReadOnly {
+                    assert!(
+                        args.windows(2)
+                            .any(|args| args == ["--tools", "Read,Glob,Grep,AskUserQuestion"])
+                    );
+                }
+                let input = json!({"command":"write through MCP","tool_name":"Bash"});
+                let step = protocol.accept(json!({"type":"control_request","request_id":"mcp-1",
+                    "request":{"subtype":"can_use_tool","tool_name":"mcp__server__write","input":input}}));
+                let Event::Approval(approval) = &step.events[0] else {
+                    panic!("missing MCP approval")
+                };
+                assert_eq!(approval.kind, ApprovalKind::McpTool);
+                assert_eq!(protocol.automatic_approval(approval), Some(true));
+                let response = protocol.approval_response(approval, true);
+                assert_eq!(response["response"]["request_id"], "mcp-1");
+                assert_eq!(response["response"]["response"]["behavior"], "allow");
+                assert_eq!(response["response"]["response"]["updatedInput"], input);
+                let helper = protocol.text_only();
+                assert_eq!(helper.automatic_approval(approval), Some(false));
             }
         }
     }

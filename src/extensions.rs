@@ -166,6 +166,58 @@ impl Locations {
     }
 }
 
+/// Names only: preserve native loading and enablement, without retaining secrets.
+pub(crate) fn opencode_mcp_names(
+    workspace: &Path,
+    environment: &std::collections::BTreeMap<String, String>,
+) -> HashSet<String> {
+    let env_path = |key: &str| {
+        environment
+            .get(key)
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os(key).map(PathBuf::from))
+    };
+    let config_home = env_path("XDG_CONFIG_HOME")
+        .unwrap_or_else(|| env_path("USERPROFILE").unwrap_or_default().join(".config"));
+    let mut folders = vec![config_home.join("opencode")];
+    for project in project_directories(workspace) {
+        folders.extend([project.clone(), project.join(".opencode")]);
+    }
+    folders.extend(env_path("OPENCODE_CONFIG_DIR"));
+    let mut paths: Vec<_> = folders
+        .iter()
+        .flat_map(|folder| [folder.join("opencode.json"), folder.join("opencode.jsonc")])
+        .collect();
+    paths.extend(env_path("OPENCODE_CONFIG"));
+    let mut names = HashSet::new();
+    let mut collect = |config: Value| {
+        if let Some(servers) = config["mcp"].as_object() {
+            names.extend(servers.keys().cloned());
+        }
+    };
+    for path in paths {
+        let Ok(file) = fs::File::open(path) else {
+            continue;
+        };
+        let mut text = String::new();
+        if file.take(FILE_LIMIT + 1).read_to_string(&mut text).is_ok()
+            && text.len() as u64 <= FILE_LIMIT
+            && let Some(config) = jsonc(&text)
+        {
+            collect(config);
+        }
+    }
+    if let Some(config) = environment
+        .get("OPENCODE_CONFIG_CONTENT")
+        .cloned()
+        .or_else(|| std::env::var("OPENCODE_CONFIG_CONTENT").ok())
+        .and_then(|text| jsonc(&text))
+    {
+        collect(config);
+    }
+    names
+}
+
 struct Scan<'a> {
     cancel: &'a AtomicBool,
     started: Instant,
@@ -853,6 +905,74 @@ fn jsonc(text: &str) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opencode_mcp_names_include_native_scopes_jsonc_and_route_overrides() {
+        let root = std::env::temp_dir().join(format!("conduit-mcp-names-{}", std::process::id()));
+        let workspace = root.join("project/nested");
+        let global = root.join("config/opencode");
+        let extra = root.join("extra");
+        for folder in [&workspace, &global, &extra, &root.join("project/.opencode")] {
+            fs::create_dir_all(folder).unwrap();
+        }
+        fs::write(root.join("project/.git"), "fixture").unwrap();
+        let files = [
+            (
+                global.join("opencode.jsonc"),
+                "{ /* config */ \"mcp\": { \"global\": {\"enabled\":false}, }, }",
+            ),
+            (
+                root.join("project/opencode.json"),
+                r#"{"mcp":{"project":{}}}"#,
+            ),
+            (
+                root.join("project/.opencode/opencode.jsonc"),
+                r#"{"mcp":{"hidden":{}}}"#,
+            ),
+            (extra.join("opencode.json"), r#"{"mcp":{"directory":{}}}"#),
+            (root.join("explicit.json"), r#"{"mcp":{"explicit":{}}}"#),
+        ];
+        for (path, content) in &files {
+            fs::write(path, content).unwrap();
+        }
+        let environment = std::collections::BTreeMap::from([
+            (
+                "XDG_CONFIG_HOME".into(),
+                root.join("config").to_string_lossy().into_owned(),
+            ),
+            (
+                "OPENCODE_CONFIG_DIR".into(),
+                extra.to_string_lossy().into_owned(),
+            ),
+            (
+                "OPENCODE_CONFIG".into(),
+                root.join("explicit.json").to_string_lossy().into_owned(),
+            ),
+            (
+                "OPENCODE_CONFIG_CONTENT".into(),
+                r#"{"mcp":{"inline":{}}}"#.into(),
+            ),
+        ]);
+        assert_eq!(
+            opencode_mcp_names(&workspace, &environment),
+            [
+                "global",
+                "project",
+                "hidden",
+                "directory",
+                "explicit",
+                "inline"
+            ]
+            .map(String::from)
+            .into_iter()
+            .collect()
+        );
+        for (path, content) in files {
+            assert_eq!(fs::read_to_string(path).unwrap(), content);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn jsonc_preserves_urls_strings_and_unicode() {
         let _locale = crate::test_support::chinese();

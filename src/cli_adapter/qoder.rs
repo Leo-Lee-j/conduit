@@ -169,7 +169,16 @@ impl QoderAdapter {
             detail: serde_json::to_string_pretty(&params["toolCall"]).unwrap_or_default(),
             input: params.clone(),
             allow_once: option(params, "allow_once").is_some(),
-            kind: ApprovalKind::QoderTool,
+            kind: if crate::protocol::is_mcp_tool_name(
+                params["toolCall"]
+                    .pointer("/_meta/qoder/toolName")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            ) {
+                ApprovalKind::McpTool
+            } else {
+                ApprovalKind::QoderTool
+            },
         };
         if self.stage != Stage::Prompt
             || params["sessionId"].as_str() != self.session_id.as_deref()
@@ -289,9 +298,6 @@ impl CliAdapter for QoderAdapter {
         ];
         if restricted {
             args.extend([
-                "--strict-mcp-config".into(),
-                "--mcp-config".into(),
-                "{\"mcpServers\":{}}".into(),
                 "--tools".into(),
                 if self.request.text_only {
                     "".into()
@@ -300,7 +306,13 @@ impl CliAdapter for QoderAdapter {
                 },
             ]);
             if self.request.text_only {
-                args.extend(["--disallowed-tools".into(), "*".into()]);
+                args.extend([
+                    "--strict-mcp-config".into(),
+                    "--mcp-config".into(),
+                    "{\"mcpServers\":{}}".into(),
+                    "--disallowed-tools".into(),
+                    "*".into(),
+                ]);
             }
         }
         Ok(LaunchSpec {
@@ -511,6 +523,12 @@ impl CliAdapter for QoderAdapter {
         if approval.is_user_input() {
             return None;
         }
+        if approval.kind == ApprovalKind::McpTool {
+            return Some(
+                option(&approval.input, "allow_once").is_some()
+                    || option(&approval.input, "allow_always").is_some(),
+            );
+        }
         match self.request.permission {
             PermissionLevel::ReadOnly => Some(false),
             PermissionLevel::FullAccess => Some(
@@ -526,13 +544,17 @@ impl CliAdapter for QoderAdapter {
         }
         let allow = allow
             && !self.request.text_only
-            && self.request.permission != PermissionLevel::ReadOnly;
+            && (self.request.permission != PermissionLevel::ReadOnly
+                || approval.kind == ApprovalKind::McpTool);
         let choice = option(
             &approval.input,
             if allow { "allow_once" } else { "reject_once" },
         )
         .or_else(|| {
-            if allow && self.request.permission == PermissionLevel::FullAccess {
+            if allow
+                && (self.request.permission == PermissionLevel::FullAccess
+                    || approval.kind == ApprovalKind::McpTool)
+            {
                 option(&approval.input, "allow_always")
             } else {
                 None

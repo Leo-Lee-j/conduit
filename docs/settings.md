@@ -53,6 +53,8 @@ Qoder CLI 使用原生认证和模型配置，不提供 Conduit 自定义 Provid
 
 Qoder 的 Skills/MCP 暂由原生 CLI 管理，应用内创建与导入入口禁用。
 
+普通聊天的只读、工作区内修改和完全访问三个权限等级均放行原生 CLI 已加载的 MCP 工具，不额外弹出工具执行审批，也不清空 MCP 配置。MCP 服务的启停、认证和原生加载规则继续生效；命名、提交说明等纯文本辅助任务仍禁用工具。
+
 Skill 导入保留脚本和资源，不覆盖同名目录。停用通过 `SKILL.md` 与 `SKILL.md.conduit-disabled` 改名实现；共享目录影响所有使用它的 CLI，插件托管内容不直接修改。
 
 MCP 保存先预览合并，保留其他配置与注释，校验外部修改冲突并保留 `.conduit-backup`。Codex / OpenCode 的启停修改原生 `enabled`；Claude 和插件托管来源遵循各自原生管理方式。

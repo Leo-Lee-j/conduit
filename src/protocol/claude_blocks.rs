@@ -54,7 +54,7 @@ impl Blocks {
                 .find(|ordinal| !message.completed.contains(ordinal))
                 .copied()
         }
-        .unwrap_or_else(|| {
+        .unwrap_or({
             if aggregate || uuid.is_empty() {
                 position
             } else {

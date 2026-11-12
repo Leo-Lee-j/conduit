@@ -101,6 +101,7 @@ pub(super) struct State {
     context_window: u64,
     context_tokens: Option<u64>,
     helper_directory: Option<std::path::PathBuf>,
+    mcp_prefixes: Vec<String>,
 }
 
 impl State {
@@ -187,7 +188,7 @@ impl Protocol {
             ))?;
         // This new agent has no user agent-specific rules. Its rules are appended
         // after inherited global rules, including inherited concrete allow rules.
-        let permission = if self.text_only {
+        let mut permission = if self.text_only {
             json!({"*":"deny","external_directory":"deny"})
         } else if self.permission == PermissionLevel::ReadOnly {
             json!({"*":"deny","read":"allow","glob":"allow","grep":"allow","list":"allow","external_directory":"ask","question":"allow"})
@@ -199,6 +200,36 @@ impl Protocol {
             };
             json!({"*":action,"read":"allow","glob":"allow","grep":"allow","list":"allow","external_directory":action,"question":"allow","plan_enter":"deny","plan_exit":"deny","task":"deny"})
         };
+        if !self.text_only {
+            // A server prefix can overlap a built-in permission such as
+            // `plan_enter` or `doom_loop`; keep those exact rules authoritative.
+            permission["plan_enter"] = json!("deny");
+            permission["plan_exit"] = json!("deny");
+            permission["doom_loop"] = permission["*"].clone();
+            self.acp.mcp_prefixes = crate::extensions::opencode_mcp_names(
+                std::path::Path::new(&self.cwd),
+                &self.route.env,
+            )
+            .into_iter()
+            .filter(|name| !name.is_empty())
+            .map(|name| {
+                let name: String = name
+                    .chars()
+                    .map(|c| {
+                        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                            c
+                        } else {
+                            '_'
+                        }
+                    })
+                    .collect();
+                format!("{name}_")
+            })
+            .collect();
+            for prefix in &self.acp.mcp_prefixes {
+                permission[format!("{prefix}*")] = json!("allow");
+            }
+        }
         agents.insert(self.acp.agent.clone(), json!({"mode":"primary","description":"Conduit managed permissions","permission":permission}));
         if self.text_only {
             // `run --format json` reports session.error immediately, whereas
@@ -591,7 +622,12 @@ impl Protocol {
             id: format!("acp:{}", id_text(&value["id"])),
             title: params["toolCall"]["title"].as_str().unwrap_or(conduit::i18n::text_static("protocol.opencode.request_to_run_an_opencode_tool")).into(),
             detail: json!({"toolCallId":params["toolCall"]["toolCallId"],"toolCall":params["toolCall"],"options":params["options"]}).to_string(),
-            wire_id: value["id"].clone(), input: params.clone(), allow_once, kind: ApprovalKind::OpenCodeTool,
+            wire_id: value["id"].clone(), input: params.clone(), allow_once,
+            kind: if text(&params["toolCall"], "kind") == "other"
+                && !matches!(text(&params["toolCall"], "title"), "external_directory" | "plan_enter" | "plan_exit" | "doom_loop")
+                && self.acp.mcp_prefixes.iter().any(|prefix| {
+                text(&params["toolCall"], "title").strip_prefix(prefix).is_some_and(|tool| !tool.is_empty())
+            }) { ApprovalKind::McpTool } else { ApprovalKind::OpenCodeTool },
         };
         if params["sessionId"].as_str() != self.acp.session_id.as_deref()
             || self.acp.stage != Stage::Prompt
@@ -736,13 +772,13 @@ pub(super) fn approval_response(approval: &Approval, allow: bool) -> Value {
 pub(super) fn approval_response_with_fallback(
     approval: &Approval,
     allow: bool,
-    full_access: bool,
+    allow_persistent: bool,
 ) -> Value {
     let kind = if allow { "allow_once" } else { "reject_once" };
-    // Prefer a one-shot choice. Only an explicitly full-access run may choose
-    // a persistent grant when the server provides no one-shot option.
+    // Prefer a one-shot choice. Full access and native MCP calls may use a
+    // persistent grant when the server provides no one-shot option.
     let option = permission_option(approval, kind).or_else(|| {
-        if allow && full_access {
+        if allow && allow_persistent {
             permission_option(approval, "allow_always")
         } else {
             None

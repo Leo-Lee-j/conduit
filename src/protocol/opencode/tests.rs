@@ -9,6 +9,15 @@ fn options(agent: &str) -> Value {
 }
 
 fn connected(native: Option<&str>, resume: bool, variant: Option<&str>) -> (Protocol, Vec<Value>) {
+    connected_with_config(native, resume, variant, json!({}))
+}
+
+fn connected_with_config(
+    native: Option<&str>,
+    resume: bool,
+    variant: Option<&str>,
+    config: Value,
+) -> (Protocol, Vec<Value>) {
     let mut protocol = Protocol::new(
         Provider::OpenCode,
         "C:/work".into(),
@@ -19,6 +28,10 @@ fn connected(native: Option<&str>, resume: bool, variant: Option<&str>) -> (Prot
     .with_options(
         Default::default(),
         crate::providers::RuntimeRoute {
+            env: std::collections::BTreeMap::from([(
+                "OPENCODE_CONFIG_CONTENT".into(),
+                config.to_string(),
+            )]),
             acp_variant: variant.map(str::to_owned),
             ..Default::default()
         },
@@ -299,6 +312,65 @@ fn opencode_permission_uses_option_kind_and_preserves_tool_and_wire_ids() {
 }
 
 #[test]
+fn opencode_mcp_tools_bypass_every_chat_permission_with_native_server_names() {
+    let _locale = crate::test_support::chinese();
+    for level in [
+        PermissionLevel::ReadOnly,
+        PermissionLevel::WorkspaceWrite,
+        PermissionLevel::FullAccess,
+    ] {
+        let (protocol, _) = connected_with_config(
+            None,
+            true,
+            None,
+            json!({"mcp":{"native.server":{"type":"local","command":["fixture"]}}}),
+        );
+        let mut protocol = protocol.with_permission(level);
+        for once in [true, false] {
+            let mut request = permission("ses_test");
+            request["params"]["toolCall"]["title"] = json!("native_server_write");
+            request["params"]["toolCall"]["kind"] = json!("other");
+            if !once {
+                request["params"]["options"].as_array_mut().unwrap().pop();
+            }
+            let step = protocol.accept(request.clone());
+            let Event::Approval(approval) = &step.events[0] else {
+                panic!("missing MCP approval")
+            };
+            assert_eq!(approval.kind, ApprovalKind::McpTool);
+            assert_eq!(protocol.automatic_approval(approval), Some(true));
+            assert_eq!(
+                protocol.approval_response(approval, true)["result"]["outcome"]["optionId"],
+                if once { "yes" } else { "permanent" }
+            );
+            request["params"]["sessionId"] = json!("foreign");
+            assert!(protocol.accept(request).events.is_empty());
+        }
+        let step = protocol.accept(permission("ses_test"));
+        let Event::Approval(approval) = &step.events[0] else {
+            panic!("missing native approval")
+        };
+        assert_eq!(approval.kind, ApprovalKind::OpenCodeTool);
+        assert_eq!(
+            protocol.automatic_approval(approval),
+            match level {
+                PermissionLevel::ReadOnly => Some(false),
+                PermissionLevel::WorkspaceWrite => None,
+                PermissionLevel::FullAccess => Some(true),
+            }
+        );
+        let mut shell = permission("ses_test");
+        shell["params"]["toolCall"]["title"] = json!("native_server_write");
+        shell["params"]["toolCall"]["kind"] = json!("execute");
+        let step = protocol.accept(shell);
+        let Event::Approval(approval) = &step.events[0] else {
+            panic!("missing command approval")
+        };
+        assert_eq!(approval.kind, ApprovalKind::OpenCodeTool);
+    }
+}
+
+#[test]
 fn opencode_tool_updates_merge_input_and_title_and_ignore_other_session() {
     let _locale = crate::test_support::chinese();
     let (mut protocol, _) = connected(None, true, None);
@@ -331,7 +403,7 @@ fn opencode_managed_agents_override_inherited_rules_and_helpers_have_private_sto
             .with_permission(permission);
         protocol.route.env.insert(
             "OPENCODE_CONFIG_CONTENT".into(),
-            json!({"permission":{"bash":"allow","custom_tool":"allow"},"provider":{"keep":{}}})
+            json!({"permission":{"bash":"allow","custom_tool":"allow"},"provider":{"keep":{}},"mcp":{"native.server":{"enabled":false},"plan":{},"doom":{}}})
                 .to_string(),
         );
         protocol.prepare().unwrap();
@@ -340,6 +412,11 @@ fn opencode_managed_agents_override_inherited_rules_and_helpers_have_private_sto
         assert!(config["provider"].get("keep").is_some());
         let agent = &config["agent"][&protocol.acp.agent];
         assert_eq!(agent["permission"]["question"], "allow");
+        assert_eq!(agent["permission"]["native_server_*"], "allow");
+        assert_eq!(agent["permission"]["plan_enter"], "deny");
+        assert_eq!(agent["permission"]["plan_exit"], "deny");
+        assert_eq!(agent["permission"]["doom_loop"], agent["permission"]["*"]);
+        assert_eq!(config["mcp"]["native.server"]["enabled"], false);
         assert_eq!(
             protocol.environment()["OPENCODE_ENABLE_QUESTION_TOOL"],
             "true"
