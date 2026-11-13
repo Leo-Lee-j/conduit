@@ -64,6 +64,8 @@
 
 应用权限约束只针对 CLI 实际支持并上报的请求；经过批准的命令仍可能访问工作区外文件，不将“工作区内修改”描述为文件系统沙箱。
 
+Codex 普通聊天使用分项 `approvalPolicy.granular`，单独开启 `mcp_elicitations`；只读和完全访问也不能使用会提前拒绝 MCP 确认的 `never`。原生 `mcpServer/elicitation/request` 中带有 `_meta.codex_approval_kind=mcp_tool_call` 的空表单工具审批自动放行；实际需要填写的表单与认证请求不能代填。纯文本辅助任务继续使用 `never` 并拒绝工具审批。
+
 ## Codex 思考内容
 
 按 [App Server 官方文档](https://developers.openai.com/codex/app-server/) 的 item 生命周期处理思考内容：

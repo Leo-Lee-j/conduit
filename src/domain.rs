@@ -27,7 +27,8 @@ impl Provider {
 /// `sandbox=read-only | workspace-write | danger-full-access`, Claude uses
 /// `--permission-mode default | acceptEdits | bypassPermissions`.
 /// Claude read-only uses a restricted tool list and rejects approval requests.
-/// FullAccess also disables Codex approval gates and uses Claude bypass mode.
+/// Codex keeps MCP approval routing independent of filesystem approval gates.
+/// FullAccess uses Claude bypass mode.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionLevel {
@@ -50,11 +51,16 @@ impl PermissionLevel {
         }
     }
 
-    pub fn codex_approval_policy(self) -> &'static str {
-        match self {
-            Self::FullAccess | Self::ReadOnly => "never",
-            Self::WorkspaceWrite => "on-request",
-        }
+    pub fn codex_approval_policy(self) -> serde_json::Value {
+        let filesystem_approvals = self == Self::WorkspaceWrite;
+        // `never` also rejects native MCP confirmations before they reach us.
+        serde_json::json!({"granular": {
+            "sandbox_approval": filesystem_approvals,
+            "rules": filesystem_approvals,
+            "skill_approval": false,
+            "request_permissions": filesystem_approvals,
+            "mcp_elicitations": true
+        }})
     }
 
     pub fn codex_sandbox(self) -> &'static str {

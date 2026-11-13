@@ -926,6 +926,34 @@ impl Protocol {
                     &mut step,
                 );
             }
+            "mcpServer/elicitation/request"
+                if p["_meta"]["codex_approval_kind"] == "mcp_tool_call"
+                    && p["_meta"]["codex_requires_user_input"] != true
+                    && p["mode"] == "form"
+                    && p["requestedSchema"]["type"] == "object"
+                    && p["requestedSchema"]["properties"]
+                        .as_object()
+                        .is_some_and(|properties| properties.is_empty())
+                    && p["requestedSchema"]["required"]
+                        .as_array()
+                        .is_none_or(|required| required.is_empty())
+                    && v.get("id").is_some_and(|id| {
+                        id.is_i64() || id.is_u64() || id.as_str().is_some_and(|id| !id.is_empty())
+                    }) =>
+            {
+                // Codex wraps tool confirmations in MCP elicitation requests.
+                // Only its explicit tool-approval marker authorizes an empty
+                // response; actual forms/authentication still require input.
+                step.events.push(Event::Approval(Approval {
+                    id: id_text(&v["id"]),
+                    wire_id: v["id"].clone(),
+                    input: p.clone(),
+                    title: text(p, "message").into(),
+                    detail: pretty(p),
+                    allow_once: true,
+                    kind: ApprovalKind::McpTool,
+                }));
+            }
             "item/permissions/requestApproval" => {
                 if !v
                     .get("id")
@@ -1339,6 +1367,13 @@ impl Protocol {
                         || approval.kind == ApprovalKind::McpTool),
             ),
             Provider::Codex => match approval.kind {
+                ApprovalKind::McpTool => {
+                    let allow = allow && !self.text_only;
+                    json!({"id":approval.wire_id,"result":{
+                        "action":if allow { "accept" } else { "decline" },
+                        "content": if allow { json!({}) } else { Value::Null }
+                    }})
+                }
                 ApprovalKind::Command | ApprovalKind::FileChange => {
                     let decision = if !allow {
                         "decline"
@@ -1369,7 +1404,6 @@ impl Protocol {
                 }
                 ApprovalKind::OpenCodeTool
                 | ApprovalKind::QoderTool
-                | ApprovalKind::McpTool
                 | ApprovalKind::ClaudeTool
                 | ApprovalKind::CodexUserInput
                 | ApprovalKind::ClaudeUserInput
@@ -1466,7 +1500,10 @@ mod tests {
             );
             let params = &step.writes[1]["params"];
             assert_eq!(params["sandbox"], "danger-full-access");
-            assert_eq!(params["approvalPolicy"], "never");
+            assert_eq!(
+                params["approvalPolicy"],
+                PermissionLevel::FullAccess.codex_approval_policy()
+            );
             assert_eq!(params["modelProvider"], "conduit");
             assert_eq!(
                 params["config"]["model_providers"]["conduit"]["base_url"],
@@ -1481,7 +1518,10 @@ mod tests {
             let step =
                 protocol.accept(json!({"id":2,"result":{"thread":{"id":"original-thread"}}}));
             assert_eq!(step.writes[0]["params"]["effort"], "high");
-            assert_eq!(step.writes[0]["params"]["approvalPolicy"], "never");
+            assert_eq!(
+                step.writes[0]["params"]["approvalPolicy"],
+                PermissionLevel::FullAccess.codex_approval_policy()
+            );
             assert_eq!(
                 step.writes[0]["params"]["sandboxPolicy"]["type"],
                 "dangerFullAccess"
@@ -1567,6 +1607,83 @@ mod tests {
                 );
                 assert_eq!(full.text_only().automatic_approval(approval), Some(false));
             }
+        }
+    }
+
+    #[test]
+    fn codex_mcp_confirmations_route_and_approve_at_every_permission_level() {
+        let _locale = crate::test_support::chinese();
+        let request = json!({"id":"mcp-confirm","method":"mcpServer/elicitation/request",
+            "params":{"threadId":"thread","serverName":"fixture","mode":"form",
+                "message":"Approve MCP call", "requestedSchema":{"type":"object","properties":{}},
+                "_meta":{"codex_approval_kind":"mcp_tool_call"}}});
+        for level in [
+            PermissionLevel::ReadOnly,
+            PermissionLevel::WorkspaceWrite,
+            PermissionLevel::FullAccess,
+        ] {
+            for native in [None, Some("thread".into())] {
+                let mut protocol =
+                    Protocol::new(Provider::Codex, "C:/work".into(), "hello".into(), native)
+                        .with_permission(level);
+                let start = protocol.accept(json!({"id":1,"result":{}}));
+                let policy = &start.writes[1]["params"]["approvalPolicy"]["granular"];
+                assert_eq!(policy["mcp_elicitations"], true);
+                assert_eq!(
+                    policy["sandbox_approval"],
+                    level == PermissionLevel::WorkspaceWrite
+                );
+                assert_eq!(start.writes[1]["params"]["sandbox"], level.codex_sandbox());
+                let turn = protocol.accept(json!({"id":2,"result":{"thread":{"id":"thread"}}}));
+                assert_eq!(
+                    turn.writes[0]["params"]["approvalPolicy"],
+                    start.writes[1]["params"]["approvalPolicy"]
+                );
+                let step = protocol.accept(request.clone());
+                assert!(step.writes.is_empty() && step.error.is_none());
+                let Event::Approval(approval) = &step.events[0] else {
+                    panic!("missing MCP confirmation")
+                };
+                assert_eq!(protocol.automatic_approval(approval), Some(true));
+                assert_eq!(
+                    protocol.approval_response(approval, true),
+                    json!({"id":"mcp-confirm","result":{"action":"accept","content":{}}})
+                );
+                assert_eq!(
+                    protocol.approval_response(approval, false)["result"]["action"],
+                    "decline"
+                );
+                let helper = protocol.text_only();
+                assert_eq!(helper.automatic_approval(approval), Some(false));
+                assert_eq!(
+                    helper.approval_response(approval, true)["result"]["action"],
+                    "decline"
+                );
+            }
+        }
+        for (pointer, value) in [
+            ("/_meta/codex_approval_kind", json!("browser_auth")),
+            ("/_meta/codex_requires_user_input", json!(true)),
+            (
+                "/requestedSchema/properties",
+                json!({"answer":{"type":"string"}}),
+            ),
+            ("/requestedSchema/required", json!(["answer"])),
+            ("/mode", json!("url")),
+        ] {
+            let mut input = request.clone();
+            // Insert metadata/schema fields that are optional on the wire.
+            let (parent, key) = pointer.rsplit_once('/').unwrap();
+            input["params"].pointer_mut(parent).unwrap()[key] = value;
+            let mut protocol =
+                Protocol::new(Provider::Codex, "C:/work".into(), "hello".into(), None);
+            let step = protocol.accept(input);
+            assert!(
+                step.events
+                    .iter()
+                    .all(|event| !matches!(event, Event::Approval(_)))
+            );
+            assert_eq!(step.writes[0]["error"]["code"], -32601);
         }
     }
 

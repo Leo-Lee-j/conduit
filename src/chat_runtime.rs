@@ -1402,6 +1402,57 @@ mod tests {
     }
 
     #[test]
+    fn codex_mcp_confirmations_execute_without_a_chat_approval_gate() {
+        let _locale = crate::test_support::chinese();
+        for permission in [
+            PermissionLevel::ReadOnly,
+            PermissionLevel::WorkspaceWrite,
+            PermissionLevel::FullAccess,
+        ] {
+            let command = r#"
+                [Console]::ReadLine() | Out-Null
+                [Console]::WriteLine('{"id":"mcp-confirm","method":"mcpServer/elicitation/request","params":{"threadId":"thread","serverName":"fixture","mode":"form","message":"Approve MCP call","requestedSchema":{"type":"object","properties":{}},"_meta":{"codex_approval_kind":"mcp_tool_call"}}}')
+                $response = [Console]::ReadLine() | ConvertFrom-Json
+                if ($response.id -ne 'mcp-confirm' -or $response.result.action -ne 'accept' -or $null -eq $response.result.content -or $null -ne $response.error) { exit 7 }
+                [Console]::WriteLine('{"method":"turn/completed","params":{"turn":{"status":"completed"}}}')
+                Start-Sleep -Seconds 5
+            "#;
+            let protocol = Protocol::new(
+                Provider::Codex,
+                std::env::temp_dir().to_string_lossy().into_owned(),
+                "fixture".into(),
+                None,
+            )
+            .with_permission(permission);
+            let executable = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+                .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+            let runtime = ChatRuntime::start_command(
+                protocol,
+                executable,
+                ["-NoProfile", "-NonInteractive", "-Command", command]
+                    .map(String::from)
+                    .into(),
+                std::env::temp_dir(),
+            );
+            loop {
+                match runtime
+                    .events
+                    .recv_timeout(Duration::from_secs(15))
+                    .unwrap()
+                {
+                    Event::Approval(_) => panic!("{permission:?}: MCP must not open a chat gate"),
+                    Event::Finished { error, cancelled } => {
+                        assert!(error.is_none(), "{permission:?}: {error:?}");
+                        assert!(!cancelled);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    #[test]
     fn full_access_answers_tool_permission_without_showing_an_approval() {
         let _locale = crate::test_support::chinese();
         let log =
