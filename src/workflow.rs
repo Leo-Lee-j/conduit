@@ -224,7 +224,19 @@ impl Workflow {
         &mut self,
         mut environment: crate::environments::Environment,
     ) -> Result<u64, String> {
+        environment.name = environment.name.trim().to_owned();
+        environment.host = environment.host.trim().to_owned();
         environment.validate().map_err(|e| e.to_string())?;
+        if environment.id != 0 {
+            let previous = self
+                .environments
+                .iter_mut()
+                .find(|e| e.id == environment.id && e.workspace == environment.workspace)
+                .ok_or_else(|| error("workflow.missing"))?;
+            let id = environment.id;
+            *previous = environment;
+            return Ok(id);
+        }
         if self.environments.len() >= 50 {
             return Err(error("workflow.limit"));
         }

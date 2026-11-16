@@ -109,6 +109,9 @@ impl ConduitApp {
                 );
             }
         }
+        if services && self.settings_ui.group.is_none() {
+            return self.model_services_page(available_width, actions.into_any_element(), view);
+        }
         let mut groups = vec![];
         if services {
             if engine.descriptor().capabilities.model_services {

@@ -653,3 +653,44 @@ fn opencode_reasoning_chunks_preserve_segments_and_ignore_replay_and_other_sessi
     protocol.text_only = true;
     assert!(protocol.accept(thought("ses_test")).events.is_empty());
 }
+
+#[test]
+fn subagent_delegation_uses_managed_worker_with_matching_permissions() {
+    for permission in [
+        PermissionLevel::ReadOnly,
+        PermissionLevel::WorkspaceWrite,
+        PermissionLevel::FullAccess,
+    ] {
+        let mut protocol = Protocol::new(
+            Provider::OpenCode,
+            "C:/fixture".into(),
+            "hello".into(),
+            None,
+        )
+        .with_permission(permission);
+        protocol
+            .route
+            .env
+            .insert("OPENCODE_CONFIG_CONTENT".into(), "{}".into());
+        protocol.prepare().unwrap();
+        let config: Value =
+            serde_json::from_str(&protocol.environment()["OPENCODE_CONFIG_CONTENT"]).unwrap();
+        let primary = &config["agent"][&protocol.acp.agent];
+        let worker_id = format!("{}-worker", protocol.acp.agent);
+        let worker = &config["agent"][&worker_id];
+        assert_eq!(worker["mode"], "subagent");
+        assert_eq!(primary["permission"], worker["permission"]);
+        assert_eq!(primary["permission"]["task"]["*"], "deny");
+        assert_eq!(
+            primary["permission"]["task"][&worker_id],
+            if permission == PermissionLevel::WorkspaceWrite {
+                "ask"
+            } else {
+                "allow"
+            }
+        );
+        if permission == PermissionLevel::ReadOnly {
+            assert_eq!(worker["permission"]["*"], "deny");
+        }
+    }
+}

@@ -49,7 +49,11 @@ impl QuestionBridge {
             .read_json()?)
     }
 
-    pub(super) fn poll(&mut self, session: &str) -> Result<Vec<Value>> {
+    pub(super) fn poll_sessions(
+        &mut self,
+        session: &str,
+        agents: &[crate::subagents::Agent],
+    ) -> Result<Vec<Value>> {
         let mut response = self
             .agent
             .get(format!("{}/question", self.base))
@@ -70,7 +74,9 @@ impl QuestionBridge {
         let mut current = HashSet::new();
         let mut messages = vec![];
         for request in requests {
-            if request["sessionID"].as_str() != Some(session) {
+            if request["sessionID"].as_str() != Some(session)
+                && !agents.iter().any(|agent| request["sessionID"] == agent.id)
+            {
                 continue;
             }
             let id = request["id"]

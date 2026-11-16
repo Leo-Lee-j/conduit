@@ -486,3 +486,147 @@ fn plugin_discovery_installs_official_package_and_respects_readonly_mode(cx: &mu
             && app.store.ui.plugins.file_icon_theme.is_none())
     );
 }
+
+#[gpui_kit::test]
+fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    use crate::{
+        domain::Provider,
+        providers::{ModelChannel, ModelProvider, ProviderSource},
+    };
+    let (app, cx) = fixture(cx);
+    cx.simulate_resize(size(px(1200.), px(800.)));
+    let provider = ModelProvider {
+        id: "ui-service".into(),
+        name: "UI service".into(),
+        engine: Provider::Codex,
+        base_url: "https://example.invalid/v1".into(),
+        api_key_env: String::new(),
+        protected_api_key: None,
+        models: vec!["model-a".into(), "model-b".into()],
+        source: ProviderSource::Local,
+        model_metadata: vec![],
+        claude_models: None,
+    };
+    let route = ModelChannel::Provider(provider.id.clone());
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.connection_settings.engine = Provider::Codex;
+            app.store.providers = vec![provider.clone()];
+            app.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
+            app.select_settings_page(8, window, cx);
+            assert!(!app.set_service_default(Provider::Codex, route.clone(), None, cx));
+            assert!(!app.delete_model_service(&provider.id, cx));
+            app.writable = true;
+            let mut session = crate::app::tests::session();
+            session.provider = Provider::Codex;
+            session.title = "Existing session".into();
+            session.channel = route.clone();
+            session.model = Some("model-b".into());
+            app.store.workspaces.push(crate::domain::Workspace {
+                path: std::env::temp_dir(),
+                sessions: vec![session],
+            });
+            cx.notify();
+        })
+    });
+    draw(cx);
+    let control = cx
+        .debug_bounds("service-default-0")
+        .expect("live default action")
+        .center();
+    cx.simulate_mouse_down(control, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(control, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    cx.update(|_, cx| {
+        app.read_with(cx, |app, _| {
+            assert_eq!(app.store.session_defaults[&Provider::Codex].channel, route);
+            assert!(app.store.session_defaults[&Provider::Codex].model.is_none());
+            assert_eq!(
+                app.store.workspaces[0].sessions[0].model.as_deref(),
+                Some("model-b")
+            );
+            assert_eq!(app.provider_configuration_references(&provider.id).len(), 1);
+            assert_eq!(app.provider_references(&provider.id).len(), 2);
+        })
+    });
+    let control = cx.debug_bounds("service-models-0").unwrap().center();
+    cx.simulate_mouse_down(control, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(control, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    assert!(cx.debug_bounds("service-details").is_some());
+    cx.update(|window, cx| {
+        use gpui_kit::component::WindowExt as _;
+        window.close_sheet(cx);
+        app.update(cx, |app, cx| {
+            let history = serde_json::to_value(&app.store.workspaces).unwrap();
+            assert!(!app.set_service_default(Provider::Claude, route.clone(), None, cx));
+            assert!(!app.set_service_default(
+                Provider::Codex,
+                ModelChannel::Provider("missing".into()),
+                None,
+                cx
+            ));
+            assert!(!app.set_service_default(
+                Provider::Codex,
+                route.clone(),
+                Some("missing-model".into()),
+                cx
+            ));
+            assert!(app.set_service_default(
+                Provider::Codex,
+                route.clone(),
+                Some("model-a".into()),
+                cx
+            ));
+            assert_eq!(
+                serde_json::to_value(&app.store.workspaces).unwrap(),
+                history
+            );
+            assert!(!app.delete_model_service(&provider.id, cx));
+            assert!(app.set_service_default(Provider::Codex, ModelChannel::Cli, None, cx));
+            assert!(
+                !app.delete_model_service(&provider.id, cx),
+                "history still references the service"
+            );
+            app.store.workspaces.clear();
+            app.store.git.generation_channel = Some(route.clone());
+            assert!(
+                !app.delete_model_service(&provider.id, cx),
+                "automation references block deletion"
+            );
+            app.store.git.generation_channel = None;
+            app.store.providers[0].source = ProviderSource::Ccs {
+                id: "external".into(),
+            };
+            assert!(
+                !app.delete_model_service(&provider.id, cx),
+                "imported services remain externally managed"
+            );
+            app.store.providers[0].source = ProviderSource::Local;
+            app.writable = false;
+            assert!(!app.set_service_default(Provider::Codex, route.clone(), None, cx));
+            assert!(!app.delete_model_service(&provider.id, cx));
+            app.writable = true;
+            assert!(app.delete_model_service(&provider.id, cx));
+            assert!(
+                !app.set_service_default(Provider::Codex, route.clone(), None, cx),
+                "stale controls cannot restore a removed route"
+            );
+            app.persistence.flush();
+            app.writable = false;
+        });
+    });
+    draw(cx);
+    let control = cx
+        .debug_bounds("services-default-catalog")
+        .unwrap()
+        .center();
+    cx.simulate_mouse_down(control, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(control, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    assert!(
+        cx.debug_bounds("service-details").is_some(),
+        "native catalog remains reachable"
+    );
+}

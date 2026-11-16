@@ -132,6 +132,7 @@ fn merge_session(
     let id = *next_id;
     *next_id += 1;
     workspace.sessions.push(crate::domain::SessionRecord {
+        subagents: Default::default(),
         branching: Default::default(),
         transcript: Default::default(),
         id,
@@ -1777,6 +1778,7 @@ mod tests {
         // Simulate an existing GUI session that shares a native id with one
         // imported session plus one completely new import.
         workspace.sessions.push(crate::domain::SessionRecord {
+            subagents: Default::default(),
             branching: Default::default(),
             transcript: Default::default(),
             id: 7,

@@ -103,6 +103,12 @@ impl ConduitApp {
                 structural_change = true;
             }
             match event {
+                Event::Subagent(agent) => {
+                    if let Some(session) = self.session_mut(id) {
+                        crate::subagents::upsert(&mut session.subagents, agent, &prefix);
+                    }
+                    self.session_control.changed(id);
+                }
                 Event::NativeTurnCompleted { thread_id, turn_id } => {
                     if let Some(session) = self.session_mut(id) {
                         crate::branching::record(session, thread_id, turn_id);
@@ -328,6 +334,13 @@ impl ConduitApp {
                     }
                 }
                 Event::Finished { error, cancelled } => {
+                    if let Some(session) = self.session_mut(id) {
+                        crate::subagents::disconnect(
+                            &mut session.subagents,
+                            Some(&prefix),
+                            cancelled,
+                        );
+                    }
                     let finished_run = self.session_control.runs.remove(&id);
                     if let Some(run) = &finished_run
                         && matches!(run.intent, crate::commands::RequestIntent::Message)

@@ -1,0 +1,519 @@
+//! Native child-agent lifecycle tracking, isolated from the main transcript and usage.
+use super::*;
+use crate::subagents::{Agent, Status};
+use std::collections::{BTreeMap, HashMap};
+use std::time::{Duration, Instant};
+
+#[derive(Default)]
+pub(super) struct Agents {
+    pub records: BTreeMap<String, Agent>,
+    published: BTreeMap<String, Agent>,
+    pending_reads: HashMap<String, (String, String, Instant)>,
+    prior_turns: HashMap<String, String>,
+    operations: std::collections::HashSet<String>,
+    read_sequence: u64,
+    cursor: usize,
+    last_poll: Option<Instant>,
+    pub main_done: bool,
+}
+impl Agents {
+    pub fn publish(&mut self, step: &mut Step) {
+        for (id, record) in &mut self.records {
+            record.bounded();
+            if self.published.get(id) != Some(record) {
+                record.updated_at = crate::subagents::now();
+                self.published.insert(id.clone(), record.clone());
+                step.events.push(Event::Subagent(record.clone()));
+            }
+        }
+    }
+    pub fn active(&self) -> bool {
+        self.records.values().any(|a| a.status.active())
+    }
+    fn register(&mut self, id: &str, parent: &str) -> Option<&mut Agent> {
+        if id.is_empty() || (self.records.len() >= 256 && !self.records.contains_key(id)) {
+            return None;
+        }
+        Some(
+            self.records
+                .entry(id.into())
+                .or_insert_with(|| Agent::new(id, parent)),
+        )
+    }
+}
+fn native_status(value: &str) -> Status {
+    match value {
+        "pendingInit" | "pending" => Status::Starting,
+        "running" | "busy" | "retry" | "inProgress" => Status::Running,
+        "completed" => Status::Completed,
+        "failed" | "errored" | "error" => Status::Failed,
+        "interrupted" | "shutdown" | "stopped" | "killed" => Status::Stopped,
+        "idle" => Status::Idle,
+        _ => Status::Unknown,
+    }
+}
+fn thread_status(value: &Value) -> Status {
+    if value["type"] == "active" {
+        let flags = value["activeFlags"].as_array();
+        if flags.is_some_and(|f| f.iter().any(|v| v == "waitingOnApproval")) {
+            Status::WaitingApproval
+        } else if flags.is_some_and(|f| f.iter().any(|v| v == "waitingOnUserInput")) {
+            Status::WaitingInput
+        } else {
+            Status::Running
+        }
+    } else if value["type"] == "systemError" {
+        Status::Failed
+    } else {
+        native_status(text(value, "type"))
+    }
+}
+impl Protocol {
+    /// Return true only for an owned child's events. Never admit arbitrary other threads.
+    pub(super) fn codex_agent_event(&mut self, v: &Value) -> bool {
+        if self.text_only {
+            return false;
+        }
+        if let Some(request) = v["id"].as_str()
+            && let Some((id, generation, _)) = self.agents.pending_reads.remove(request)
+        {
+            if let Some(agent) = self.agents.records.get_mut(&id) {
+                if agent.task_id != generation {
+                    return true;
+                }
+                if v.get("error").is_some() {
+                    if agent.status.active() {
+                        agent.set_status(Status::Unknown);
+                    }
+                } else {
+                    let thread = &v["result"]["thread"];
+                    if thread["id"] == id {
+                        update_thread(
+                            agent,
+                            thread,
+                            self.agents.prior_turns.get(&id).map(String::as_str),
+                        );
+                    }
+                }
+            }
+            return true;
+        }
+        let method = text(v, "method");
+        let p = &v["params"];
+        if method == "thread/started" {
+            let thread = &p["thread"];
+            let parent = thread["parentThreadId"].as_str().or_else(|| {
+                thread
+                    .pointer("/source/subAgent/thread_spawn/parent_thread_id")
+                    .and_then(Value::as_str)
+            });
+            if let Some(parent) = parent
+                && (self.thread_id.as_deref() == Some(parent)
+                    || self.agents.records.contains_key(parent))
+                && let Some(agent) = self.agents.register(text(thread, "id"), parent)
+            {
+                update_thread(agent, thread, None);
+            }
+            return true;
+        }
+        let id = text(p, "threadId");
+        let child = self.agents.records.contains_key(id);
+        let root = self.thread_id.as_deref() == Some(id);
+        if root
+            && p["turnId"]
+                .as_str()
+                .zip(self.turn_id.as_deref())
+                .is_some_and(|(actual, expected)| actual != expected)
+        {
+            return false; // The main parser will reject this previous-turn notification too.
+        }
+        if (root || child)
+            && matches!(method, "item/started" | "item/completed")
+            && p["item"]["type"] == "collabAgentToolCall"
+        {
+            let item = &p["item"];
+            let operation = text(item, "tool");
+            for receiver in item["receiverThreadIds"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                if receiver == self.thread_id.as_deref().unwrap_or("") {
+                    continue;
+                }
+                let key = format!("{}:{receiver}", text(item, "id"));
+                let new_task = matches!(
+                    operation,
+                    "spawnAgent" | "sendInput" | "followupTask" | "resumeAgent"
+                ) && self.agents.operations.insert(key);
+                if new_task
+                    && let Some(agent) = self.agents.records.get(receiver)
+                    && !agent.task_id.is_empty()
+                {
+                    self.agents
+                        .prior_turns
+                        .insert(receiver.into(), agent.task_id.clone());
+                }
+                if let Some(agent) = self.agents.register(receiver, id) {
+                    if new_task {
+                        agent.restart(&format!("call:{}", text(item, "id")));
+                        if let Some(prompt) = item["prompt"].as_str() {
+                            agent.task = prompt.into();
+                        }
+                    }
+                    if item["status"] == "failed" && !agent.status.terminal() {
+                        agent.set_status(Status::Unknown);
+                    }
+                    if let Some(state) = item["agentsStates"].get(receiver) {
+                        let status = native_status(text(state, "status"));
+                        // A repeated spawn result must not revive a child already completed.
+                        if !agent.status.terminal() {
+                            agent.set_status(status);
+                        }
+                        if let Some(message) = state["message"].as_str() {
+                            agent.result = message.into();
+                        }
+                    }
+                }
+            }
+            return child; // Keep the parent's ordinary tool card as well.
+        }
+        if !child {
+            return false;
+        }
+        let agent = self.agents.records.get_mut(id).unwrap();
+        match method {
+            "thread/status/changed" => {
+                let status = thread_status(&p["status"]);
+                if !agent.status.terminal() {
+                    agent.set_status(status);
+                }
+            }
+            "turn/started" => agent.restart(text(&p["turn"], "id")),
+            "turn/completed" => {
+                let turn = &p["turn"];
+                if agent.task_id.is_empty()
+                    || agent.task_id == text(turn, "id")
+                    || (agent.task_id.starts_with("call:")
+                        && self.agents.prior_turns.get(id).map(String::as_str)
+                            != Some(text(turn, "id")))
+                {
+                    agent.task_id = text(turn, "id").into();
+                    agent.set_status(native_status(text(turn, "status")));
+                    if !turn["error"].is_null() {
+                        agent.result = pretty(&turn["error"]);
+                    }
+                }
+            }
+            "item/started" => {
+                let item = &p["item"];
+                if !agent.status.terminal() {
+                    agent.status = Status::Running;
+                }
+                agent.activity = match text(item, "type") {
+                    "commandExecution" => text(item, "command"),
+                    "mcpToolCall" => text(item, "tool"),
+                    other => other,
+                }
+                .into();
+            }
+            "item/completed" if p["item"]["type"] == "agentMessage" => {
+                agent.result = text(&p["item"], "text").into()
+            }
+            // Preserve the normal approval broker for child requests, including exact wire IDs.
+            _ if v.get("id").is_some() => return false,
+            _ => {}
+        }
+        true
+    }
+    pub(crate) fn needs_agent_poll(&self) -> bool {
+        self.provider == Provider::Codex && !self.agents.records.is_empty()
+    }
+    pub(crate) fn observe_opencode_agents(&mut self, records: &[Agent]) {
+        for record in records {
+            self.agents
+                .records
+                .insert(record.id.clone(), record.clone());
+        }
+    }
+    pub(crate) fn opencode_agent_session(&self) -> Option<&str> {
+        (self.provider == Provider::OpenCode)
+            .then_some(self.acp.session_id.as_deref())
+            .flatten()
+    }
+    pub(crate) fn poll_subagents(&mut self) -> Vec<Value> {
+        if self.provider != Provider::Codex || self.text_only {
+            return vec![];
+        }
+        let now = Instant::now();
+        if self
+            .agents
+            .last_poll
+            .is_some_and(|at| now.duration_since(at) < Duration::from_secs(1))
+        {
+            return vec![];
+        }
+        self.agents.last_poll = Some(now);
+        let timed_out: Vec<_> = self
+            .agents
+            .pending_reads
+            .iter()
+            .filter(|(_, (_, _, at))| now.duration_since(*at) > Duration::from_secs(10))
+            .map(|(key, (id, _, _))| (key.clone(), id.clone()))
+            .collect();
+        for (key, id) in timed_out {
+            self.agents.pending_reads.remove(&key);
+            if let Some(agent) = self.agents.records.get_mut(&id) {
+                agent.set_status(Status::Unknown);
+            }
+        }
+        let ids: Vec<_> = self.agents.records.keys().cloned().collect();
+        let mut writes = vec![];
+        for _ in 0..ids.len().min(4) {
+            let id = &ids[self.agents.cursor % ids.len()];
+            self.agents.cursor = self.agents.cursor.wrapping_add(1);
+            if self.agents.records[id].status.terminal()
+                || self
+                    .agents
+                    .pending_reads
+                    .values()
+                    .any(|(pending, _, _)| pending == id)
+            {
+                continue;
+            }
+            self.agents.read_sequence += 1;
+            let key = format!("conduit-agent-read-{}", self.agents.read_sequence);
+            self.agents.pending_reads.insert(
+                key.clone(),
+                (id.clone(), self.agents.records[id].task_id.clone(), now),
+            );
+            writes.push(json!({"id":key,"method":"thread/read","params":{"threadId":id,"includeTurns":true}}));
+        }
+        writes
+    }
+    pub(super) fn claude_agent_event(&mut self, v: &Value) -> bool {
+        if self.text_only {
+            return false;
+        }
+        if v["type"] == "system" {
+            let subtype = text(v, "subtype");
+            if matches!(
+                subtype,
+                "task_started" | "task_updated" | "task_progress" | "task_notification"
+            ) {
+                let id = text(v, "task_id");
+                // Task notifications also describe shell/MCP/workflow tasks. Only agents belong here.
+                let agent_task =
+                    v["task_type"] == "local_agent" || v["subagent_type"].as_str().is_some();
+                if !self.agents.records.contains_key(id) && !agent_task {
+                    return true;
+                }
+                let parent = self.thread_id.as_deref().unwrap_or("");
+                if let Some(agent) = self.agents.register(id, parent) {
+                    if let Some(name) = v["subagent_type"].as_str() {
+                        agent.name = name.into();
+                    }
+                    if let Some(task) = v["description"].as_str() {
+                        agent.task = task.into();
+                    }
+                    match subtype {
+                        "task_started" if agent.task_id.is_empty() => agent.restart(id),
+                        "task_updated" => {
+                            if let Some(status) = v["patch"]["status"].as_str() {
+                                let status = native_status(status);
+                                if !agent.status.terminal() || status.terminal() {
+                                    agent.set_status(status);
+                                }
+                            }
+                        }
+                        "task_progress" => {
+                            if !agent.status.terminal() {
+                                agent.status = Status::Running;
+                            }
+                            if let Some(activity) = v["summary"]
+                                .as_str()
+                                .or_else(|| v["last_tool_name"].as_str())
+                            {
+                                agent.activity = activity.into();
+                            }
+                        }
+                        "task_notification" => {
+                            agent.set_status(native_status(text(v, "status")));
+                            agent.result = text(v, "summary").into();
+                        }
+                        _ => {}
+                    }
+                    if agent.task_id.is_empty() {
+                        agent.task_id = id.into();
+                    }
+                    if let Some(ms) = v["usage"]["duration_ms"].as_u64() {
+                        agent.elapsed_ms = Some(ms);
+                    }
+                }
+                return true;
+            }
+        }
+        // Child messages have independent IDs and must not overwrite the main stream cursor.
+        !v["parent_tool_use_id"].is_null()
+            && matches!(text(v, "type"), "assistant" | "stream_event" | "user")
+    }
+}
+fn update_thread(agent: &mut Agent, thread: &Value, prior_turn: Option<&str>) {
+    if let Some(name) = thread["agentNickname"]
+        .as_str()
+        .or_else(|| thread["agentRole"].as_str())
+    {
+        agent.name = name.into();
+    }
+    let status = thread_status(&thread["status"]);
+    if let Some(turn) = thread["turns"].as_array().and_then(|turns| turns.last()) {
+        let id = text(turn, "id");
+        if agent.task_id.starts_with("call:") && prior_turn == Some(id) {
+            return;
+        }
+        let turn_status = native_status(text(turn, "status"));
+        if turn_status.active() {
+            agent.restart(id);
+        }
+        if turn_status.terminal() || (agent.task_id == id && !agent.status.terminal()) {
+            agent.task_id = id.into();
+            agent.set_status(turn_status);
+        }
+        if !turn["error"].is_null() {
+            agent.result = pretty(&turn["error"]);
+        }
+        for item in turn["items"].as_array().into_iter().flatten() {
+            match text(item, "type") {
+                "agentMessage" => agent.result = text(item, "text").into(),
+                "commandExecution" => agent.activity = text(item, "command").into(),
+                "mcpToolCall" => agent.activity = text(item, "tool").into(),
+                "fileChange" => agent.activity = conduit::i18n::text("tools.edit_code"),
+                _ => {}
+            }
+        }
+    }
+    if !agent.status.terminal() {
+        agent.set_status(status);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn codex() -> Protocol {
+        let mut protocol = Protocol::new(Provider::Codex, "C:/work".into(), "inspect".into(), None);
+        protocol.thread_id = Some("root".into());
+        protocol.turn_id = Some("main-turn".into());
+        protocol
+    }
+    fn spawn(id: &str) -> Value {
+        json!({"method":"item/completed","params":{"threadId":"root","turnId":"main-turn","item":{
+            "id":format!("spawn-{id}"),"type":"collabAgentToolCall","tool":"spawnAgent","status":"completed",
+            "receiverThreadIds":[id],"senderThreadId":"root","prompt":"inspect code","agentsStates":{id:{"status":"running"}}
+        }}})
+    }
+    #[test]
+    fn subagent_spawn_completion_is_not_task_completion_and_main_waits_for_all_children() {
+        let mut p = codex();
+        let mut previous = spawn("old-child");
+        previous["params"]["turnId"] = json!("previous-turn");
+        p.accept(previous);
+        assert!(!p.agents.records.contains_key("old-child"));
+        p.accept(spawn("a"));
+        p.accept(spawn("b"));
+        assert_eq!(p.agents.records["a"].status, Status::Running);
+        let done = p.accept(json!({"method":"turn/completed","params":{"threadId":"root","turn":{"id":"main-turn","status":"completed"}}}));
+        assert!(!done.done);
+        let done = p.accept(json!({"method":"turn/completed","params":{"threadId":"a","turn":{"id":"a-turn","status":"completed"}}}));
+        assert!(!done.done);
+        assert_eq!(p.agents.records["a"].status, Status::Completed);
+        // Duplicate spawn snapshots cannot resurrect completed work.
+        p.accept(spawn("a"));
+        assert_eq!(p.agents.records["a"].status, Status::Completed);
+        p.accept(json!({"method":"item/completed","params":{"threadId":"root","turnId":"main-turn","item":{"id":"close-a","type":"collabAgentToolCall","tool":"closeAgent","status":"completed","receiverThreadIds":["a"],"agentsStates":{"a":{"status":"shutdown"}}}}}));
+        assert_eq!(p.agents.records["a"].status, Status::Completed);
+        p.accept(json!({"method":"thread/status/changed","params":{"threadId":"a","status":{"type":"active","activeFlags":[]}}}));
+        assert_eq!(p.agents.records["a"].status, Status::Completed);
+        let done = p.accept(json!({"method":"turn/completed","params":{"threadId":"b","turn":{"id":"b-turn","status":"failed","error":{"message":"failure"}}}}));
+        assert!(done.done);
+        assert_eq!(p.agents.records["b"].status, Status::Failed);
+    }
+    #[test]
+    fn subagent_streams_are_isolated_and_approval_requests_keep_their_wire_identity() {
+        let mut p = codex();
+        p.accept(spawn("a"));
+        for thread in ["a", "unrelated"] {
+            let step = p.accept(json!({"method":"item/agentMessage/delta","params":{"threadId":thread,"turnId":"child-turn","itemId":"text","delta":"child output"}}));
+            assert!(
+                !step
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, Event::Delta { .. } | Event::Text { .. }))
+            );
+        }
+        let step = p.accept(json!({"id":55,"method":"item/commandExecution/requestApproval","params":{"threadId":"a","turnId":"child-turn","itemId":"tool","command":"cargo test"}}));
+        assert!(
+            step.events
+                .iter()
+                .any(|event| matches!(event, Event::Approval(a) if a.wire_id == 55))
+        );
+        p.accept(json!({"method":"thread/status/changed","params":{"threadId":"a","status":{"type":"active","activeFlags":["waitingOnApproval"]}}}));
+        assert_eq!(p.agents.records["a"].status, Status::WaitingApproval);
+    }
+    #[test]
+    fn subagent_read_poll_completes_without_native_child_subscription() {
+        let mut p = codex();
+        p.accept(spawn("a"));
+        let writes = p.poll_subagents();
+        assert_eq!(writes.len(), 1);
+        let step = p.accept(json!({"id":writes[0]["id"],"result":{"thread":{"id":"a","status":{"type":"idle"},"turns":[{"id":"child-turn","status":"completed","items":[{"type":"agentMessage","text":"verified"}]}]}}}));
+        assert!(step.events.iter().any(|event| matches!(event, Event::Subagent(a) if a.status == Status::Completed && a.result == "verified")));
+    }
+    #[test]
+    fn subagent_old_read_cannot_complete_a_new_task() {
+        let mut p = codex();
+        p.accept(spawn("a"));
+        let writes = p.poll_subagents();
+        let mut next = spawn("a");
+        next["params"]["item"]["id"] = json!("send-next");
+        next["params"]["item"]["tool"] = json!("sendInput");
+        p.accept(next);
+        p.accept(json!({"id":writes[0]["id"],"result":{"thread":{"id":"a","status":{"type":"idle"},"turns":[{"id":"old","status":"completed"}]}}}));
+        assert_eq!(p.agents.records["a"].status, Status::Running);
+    }
+    #[test]
+    fn subagent_claude_progress_end_and_out_of_order_start() {
+        let mut p = Protocol::new(Provider::Claude, "C:/work".into(), "inspect".into(), None);
+        p.accept(json!({"type":"system","session_id":"root","subtype":"task_started","task_id":"shell","task_type":"local_bash"}));
+        assert!(p.agents.records.is_empty());
+        p.accept(json!({"type":"system","session_id":"root","subtype":"task_started","task_id":"a","task_type":"local_agent","description":"review"}));
+        p.accept(json!({"type":"system","session_id":"root","subtype":"task_progress","task_id":"a","last_tool_name":"Read","usage":{"duration_ms":42}}));
+        assert_eq!(p.agents.records["a"].activity, "Read");
+        assert_eq!(p.agents.records["a"].elapsed_ms, Some(42));
+        assert!(
+            !p.accept(json!({"type":"result","subtype":"success","session_id":"root"}))
+                .done
+        );
+        let done = p.accept(json!({"type":"system","session_id":"root","subtype":"task_notification","task_id":"a","status":"completed","summary":"ok"}));
+        assert!(done.done);
+        p.accept(json!({"type":"system","session_id":"root","subtype":"task_started","task_id":"a","task_type":"local_agent"}));
+        assert_eq!(p.agents.records["a"].status, Status::Completed);
+    }
+    #[test]
+    fn subagent_claude_child_stream_does_not_replace_main_cursor() {
+        let mut p = Protocol::new(Provider::Claude, "C:/work".into(), "inspect".into(), None);
+        p.accept(
+            json!({"type":"stream_event","event":{"type":"message_start","message":{"id":"main"}}}),
+        );
+        let child = p.accept(json!({"type":"stream_event","parent_tool_use_id":"task","event":{"type":"message_start","message":{"id":"child"}}}));
+        assert!(child.events.is_empty());
+        assert_eq!(p.claude_message, "main");
+        let main = p.accept(json!({"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"main reply"}}}));
+        assert!(
+            main.events
+                .iter()
+                .any(|event| matches!(event, Event::Delta {key,..} if key.starts_with("main-")))
+        );
+    }
+}

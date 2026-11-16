@@ -55,7 +55,24 @@ impl MockModel {
                             let has_question = body["tools"].as_array().is_some_and(|tools| {
                                 tools.iter().any(|v| v["function"]["name"] == "question")
                             });
-                            let delta = if latest.contains("CONDUIT_QUESTION")
+                            let task = body["tools"].as_array().and_then(|tools| {
+                                tools.iter().find(|tool| tool["function"]["name"] == "task")
+                            });
+                            let delta = if latest.contains("CONDUIT_SUBAGENT_PARENT")
+                                && !tool_result
+                                && task.is_some()
+                            {
+                                let description =
+                                    task.unwrap()["function"]["description"].as_str().unwrap();
+                                let start = description
+                                    .find("conduit-")
+                                    .expect("managed worker advertised");
+                                let worker: String = description[start..]
+                                    .chars()
+                                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+                                    .collect();
+                                json!({"role":"assistant","tool_calls":[{"index":0,"id":"call_conduit_task","type":"function","function":{"name":"task","arguments":json!({"description":"Review local fixture","prompt":"CONDUIT_SUBAGENT_CHILD CONDUIT_HOLD","subagent_type":worker}).to_string()}}]})
+                            } else if latest.contains("CONDUIT_QUESTION")
                                 && has_question
                                 && !tool_result
                             {
@@ -653,5 +670,63 @@ fn installed_opencode_helper_reports_model_failure_promptly() {
     }
     assert!(started.elapsed() < Duration::from_secs(25));
     drop(server);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[ignore = "runs installed OpenCode against an isolated local mock; no model account"]
+fn installed_opencode_subagent_lifecycle() {
+    let _locale = crate::test_support::chinese();
+    let root = std::env::temp_dir().join(format!(
+        "conduit-opencode-subagents-{}-{}",
+        std::process::id(),
+        crate::subagents::now()
+    ));
+    std::fs::create_dir_all(root.join("workspace")).unwrap();
+    let server = MockModel::start(root.join("workspace/unused.txt"));
+    let runtime = run(
+        &root,
+        &server,
+        "CONDUIT_SUBAGENT_PARENT",
+        None,
+        PermissionLevel::WorkspaceWrite,
+    );
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut agents = vec![];
+    let mut approved = 0;
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "child lifecycle timeout: {agents:?}"
+        );
+        match runtime.events.recv_timeout(Duration::from_secs(1)) {
+            Ok(Event::Subagent(agent)) => agents.push(agent),
+            Ok(Event::Approval(approval)) => {
+                approved += 1;
+                runtime.decide(approval.id, true);
+            }
+            Ok(Event::Finished { error, cancelled }) => {
+                assert!(error.is_none() && !cancelled, "{error:?}");
+                break;
+            }
+            Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(error) => panic!("{error}"),
+        }
+    }
+    assert!(
+        approved > 0,
+        "task dispatch must honor workspace-write approval"
+    );
+    assert!(
+        agents.iter().any(|a| a.status.active()),
+        "must observe live child: {agents:?}"
+    );
+    assert!(
+        agents
+            .iter()
+            .any(|a| a.status == crate::subagents::Status::Completed
+                && a.result.contains("CONDUIT_LOCAL_OK")),
+        "must observe confirmed result: {agents:?}"
+    );
     std::fs::remove_dir_all(root).unwrap();
 }

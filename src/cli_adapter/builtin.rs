@@ -57,6 +57,14 @@ impl CliAdapter for StdioAdapter {
     fn accept(&mut self, value: Value) -> Step {
         self.protocol.accept(value)
     }
+    fn poll(&mut self) -> anyhow::Result<Vec<Value>> {
+        // Synthetic tick allows the normal writer and completion path to process polling.
+        Ok(if self.protocol.needs_agent_poll() {
+            vec![serde_json::json!({"method":"conduit/agentPoll"})]
+        } else {
+            vec![]
+        })
+    }
     fn startup_pending(&self) -> bool {
         self.protocol.startup_pending()
     }

@@ -230,6 +230,19 @@ impl Protocol {
                 permission[format!("{prefix}*")] = json!("allow");
             }
         }
+        if !self.text_only {
+            // Task delegation is restricted to a managed worker with the same permission
+            // profile. User-defined agents may have broader rules and cannot be used
+            // to bypass the selected Conduit permission level.
+            let worker = format!("{}-worker", self.acp.agent);
+            let action = if self.permission == PermissionLevel::WorkspaceWrite {
+                "ask"
+            } else {
+                "allow"
+            };
+            permission["task"] = json!({"*":"deny", worker.clone():action});
+            agents.insert(worker, json!({"mode":"subagent","description":"Delegate a focused task using the current Conduit permissions", "permission":permission.clone()}));
+        }
         agents.insert(self.acp.agent.clone(), json!({"mode":"primary","description":"Conduit managed permissions","permission":permission}));
         if self.text_only {
             // `run --format json` reports session.error immediately, whereas
@@ -308,8 +321,11 @@ impl Protocol {
             return step;
         }
         if value["method"] == "conduit/question" {
-            if value["params"]["sessionID"].as_str() == self.acp.session_id.as_deref()
-                && self.acp.stage == Stage::Prompt
+            if (value["params"]["sessionID"].as_str() == self.acp.session_id.as_deref()
+                && (self.acp.stage == Stage::Prompt || self.agents.active()))
+                || value["params"]["sessionID"]
+                    .as_str()
+                    .is_some_and(|id| self.agents.records.contains_key(id))
             {
                 self.accept_user_input(
                     &value["id"],
@@ -629,8 +645,11 @@ impl Protocol {
                 text(&params["toolCall"], "title").strip_prefix(prefix).is_some_and(|tool| !tool.is_empty())
             }) { ApprovalKind::McpTool } else { ApprovalKind::OpenCodeTool },
         };
-        if params["sessionId"].as_str() != self.acp.session_id.as_deref()
-            || self.acp.stage != Stage::Prompt
+        if (params["sessionId"].as_str() != self.acp.session_id.as_deref()
+            || (self.acp.stage != Stage::Prompt && !self.agents.active()))
+            && !params["sessionId"]
+                .as_str()
+                .is_some_and(|id| self.agents.records.contains_key(id))
             || self.text_only
         {
             step.writes.push(approval_response(&approval, false));

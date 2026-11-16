@@ -165,7 +165,9 @@ fn opencode_side_channel_filters_sessions_routes_answers_and_revokes_questions()
         ]);
         let mut captured = vec![];
         let deadline = Instant::now() + Duration::from_secs(10);
-        for response in [pending, json!({}), json!({}), json!([])] {
+        let mut responses =
+            std::collections::VecDeque::from([pending, json!({}), json!({}), json!([])]);
+        while !responses.is_empty() {
             let (mut socket, _) = loop {
                 match listener.accept() {
                     Ok(value) => break value,
@@ -204,7 +206,17 @@ fn opencode_side_channel_filters_sessions_routes_answers_and_revokes_questions()
                 .unwrap_or(0);
             let mut body = vec![0; len];
             socket.read_exact(&mut body).unwrap();
-            captured.push((header.lines().next().unwrap().to_owned(), body));
+            let first = header.lines().next().unwrap();
+            // The child observer has its own concurrent connection. Its status/children
+            // requests do not consume this question-transport fixture's responses.
+            let response = if first.starts_with("GET /session/status") {
+                json!({})
+            } else if first.starts_with("GET /session/") || first.starts_with("GET /permission") {
+                json!([])
+            } else {
+                captured.push((first.to_owned(), body));
+                responses.pop_front().unwrap()
+            };
             let body = response.to_string();
             write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
         }
@@ -213,7 +225,13 @@ fn opencode_side_channel_filters_sessions_routes_answers_and_revokes_questions()
     adapter.accept(json!({"id":1,"result":{"protocolVersion":1,"agentInfo":{"name":"OpenCode"},"agentCapabilities":{}}}));
     let config: Value =
         serde_json::from_str(&launch.environment["OPENCODE_CONFIG_CONTENT"]).unwrap();
-    let agent = config["agent"].as_object().unwrap().keys().next().unwrap();
+    let agent = config["agent"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .find(|(_, value)| value["mode"] == "primary")
+        .map(|(key, _)| key)
+        .unwrap();
     let options = json!([
         {"id":"mode","options":[{"value":agent}]},
         {"id":"model","options":[{"value":"test/model"}]}
@@ -228,8 +246,19 @@ fn opencode_side_channel_filters_sessions_routes_answers_and_revokes_questions()
         step =
             adapter.accept(json!({"id":step.writes[0]["id"],"result":{"configOptions":options}}));
     }
+    assert!(
+        !step.writes.is_empty(),
+        "expected prompt; error={:?}; events={:?}; options={options:?}",
+        step.error,
+        step.events
+    );
     assert_eq!(step.writes[0]["method"], "session/prompt");
-    let questions = adapter.poll().unwrap();
+    let questions: Vec<_> = adapter
+        .poll()
+        .unwrap()
+        .into_iter()
+        .filter(|v| v["method"] != "conduit/opencodeAgents")
+        .collect();
     assert_eq!(questions.len(), 2);
     for (index, value) in questions.into_iter().enumerate() {
         let step = adapter.accept(value);
@@ -251,7 +280,12 @@ fn opencode_side_channel_filters_sessions_routes_answers_and_revokes_questions()
                 .is_none()
         );
     }
-    let revoked = adapter.poll().unwrap();
+    let revoked: Vec<_> = adapter
+        .poll()
+        .unwrap()
+        .into_iter()
+        .filter(|v| v["method"] != "conduit/opencodeAgents")
+        .collect();
     assert_eq!(revoked.len(), 2);
     assert!(
         revoked

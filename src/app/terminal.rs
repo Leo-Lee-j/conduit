@@ -163,11 +163,28 @@ impl ConduitApp {
         environment: crate::environments::Environment,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        if self.selected_workspace_path().as_ref() != Some(&environment.workspace) {
-            return;
+    ) -> Result<(), String> {
+        if !self.writable
+            || self.closing
+            || self.updater.preparing()
+            || self.selected_workspace_path().as_ref() != Some(&environment.workspace)
+        {
+            return Err(conduit::i18n::text("workflow.unavailable"));
         }
-        self.launch_terminal(ShellProfile::Auto, Some(environment), window, cx);
+        let workspace = environment.workspace.clone();
+        if !self.launch_terminal(ShellProfile::Auto, Some(environment), window, cx) {
+            return Err(self
+                .terminals
+                .feedback
+                .clone()
+                .unwrap_or_else(|| conduit::i18n::text("workflow.unavailable")));
+        }
+        window.close_dialog(cx);
+        // Dismissal restores dialog focus; the new terminal must receive keyboard input.
+        if let Some(session) = self.terminals.current(&workspace) {
+            session.view.read(cx).focus.clone().focus(window, cx);
+        }
+        Ok(())
     }
 
     fn launch_terminal(
@@ -176,9 +193,9 @@ impl ConduitApp {
         environment: Option<crate::environments::Environment>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         if !self.writable || self.closing || self.updater.preparing() {
-            return;
+            return false;
         }
         let Some(key) = self.terminal_key() else {
             self.terminals.feedback = Some(
@@ -186,7 +203,7 @@ impl ConduitApp {
             );
             self.terminals.open = true;
             cx.notify();
-            return;
+            return false;
         };
         if self.terminals.sessions.len() >= 8
             || self
@@ -202,7 +219,7 @@ impl ConduitApp {
             );
             self.terminals.open = true;
             cx.notify();
-            return;
+            return false;
         }
         self.remember_terminal_focus(window, cx);
         self.terminals.close_confirmed = false;
@@ -213,8 +230,9 @@ impl ConduitApp {
                 Ok((exe, args)) => Runtime::command(exe, args, key.path().into()),
                 Err(error) => {
                     self.terminals.feedback = Some(format!("{error:#}"));
+                    self.terminals.open = true;
                     cx.notify();
-                    return;
+                    return false;
                 }
             }
         } else {
@@ -237,6 +255,7 @@ impl ConduitApp {
         self.terminals.feedback = None;
         self.terminals.confirm_close = None;
         cx.notify();
+        true
     }
     pub(super) fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.terminals.open && self.terminal_focused(window, cx) {
@@ -828,7 +847,11 @@ impl ConduitApp {
                                 Button::new("terminal-restart")
                                     .ghost()
                                     .xsmall()
-                                    .label(conduit::i18n::text_static("terminal.restart"))
+                                    .label(conduit::i18n::text_static(if s.environment.is_some() {
+                                        "environment.reconnect"
+                                    } else {
+                                        "terminal.restart"
+                                    }))
                                     .disabled(!can_create)
                                     .on_click(cx.listener(move |this, _, w, cx| {
                                         this.restart_terminal(id, w, cx)

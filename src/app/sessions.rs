@@ -1483,6 +1483,7 @@ impl ConduitApp {
             .get(&provider)
             .and_then(|catalog| catalog.current.clone());
         let mut session = SessionRecord {
+            subagents: Default::default(),
             branching: Default::default(),
             transcript: Default::default(),
             id,

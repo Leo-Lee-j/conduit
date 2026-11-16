@@ -108,6 +108,7 @@ mod shortcuts;
 mod sidebar;
 mod state;
 mod stream_events;
+mod subagents;
 mod terminal;
 mod theme;
 mod tool_analysis;

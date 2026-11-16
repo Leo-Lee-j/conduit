@@ -569,6 +569,7 @@ fn commit_generation_snapshot_replaces_stream_without_duplicate_text() {
 }
 pub(crate) fn session() -> SessionRecord {
     SessionRecord {
+        subagents: Default::default(),
         branching: Default::default(),
         transcript: Default::default(),
         id: 1,

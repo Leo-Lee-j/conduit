@@ -33,6 +33,7 @@ mod protocol;
 mod providers;
 mod review;
 mod store;
+mod subagents;
 mod terminal;
 mod transcript;
 mod usage_ledger;

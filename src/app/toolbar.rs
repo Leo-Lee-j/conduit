@@ -308,6 +308,10 @@ impl ConduitApp {
                     .child(self.terminal_button(cx))
                     .child(self.terminal_options_button(cx)),
             )
+            .child(
+                self.environments_button(cx, None)
+                    .debug_selector(|| "toolbar-environments".into()),
+            )
             .child(self.notification_bell(cx));
         let statuses = self.render_status_contributions(window, cx);
         #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
@@ -371,6 +375,9 @@ mod tests {
             cx.simulate_resize(size(px(width), px(height)));
             draw(cx);
             assert!(cx.debug_bounds("workspace-tools-button").is_none());
+            let connections = cx.debug_bounds("toolbar-environments").unwrap();
+            assert!(connections.left() >= px(0.) && connections.right() <= px(width));
+            assert!(connections.top() >= px(0.) && connections.bottom() <= px(height));
             let usage = cx.debug_bounds("navigation-usage").unwrap();
             assert!(usage.right() <= px(width) && usage.bottom() <= px(height));
             for (trigger, list) in [
@@ -414,6 +421,12 @@ mod tests {
             })
         });
         cx.simulate_resize(size(px(1000.), px(800.)));
+        draw(cx);
+        click(cx, "toolbar-environments");
+        cx.update(|window, cx| {
+            assert!(window.has_active_dialog(cx));
+            window.close_all_dialogs(cx);
+        });
         for (trigger, list, selector) in [
             ("task-tools", "task-tools-list", "task-tools-0"),
             ("task-tools", "task-tools-list", "task-tools-1"),

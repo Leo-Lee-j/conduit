@@ -8,6 +8,7 @@ mod codex_fork;
 mod opencode;
 pub use codex_commands::SOURCE as CODEX_COMMANDS;
 mod reasoning;
+mod subagents;
 pub(crate) use reasoning::ThoughtStream;
 mod user_input;
 pub use opencode::AcpSettings;
@@ -43,6 +44,7 @@ pub struct Approval {
 }
 #[derive(Clone, Debug)]
 pub enum Event {
+    Subagent(crate::subagents::Agent),
     NativeTurnCompleted {
         thread_id: String,
         turn_id: String,
@@ -185,6 +187,7 @@ pub struct Protocol {
     reasoning_effort: crate::providers::ReasoningEffort,
     codex_reasoning: reasoning::CodexReasoning,
     codex_async_input: Option<codex_async_input::PendingInput>,
+    agents: subagents::Agents,
     route: crate::providers::RuntimeRoute,
     text_only: bool,
     thread_id: Option<String>,
@@ -272,6 +275,7 @@ impl Protocol {
             reasoning_effort: Default::default(),
             codex_reasoning: Default::default(),
             codex_async_input: None,
+            agents: Default::default(),
             route: Default::default(),
             permission: PermissionLevel::default(),
             text_only: false,
@@ -576,12 +580,26 @@ impl Protocol {
             }
             Provider::OpenCode => self.text_only && value["type"] == "text",
         };
-        match self.provider {
+        let mut step = match self.provider {
             Provider::Qoder => unreachable!("Qoder uses its own CliAdapter"),
             Provider::Codex => self.codex(value),
             Provider::Claude => self.claude(value),
             Provider::OpenCode => self.opencode(value),
+        };
+        if self.provider != Provider::OpenCode {
+            self.agents.publish(&mut step);
         }
+        if self.provider != Provider::OpenCode
+            && step.done
+            && step.error.is_none()
+            && self.agents.active()
+        {
+            self.agents.main_done = true;
+            step.done = false;
+        } else if self.agents.main_done && !self.agents.active() {
+            step.done = true;
+        }
+        step
     }
     fn codex(&mut self, v: Value) -> Step {
         if matches!(self.intent, crate::commands::RequestIntent::Fork(_)) {
@@ -700,10 +718,20 @@ impl Protocol {
             }
             _ => {}
         }
+        if v["method"] == "conduit/agentPoll" {
+            step.writes = self.poll_subagents();
+            return step;
+        }
+        if self.codex_agent_event(&v) {
+            return step;
+        }
         let method = text(&v, "method");
         let p = &v["params"];
+        let child_request =
+            v.get("id").is_some() && self.agents.records.contains_key(text(p, "threadId"));
         // Ignore notifications belonging to a different thread or turn.
-        if let Some(id) = p.get("threadId").and_then(Value::as_str)
+        if !child_request
+            && let Some(id) = p.get("threadId").and_then(Value::as_str)
             && self
                 .thread_id
                 .as_deref()
@@ -715,7 +743,8 @@ impl Protocol {
             .get("turnId")
             .and_then(Value::as_str)
             .or_else(|| p.pointer("/turn/id").and_then(Value::as_str));
-        if let (Some(expected), Some(actual)) = (self.turn_id.as_deref(), notification_turn)
+        if !child_request
+            && let (Some(expected), Some(actual)) = (self.turn_id.as_deref(), notification_turn)
             && expected != actual
         {
             return step;
@@ -1048,6 +1077,9 @@ impl Protocol {
                 self.thread_id = Some(id.into());
                 step.events.push(Event::NativeId(id.into()));
             }
+        }
+        if self.claude_agent_event(&v) {
+            return step;
         }
         match text(&v, "type") {
             "control_response" if text(&v["response"], "request_id") == "conduit-init" => {

@@ -849,6 +849,9 @@ impl ConduitApp {
         let turn_stats = self
             .selected_session
             .and_then(|id| self.turn_stats_tags(id, cx));
+        let subagents = self
+            .selected_session
+            .and_then(|id| self.subagent_panel(id, cx));
         let has_status_row = turn_activity.is_some() || turn_stats.is_some();
         // Live engine activity and the step/file tags share the transcription's
         // content width: the same 24px gutter message rows add inside the 8px
@@ -873,6 +876,7 @@ impl ConduitApp {
             v_flex()
                 .w_full()
                 .items_center()
+                .when_some(subagents, |column, panel| column.child(panel))
                 .when(has_status_row, |column| column.child(status_row))
                 .when_some(
                     self.render_queued_message(composer_enabled, cx),

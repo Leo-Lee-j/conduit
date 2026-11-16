@@ -527,6 +527,7 @@ impl Store {
                 ));
             }
             for session in &mut workspace.sessions {
+                crate::subagents::disconnect(&mut session.subagents, None, false);
                 if session.id == 0 || session.id == u64::MAX || !sessions.insert(session.id) {
                     bail!(conduit::i18n::text(
                         "store.invalid_or_duplicate_session_ids_fix_state"
@@ -634,6 +635,7 @@ pub(crate) fn replace_file(temp: &Path, path: &Path) -> Result<()> {
 }
 
 pub(crate) fn restore_session(session: &mut crate::domain::SessionRecord) {
+    crate::subagents::disconnect(&mut session.subagents, None, false);
     if session.interrupted {
         for item in &mut session.messages {
             if let Some(approval) = item.approval.as_mut()
@@ -940,6 +942,7 @@ mod tests {
         };
         store.save_to(&path).unwrap();
         store.workspaces[0].sessions.push(SessionRecord {
+            subagents: Default::default(),
             branching: Default::default(),
             transcript: Default::default(),
             id: 1,

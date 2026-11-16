@@ -794,6 +794,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
     use gpui_kit::AppContext as _;
 
     let session = |id, provider, native: &str| SessionRecord {
+        subagents: Default::default(),
         branching: Default::default(),
         transcript: Default::default(),
         id,
@@ -1263,6 +1264,7 @@ fn composer_files_paste_drafts_removal_and_failed_send(cx: &mut TestAppContext) 
     std::fs::write(&first, b"fn first() {}").unwrap();
     std::fs::write(&second, b"fn second() {}").unwrap();
     let session = |id| SessionRecord {
+        subagents: Default::default(),
         branching: Default::default(),
         transcript: Default::default(),
         id,
@@ -2041,4 +2043,70 @@ fn cli_retry_progress_keeps_native_details_and_recovers_with_output(cx: &mut Tes
             "Recovered response"
         );
     });
+}
+
+#[gpui_kit::test]
+fn subagent_panel_tracks_concurrent_tasks_and_disconnects_without_false_success(
+    cx: &mut TestAppContext,
+) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx, _) = super::queue::tests::fixture(cx, "subagent-panel");
+    let sender = cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            app.startup = None;
+            app.writable = false;
+            super::queue::tests::running(app, 1)
+        })
+    });
+    for (id, state) in [
+        ("running", crate::subagents::Status::Running),
+        ("done", crate::subagents::Status::Completed),
+    ] {
+        let mut agent = crate::subagents::Agent::new(id, "root");
+        agent.task = "Review authentication flow".into();
+        agent.set_status(state);
+        sender
+            .send(crate::protocol::Event::Subagent(agent))
+            .unwrap();
+    }
+    cx.update(|window, cx| app.update(cx, |app, cx| app.poll_streams(window, cx)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.simulate_next_frame(cx);
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("subagent-panel").is_some());
+    let rows = cx.debug_bounds("subagent-rows").unwrap();
+    assert!(rows.size.height <= px(208.));
+    sender
+        .send(crate::protocol::Event::Finished {
+            error: Some("disconnected".into()),
+            cancelled: false,
+        })
+        .unwrap();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.poll_streams(window, cx);
+            let agents = &app.session(1).unwrap().subagents;
+            assert_eq!(agents.len(), 2);
+            assert_eq!(agents[0].status, crate::subagents::Status::Unknown);
+            assert_eq!(agents[1].status, crate::subagents::Status::Completed);
+            assert!(
+                app.session(1)
+                    .unwrap()
+                    .messages
+                    .iter()
+                    .all(|m| !m.text.contains("Review authentication"))
+            );
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.simulate_next_frame(cx);
+        let _ = window.draw(cx);
+    });
+    assert!(
+        cx.debug_bounds("subagent-panel").is_some(),
+        "finished task history remains visible"
+    );
 }

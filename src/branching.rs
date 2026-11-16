@@ -142,6 +142,7 @@ pub fn prepare(
         return Err(error("branching.changed"));
     }
     let mut session = source.clone();
+    session.subagents.clear();
     session.id = id;
     session.created_at = now;
     session.title = conduit::i18n::format("branching.title", &[("title", source.title.clone())]);

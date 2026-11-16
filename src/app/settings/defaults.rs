@@ -137,7 +137,7 @@ impl ConduitApp {
         .groups(groups)
     }
 
-    pub(super) fn provider_references(&self, id: &str) -> Vec<String> {
+    pub(super) fn provider_configuration_references(&self, id: &str) -> Vec<String> {
         let channel = ModelChannel::Provider(id.into());
         let mut references = vec![];
         for (engine, defaults) in &self.store.session_defaults {
@@ -157,6 +157,12 @@ impl ConduitApp {
         if self.store.git.generation_channel.as_ref() == Some(&channel) {
             references.push(conduit::i18n::text_static("git_ui.git_commit_message").into());
         }
+        references
+    }
+
+    pub(super) fn provider_references(&self, id: &str) -> Vec<String> {
+        let channel = ModelChannel::Provider(id.into());
+        let mut references = self.provider_configuration_references(id);
         for workspace in &self.store.workspaces {
             for session in &workspace.sessions {
                 if session.channel == channel {

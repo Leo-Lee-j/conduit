@@ -66,6 +66,22 @@
 
 Codex 普通聊天使用分项 `approvalPolicy.granular`，单独开启 `mcp_elicitations`；只读和完全访问也不能使用会提前拒绝 MCP 确认的 `never`。原生 `mcpServer/elicitation/request` 中带有 `_meta.codex_approval_kind=mcp_tool_call` 的空表单工具审批自动放行；实际需要填写的表单与认证请求不能代填。纯文本辅助任务继续使用 `never` 并拒绝工具审批。
 
+## 子代理运行状态
+
+会话输入区上方有独立的子代理面板，显示任务、运行状态、最近活动、耗时及展开后的结果摘要。面板支持折叠和查看历史；不依赖普通工具组是否展开。记录按本地运行和原生代理 ID 隔离，作为会话元数据保存。
+
+| 引擎 | 状态来源 |
+| --- | --- |
+| Codex | `collabAgentToolCall.agentsStates`、所属子线程通知，以及有界轮询 `thread/read` 的回合状态；只接收已确认父子关系的线程 |
+| Claude Code | `task_started` / `task_updated` / `task_progress` / `task_notification`；过滤后台命令等非代理任务，子代理文本不混入主回复 |
+| OpenCode | 复用认证的本地服务，后台查询 `/session/{id}/children`、`/session/status`、最近消息和待审批状态；问答沿用现有认证旁路 |
+
+任务派发工具完成不等于子代理完成。空闲、运行中、等待审批、等待输入、完成、失败、停止和状态未知分别保存；OpenCode 空闲必须再结合明确的最终消息才能显示完成。主回复结束后，有明确运行状态的子代理继续保留监听；用户停止仍执行统一进程树清理。应用重启或异常断连后，未确认结束的任务显示状态未知，不自动变成完成。
+
+OpenCode 普通聊天提供一个具有相同权限配置的托管 worker，并只允许向该 worker 派发任务，避免通过任意自定义 agent 绕过当前权限等级。工作区修改模式的派发需要审批；只读 worker 保持只读工具规则。纯文本辅助任务仍禁止派发。
+
+界面仅显示 CLI 实际提供的信息，不估算完成百分比。旧 CLI 缺少相应事件或查询能力时，可能只能保留最后已知状态；不提供单独给子代理发消息或单独取消的操作。
+
 ## Codex 思考内容
 
 按 [App Server 官方文档](https://developers.openai.com/codex/app-server/) 的 item 生命周期处理思考内容：

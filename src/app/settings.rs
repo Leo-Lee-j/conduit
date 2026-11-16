@@ -436,6 +436,7 @@ mod extension_management;
 mod general;
 mod management;
 mod model_management;
+mod services;
 use management::{management_badge, management_toolbar};
 #[path = "settings/models.rs"]
 mod model_sync;

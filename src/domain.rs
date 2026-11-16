@@ -154,6 +154,8 @@ impl Usage {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionRecord {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subagents: Vec<crate::subagents::Agent>,
     pub id: u64,
     pub provider: Provider,
     pub created_at: u64,
