@@ -13,7 +13,11 @@ struct ReviewInbox {
 }
 
 impl ConduitApp {
-    pub(in crate::app) fn review_inbox_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(in crate::app) fn review_inbox_button(
+        &self,
+        cx: &mut Context<Self>,
+        popover: Option<WeakEntity<gpui_kit::component::popover::PopoverState>>,
+    ) -> Button {
         Button::new("review-inbox")
             .small()
             .ghost()
@@ -22,7 +26,12 @@ impl ConduitApp {
             .accessibility_label(label("review.inbox"))
             .tooltip(label("review.inbox"))
             .disabled(self.selected_workspace_path().is_none())
-            .on_click(cx.listener(|this, _, window, cx| this.open_review_inbox(window, cx)))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if let Some(popover) = &popover {
+                    let _ = popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                }
+                this.open_review_inbox(window, cx);
+            }))
     }
 
     pub(in crate::app) fn open_review_inbox(

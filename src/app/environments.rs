@@ -15,7 +15,11 @@ struct EnvironmentsPanel {
 }
 
 impl ConduitApp {
-    pub(super) fn environments_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn environments_button(
+        &self,
+        cx: &mut Context<Self>,
+        popover: Option<WeakEntity<gpui_kit::component::popover::PopoverState>>,
+    ) -> Button {
         Button::new("project-environments")
             .small()
             .compact()
@@ -24,7 +28,10 @@ impl ConduitApp {
             .tooltip(label("environment.title"))
             .accessibility_label(label("environment.title"))
             .disabled(self.selected_workspace_path().is_none())
-            .on_click(cx.listener(|this, _, window, cx| {
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if let Some(popover) = &popover {
+                    let _ = popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                }
                 let Some(workspace) = this.selected_workspace_path() else {
                     return;
                 };

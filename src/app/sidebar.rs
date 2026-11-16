@@ -654,6 +654,7 @@ impl ConduitApp {
             .child(
                 h_flex()
                     .gap_1()
+                    .child(self.task_tools_button(cx))
                     .child(
                         Button::new("toggle-archived")
                             .label(conduit::i18n::text_static("search.archived"))

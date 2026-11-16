@@ -2,6 +2,7 @@
 use crate::domain::{PermissionLevel, Provider, Usage};
 use serde_json::{Value, json};
 mod claude_blocks;
+mod codex_async_input;
 mod codex_commands;
 mod codex_fork;
 mod opencode;
@@ -25,6 +26,7 @@ pub enum ApprovalKind {
     /// A native CLI MCP call, independent of the chat filesystem permission.
     McpTool,
     CodexUserInput,
+    CodexAsyncUserInput,
     ClaudeUserInput,
     OpenCodeUserInput,
     QoderUserInput,
@@ -182,6 +184,7 @@ pub struct Protocol {
     permission: PermissionLevel,
     reasoning_effort: crate::providers::ReasoningEffort,
     codex_reasoning: reasoning::CodexReasoning,
+    codex_async_input: Option<codex_async_input::PendingInput>,
     route: crate::providers::RuntimeRoute,
     text_only: bool,
     thread_id: Option<String>,
@@ -268,6 +271,7 @@ impl Protocol {
             model: None,
             reasoning_effort: Default::default(),
             codex_reasoning: Default::default(),
+            codex_async_input: None,
             route: Default::default(),
             permission: PermissionLevel::default(),
             text_only: false,
@@ -362,6 +366,7 @@ impl Protocol {
                         | ApprovalKind::ClaudeTool
                         | ApprovalKind::McpTool => false,
                         ApprovalKind::CodexUserInput
+                        | ApprovalKind::CodexAsyncUserInput
                         | ApprovalKind::ClaudeUserInput
                         | ApprovalKind::OpenCodeUserInput
                         | ApprovalKind::QoderUserInput => false,
@@ -583,6 +588,9 @@ impl Protocol {
             return self.codex_fork(v);
         }
         let mut step = Step::new();
+        if self.codex_async_interrupt_acknowledged(&v) {
+            return step;
+        }
         if let Some(error) = v.get("error")
             && v.get("id").is_some()
         {
@@ -713,7 +721,7 @@ impl Protocol {
             return step;
         }
         match method {
-            "turn/started" if self.codex_compacting() => {
+            "turn/started" => {
                 self.turn_id = p
                     .pointer("/turn/id")
                     .and_then(Value::as_str)
@@ -743,6 +751,10 @@ impl Protocol {
                 let key = text(item, "id").to_string();
                 let kind = text(item, "type");
                 if kind == "agentMessage" {
+                    if item["delivery"] == "async" && !item["questions"].is_null() {
+                        self.accept_codex_async_input(p, &mut step);
+                        return step;
+                    }
                     if method == "item/completed" {
                         step.events.push(Event::Text {
                             key,
@@ -844,6 +856,9 @@ impl Protocol {
                 }));
             }
             "turn/completed" => {
+                if self.codex_async_input_completed(p, &mut step) {
+                    return step;
+                }
                 if self.codex_compacting() && self.turn_id.is_none() {
                     return step;
                 }
@@ -1414,6 +1429,7 @@ impl Protocol {
                 | ApprovalKind::QoderTool
                 | ApprovalKind::ClaudeTool
                 | ApprovalKind::CodexUserInput
+                | ApprovalKind::CodexAsyncUserInput
                 | ApprovalKind::ClaudeUserInput
                 | ApprovalKind::OpenCodeUserInput
                 | ApprovalKind::QoderUserInput => {

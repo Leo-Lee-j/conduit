@@ -1,4 +1,5 @@
 //! Bounded, read-only discovery. A definition is not proof of runtime availability.
+pub mod catalog;
 pub mod connection;
 pub mod edit;
 pub mod management;
@@ -71,6 +72,8 @@ pub struct Catalog {
     pub scanned: Vec<PathBuf>,
     pub sources: Vec<PathBuf>,
     pub updated: Option<SystemTime>,
+    /// Online additions are connected only by an explicit user action.
+    pub manual_detection: HashSet<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -107,6 +110,7 @@ impl Probe {
         thread::spawn(move || {
             let mut scan = Scan::new(&cancel);
             scan.discover(&query, &Locations::environment());
+            scan.catalog.manual_detection = catalog::receipts::manual_mcp(&scan.catalog.entries);
             scan.catalog.entries.sort_by_key(|entry| {
                 (
                     entry.kind == Kind::Mcp,

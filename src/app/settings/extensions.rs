@@ -4,6 +4,7 @@ use crate::extensions::management::{self, Filter};
 use crate::extensions::{self, Catalog, Kind};
 
 pub(in crate::app) struct ExtensionsUi {
+    pub discovery: [super::extension_catalog::Browse; 2],
     pub engine: Provider,
     pub feedback: Option<String>,
     pub importing: bool,
@@ -28,6 +29,10 @@ pub(in crate::app) struct ExtensionsUi {
 impl ExtensionsUi {
     pub fn new(skills: Entity<InputState>, mcp: Entity<InputState>, engine: Provider) -> Self {
         Self {
+            discovery: [
+                super::extension_catalog::Browse::new(false),
+                super::extension_catalog::Browse::new(true),
+            ],
             engine,
             feedback: None,
             importing: false,
@@ -256,6 +261,9 @@ impl ConduitApp {
             self.extensions_ui.tool_reports.clear();
             self.extensions_ui.expanded.clear();
             self.extensions_ui.lists = new_lists();
+            for index in 0..2 {
+                self.refresh_catalog_target(index, cx);
+            }
         }
         self.extensions_ui.context = Some(context.clone());
         if !refresh
@@ -284,6 +292,9 @@ impl ConduitApp {
 
     pub(in crate::app) fn poll_extensions(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.closing || !self.settings_ui.open || !matches!(self.settings_ui.page, 4 | 9) {
+            for state in &mut self.extensions_ui.discovery {
+                state.cancel();
+            }
             self.extensions_ui.probe = None;
             self.extensions_ui.cancel_mcp_detection();
             return;
@@ -291,6 +302,9 @@ impl ConduitApp {
         if self.settings_ui.page != 9 {
             self.extensions_ui.cancel_mcp_detection();
         }
+        // Skills and MCP keep their lists, but a hidden discovery page must not open a late dialog.
+        let inactive = usize::from(self.settings_ui.page == 4);
+        self.extensions_ui.discovery[inactive].cancel();
         let connection = self
             .extensions_ui
             .connection_probe
@@ -393,12 +407,21 @@ impl ConduitApp {
             self.extensions_ui.detection_queue = catalog
                 .entries
                 .iter()
-                .filter(|entry| entry.kind == Kind::Mcp && !entry.disabled)
+                .filter(|entry| {
+                    entry.kind == Kind::Mcp
+                        && !entry.disabled
+                        && !catalog.manual_detection.contains(&entry.id())
+                })
                 .cloned()
                 .collect();
             self.extensions_ui.auto_detection_started = true;
             self.extensions_ui.tool_reports.clear();
             self.extensions_ui.connection_results.clear();
+            for id in &catalog.manual_detection {
+                self.extensions_ui
+                    .connection_results
+                    .insert(id.clone(), extensions::catalog::text("manual_detection"));
+            }
             for entry in &self.extensions_ui.detection_queue {
                 self.extensions_ui.connection_results.insert(
                     entry.id(),
@@ -416,7 +439,7 @@ impl ConduitApp {
         }
     }
 
-    pub(super) fn extensions_content(
+    pub(super) fn installed_extensions_content(
         &self,
         window: &Window,
         available_width: f32,
@@ -1205,13 +1228,16 @@ mod tests {
                 };
                 let first = entry("first", Kind::Mcp, false);
                 let second = entry("second", Kind::Mcp, false);
+                let from_catalog = entry("catalog", Kind::Mcp, false);
                 let catalog = Catalog {
                     entries: vec![
                         first.clone(),
                         entry("disabled", Kind::Mcp, true),
                         entry("skill", Kind::Skill, false),
                         second.clone(),
+                        from_catalog.clone(),
                     ],
+                    manual_detection: [from_catalog.id()].into_iter().collect(),
                     updated: Some(std::time::SystemTime::now()),
                     ..Default::default()
                 };
@@ -1222,6 +1248,10 @@ mod tests {
                     first.id()
                 );
                 assert_eq!(app.extensions_ui.detection_queue.len(), 1);
+                assert_eq!(
+                    app.extensions_ui.connection_results[&from_catalog.id()],
+                    crate::extensions::catalog::text("manual_detection")
+                );
                 assert_eq!(
                     app.extensions_ui.connection_results[&second.id()],
                     "等待检测工具…"

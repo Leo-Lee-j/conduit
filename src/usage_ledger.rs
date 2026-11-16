@@ -10,6 +10,9 @@ pub struct Observation {
     pub workspace: PathBuf,
     pub provider: Provider,
     pub service: String,
+    /// Display name captured with the observation; survives provider removal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_name: Option<String>,
     pub model: Option<String>,
     pub finished_at: u64,
     pub input: Option<u64>,
@@ -141,6 +144,7 @@ mod tests {
             workspace: workspace.clone(),
             provider: Provider::Codex,
             service: "cli".into(),
+            service_name: None,
             model: None,
             finished_at: timestamp,
             input: Some(100),

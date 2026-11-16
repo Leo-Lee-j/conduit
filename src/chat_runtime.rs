@@ -1322,6 +1322,77 @@ mod tests {
     }
 
     #[test]
+    fn runtime_async_user_input_interrupts_and_waits_before_starting_the_answer_turn() {
+        let _locale = crate::test_support::chinese();
+        let command = r#"
+            [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding
+            $null = [Console]::ReadLine()
+            [Console]::WriteLine('{"id":1,"result":{}}')
+            $null = [Console]::ReadLine()
+            $null = [Console]::ReadLine()
+            [Console]::WriteLine('{"id":2,"result":{"thread":{"id":"thread"}}}')
+            $null = [Console]::ReadLine()
+            [Console]::WriteLine('{"id":3,"result":{"turn":{"id":"question-turn"}}}')
+            [Console]::WriteLine('{"method":"item/completed","params":{"threadId":"thread","turnId":"question-turn","item":{"type":"agentMessage","id":"async-question","delivery":"async","text":"Which? A / B","questions":[{"title":"Which?","options":["A","B"]}]}}}')
+            $interrupt = [Console]::ReadLine() | ConvertFrom-Json
+            if ($interrupt.method -ne 'turn/interrupt' -or $interrupt.params.turnId -ne 'question-turn') { exit 7 }
+            [Console]::WriteLine('{"method":"turn/completed","params":{"threadId":"thread","turn":{"id":"question-turn","status":"interrupted"}}}')
+            $resume = [Console]::ReadLine() | ConvertFrom-Json
+            if ($resume.method -ne 'turn/start' -or $resume.params.threadId -ne 'thread' -or $resume.params.input[0].text -notmatch '"B"') { exit 8 }
+            [Console]::WriteLine('{"method":"turn/started","params":{"threadId":"thread","turn":{"id":"answer-turn"}}}')
+            [Console]::WriteLine('{"id":3,"result":{"turn":{"id":"answer-turn"}}}')
+            [Console]::WriteLine('{"method":"turn/completed","params":{"threadId":"thread","turn":{"id":"answer-turn","status":"completed"}}}')
+        "#;
+        let runtime = fixture(command);
+        let approval = loop {
+            match runtime
+                .events
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap()
+            {
+                Event::NativeId(_) | Event::CommandCatalog(_) => {}
+                Event::Approval(approval) => break approval,
+                other => panic!("unexpected event: {other:?}"),
+            }
+        };
+        assert!(approval.is_user_input());
+        runtime.enable_full_access();
+        runtime.decide(approval.id.clone(), true);
+        runtime.answer(approval.id.clone(), Default::default());
+        assert!(
+            matches!(
+                runtime.events.recv_timeout(Duration::from_millis(200)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ),
+            "the interrupted turn must remain waiting, without automatic answers or completion"
+        );
+        runtime.answer(
+            approval.id.clone(),
+            std::collections::BTreeMap::from([("question_1".into(), vec!["B".into()])]),
+        );
+        let mut resolved = false;
+        loop {
+            match runtime
+                .events
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap()
+            {
+                Event::ApprovalResolved { id, allow: true } => {
+                    assert_eq!(id, approval.id);
+                    resolved = true;
+                }
+                Event::NativeTurnCompleted { turn_id, .. } => assert_eq!(turn_id, "answer-turn"),
+                Event::Finished { error, cancelled } => {
+                    assert!(error.is_none(), "{error:?}");
+                    assert!(!cancelled && resolved);
+                    break;
+                }
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn selecting_full_access_resolves_pending_and_future_approvals_in_the_active_turn() {
         let _locale = crate::test_support::chinese();
         let log = std::env::temp_dir().join(format!(

@@ -22,6 +22,7 @@ pub(super) enum Scope {
     Composer,
     File,
     Diff,
+    PullRequest,
     Terminal,
 }
 impl Scope {
@@ -32,6 +33,7 @@ impl Scope {
             Self::Composer => conduit::i18n::text_static("shortcuts.message_input"),
             Self::File => conduit::i18n::text_static("shortcuts.file_preview"),
             Self::Diff => "Diff",
+            Self::PullRequest => conduit::i18n::text_static("github.title"),
             Self::Terminal => conduit::i18n::text_static("shortcuts.terminal"),
         }
     }
@@ -133,6 +135,13 @@ pub(super) static SHORTCUTS: &[Shortcut] = &[
         &[Some("GitDiffDocument")]
     ),
     shortcut!(
+        "close_pr",
+        "关闭 PR 标签",
+        PullRequest,
+        ["ctrl-w"],
+        &[Some("PullRequestDocument")]
+    ),
+    shortcut!(
         "leave_terminal",
         "从终端返回工作台",
         Terminal,
@@ -173,7 +182,7 @@ impl Shortcut {
             "file_find" => KeyBinding::new(key, file_preview::ToggleFind, context),
             "next_diff" => KeyBinding::new(key, NextDiff, context),
             "previous_diff" => KeyBinding::new(key, PreviousDiff, context),
-            "close_diff" => KeyBinding::new(key, CloseDocument, context),
+            "close_diff" | "close_pr" => KeyBinding::new(key, CloseDocument, context),
             "leave_terminal" => KeyBinding::new(key, LeaveTerminal, context),
             "previous_terminal" => KeyBinding::new(key, PreviousTerminal, context),
             "next_terminal" => KeyBinding::new(key, NextTerminal, context),

@@ -807,11 +807,6 @@ impl ConduitApp {
             .and_then(|id| self.session(id))
             .map(|session| session.permission)
             .unwrap_or(self.pending_permission);
-        let engine = self
-            .send_target(true)
-            .and_then(|id| self.session(id))
-            .map(|session| session.provider)
-            .unwrap_or(self.new_session_provider);
         let warning = permission == PermissionLevel::FullAccess;
         let trigger = Button::new("permission-picker-trigger")
             .ghost()
@@ -869,7 +864,7 @@ impl ConduitApp {
             .trigger(trigger)
             .content(move |_, _, cx| {
                 let popover = cx.entity().downgrade();
-                let mut list = v_flex().w(px(220.)).gap(px(1.));
+                let mut list = v_flex().w(px(200.)).gap(px(2.));
                 for option in [
                     PermissionLevel::ReadOnly,
                     PermissionLevel::WorkspaceWrite,
@@ -886,81 +881,48 @@ impl ConduitApp {
                             PermissionLevel::FullAccess => "permission-option-full",
                         })
                         .ghost()
-                        .h(px(52.))
+                        .h(px(36.))
                         .w_full()
                         .px_2()
                         .cursor_pointer()
                         .accessibility_label(option.label())
                         .child(
-                            v_flex()
+                            h_flex()
                                 .w_full()
-                                .gap(px(2.))
+                                .items_center()
+                                .gap_2()
                                 .child(
-                                    h_flex()
-                                        .w_full()
-                                        .gap_2()
-                                        .items_center()
-                                        .child(
-                                            Icon::new(if is_danger {
-                                                gpui_kit::assets::IconName::TriangleAlert
-                                            } else {
-                                                match option {
-                                                    PermissionLevel::ReadOnly => {
-                                                        gpui_kit::assets::IconName::Eye
-                                                    }
-                                                    _ => gpui_kit::assets::IconName::SquarePen,
-                                                }
-                                            })
-                                            .small()
-                                            .text_color(rgb(if is_danger {
-                                                palette().warning_text
-                                            } else {
-                                                palette().muted
-                                            })),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(ui_text_size(12.))
-                                                .text_color(rgb(if is_danger {
-                                                    palette().warning_text
-                                                } else {
-                                                    palette().muted
-                                                }))
-                                                .child(option.label()),
-                                        ),
+                                    Icon::new(if is_danger {
+                                        gpui_kit::assets::IconName::TriangleAlert
+                                    } else {
+                                        match option {
+                                            PermissionLevel::ReadOnly => {
+                                                gpui_kit::assets::IconName::Eye
+                                            }
+                                            _ => gpui_kit::assets::IconName::SquarePen,
+                                        }
+                                    })
+                                    .small()
+                                    .text_color(rgb(
+                                        if is_danger {
+                                            palette().warning_text
+                                        } else {
+                                            palette().muted
+                                        },
+                                    )),
                                 )
                                 .child(
                                     div()
-                                        .pl_6()
+                                        .flex_1()
                                         .text_size(ui_text_size(12.))
-                                        .text_color(rgb(palette().faint))
-                                        .child(match (engine, option) {
-                                            (Provider::Qoder, PermissionLevel::ReadOnly) => {
-                                                conduit::i18n::text_static("qoder.permission_read_only")
-                                            }
-                                            (Provider::Qoder, PermissionLevel::WorkspaceWrite) => {
-                                                conduit::i18n::text_static("qoder.permission_ask")
-                                            }
-                                            (Provider::Qoder, PermissionLevel::FullAccess) => {
-                                                conduit::i18n::text_static("qoder.permission_full_access")
-                                            }
-                                            (Provider::OpenCode, PermissionLevel::ReadOnly) => {
-                                                conduit::i18n::text_static("model_picker.opencode_read_tools_only_commands_and_writes")
-                                            }
-                                            (Provider::OpenCode, PermissionLevel::WorkspaceWrite) => {
-                                                conduit::i18n::text_static("model_picker.opencode_writes_commands_and_access_outside_the")
-                                            }
-                                            (_, PermissionLevel::ReadOnly) => {
-                                                conduit::i18n::text_static("model_picker.codex_read_only_sandbox_claude_read_tools")
-                                            }
-                                            (_, PermissionLevel::WorkspaceWrite) => {
-                                                conduit::i18n::text_static("model_picker.codex_workspace_sandbox_claude_automatically_accept_file")
-                                            }
-                                            (_, PermissionLevel::FullAccess) => {
-                                                conduit::i18n::text_static("model_picker.warning_no_sandbox_restrictions_commands_run_without")
-                                            }
-                                        }),
-                                ),
+                                        .text_color(rgb(if is_danger {
+                                            palette().warning_text
+                                        } else {
+                                            palette().muted
+                                        }))
+                                        .child(option.label()),
+                                )
+                                .when(active, |row| row.child(Icon::new(IconName::Check).small())),
                         )
                         .when(active, |button| button.bg(rgb(palette().surface_hover)))
                         .on_click(move |_, window, cx| {
@@ -973,18 +935,7 @@ impl ConduitApp {
                         }),
                     );
                 }
-                list.child(
-                    div()
-                        .px_2()
-                        .pt_2()
-                        .border_t_1()
-                        .border_color(rgb(palette().border))
-                        .text_size(ui_text_size(12.))
-                        .text_color(rgb(palette().faint))
-                        .child(
-                            conduit::i18n::text_static("model_picker.full_access_immediately_handles_pending_approvals_automatically"),
-                        ),
-                )
+                list
             })
             .into_any_element()
     }

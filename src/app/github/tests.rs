@@ -9,6 +9,159 @@ use gpui_kit::{
 };
 use std::sync::{Arc, atomic::AtomicBool};
 
+#[gpui_kit::test]
+fn pr_document_preserves_workspace_drafts_tabs_and_releases_closed_panels(cx: &mut TestAppContext) {
+    use crate::app::files::DocumentTab;
+    use gpui_kit::{App, Entity};
+    let _locale = crate::test_support::chinese();
+    let (app, cx, root) = fixture(cx, "pr-document-navigation");
+    let make_panel = |workspace, cx: &mut App| {
+        cx.new(|cx| PullRequestPanel {
+            host: app.downgrade(),
+            workspace,
+            focus: cx.focus_handle(),
+            document: true,
+            scrolls: Default::default(),
+            snapshot: None,
+            error: Some("Offline fixture".into()),
+            sync_result: None,
+            loading: false,
+            shown: 40,
+            tab: 1,
+            expanded_threads: Default::default(),
+            cancel: Arc::new(AtomicBool::new(false)),
+            _task: Task::ready(()),
+            _subscription: None,
+        })
+    };
+    let panels: (Entity<PullRequestPanel>, Entity<PullRequestPanel>) = cx.update(|_, cx| {
+        let other = app.read(cx).store.workspaces[1].path.clone();
+        (make_panel(root.clone(), cx), make_panel(other, cx))
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.startup = None;
+            for (id, panel) in [(100, &panels.0), (101, &panels.1)] {
+                app.github_ui
+                    .roots
+                    .insert(id, panel.read(cx).workspace.clone());
+                app.github_ui.panels.insert(id, panel.clone());
+                app.open_tabs.push(DocumentTab::PullRequest(id));
+            }
+            app.input.update(cx, |input, cx| {
+                input.set_value("keep original draft", window, cx)
+            });
+            app.open_github(window, cx);
+            assert_eq!(app.active_document(), Some(DocumentTab::PullRequest(100)));
+            app.select_document(DocumentTab::Chat(2), window, cx);
+            assert!(app.github_ui.active.is_none());
+            app.input.update(cx, |input, cx| {
+                input.set_value("keep other draft", window, cx)
+            });
+            app.open_github(window, cx);
+            assert_eq!(app.active_document(), Some(DocumentTab::PullRequest(101)));
+            app.select_document(DocumentTab::PullRequest(100), window, cx);
+            assert_eq!(app.selected_workspace, Some(0));
+            assert_eq!(app.input.read(cx).value().as_str(), "keep original draft");
+            assert_eq!(panels.0.read(cx).tab, 1);
+            assert_eq!(panels.0.read(cx).shown, 40);
+            assert!(panels.0.read(cx).focus.is_focused(window));
+            app.select_document(DocumentTab::Settings, window, cx);
+            app.close_documents(&[DocumentTab::Settings], window, cx);
+            assert_eq!(app.active_document(), Some(DocumentTab::PullRequest(100)));
+            app.close_documents(&[DocumentTab::PullRequest(100)], window, cx);
+            assert_eq!(app.active_document(), Some(DocumentTab::Chat(1)));
+            assert!(!app.github_ui.panels.contains_key(&100));
+            app.select_document(DocumentTab::Chat(2), window, cx);
+            assert_eq!(app.input.read(cx).value().as_str(), "keep other draft");
+            app.select_document(DocumentTab::PullRequest(101), window, cx);
+            let other = app.github_ui.roots[&101].clone();
+            app.forget_workspace_files(&other);
+            assert!(app.github_ui.panels.is_empty());
+            assert!(app.github_ui.active.is_none());
+            assert!(app.session_control.runs.is_empty());
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn pr_document_checks_fit_and_attachment_returns_to_chat_without_losing_the_page(
+    cx: &mut TestAppContext,
+) {
+    use crate::app::files::DocumentTab;
+    let _locale = crate::test_support::chinese();
+    let (app, cx, root) = fixture(cx, "pr-document-layout");
+    let panel = cx.update(|window, cx| {
+        let mut pr = crate::github::parse(&serde_json::json!({
+            "number":7,"url":PR,"headRefOid":"a".repeat(40),"headRefName":"fix-ci","baseRefName":"main",
+            "title":"修复构建与检查失败", "state":"OPEN", "reviewDecision":"CHANGES_REQUESTED",
+            "statusCheckRollup":[{"name":"Windows CI", "conclusion":"FAILURE"}, {"name":"Lint", "conclusion":"SUCCESS"}]
+        }).to_string()).unwrap();
+        pr.local_head = pr.head.clone();
+        pr.threads = Some(snapshot());
+        let panel = cx.new(|cx| PullRequestPanel {
+            host: app.downgrade(), workspace: root.clone(), focus: cx.focus_handle(), document: true,
+            scrolls: Default::default(), snapshot: Some(pr), error: None, sync_result: None,
+            loading: false, shown: 20, tab: 0, expanded_threads: Default::default(),
+            cancel: Arc::new(AtomicBool::new(false)), _task: Task::ready(()), _subscription: None,
+        });
+        app.update(cx, |app, cx| {
+            app.startup = None;
+            app.github_ui.roots.insert(100, root.clone());
+            app.github_ui.panels.insert(100, panel.clone());
+            app.open_tabs.push(DocumentTab::PullRequest(100));
+            app.input.update(cx, |input, cx| input.set_value("existing request", window, cx));
+            app.select_document(DocumentTab::PullRequest(100), window, cx);
+        });
+        panel
+    });
+    for (width, height) in [(850., 500.), (1200., 800.)] {
+        cx.simulate_resize(gpui_kit::size(gpui_kit::px(width), gpui_kit::px(height)));
+        draw(cx);
+        let page = cx.debug_bounds("github-document").expect("PR document");
+        let content = cx.debug_bounds("github-content").expect("PR list");
+        assert!(
+            content.size.height >= gpui_kit::px(80.),
+            "list too small: {content:?} within {page:?}"
+        );
+        assert!(page.right() <= gpui_kit::px(width) && page.bottom() <= gpui_kit::px(height));
+        cx.update(|window, _| {
+            let refresh = gpui_kit::base::test_support::find(window, &[], &"github-refresh".into())
+                .unwrap()
+                .bounds();
+            assert!(refresh.bottom() <= page.bottom());
+            assert!(
+                gpui_kit::base::test_support::find(window, &[], &"github-publish-comment".into())
+                    .is_none()
+            );
+        });
+    }
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.attach("CI evidence".into(), window, cx);
+        })
+    });
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert_eq!(app.active_document(), Some(DocumentTab::Chat(1)));
+        assert!(app.input.read(cx).value().contains("existing request"));
+        assert!(app.input.read(cx).value().contains("CI evidence"));
+        assert!(app.github_ui.panels.contains_key(&100));
+        assert!(app.session_control.runs.is_empty());
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_github(window, cx);
+            assert_eq!(app.github_ui.panels.len(), 1);
+            assert_eq!(panel.read(cx).tab, 0);
+        })
+    });
+    draw(cx);
+    cx.simulate_keystrokes("ctrl-w");
+    draw(cx);
+    cx.update(|_, cx| assert!(app.read(cx).github_ui.panels.is_empty()));
+}
+
 fn draw(cx: &mut VisualTestContext) {
     cx.run_until_parked();
     cx.update(|window, cx| {
@@ -60,6 +213,11 @@ fn pr_review_sync_and_attachments_keep_the_original_workspace_and_saved_status(
             sync_result: None,
             loading: false,
             shown: 20,
+            tab: 1,
+            expanded_threads: Default::default(),
+            focus: cx.focus_handle(),
+            document: false,
+            scrolls: Default::default(),
             cancel: Arc::new(AtomicBool::new(false)),
             _task: Task::ready(()),
             _subscription: Some(cx.observe(&app, |_, _, cx| cx.notify())),
@@ -181,6 +339,11 @@ fn pr_review_loading_missing_workspaces_and_readonly_state_block_sync(cx: &mut T
             sync_result: None,
             loading: true,
             shown: 20,
+            tab: 0,
+            expanded_threads: Default::default(),
+            focus: cx.focus_handle(),
+            document: false,
+            scrolls: Default::default(),
             cancel: Arc::new(AtomicBool::new(false)),
             _task: Task::ready(()),
             _subscription: Some(cx.observe(&app, |_, _, cx| cx.notify())),
@@ -224,6 +387,11 @@ fn failed_check_task_preserves_workspace_drafts_and_user_acceptance(cx: &mut Tes
         let panel = cx.new(|cx| PullRequestPanel {
             host: app.downgrade(), workspace: root.clone(), snapshot: Some(pr),
             error: None, sync_result: None, loading: false, shown: 20,
+            tab: 0,
+            expanded_threads: Default::default(),
+            focus: cx.focus_handle(),
+            document: false,
+            scrolls: Default::default(),
             cancel: Arc::new(AtomicBool::new(false)), _task: Task::ready(()),
             _subscription: Some(cx.observe(&app, |_, _, cx| cx.notify())),
         });
@@ -316,6 +484,11 @@ fn failed_check_task_rejects_stale_readonly_loading_and_missing_workspace_action
             sync_result: None,
             loading: true,
             shown: 20,
+            tab: 0,
+            expanded_threads: Default::default(),
+            focus: cx.focus_handle(),
+            document: false,
+            scrolls: Default::default(),
             cancel: Arc::new(AtomicBool::new(false)),
             _task: Task::ready(()),
             _subscription: Some(cx.observe(&app, |_, _, cx| cx.notify())),
@@ -349,5 +522,88 @@ fn failed_check_task_rejects_stale_readonly_loading_and_missing_workspace_action
             assert!(app.session_control.runs.is_empty());
             app.writable = false;
         });
+    });
+}
+
+#[gpui_kit::test]
+fn github_write_form_blocks_removed_readonly_and_uncertain_resubmission(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx, root) = fixture(cx, "github-write-guards");
+    cx.update(|window, cx| {
+        let mut pr = crate::github::parse(
+            &serde_json::json!({
+                "number":7, "url":PR, "headRefOid":"a".repeat(40),
+                "headRefName":"topic", "state":"OPEN"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        pr.local_head = "b".repeat(40);
+        let parent = cx.new(|cx| PullRequestPanel {
+            host: app.downgrade(),
+            workspace: root.clone(),
+            snapshot: Some(pr.clone()),
+            error: None,
+            sync_result: None,
+            loading: false,
+            shown: 20,
+            tab: 0,
+            expanded_threads: Default::default(),
+            focus: cx.focus_handle(),
+            document: false,
+            scrolls: Default::default(),
+            cancel: Arc::new(AtomicBool::new(false)),
+            _task: Task::ready(()),
+            _subscription: Some(cx.observe(&app, |_, _, cx| cx.notify())),
+        });
+        let editor =
+            cx.new(|cx| super::TextareaState::new(window, cx).default_value("Keep this draft"));
+        let form = cx.new(|cx| super::GithubCommentPanel {
+            host: app.downgrade(),
+            parent: parent.downgrade(),
+            workspace: root.clone(),
+            expected: pr,
+            action: crate::github::write::Action::Comment(String::new()),
+            editor: Some(editor.clone()),
+            error: None,
+            busy: false,
+            finished: false,
+            uncertain: false,
+            confirm_discard: false,
+            _editor_subscription: None,
+            cancel: Arc::new(AtomicBool::new(false)),
+            _task: Task::ready(()),
+            _subscription: cx.observe(&app, |_, _, cx| cx.notify()),
+        });
+        app.update(cx, |app, _| app.writable = false);
+        form.update(cx, |form, cx| {
+            form.submit(cx);
+            assert!(!form.busy);
+            assert!(!form.can_close(cx));
+            assert!(form.confirm_discard);
+            assert!(!form.can_close(cx));
+            form.confirm_discard = false;
+            form.busy = true;
+            assert!(!form.can_close(cx));
+            form.busy = false;
+        });
+        app.update(cx, |app, _| app.writable = true);
+        form.update(cx, |form, cx| {
+            form.workspace = root.join("removed");
+            form.submit(cx);
+            assert!(!form.busy);
+            form.workspace = root;
+            form.uncertain = true;
+            form.submit(cx);
+            assert!(!form.busy);
+            form.uncertain = false;
+            form.finished = true;
+            form.submit(cx);
+            assert!(!form.busy);
+            assert!(form.can_close(cx));
+        });
+        assert_eq!(editor.read(cx).value().as_str(), "Keep this draft");
+        assert!(app.read(cx).session_control.runs.is_empty());
+        app.update(cx, |app, _| app.writable = false);
     });
 }

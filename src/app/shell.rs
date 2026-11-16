@@ -235,6 +235,8 @@ impl Render for ConduitApp {
         if self.store.ui.performance_monitor {
             let timeline_visible = message_count > 0
                 && !self.settings_ui.open
+                && self.usage_ui.active.is_none()
+                && self.github_ui.active.is_none()
                 && self.active_diff.is_none()
                 && self.active_file.is_none();
             self.performance.update(cx, |monitor, _| {
@@ -299,6 +301,32 @@ impl Render for ConduitApp {
                 .h_full()
                 .child(self.session_tab_bar(cx))
                 .child(self.render_settings_workspace(window, settings_width, cx))
+        } else if let Some(panel) = self
+            .github_ui
+            .active
+            .and_then(|id| self.github_ui.panels.get(&id))
+            .cloned()
+        {
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .h_full()
+                .child(self.session_tab_bar(cx))
+                .child(panel)
+        } else if let Some(panel) = self
+            .usage_ui
+            .active
+            .and_then(|id| self.usage_ui.panels.get(&id))
+            .cloned()
+        {
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .h_full()
+                .child(self.session_tab_bar(cx))
+                .child(panel)
         } else if self.active_diff.is_some() {
             v_flex()
                 .flex_1()
@@ -882,45 +910,56 @@ impl Render for ConduitApp {
                         })),
                 ),
         );
-        let conversation = if self.settings_ui.open {
+        let conversation = if self.settings_ui.open
+            || self.usage_ui.active.is_some()
+            || self.github_ui.active.is_some()
+        {
             conversation.into_any_element()
         } else {
             self.with_terminal_panel(conversation.into_any_element(), window, cx)
+        };
+        let conversation = if self.branch_navigation_open()
+            && !self.settings_ui.open
+            && self.usage_ui.active.is_none()
+            && self.github_ui.active.is_none()
+        {
+            let state =
+                window.use_keyed_state("branch-split", cx, |_, _| ResizableState::default());
+            let height = (f32::from(window.viewport_size().height) / 3.).clamp(180., 800.);
+            let panel = h_flex()
+                .id("branch-bottom-panel")
+                .debug_selector(|| "branch-bottom-panel".into())
+                .size_full()
+                .min_h_0()
+                .overflow_hidden()
+                .bg(rgb(palette().canvas))
+                .border_t_1()
+                .border_color(rgb(palette().border))
+                .children(self.branch_manager.clone());
+            v_resizable("branch-split-group")
+                .with_state(&state)
+                .child(resizable_panel().child(conversation))
+                .child(
+                    resizable_panel()
+                        .size(px(height))
+                        .size_range(px(180.)..px(800.))
+                        .child(panel),
+                )
+                .into_any_element()
+        } else {
+            conversation
         };
         let conversation = v_flex()
             .flex_1()
             .min_w_0()
             .h_full()
-            .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .child(conversation)
-                    .when(
-                        self.branch_navigation_open() && !self.settings_ui.open,
-                        |area| {
-                            area.child(
-                                h_flex()
-                                    .id("branch-bottom-panel")
-                                    .debug_selector(|| "branch-bottom-panel".into())
-                                    .absolute()
-                                    .bottom_0()
-                                    .left_0()
-                                    .w_full()
-                                    .h(relative(1. / 3.))
-                                    .min_h_0()
-                                    .overflow_hidden()
-                                    .occlude()
-                                    .bg(rgb(palette().canvas))
-                                    .border_t_1()
-                                    .border_color(rgb(palette().border))
-                                    .children(self.branch_manager.clone()),
-                            )
-                        },
-                    ),
-            )
-            .when(!self.settings_ui.open, |layout| layout.child(toolbar));
+            .child(div().flex_1().min_h_0().child(conversation))
+            .when(
+                !self.settings_ui.open
+                    && self.usage_ui.active.is_none()
+                    && self.github_ui.active.is_none(),
+                |layout| layout.child(toolbar),
+            );
         // The left workspace rail stays a resizable group. The right sidebar is
         // laid out by hand so dragging its edge follows the pointer 1:1 and its
         // width can be capped at half of the remaining content area.

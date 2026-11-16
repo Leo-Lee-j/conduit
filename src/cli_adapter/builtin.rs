@@ -63,6 +63,16 @@ impl CliAdapter for StdioAdapter {
     fn cancel_message(&self) -> Option<Value> {
         self.protocol.cancel_message()
     }
+    fn route_response(
+        &mut self,
+        approval: &Approval,
+        response: Value,
+    ) -> anyhow::Result<Option<Value>> {
+        if approval.kind == crate::protocol::ApprovalKind::CodexAsyncUserInput {
+            return self.protocol.route_codex_async_input(approval, response);
+        }
+        Ok(Some(response))
+    }
     fn automatic_approval(&self, approval: &Approval) -> Option<bool> {
         self.protocol.automatic_approval(approval)
     }

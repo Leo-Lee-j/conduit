@@ -15,6 +15,13 @@ pub(in crate::app) struct SettingsResult {
 // targets open the section, including controls hidden behind disclosures.
 const ENTRIES: &[(usize, usize, &str, &str, &str)] = &[
     (
+        0,
+        0,
+        "默认会话权限",
+        "新会话使用的默认权限",
+        "权限 默认 会话 工作区 permission default session workspace",
+    ),
+    (
         1,
         1,
         "自动将活跃工作空间排到前面",

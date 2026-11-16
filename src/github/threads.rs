@@ -110,14 +110,14 @@ pub struct Snapshot {
     pub limited: bool,
 }
 
-struct Repository {
-    host: String,
+pub(super) struct Repository {
+    pub(super) host: String,
     owner: String,
     name: String,
-    number: u64,
+    pub(super) number: u64,
 }
 
-fn identity(value: &str) -> Result<Repository> {
+pub(super) fn identity(value: &str) -> Result<Repository> {
     let parsed = url::Url::parse(value)?;
     let segments: Vec<_> = parsed.path_segments().context("Invalid PR path")?.collect();
     if web_url(value).is_none()
@@ -147,7 +147,7 @@ fn identity(value: &str) -> Result<Repository> {
     })
 }
 
-fn oid(value: &str) -> bool {
+pub(super) fn oid(value: &str) -> bool {
     (40..=64).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 

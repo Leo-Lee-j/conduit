@@ -46,7 +46,9 @@ impl PullRequestPanel {
                     cx.notify();
                     id
                 };
-                window.close_dialog(cx);
+                if !self.document {
+                    window.close_dialog(cx);
+                }
                 app.open_workflow_task(id, window, cx);
                 Ok(())
             })

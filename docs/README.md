@@ -32,6 +32,8 @@
 
 ## 实验扩展
 
+[Skill / MCP 三方目录与安装调研](skill-mcp-catalog-research-2026-11-16.md)：来源 API 实测与分阶段方案；首版已接入，操作与当前范围见[设置与 AI 连接](settings.md#在线发现与安装)。
+
 [手机操控会话调研](mobile-session-control-research-2026-11-10.md)：手机 Web/PWA、会话控制边界、网络接入、投入与验收建议；尚未实现。
 
 [插件文档](plugins/README.md)区分已接入的原生贡献机制、开发态 Shell 运行时和后续安装管理方案。Shell 生产准入尚未完成。

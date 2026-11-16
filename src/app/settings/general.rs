@@ -35,6 +35,16 @@ impl ConduitApp {
             |app| app.store.ui.full_width_content,
             |app, value| app.store.ui.full_width_content = value,
         );
+        let compact_middle_packages = switch_field(
+            view.clone(),
+            |app| app.store.ui.compact_middle_packages,
+            |app, value| app.store.ui.compact_middle_packages = value,
+        );
+        let group_tabs = switch_field(
+            view.clone(),
+            |app| app.store.ui.group_tabs,
+            |app, value| app.store.ui.group_tabs = value,
+        );
         let collapse_reasoning = switch_field(
             view.clone(),
             |app| app.store.ui.collapse_reasoning,
@@ -77,6 +87,41 @@ impl ConduitApp {
                     menu
                 })
         });
+        let permission_view = view.clone();
+        let permission = self.store.ui.default_session_permission;
+        let permission_field = SettingField::render(move |_, _, _| {
+            let view = permission_view.clone();
+            Button::new("default-session-permission")
+                .outline()
+                .w(px(160.))
+                .justify_between()
+                .label(permission.label())
+                .icon(FullIconName::ChevronDown)
+                .disabled(disabled)
+                .dropdown_menu(move |mut menu, _, _| {
+                    for option in [
+                        PermissionLevel::ReadOnly,
+                        PermissionLevel::WorkspaceWrite,
+                        PermissionLevel::FullAccess,
+                    ] {
+                        let view = view.clone();
+                        menu = menu.item(PopupMenuItem::new(option.label()).on_click(
+                            move |_, _, cx| {
+                                view.update(cx, |app, cx| {
+                                    if !app.writable || app.closing {
+                                        return;
+                                    }
+                                    app.store.ui.default_session_permission = option;
+                                    app.pending_permission = option;
+                                    app.persist();
+                                    cx.notify();
+                                });
+                            },
+                        ));
+                    }
+                    menu
+                })
+        });
         settings_page(
             conduit::i18n::text_static("settings.general.general"),
             FullIconName::Settings,
@@ -87,11 +132,32 @@ impl ConduitApp {
             ))
             .items(vec![
                 SettingItem::new(
+                    conduit::i18n::text_static("settings.general.default_session_permission"),
+                    permission_field,
+                )
+                .disabled(disabled),
+                SettingItem::new(
                     conduit::i18n::text_static("settings.general.full_width_content"),
                     full_width,
                 )
                 .description(settings_description(conduit::i18n::text_static(
                     "settings.general.fill_the_available_area_with_chat_content",
+                )))
+                .disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.compact_middle_packages"),
+                    compact_middle_packages,
+                )
+                .description(settings_description(conduit::i18n::text_static(
+                    "settings.general.compact_middle_packages_description",
+                )))
+                .disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.group_tabs"),
+                    group_tabs,
+                )
+                .description(settings_description(conduit::i18n::text_static(
+                    "settings.general.group_tabs_description",
                 )))
                 .disabled(disabled),
                 SettingItem::new(

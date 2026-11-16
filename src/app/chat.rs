@@ -240,6 +240,10 @@ impl ConduitApp {
     pub(super) fn turn_activity_strip(&self, session_id: u64) -> Option<AnyElement> {
         let session = self.session(session_id)?;
         let run = self.session_control.runs.get(&session_id)?;
+        let activity = run.activity_label();
+        // Tool titles can contain entire multiline shell commands. Keep the
+        // status compact while preserving the original text in the tooltip.
+        let activity_preview = activity.split_whitespace().collect::<Vec<_>>().join(" ");
         let model = run
             .model
             .as_deref()
@@ -262,7 +266,6 @@ impl ConduitApp {
                 .debug_selector(|| "engine-activity".into())
                 .flex_1()
                 .min_w_0()
-                .flex_wrap()
                 .items_center()
                 .gap_2()
                 .child(provider_icon(session.provider))
@@ -270,16 +273,22 @@ impl ConduitApp {
                     div()
                         .id("engine-activity-text")
                         .debug_selector(|| "engine-activity-text".into())
+                        .flex_1()
                         .min_w_0()
                         .truncate()
                         .text_size(px(12.))
                         .text_color(rgb(palette().muted))
-                        .child(run.activity_label()),
+                        .tooltip(move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(activity.clone())
+                                .build(window, cx)
+                        })
+                        .child(activity_preview),
                 )
                 .child(
                     div()
                         .id("engine-activity-spinner")
                         .debug_selector(|| "engine-activity-spinner".into())
+                        .flex_shrink_0()
                         .child(Spinner::new().small().color(rgb(palette().loading).into())),
                 )
                 .child(

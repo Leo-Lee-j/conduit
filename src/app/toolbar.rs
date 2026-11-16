@@ -2,46 +2,89 @@
 
 use super::*;
 
-struct WorkspaceTools {
-    host: WeakEntity<ConduitApp>,
+#[derive(Clone, Copy)]
+enum ToolGroup {
+    Tasks,
+    Terminal,
 }
-impl Render for WorkspaceTools {
+
+impl ToolGroup {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Tasks => "task-tools",
+            Self::Terminal => "terminal-options",
+        }
+    }
+    fn title(self) -> &'static str {
+        conduit::i18n::text_static(match self {
+            Self::Tasks => "navigation.tasks",
+            Self::Terminal => "navigation.terminal_options",
+        })
+    }
+}
+
+struct ContextTools {
+    host: WeakEntity<ConduitApp>,
+    popover: WeakEntity<gpui_kit::component::popover::PopoverState>,
+    group: ToolGroup,
+    availability: Option<(Option<PathBuf>, bool, bool, bool)>,
+    _subscription: Subscription,
+}
+impl Render for ContextTools {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(host) = self.host.upgrade() else {
             return div().into_any_element();
         };
+        let popover = self.popover.clone();
+        let group = self.group;
         host.update(cx, |app, cx| {
-            let items = [
-                ("workflow.title", app.workflow_button(cx).into_any_element()),
-                (
-                    "review.inbox",
-                    app.review_inbox_button(cx).into_any_element(),
-                ),
-                ("github.title", app.github_button(cx).into_any_element()),
-                ("usage.title", app.usage_button(cx).into_any_element()),
-                (
-                    "automation.title",
-                    app.automation_button(cx).into_any_element(),
-                ),
-                (
-                    "artifact.title",
-                    app.project_files_button(cx).into_any_element(),
-                ),
-                (
-                    "environment.title",
-                    app.environments_button(cx).into_any_element(),
-                ),
-            ];
+            let items = match group {
+                ToolGroup::Tasks => vec![
+                    (
+                        "workflow.title",
+                        app.workflow_button(cx, Some(popover.clone())),
+                    ),
+                    (
+                        "automation.title",
+                        app.automation_button(cx, Some(popover.clone())),
+                    ),
+                ],
+                ToolGroup::Terminal => vec![
+                    (
+                        "shortcuts.new_terminal",
+                        Button::new("context-new-terminal")
+                            .small()
+                            .ghost()
+                            .icon(FullIconName::Plus)
+                            .disabled(
+                                !app.writable
+                                    || app.closing
+                                    || app.updater.preparing()
+                                    || app.selected_workspace_path().is_none(),
+                            )
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                let _ =
+                                    popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                                this.terminal_command(true, window, cx);
+                            })),
+                    ),
+                    (
+                        "environment.title",
+                        app.environments_button(cx, Some(self.popover.clone())),
+                    ),
+                ],
+            };
             v_flex()
-                .debug_selector(|| "workspace-tool-list".into())
+                .w(px(260.))
                 .p_2()
                 .gap_1()
-                .children(items.into_iter().map(|(key, button)| {
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .child(button)
-                        .child(conduit::i18n::text(key))
+                .debug_selector(move || format!("{}-list", group.id()))
+                .children(items.into_iter().enumerate().map(|(index, (key, button))| {
+                    button
+                        .debug_selector(move || format!("{}-{index}", group.id()))
+                        .w_full()
+                        .justify_start()
+                        .label(conduit::i18n::text(key))
                 }))
                 .into_any_element()
         })
@@ -49,22 +92,63 @@ impl Render for WorkspaceTools {
 }
 
 impl ConduitApp {
-    fn workspace_tools_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn contextual_tools_button(
+        &self,
+        group: ToolGroup,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let host = cx.weak_entity();
-        Popover::new("workspace-tools")
+        Popover::new(group.id())
             .anchor(Anchor::BottomRight)
             .trigger(
-                Button::new("workspace-tools-button")
-                    .debug_selector(|| "workspace-tools-button".into())
+                Button::new(group.id())
+                    .debug_selector(move || group.id().into())
                     .small()
-                    .compact()
                     .ghost()
-                    .icon(FullIconName::PanelsTopLeft)
-                    .tooltip(conduit::i18n::text_static("workflow.tools"))
-                    .accessibility_label(conduit::i18n::text_static("workflow.tools"))
+                    .icon(match group {
+                        ToolGroup::Tasks => FullIconName::ListTodo,
+                        ToolGroup::Terminal => FullIconName::ChevronDown,
+                    })
+                    .when(matches!(group, ToolGroup::Tasks), |button| {
+                        button.label(group.title())
+                    })
+                    .tooltip(group.title())
+                    .accessibility_label(group.title())
                     .disabled(self.selected_workspace_path().is_none()),
             )
-            .content(move |_, _, cx| cx.new(|_| WorkspaceTools { host: host.clone() }))
+            .content(move |_, window, cx| {
+                let popover = cx.weak_entity();
+                window.use_keyed_state((group.id(), 0usize), cx, |_, cx| ContextTools {
+                    _subscription: cx.observe(
+                        &host.upgrade().expect("host is alive"),
+                        |this: &mut ContextTools, host, cx| {
+                            let app = host.read(cx);
+                            let availability = (
+                                app.selected_workspace_path(),
+                                app.writable,
+                                app.closing,
+                                app.updater.preparing(),
+                            );
+                            if this.availability.as_ref() != Some(&availability) {
+                                this.availability = Some(availability);
+                                cx.notify();
+                            }
+                        },
+                    ),
+                    host: host.clone(),
+                    popover,
+                    group,
+                    availability: None,
+                })
+            })
+    }
+
+    pub(super) fn task_tools_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        self.contextual_tools_button(ToolGroup::Tasks, cx)
+    }
+
+    pub(super) fn terminal_options_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        self.contextual_tools_button(ToolGroup::Terminal, cx)
     }
     pub(super) fn render_toolbar(
         &mut self,
@@ -211,9 +295,19 @@ impl ConduitApp {
                         )
                 })
             })
-            .child(self.workspace_tools_button(cx))
             .child(self.branch_toolbar_button(cx))
-            .child(self.terminal_button(cx))
+            .child(
+                self.github_button(cx, None)
+                    .label(conduit::i18n::text_static("github.short_title"))
+                    .debug_selector(|| "branch-pr".into()),
+            )
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_0()
+                    .child(self.terminal_button(cx))
+                    .child(self.terminal_options_button(cx)),
+            )
             .child(self.notification_bell(cx));
         let statuses = self.render_status_contributions(window, cx);
         #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
@@ -243,6 +337,7 @@ impl ConduitApp {
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests {
+    use gpui_kit::component::WindowExt as _;
     use gpui_kit::{Modifiers, MouseButton, TestAppContext, VisualTestContext, px, size};
     fn draw(cx: &mut VisualTestContext) {
         cx.run_until_parked();
@@ -251,12 +346,20 @@ mod tests {
         });
         cx.run_until_parked();
     }
+    fn click(cx: &mut VisualTestContext, selector: &'static str) {
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("missing {selector}"));
+        let point = gpui_kit::point(bounds.right() - px(12.), bounds.center().y);
+        cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+        draw(cx);
+    }
+
     #[gpui_kit::test]
-    fn workspace_tools_render_inside_the_minimum_window_without_borrowing_the_host_twice(
-        cx: &mut TestAppContext,
-    ) {
+    fn contextual_menus_fit_the_minimum_window_and_close_with_escape(cx: &mut TestAppContext) {
         let _locale = crate::test_support::chinese();
-        let (app, cx, _) = crate::app::queue::tests::fixture(cx, "workspace-tools");
+        let (app, cx, _) = crate::app::queue::tests::fixture(cx, "context-tool-bounds");
         cx.update(|_, cx| {
             app.update(cx, |app, cx| {
                 app.startup = None;
@@ -267,17 +370,107 @@ mod tests {
         for (width, height) in [(850., 500.), (1200., 800.)] {
             cx.simulate_resize(size(px(width), px(height)));
             draw(cx);
-            let button = cx.debug_bounds("workspace-tools-button").unwrap();
-            assert!(button.right() <= px(width) && button.bottom() <= px(height));
-            cx.simulate_mouse_down(button.center(), MouseButton::Left, Modifiers::default());
-            cx.simulate_mouse_up(button.center(), MouseButton::Left, Modifiers::default());
-            draw(cx);
-            let menu = cx.debug_bounds("workspace-tool-list").unwrap();
-            assert!(menu.left() >= px(0.) && menu.top() >= px(0.));
-            assert!(menu.right() <= px(width) && menu.bottom() <= px(height));
-            cx.simulate_keystrokes("escape");
-            draw(cx);
-            assert!(cx.debug_bounds("workspace-tool-list").is_none());
+            assert!(cx.debug_bounds("workspace-tools-button").is_none());
+            let usage = cx.debug_bounds("navigation-usage").unwrap();
+            assert!(usage.right() <= px(width) && usage.bottom() <= px(height));
+            for (trigger, list) in [
+                ("task-tools", "task-tools-list"),
+                ("terminal-options", "terminal-options-list"),
+            ] {
+                let button = cx.debug_bounds(trigger).unwrap();
+                assert!(button.right() <= px(width) && button.bottom() <= px(height));
+                click(cx, trigger);
+                let menu = cx.debug_bounds(list).unwrap();
+                assert!(menu.left() >= px(0.) && menu.top() >= px(0.));
+                assert!(menu.right() <= px(width) && menu.bottom() <= px(height));
+                cx.simulate_keystrokes("escape");
+                draw(cx);
+                assert!(cx.debug_bounds(list).is_none());
+            }
+            for (navigation, selectors) in [
+                ("nav-git", &["context-pr", "context-review"][..]),
+                ("nav-files", &["context-file-tools"][..]),
+            ] {
+                click(cx, navigation);
+                for selector in selectors {
+                    let bounds = cx.debug_bounds(selector).unwrap();
+                    assert!(bounds.left() >= px(0.) && bounds.right() <= px(width));
+                    assert!(bounds.top() >= px(0.) && bounds.bottom() <= px(height));
+                }
+            }
+            click(cx, "nav-workspaces");
         }
+    }
+
+    #[gpui_kit::test]
+    fn contextual_entries_open_their_panels_and_dismiss_the_menu(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
+        let (app, cx, _) = crate::app::queue::tests::fixture(cx, "context-tool-clicks");
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.startup = None;
+                app.writable = false;
+                cx.notify();
+            })
+        });
+        cx.simulate_resize(size(px(1000.), px(800.)));
+        for (trigger, list, selector) in [
+            ("task-tools", "task-tools-list", "task-tools-0"),
+            ("task-tools", "task-tools-list", "task-tools-1"),
+            (
+                "terminal-options",
+                "terminal-options-list",
+                "terminal-options-1",
+            ),
+        ] {
+            draw(cx);
+            click(cx, trigger);
+            click(cx, selector);
+            assert!(
+                cx.debug_bounds(list).is_none(),
+                "menu remained open for {selector}"
+            );
+            cx.update(|window, cx| {
+                assert!(
+                    window.has_active_dialog(cx),
+                    "{selector} did not open its panel"
+                );
+                window.close_all_dialogs(cx);
+            });
+            draw(cx);
+        }
+        for (navigation, selector) in [
+            ("nav-git", "context-pr"),
+            ("nav-git", "context-review"),
+            ("nav-files", "context-file-tools"),
+        ] {
+            click(cx, navigation);
+            click(cx, selector);
+            cx.update(|window, cx| {
+                if selector == "context-pr" {
+                    assert!(!window.has_active_dialog(cx));
+                    app.update(cx, |app, cx| {
+                        let id = app.github_ui.active.expect("PR document opened");
+                        app.close_documents(
+                            &[super::files::DocumentTab::PullRequest(id)],
+                            window,
+                            cx,
+                        );
+                    });
+                } else {
+                    assert!(
+                        window.has_active_dialog(cx),
+                        "{selector} did not open its panel"
+                    );
+                    window.close_all_dialogs(cx);
+                }
+            });
+            draw(cx);
+        }
+        click(cx, "navigation-usage");
+        cx.update(|window, cx| {
+            assert!(!window.has_active_dialog(cx));
+            assert!(app.read(cx).usage_ui.active.is_some());
+        });
     }
 }

@@ -182,6 +182,23 @@ pub fn add_preview(
             server.insert("args".into(), serde_json::to_value(args)?);
         }
     }
+    merge_server(engine, original, name, server)
+}
+
+pub(super) fn merge_server(
+    engine: Provider,
+    original: Option<&str>,
+    name: &str,
+    server: serde_json::Map<String, Value>,
+) -> Result<String> {
+    ensure!(
+        !name.is_empty()
+            && name.len() <= 80
+            && name
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-'),
+        conduit::i18n::text("extensions.mcp.service_names_may_contain_letters_digits_underscores")
+    );
     if engine == Provider::Codex {
         let original = original.unwrap_or("");
         let value: toml::Table = toml::from_str(original).map_err(|_| {

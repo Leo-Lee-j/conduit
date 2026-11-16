@@ -431,6 +431,7 @@ mod config_editor;
 #[path = "settings/connections.rs"]
 mod connections;
 mod defaults;
+mod extension_catalog;
 mod extension_management;
 mod general;
 mod management;

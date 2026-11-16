@@ -8,3 +8,4 @@ docs/screenshots/
 bash.exe.stackdump
 .zvec-grep
 .codegraph
+.tmp*

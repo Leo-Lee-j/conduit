@@ -45,7 +45,11 @@ struct WorkflowPanel {
 }
 
 impl ConduitApp {
-    pub(super) fn workflow_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn workflow_button(
+        &self,
+        cx: &mut Context<Self>,
+        popover: Option<WeakEntity<gpui_kit::component::popover::PopoverState>>,
+    ) -> Button {
         Button::new("project-workflow")
             .small()
             .compact()
@@ -54,7 +58,12 @@ impl ConduitApp {
             .accessibility_label(label("workflow.title"))
             .tooltip(label("workflow.title"))
             .disabled(self.selected_workspace_path().is_none())
-            .on_click(cx.listener(|this, _, window, cx| this.open_workflow(window, cx)))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if let Some(popover) = &popover {
+                    let _ = popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                }
+                this.open_workflow(window, cx);
+            }))
     }
 
     fn open_workflow(&mut self, window: &mut Window, cx: &mut Context<Self>) {

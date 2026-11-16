@@ -923,6 +923,8 @@ impl ConduitApp {
             self.workspace_drafts
                 .insert(target.workspace, self.input.read(cx).value().to_string());
         }
+        self.usage_ui.active = None;
+        self.github_ui.active = None;
         self.active_file = None;
         self.active_diff = None;
         self.selected_workspace = None;
@@ -987,6 +989,8 @@ impl ConduitApp {
             self.workspace_drafts
                 .insert(target.workspace, self.input.read(cx).value().to_string());
         }
+        self.usage_ui.active = None;
+        self.github_ui.active = None;
         self.active_file = None;
         self.active_diff = None;
         self.selected_workspace = Some(workspace);
@@ -1000,6 +1004,7 @@ impl ConduitApp {
             self.dirty = true;
         }
         self.pending_model_selection = None;
+        self.pending_permission = self.store.ui.default_session_permission;
         if activate_chat && let Some(id) = session {
             self.session_control.unread_completed.remove(&id);
             self.push_tab(id);
@@ -1454,7 +1459,8 @@ impl ConduitApp {
         if !self.writable || self.closing || index >= self.store.workspaces.len() {
             return None;
         }
-        let session = self.prepare_session(provider);
+        let mut session = self.prepare_session(provider);
+        session.permission = self.store.ui.default_session_permission;
         let id = session.id;
         self.store.workspaces[index].sessions.insert(0, session);
         self.select_created_session(index, id, provider);
@@ -1513,10 +1519,13 @@ impl ConduitApp {
     }
 
     pub(super) fn select_created_session(&mut self, index: usize, id: u64, provider: Provider) {
+        self.pending_permission = self.store.ui.default_session_permission;
         self.next_id = self.next_id.max(id + 1);
         self.collapsed_workspaces
             .remove(&self.store.workspaces[index].path);
         self.selected_workspace = Some(index);
+        self.usage_ui.active = None;
+        self.github_ui.active = None;
         self.active_file = None;
         self.active_diff = None;
         self.selected_session = Some(id);

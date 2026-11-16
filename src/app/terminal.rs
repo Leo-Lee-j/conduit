@@ -361,7 +361,10 @@ impl ConduitApp {
     }
     pub(super) fn poll_terminals(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let key = self.terminal_key();
-        let visible = self.terminals.open && !self.settings_ui.open && self.startup.is_none();
+        let visible = self.terminals.open
+            && !self.settings_ui.open
+            && self.usage_ui.active.is_none()
+            && self.startup.is_none();
         let mut changed = false;
         if let Some(id) = self.terminals.confirm_close
             && (!visible
@@ -491,6 +494,19 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if !self.terminals.open {
+            return content;
+        }
+        let key = self.terminal_key();
+        if key.is_none()
+            || !self
+                .terminals
+                .sessions
+                .iter()
+                .any(|session| Some(&session.workspace) == key.as_ref())
+        {
+            self.terminals.open = false;
+            self.terminals.confirm_close = None;
+            self.leave_terminal(window, cx);
             return content;
         }
         let panel = self.render_terminal_panel(cx);
@@ -722,6 +738,10 @@ impl ConduitApp {
                         }
                         menu
                     }),
+            )
+            .child(
+                self.environments_button(cx, None)
+                    .tooltip(conduit::i18n::text_static("environment.title")),
             )
             .child(
                 Button::new("terminal-maximize")

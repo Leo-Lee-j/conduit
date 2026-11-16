@@ -18,6 +18,7 @@ impl Approval {
         matches!(
             self.kind,
             ApprovalKind::CodexUserInput
+                | ApprovalKind::CodexAsyncUserInput
                 | ApprovalKind::ClaudeUserInput
                 | ApprovalKind::OpenCodeUserInput
                 | ApprovalKind::QoderUserInput
@@ -139,6 +140,7 @@ impl Protocol {
             return None;
         }
         Some(match approval.kind {
+            ApprovalKind::CodexAsyncUserInput => self.codex_async_answer(approval, Some(answers)),
             ApprovalKind::CodexUserInput => {
                 let answers: BTreeMap<_, _> = answers
                     .iter()
@@ -164,6 +166,7 @@ impl Protocol {
 
     pub(super) fn user_input_cancel_response(&self, approval: &Approval) -> Value {
         match approval.kind {
+            ApprovalKind::CodexAsyncUserInput => self.codex_async_answer(approval, None),
             ApprovalKind::CodexUserInput => json!({"id":approval.wire_id,"result":{"answers":{}}}),
             ApprovalKind::OpenCodeUserInput => json!({"reject":true}),
             ApprovalKind::ClaudeUserInput => {

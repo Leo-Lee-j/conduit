@@ -47,6 +47,8 @@ pub struct UiSettings {
     /// How many recent sessions a workspace shows before "show more".
     #[serde(default = "default_sessions_per_workspace")]
     pub sessions_per_workspace: usize,
+    #[serde(default)]
+    pub default_session_permission: crate::domain::PermissionLevel,
     /// Engine used for the next new session (the composer's engine picker).
     #[serde(default)]
     pub last_provider: Option<crate::domain::Provider>,
@@ -67,6 +69,12 @@ pub struct UiSettings {
     /// Fill the available chat area instead of a centered 840px column.
     #[serde(default = "default_full_width_content")]
     pub full_width_content: bool,
+    /// Collapse directory chains that contain only another directory in the file tree.
+    #[serde(default = "default_compact_middle_packages")]
+    pub compact_middle_packages: bool,
+    /// Keep tabs from the same workspace adjacent in the document tab bar.
+    #[serde(default = "default_group_tabs")]
+    pub group_tabs: bool,
     /// Initial visibility of CLI thinking; individual blocks can override it.
     #[serde(default = "default_collapse_reasoning")]
     pub collapse_reasoning: bool,
@@ -151,6 +159,14 @@ fn default_full_width_content() -> bool {
     true
 }
 
+fn default_compact_middle_packages() -> bool {
+    true
+}
+
+fn default_group_tabs() -> bool {
+    true
+}
+
 fn default_collapse_reasoning() -> bool {
     false
 }
@@ -213,6 +229,7 @@ impl Default for UiSettings {
             recent_sessions: Vec::new(),
             shortcuts: Default::default(),
             sessions_per_workspace: default_sessions_per_workspace(),
+            default_session_permission: Default::default(),
             last_provider: None,
             performance_monitor: default_performance_monitor(),
             appearance: AppearanceMode::default(),
@@ -220,6 +237,8 @@ impl Default for UiSettings {
             auto_collapse_inactive_workspaces: false,
             auto_sort_workspaces: true,
             full_width_content: default_full_width_content(),
+            compact_middle_packages: default_compact_middle_packages(),
+            group_tabs: default_group_tabs(),
             collapse_reasoning: default_collapse_reasoning(),
             auto_collapse_question_history: false,
             max_tabs: default_max_tabs(),
@@ -1083,6 +1102,8 @@ mod tests {
         );
         assert_eq!(store.ui.max_tabs, 8);
         assert!(store.ui.full_width_content);
+        assert!(store.ui.compact_middle_packages);
+        assert!(store.ui.group_tabs);
         assert!(!store.ui.collapse_reasoning);
         assert!(!store.ui.auto_collapse_question_history);
         assert!(
@@ -1115,6 +1136,8 @@ mod tests {
         store.ui.auto_sort_workspaces = false;
         store.ui.max_tabs = 12;
         store.ui.full_width_content = false;
+        store.ui.compact_middle_packages = false;
+        store.ui.group_tabs = false;
         store.ui.collapse_reasoning = true;
         store.ui.auto_collapse_question_history = true;
         store.ui.naming_mode = NamingMode::Latest;
@@ -1147,6 +1170,8 @@ mod tests {
         assert!(!reloaded.ui.auto_sort_workspaces);
         assert_eq!(reloaded.ui.max_tabs, 12);
         assert!(!reloaded.ui.full_width_content);
+        assert!(!reloaded.ui.compact_middle_packages);
+        assert!(!reloaded.ui.group_tabs);
         assert!(reloaded.ui.collapse_reasoning);
         assert!(reloaded.ui.auto_collapse_question_history);
         assert_eq!(reloaded.ui.naming_mode, NamingMode::Latest);
@@ -1238,6 +1263,28 @@ mod tests {
         let roundtrip: GitSettings =
             serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert_eq!(roundtrip.tag_step, 10);
+    }
+    #[test]
+    fn default_session_permission_is_backward_compatible_and_persisted() {
+        use crate::domain::PermissionLevel;
+        let old: UiSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            old.default_session_permission,
+            PermissionLevel::WorkspaceWrite
+        );
+        for permission in [
+            PermissionLevel::ReadOnly,
+            PermissionLevel::WorkspaceWrite,
+            PermissionLevel::FullAccess,
+        ] {
+            let settings = UiSettings {
+                default_session_permission: permission,
+                ..Default::default()
+            };
+            let restored: UiSettings =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(restored.default_session_permission, permission);
+        }
     }
     #[test]
     fn model_preferences_restore_old_defaults_and_roundtrip_new_routes() {

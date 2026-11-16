@@ -1,7 +1,7 @@
 use super::*;
 use crate::github::threads::{CommentState, Thread};
 
-fn excerpt(text: &str, limit: usize) -> String {
+pub(super) fn excerpt(text: &str, limit: usize) -> String {
     let mut chars = text.chars();
     let mut text: String = chars.by_ref().take(limit).collect();
     if chars.next().is_some() {
@@ -208,8 +208,20 @@ impl PullRequestPanel {
         if snapshot.threads.is_empty() {
             body = body.child(label("github.threads_empty"));
         }
-        for thread in snapshot.threads.iter().take(self.shown) {
+        let mut threads: Vec<_> = snapshot.threads.iter().collect();
+        threads.sort_by_key(|thread| thread.is_resolved);
+        for thread in threads.into_iter().take(self.shown) {
             let id = thread.id.clone();
+            let resolve_thread = thread.clone();
+            let reply_thread = thread.clone();
+            let can_write = writable
+                && !self.loading
+                && pr.state == "OPEN"
+                && !thread
+                    .comments
+                    .iter()
+                    .any(|comment| comment.state == CommentState::Pending);
+            let can_resolve = !thread.is_resolved && can_write;
             body = body.child(
                 v_flex()
                     .id(SharedString::from(format!("pr-thread-{id}")))
@@ -218,16 +230,95 @@ impl PullRequestPanel {
                     .border_1()
                     .border_color(rgb(palette().border))
                     .rounded_md()
-                    .child(thread_body(thread))
+                    .child({
+                        let expanded = self.expanded_threads.contains(&thread.id);
+                        let key = thread.id.clone();
+                        let mut summary = v_flex().gap_2();
+                        if expanded {
+                            summary = summary.child(thread_body(thread));
+                        } else {
+                            summary = summary.child(thread.path.clone()).child(
+                                div()
+                                    .text_size(ui_text_size(11.))
+                                    .text_color(rgb(palette().muted))
+                                    .child(format!(
+                                        "{} · {}",
+                                        thread.location(),
+                                        thread.remote_status()
+                                    )),
+                            );
+                            if let Some(comment) = thread.comments.last() {
+                                summary = summary.child(
+                                    div()
+                                        .text_size(ui_text_size(12.))
+                                        .child(excerpt(&comment.body, 350)),
+                                );
+                            }
+                        }
+                        summary.child(
+                            Button::new("thread-expand")
+                                .small()
+                                .ghost()
+                                .label(label(if expanded {
+                                    "github.collapse_context"
+                                } else {
+                                    "github.expand_context"
+                                }))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if !this.expanded_threads.remove(&key) {
+                                        this.expanded_threads.insert(key.clone());
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                    })
                     .child(
-                        Button::new("thread-attach")
-                            .small()
-                            .ghost()
-                            .label(label("github.attach"))
-                            .disabled(!writable || self.loading)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.attach_thread(&id, window, cx)
-                            })),
+                        h_flex()
+                            .gap_2()
+                            .flex_wrap()
+                            .child(
+                                Button::new("thread-attach")
+                                    .small()
+                                    .ghost()
+                                    .label(label("github.attach"))
+                                    .disabled(!writable || self.loading)
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.attach_thread(&id, window, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("thread-resolve")
+                                    .small()
+                                    .ghost()
+                                    .label(label("github.resolve_thread"))
+                                    .disabled(!can_resolve)
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.open_write(
+                                            crate::github::write::Action::Resolve(
+                                                resolve_thread.clone(),
+                                            ),
+                                            window,
+                                            cx,
+                                        )
+                                    })),
+                            )
+                            .child(
+                                Button::new("thread-reply")
+                                    .small()
+                                    .ghost()
+                                    .label(label("github.reply_thread"))
+                                    .disabled(!can_write)
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.open_write(
+                                            crate::github::write::Action::Reply {
+                                                thread: reply_thread.clone(),
+                                                body: String::new(),
+                                            },
+                                            window,
+                                            cx,
+                                        )
+                                    })),
+                            ),
                     ),
             );
         }

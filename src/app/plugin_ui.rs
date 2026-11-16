@@ -312,10 +312,10 @@ impl PluginUi {
     }
 }
 
-// Rail rows are 36px + 4px gap. Reserve the fixed bottom control,
+// Rail rows are 36px + 4px gap. Reserve the usage and collapse controls,
 // their gaps, the spacer gap and 4px top padding. An overflow button needs one slot.
 fn visible_activity_count(count: usize, height: f32) -> usize {
-    let slots = ((height - 40.).max(0.) / 40.).floor() as usize;
+    let slots = ((height - 80.).max(0.) / 40.).floor() as usize;
     if count <= slots {
         count
     } else {
@@ -410,14 +410,12 @@ impl ConduitApp {
             shell.host.set_visible(&visible);
         }
     }
-    pub(super) fn select_navigation(&mut self, id: &ViewId) -> conduit::plugins::Result<()> {
+    fn select_navigation(&mut self, id: &ViewId) -> conduit::plugins::Result<NavigationAdapter> {
         self.sync_plugin_context();
-        self.plugins.select(id)?;
-        Ok(())
+        self.plugins.select(id)
     }
     pub(super) fn open_navigation(&mut self, id: &ViewId, cx: &mut Context<Self>) {
-        self.sync_plugin_context();
-        match self.plugins.select(id) {
+        match self.select_navigation(id) {
             Ok(adapter) => (adapter.activate)(self, cx),
             Err(error) => {
                 self.message = Some(conduit::i18n::format(
@@ -703,6 +701,12 @@ impl ConduitApp {
             );
         }
         let rail = rail.child(div().flex_1());
+        let rail = rail.child(
+            self.usage_button(cx, None)
+                .w(px(36.))
+                .h(px(36.))
+                .debug_selector(|| "navigation-usage".into()),
+        );
         let rail = rail.child(
             Button::new("nav-collapse")
                 .debug_selector(|| "nav-collapse".into())

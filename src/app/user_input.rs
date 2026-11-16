@@ -750,6 +750,7 @@ impl ConduitApp {
 #[cfg(test)]
 mod history_tests {
     use super::*;
+    use core::prelude::v1::test;
 
     #[test]
     fn copied_history_keeps_options_custom_answers_and_resolution_state() {

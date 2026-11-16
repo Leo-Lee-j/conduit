@@ -203,6 +203,8 @@ pub struct ConduitApp {
     open_tabs: Vec<DocumentTab>,
     active_file: Option<u64>,
     active_diff: Option<u64>,
+    usage_ui: usage::UsageUi,
+    github_ui: github::GithubUi,
     files: files::FileBrowser,
     plugins: plugin_ui::PluginUi,
     /// The open tab under the pointer, so the strip's right-click menu knows
@@ -518,6 +520,7 @@ impl ConduitApp {
             .first()
             .and_then(|w| w.sessions.iter().find(|session| !session.archived))
             .map(|s| s.id);
+        let pending_permission = store.ui.default_session_permission;
         let new_session_provider = store
             .ui
             .last_provider
@@ -704,6 +707,8 @@ impl ConduitApp {
                 .collect(),
             active_file: None,
             active_diff: None,
+            usage_ui: usage::UsageUi::default(),
+            github_ui: github::GithubUi::default(),
             files: files::FileBrowser::default(),
             plugins: plugin_ui::PluginUi::new(),
             tab_menu_target: None,
@@ -746,7 +751,7 @@ impl ConduitApp {
             show_archived: false,
             new_session_provider,
             pending_model_selection: None,
-            pending_permission: PermissionLevel::default(),
+            pending_permission,
             rename_target: None,
             rename_input: None,
             delete_target: None,

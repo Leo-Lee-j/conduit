@@ -2,6 +2,8 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(conduit_shell_desktop)");
     println!("cargo:rerun-if-env-changed=CONDUIT_UPDATE_PUBLIC_KEY");
     println!("cargo:rerun-if-changed=build.rs");
+    // rust-i18n reads catalogs in a proc macro; invalidate it when copy changes.
+    println!("cargo:rerun-if-changed=locales");
     println!("cargo:rerun-if-changed=assets/app-icons/icon.ico");
     println!("cargo:rerun-if-changed=assets/conduit-updater.manifest");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {

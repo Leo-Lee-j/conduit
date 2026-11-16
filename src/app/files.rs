@@ -18,6 +18,8 @@ fn is_markdown(path: &Path) -> bool {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DocumentTab {
     Settings,
+    Usage(u64),
+    PullRequest(u64),
     Chat(u64),
     File(u64),
     Diff(u64),
@@ -45,6 +47,9 @@ struct Explorer {
     expanded: HashSet<PathBuf>,
     show_ignored: bool,
     cached_rows: Option<Arc<Vec<TreeRow>>>,
+    cached_compact_middle_packages: Option<bool>,
+    /// Directories consulted for visible rows, including hidden middle segments.
+    visible_directories: HashSet<PathBuf>,
 }
 struct Document {
     key: FileKey,
@@ -67,7 +72,7 @@ struct DiffDocument {
 #[derive(Default)]
 pub(super) struct FileBrowser {
     tab_scroll: ScrollHandle,
-    tab_layout: std::cell::RefCell<(Vec<DocumentTab>, Option<DocumentTab>, Pixels)>,
+    tab_layout: std::cell::RefCell<(Vec<DocumentTab>, Option<DocumentTab>, Pixels, bool)>,
     explorers: HashMap<PathBuf, Explorer>,
     documents: HashMap<u64, Document>,
     diffs: HashMap<u64, DiffDocument>,
@@ -136,8 +141,179 @@ impl Render for FileDrag {
 
 #[derive(Clone)]
 enum TreeRow {
-    Entry(Entry, usize),
+    Entry(Entry, usize, PathBuf),
     Status(PathBuf, usize, String),
+}
+
+fn grouped_tabs(
+    tabs: &[DocumentTab],
+    workspace: impl Fn(DocumentTab) -> Option<PathBuf>,
+) -> Vec<DocumentTab> {
+    let mut groups = HashMap::new();
+    let mut ranked: Vec<_> = tabs
+        .iter()
+        .copied()
+        .map(|tab| {
+            let next = groups.len();
+            let group = *groups.entry(workspace(tab)).or_insert(next);
+            (group, tab)
+        })
+        .collect();
+    ranked.sort_by_key(|(group, _)| *group);
+    ranked.into_iter().map(|(_, tab)| tab).collect()
+}
+
+fn compact_middle_entry(
+    explorer: &Explorer,
+    entry: &Entry,
+    visible: &mut HashSet<PathBuf>,
+) -> Entry {
+    let mut compacted = entry.clone();
+    let mut names = vec![entry.name.clone()];
+    let mut relative = entry.relative.clone();
+
+    while compacted.directory && !compacted.link && relative.components().count() <= 64 {
+        visible.insert(relative.clone());
+        let Some(directory) = explorer.directories.get(&relative) else {
+            break;
+        };
+        let Some(child) = directory.entries.first() else {
+            break;
+        };
+        if directory.error.is_some()
+            || directory.stamp.is_none()
+            || directory.entries.len() != 1
+            || !child.directory
+            || child.link
+            || child.relative.parent() != Some(relative.as_path())
+        {
+            break;
+        }
+        names.push(child.name.clone());
+        relative = child.relative.clone();
+        compacted = child.clone();
+    }
+
+    if names.len() > 1 {
+        compacted.name = names.join("/");
+    }
+    compacted
+}
+
+fn flatten(
+    explorer: &Explorer,
+    path: &Path,
+    depth: usize,
+    compact_middle_packages: bool,
+    rows: &mut Vec<TreeRow>,
+    visible: &mut HashSet<PathBuf>,
+) {
+    visible.insert(path.to_owned());
+    if path.components().count() > 64 {
+        rows.push(TreeRow::Status(
+            path.to_owned(),
+            depth,
+            conduit::i18n::text_static("files.directory_depth_exceeds_64_levels").into(),
+        ));
+        return;
+    }
+    let Some(directory) = explorer.directories.get(path) else {
+        return;
+    };
+    if directory.loading && directory.entries.is_empty() {
+        rows.push(TreeRow::Status(
+            path.to_owned(),
+            depth,
+            conduit::i18n::text_static("dock.loading").into(),
+        ));
+    } else if let Some(error) = &directory.error {
+        rows.push(TreeRow::Status(path.to_owned(), depth, error.clone()));
+    } else if directory.entries.is_empty() {
+        rows.push(TreeRow::Status(
+            path.to_owned(),
+            depth,
+            conduit::i18n::text_static("files.no_visible_files").into(),
+        ));
+    }
+    for entry in &directory.entries {
+        let origin = entry.relative.clone();
+        let entry = if compact_middle_packages {
+            compact_middle_entry(explorer, entry, visible)
+        } else {
+            entry.clone()
+        };
+        rows.push(TreeRow::Entry(entry.clone(), depth, origin.clone()));
+        if entry.directory && explorer.expanded.contains(&origin) {
+            flatten(
+                explorer,
+                &entry.relative,
+                depth + 1,
+                compact_middle_packages,
+                rows,
+                visible,
+            );
+        }
+    }
+}
+
+impl Explorer {
+    fn rows(&mut self, compact_middle_packages: bool) -> Arc<Vec<TreeRow>> {
+        if self.cached_compact_middle_packages != Some(compact_middle_packages) {
+            // A chain may have finished loading after its first segment was expanded.
+            // Keep its contents visible when switching back to separate directory rows.
+            if !compact_middle_packages && let Some(rows) = &self.cached_rows {
+                for row in rows.iter() {
+                    if let TreeRow::Entry(entry, _, origin) = row
+                        && entry.directory
+                        && self.expanded.contains(origin)
+                    {
+                        self.expanded.extend(
+                            entry
+                                .relative
+                                .ancestors()
+                                .take_while(|path| !path.as_os_str().is_empty())
+                                .map(Path::to_path_buf),
+                        );
+                    }
+                }
+            }
+            self.cached_rows = None;
+            self.cached_compact_middle_packages = Some(compact_middle_packages);
+        }
+        if let Some(rows) = &self.cached_rows {
+            rows.clone()
+        } else {
+            let mut rows = Vec::new();
+            let mut visible = HashSet::new();
+            flatten(
+                self,
+                Path::new(""),
+                0,
+                compact_middle_packages,
+                &mut rows,
+                &mut visible,
+            );
+            self.visible_directories = visible;
+            let rows = Arc::new(rows);
+            self.cached_rows = Some(rows.clone());
+            rows
+        }
+    }
+
+    fn toggle(&mut self, origin: &Path, endpoint: &Path) -> bool {
+        self.cached_rows = None;
+        if self.expanded.remove(origin) {
+            false
+        } else {
+            self.expanded.extend(
+                endpoint
+                    .ancestors()
+                    .take_while(|p| !p.as_os_str().is_empty())
+                    .map(Path::to_path_buf),
+            );
+            true
+        }
+    }
 }
 
 /// Streaming chat invalidations must not reshape a whole source document.
@@ -243,8 +419,11 @@ impl ConduitApp {
             .open
             .then_some(DocumentTab::Settings)
             .or_else(|| {
-                self.active_diff
-                    .map(DocumentTab::Diff)
+                self.usage_ui
+                    .active
+                    .map(DocumentTab::Usage)
+                    .or_else(|| self.github_ui.active.map(DocumentTab::PullRequest))
+                    .or_else(|| self.active_diff.map(DocumentTab::Diff))
                     .or_else(|| self.active_file.map(DocumentTab::File))
                     .or_else(|| self.selected_session.map(DocumentTab::Chat))
             })
@@ -257,6 +436,10 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) {
         self.leave_branch_navigation();
+        if !matches!(tab, DocumentTab::Settings) {
+            self.usage_ui.active = None;
+            self.github_ui.active = None;
+        }
         if !matches!(tab, DocumentTab::Settings) && self.settings_ui.open {
             self.settings_ui.open = false;
             self.settings_ui.focus_before_open = None;
@@ -267,6 +450,50 @@ impl ConduitApp {
                 .update(cx, |input, cx| input.set_value("", window, cx));
         }
         match tab {
+            DocumentTab::PullRequest(id) => {
+                let Some(panel) = self.github_ui.panels.get(&id).cloned() else {
+                    return;
+                };
+                let root = panel.read(cx).workspace.clone();
+                let Some(index) = self.store.workspaces.iter().position(|w| w.path == root) else {
+                    return;
+                };
+                if self.selected_workspace != Some(index) {
+                    let session = self.store.workspaces[index]
+                        .sessions
+                        .iter()
+                        .find(|s| !s.archived)
+                        .map(|s| s.id);
+                    self.switch_context(index, session, false, window, cx);
+                }
+                self.active_file = None;
+                self.active_diff = None;
+                self.github_ui.active = Some(id);
+                panel.read(cx).focus.clone().focus(window, cx);
+                cx.notify();
+            }
+            DocumentTab::Usage(id) => {
+                let Some(panel) = self.usage_ui.panels.get(&id).cloned() else {
+                    return;
+                };
+                let root = panel.read(cx).workspace.clone();
+                let Some(index) = self.store.workspaces.iter().position(|w| w.path == root) else {
+                    return;
+                };
+                if self.selected_workspace != Some(index) {
+                    let session = self.store.workspaces[index]
+                        .sessions
+                        .iter()
+                        .find(|s| !s.archived)
+                        .map(|s| s.id);
+                    self.switch_context(index, session, false, window, cx);
+                }
+                self.active_file = None;
+                self.active_diff = None;
+                self.usage_ui.active = Some(id);
+                panel.update(cx, |panel, cx| panel.focus(window, cx));
+                cx.notify();
+            }
             DocumentTab::Settings => self.open_settings(window, cx),
             DocumentTab::Chat(id) => {
                 self.active_diff = None;
@@ -394,6 +621,8 @@ impl ConduitApp {
         // so its last entry can belong to an unrelated workspace.
         let document_workspace = active
             .and_then(|tab| match tab {
+                DocumentTab::PullRequest(id) => self.github_ui.roots.get(&id),
+                DocumentTab::Usage(id) => self.usage_ui.roots.get(&id),
                 DocumentTab::File(id) => self.files.documents.get(&id).map(|d| &d.key.workspace),
                 DocumentTab::Diff(id) => self.files.diffs.get(&id).map(|d| &d.workspace),
                 _ => None,
@@ -421,6 +650,20 @@ impl ConduitApp {
         }
         self.open_tabs.retain(|tab| !tabs.contains(tab));
         for tab in tabs {
+            if let DocumentTab::PullRequest(id) = tab {
+                self.github_ui.panels.remove(id);
+                self.github_ui.roots.remove(id);
+                if self.github_ui.active == Some(*id) {
+                    self.github_ui.active = None;
+                }
+            }
+            if let DocumentTab::Usage(id) = tab {
+                self.usage_ui.panels.remove(id);
+                self.usage_ui.roots.remove(id);
+                if self.usage_ui.active == Some(*id) {
+                    self.usage_ui.active = None;
+                }
+            }
             if let DocumentTab::Diff(id) = tab {
                 self.files.diffs.remove(id);
             }
@@ -496,6 +739,46 @@ impl ConduitApp {
     }
 
     pub(super) fn forget_workspace_files(&mut self, root: &Path) {
+        let github_ids: HashSet<_> = self
+            .github_ui
+            .roots
+            .iter()
+            .filter(|(_, path)| path.as_path() == root)
+            .map(|(id, _)| *id)
+            .collect();
+        self.open_tabs
+            .retain(|tab| !matches!(tab, DocumentTab::PullRequest(id) if github_ids.contains(id)));
+        self.github_ui
+            .panels
+            .retain(|id, _| !github_ids.contains(id));
+        self.github_ui
+            .roots
+            .retain(|id, _| !github_ids.contains(id));
+        if self
+            .github_ui
+            .active
+            .is_some_and(|id| github_ids.contains(&id))
+        {
+            self.github_ui.active = None;
+        }
+        let usage_ids: HashSet<_> = self
+            .usage_ui
+            .roots
+            .iter()
+            .filter(|(_, path)| path.as_path() == root)
+            .map(|(id, _)| *id)
+            .collect();
+        self.open_tabs
+            .retain(|tab| !matches!(tab, DocumentTab::Usage(id) if usage_ids.contains(id)));
+        self.usage_ui.panels.retain(|id, _| !usage_ids.contains(id));
+        self.usage_ui.roots.retain(|id, _| !usage_ids.contains(id));
+        if self
+            .usage_ui
+            .active
+            .is_some_and(|id| usage_ids.contains(&id))
+        {
+            self.usage_ui.active = None;
+        }
         let diff_ids: HashSet<_> = self
             .files
             .diffs
@@ -740,7 +1023,12 @@ impl ConduitApp {
             .get(&root)
             .map(|e| {
                 std::iter::once(PathBuf::new())
-                    .chain(e.expanded.iter().cloned())
+                    .chain(
+                        e.visible_directories
+                            .iter()
+                            .filter(|p| !p.as_os_str().is_empty())
+                            .cloned(),
+                    )
                     .collect()
             })
             .unwrap_or_else(|| vec![PathBuf::new()]);
@@ -784,7 +1072,7 @@ impl ConduitApp {
                 e.directories
                     .iter()
                     .filter(|(p, d)| {
-                        (p.as_os_str().is_empty() || e.expanded.contains(*p))
+                        (p.as_os_str().is_empty() || e.visible_directories.contains(*p))
                             && !d.loading
                             && d.error.is_none()
                     })
@@ -863,51 +1151,29 @@ impl ConduitApp {
         }
         let explorer = self.files.explorers.get_mut(&root).expect("created above");
         let show_ignored = explorer.show_ignored;
-        fn flatten(explorer: &Explorer, path: &Path, depth: usize, rows: &mut Vec<TreeRow>) {
-            if depth > 64 {
-                rows.push(TreeRow::Status(
-                    path.to_owned(),
-                    depth,
-                    conduit::i18n::text_static("files.directory_depth_exceeds_64_levels").into(),
-                ));
-                return;
-            }
-            let Some(directory) = explorer.directories.get(path) else {
-                return;
-            };
-            if directory.loading && directory.entries.is_empty() {
-                rows.push(TreeRow::Status(
-                    path.to_owned(),
-                    depth,
-                    conduit::i18n::text_static("dock.loading").into(),
-                ));
-            } else if let Some(error) = &directory.error {
-                rows.push(TreeRow::Status(path.to_owned(), depth, error.clone()));
-            } else if directory.entries.is_empty() {
-                rows.push(TreeRow::Status(
-                    path.to_owned(),
-                    depth,
-                    conduit::i18n::text_static("files.no_visible_files").into(),
-                ));
-            }
-            for entry in &directory.entries {
-                rows.push(TreeRow::Entry(entry.clone(), depth));
-                if entry.directory && explorer.expanded.contains(&entry.relative) {
-                    flatten(explorer, &entry.relative, depth + 1, rows);
-                }
-            }
+        let compact_middle_packages = self.store.ui.compact_middle_packages;
+        let rows = explorer.rows(compact_middle_packages);
+        // Probe only directories needed by the visible tree, with bounded concurrency.
+        let loading = explorer.directories.values().filter(|d| d.loading).count();
+        let mut pending: Vec<_> = explorer
+            .visible_directories
+            .iter()
+            .filter(|path| path.components().count() <= 64)
+            .filter(|path| {
+                explorer
+                    .directories
+                    .get(*path)
+                    .is_none_or(|d| !d.loading && d.stamp.is_none() && d.error.is_none())
+            })
+            .cloned()
+            .collect();
+        pending.sort();
+        for path in pending.into_iter().take(8usize.saturating_sub(loading)) {
+            self.load_directory(root.clone(), path, cx);
         }
-        let rows = if let Some(rows) = &explorer.cached_rows {
-            rows.clone()
-        } else {
-            let mut rows = Vec::new();
-            flatten(explorer, Path::new(""), 0, &mut rows);
-            let rows = Arc::new(rows);
-            explorer.cached_rows = Some(rows.clone());
-            rows
-        };
         let app = cx.entity();
         let header = self.navigation_workspace_picker("files-workspace", name, root.clone(), cx);
+        let options_app = cx.entity();
         let refresh_root = root.clone();
         let ignore_root = root.clone();
         let list_root = root.clone();
@@ -939,7 +1205,8 @@ impl ConduitApp {
                                     }))
                                     .into_any_element()
                             }
-                            TreeRow::Entry(entry, depth) => {
+                            TreeRow::Entry(entry, depth, origin) => {
+                                let origin = origin.clone();
                                 let key = FileKey {
                                     workspace: list_root.clone(),
                                     relative: entry.relative.clone(),
@@ -954,7 +1221,7 @@ impl ConduitApp {
                                     .files
                                     .explorers
                                     .get(&list_root)
-                                    .is_some_and(|e| e.expanded.contains(&entry.relative));
+                                    .is_some_and(|e| e.expanded.contains(&origin));
                                 let active = this
                                     .active_file
                                     .and_then(|id| this.files.documents.get(&id))
@@ -1043,18 +1310,13 @@ impl ConduitApp {
                                         if directory {
                                             if let Some(e) =
                                                 this.files.explorers.get_mut(&click_key.workspace)
+                                                && e.toggle(&origin, &click_key.relative)
                                             {
-                                                e.cached_rows = None;
-                                                if !e.expanded.remove(&click_key.relative) {
-                                                    e.expanded.insert(click_key.relative.clone());
-                                                }
-                                                if e.expanded.contains(&click_key.relative) {
-                                                    this.load_directory(
-                                                        click_key.workspace.clone(),
-                                                        click_key.relative.clone(),
-                                                        cx,
-                                                    );
-                                                }
+                                                this.load_directory(
+                                                    click_key.workspace.clone(),
+                                                    click_key.relative.clone(),
+                                                    cx,
+                                                );
                                             }
                                             cx.notify();
                                         } else {
@@ -1093,6 +1355,94 @@ impl ConduitApp {
                 sidebar::navigation_header()
                     .child(div().flex_1().min_w_0().overflow_hidden().child(header))
                     .child(
+                        Button::new("files-view-options")
+                            .debug_selector(|| "files-view-options".into())
+                            .ghost()
+                            .small()
+                            .compact()
+                            .icon(IconName::Settings)
+                            .tooltip(conduit::i18n::text_static("files.view_options"))
+                            .accessibility_label(conduit::i18n::text_static("files.view_options"))
+                            .disabled(!self.writable || self.closing)
+                            .dropdown_menu(move |menu, _, cx| {
+                                let compact = options_app.read(cx).store.ui.compact_middle_packages;
+                                let grouped = options_app.read(cx).store.ui.group_tabs;
+                                let compact_app = options_app.clone();
+                                let group_app = options_app.clone();
+                                menu.item(
+                                    PopupMenuItem::new(conduit::i18n::text_static(
+                                        "settings.general.compact_middle_packages",
+                                    ))
+                                    .checked(compact)
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            compact_app.update(cx, |this, cx| {
+                                                if !this.writable || this.closing {
+                                                    return;
+                                                }
+                                                this.store.ui.compact_middle_packages =
+                                                    !this.store.ui.compact_middle_packages;
+                                                this.persist();
+                                                cx.notify();
+                                            });
+                                        },
+                                    ),
+                                )
+                                .item(
+                                    PopupMenuItem::new(conduit::i18n::text_static(
+                                        "settings.general.group_tabs",
+                                    ))
+                                    .checked(grouped)
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            group_app.update(cx, |this, cx| {
+                                                if !this.writable || this.closing {
+                                                    return;
+                                                }
+                                                this.store.ui.group_tabs =
+                                                    !this.store.ui.group_tabs;
+                                                this.persist();
+                                                cx.notify();
+                                            });
+                                        },
+                                    ),
+                                )
+                            }),
+                    )
+                    .child(
+                        Button::new("files-show-ignored")
+                            .debug_selector(|| "files-show-ignored".into())
+                            .ghost()
+                            .small()
+                            .compact()
+                            .icon(FullIconName::Eye)
+                            .tooltip(if show_ignored {
+                                conduit::i18n::text_static("files.hide_ignored_files")
+                            } else {
+                                conduit::i18n::text_static("files.show_ignored_files")
+                            })
+                            .accessibility_label(if show_ignored {
+                                conduit::i18n::text_static("files.hide_ignored_files")
+                            } else {
+                                conduit::i18n::text_static("files.show_ignored_files")
+                            })
+                            .selected(show_ignored)
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(e) = this.files.explorers.get_mut(&ignore_root) {
+                                    e.show_ignored = !e.show_ignored;
+                                    for d in e.directories.values_mut() {
+                                        d.loading = false;
+                                        d.entries.clear();
+                                        d.stamp = None;
+                                        d.error = None;
+                                        d.sequence += 1;
+                                    }
+                                }
+                                this.refresh_tree(ignore_root.clone(), cx);
+                            })),
+                    )
+                    .child(
                         Button::new("files-refresh")
                             .ghost()
                             .small()
@@ -1105,31 +1455,16 @@ impl ConduitApp {
                             })),
                     ),
             )
-            .child(sidebar::navigation_content().flex_1().min_h_0().child(list))
             .child(
-                sidebar::navigation_content().child(
-                    Button::new("files-show-ignored")
-                        .ghost()
-                        .small()
-                        .label(if show_ignored {
-                            conduit::i18n::text_static("files.hide_ignored_files")
-                        } else {
-                            conduit::i18n::text_static("files.show_ignored_files")
-                        })
-                        .selected(show_ignored)
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(e) = this.files.explorers.get_mut(&ignore_root) {
-                                e.show_ignored = !e.show_ignored;
-                                for d in e.directories.values_mut() {
-                                    d.loading = false;
-                                    d.sequence += 1;
-                                }
-                            }
-                            this.refresh_tree(ignore_root.clone(), cx);
-                        })),
+                sidebar::navigation_content().py_1().child(
+                    self.project_files_button(cx, None)
+                        .debug_selector(|| "context-file-tools".into())
+                        .w_full()
+                        .justify_start()
+                        .label(conduit::i18n::text_static("artifact.title")),
                 ),
             )
+            .child(sidebar::navigation_content().flex_1().min_h_0().child(list))
             .into_any_element()
     }
 
@@ -1398,16 +1733,50 @@ impl ConduitApp {
         page.into_any_element()
     }
 
+    fn document_tabs(&self) -> Vec<DocumentTab> {
+        let tabs = self.open_tabs.clone();
+        if !self.store.ui.group_tabs {
+            return tabs;
+        }
+        grouped_tabs(&tabs, |tab| self.tab_workspace(&tab))
+    }
+
+    fn tab_workspace(&self, tab: &DocumentTab) -> Option<PathBuf> {
+        match *tab {
+            DocumentTab::Settings => None,
+            DocumentTab::PullRequest(id) => self.github_ui.roots.get(&id).cloned(),
+            DocumentTab::Usage(id) => self.usage_ui.roots.get(&id).cloned(),
+            DocumentTab::Chat(id) => self
+                .store
+                .workspaces
+                .iter()
+                .find(|workspace| workspace.sessions.iter().any(|session| session.id == id))
+                .map(|workspace| workspace.path.clone()),
+            DocumentTab::File(id) => self
+                .files
+                .documents
+                .get(&id)
+                .map(|document| document.key.workspace.clone()),
+            DocumentTab::Diff(id) => self
+                .files
+                .diffs
+                .get(&id)
+                .map(|document| document.workspace.clone()),
+        }
+    }
+
     pub(super) fn document_tab_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let tabs = self.document_tabs();
         let selected = self
             .active_document()
-            .and_then(|t| self.open_tabs.iter().position(|item| *item == t));
+            .and_then(|t| tabs.iter().position(|item| *item == t));
         let active = self.active_document();
         {
             let mut layout = self.files.tab_layout.borrow_mut();
-            if layout.0 != self.open_tabs || layout.1 != active {
-                layout.0 = self.open_tabs.clone();
+            if layout.0 != tabs || layout.1 != active || layout.3 != self.store.ui.group_tabs {
+                layout.0 = tabs.clone();
                 layout.1 = active;
+                layout.3 = self.store.ui.group_tabs;
                 if let Some(index) = selected {
                     self.files.tab_scroll.scroll_to_item(index);
                 }
@@ -1421,8 +1790,41 @@ impl ConduitApp {
             .with_size(Size::Medium)
             .h(px(TAB_BAR_HEIGHT))
             .when_some(selected, |bar, i| bar.selected_index(i));
-        for tab in self.open_tabs.iter().copied() {
+        let mut previous_workspace = None;
+        for tab in tabs.iter().copied() {
             let (title, tooltip, icon, running, unread, selector) = match tab {
+                DocumentTab::PullRequest(id) => (
+                    self.github_ui
+                        .panels
+                        .get(&id)
+                        .map(|panel| panel.read(cx).tab_title())
+                        .unwrap_or_else(|| conduit::i18n::text_static("github.title").to_owned()),
+                    self.github_ui
+                        .roots
+                        .get(&id)
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default(),
+                    Icon::new(FullIconName::GitPullRequest)
+                        .small()
+                        .into_any_element(),
+                    false,
+                    false,
+                    format!("pr-tab-{id}"),
+                ),
+                DocumentTab::Usage(id) => (
+                    conduit::i18n::text_static("usage.title").to_owned(),
+                    self.usage_ui
+                        .roots
+                        .get(&id)
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default(),
+                    Icon::new(FullIconName::ChartColumn)
+                        .small()
+                        .into_any_element(),
+                    false,
+                    false,
+                    format!("usage-tab-{id}"),
+                ),
                 DocumentTab::Settings => (
                     conduit::i18n::text_static("files.settings").to_owned(),
                     conduit::i18n::text_static("files.settings").to_owned(),
@@ -1524,9 +1926,45 @@ impl ConduitApp {
             };
             let selector_close = match tab {
                 DocumentTab::Settings => "settings-tab-close".to_owned(),
+                DocumentTab::Usage(id) => format!("usage-tab-close-{id}"),
+                DocumentTab::PullRequest(id) => format!("pr-tab-close-{id}"),
                 DocumentTab::Chat(id) => format!("session-tab-close-{id}"),
                 DocumentTab::File(id) => format!("file-tab-close-{id}"),
                 DocumentTab::Diff(id) => format!("diff-tab-close-{id}"),
+            };
+            let workspace = self.tab_workspace(&tab);
+            let starts_group =
+                self.store.ui.group_tabs && workspace.is_some() && workspace != previous_workspace;
+            previous_workspace = workspace.clone();
+            let icon = if starts_group {
+                let root = workspace.expect("group has a workspace");
+                h_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("tab-group-{}", root.display())))
+                            .debug_selector({
+                                let root = root.clone();
+                                move || format!("tab-group-{}", root.display())
+                            })
+                            .max_w(px(90.))
+                            .truncate()
+                            .pr_2()
+                            .border_r_1()
+                            .border_color(rgb(palette().border))
+                            .text_size(ui_text_size(10.))
+                            .text_color(rgb(palette().muted))
+                            .child(
+                                root.file_name()
+                                    .unwrap_or(root.as_os_str())
+                                    .to_string_lossy()
+                                    .into_owned(),
+                            ),
+                    )
+                    .child(icon)
+                    .into_any_element()
+            } else {
+                icon
             };
             let group = SharedString::from(selector.clone());
             let preview = matches!(tab, DocumentTab::File(id) if self.files.preview == Some(id));
@@ -1586,7 +2024,7 @@ impl ConduitApp {
                 )),
             );
         }
-        if self.open_tabs.is_empty() {
+        if tabs.is_empty() {
             bar = bar.prefix(
                 div()
                     .pl_3()
@@ -1615,7 +2053,7 @@ impl ConduitApp {
                         window.on_next_frame(move |_, cx| {
                             let _ = view.update(cx, |this, cx| {
                                 if let Some(index) = this.active_document().and_then(|tab| {
-                                    this.open_tabs.iter().position(|item| *item == tab)
+                                    this.document_tabs().iter().position(|item| *item == tab)
                                 }) {
                                     this.files.tab_scroll.scroll_to_item(index);
                                     cx.notify();
@@ -1653,8 +2091,9 @@ impl ConduitApp {
                     PopupMenuItem::new(conduit::i18n::text_static("files.close_tabs_to_the_right"))
                         .on_click(move |_, window, cx| {
                             right.update(cx, |this, cx| {
-                                if let Some(i) = this.open_tabs.iter().position(|t| *t == target) {
-                                    let tabs = this.open_tabs[i + 1..].to_vec();
+                                let ordered = this.document_tabs();
+                                if let Some(i) = ordered.iter().position(|t| *t == target) {
+                                    let tabs = ordered[i + 1..].to_vec();
                                     this.close_documents(&tabs, window, cx);
                                 }
                             });
@@ -1664,8 +2103,9 @@ impl ConduitApp {
                     PopupMenuItem::new(conduit::i18n::text_static("files.close_tabs_to_the_left"))
                         .on_click(move |_, window, cx| {
                             left.update(cx, |this, cx| {
-                                if let Some(i) = this.open_tabs.iter().position(|t| *t == target) {
-                                    let tabs = this.open_tabs[..i].to_vec();
+                                let ordered = this.document_tabs();
+                                if let Some(i) = ordered.iter().position(|t| *t == target) {
+                                    let tabs = ordered[..i].to_vec();
                                     this.close_documents(&tabs, window, cx);
                                 }
                             });
@@ -1907,6 +2347,23 @@ impl ConduitApp {
                     )),
             );
         }
+        pane = pane.child(
+            h_flex()
+                .px_2()
+                .py_1()
+                .gap_1()
+                .flex_wrap()
+                .child(
+                    self.github_button(cx, None)
+                        .debug_selector(|| "context-pr".into())
+                        .label(conduit::i18n::text_static("github.title")),
+                )
+                .child(
+                    self.review_inbox_button(cx, None)
+                        .debug_selector(|| "context-review".into())
+                        .label(conduit::i18n::text_static("navigation.review")),
+                ),
+        );
         pane.child(
             v_flex()
                 .flex_1()
@@ -3015,5 +3472,151 @@ impl FileBrowser {
         for document in self.diffs.values() {
             document.view.update(cx, |_, cx| cx.notify());
         }
+    }
+}
+
+#[cfg(test)]
+mod navigation_tests {
+    use super::*;
+    use core::prelude::v1::test;
+
+    fn entry(path: &str, directory: bool) -> Entry {
+        let relative = PathBuf::from(path);
+        Entry {
+            name: relative.file_name().unwrap().to_string_lossy().into_owned(),
+            relative,
+            directory,
+            link: false,
+        }
+    }
+    fn directory(entries: Vec<Entry>) -> Directory {
+        Directory {
+            entries,
+            stamp: Some(Stamp {
+                modified: None,
+                len: 0,
+            }),
+            ..Default::default()
+        }
+    }
+    fn fixture() -> Explorer {
+        Explorer {
+            directories: [
+                (PathBuf::new(), directory(vec![entry("src", true)])),
+                (
+                    PathBuf::from("src"),
+                    directory(vec![entry("src/com", true)]),
+                ),
+                (
+                    PathBuf::from("src/com"),
+                    directory(vec![entry("src/com/example", true)]),
+                ),
+                (
+                    PathBuf::from("src/com/example"),
+                    directory(vec![entry("src/com/example/main.rs", false)]),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        }
+    }
+    fn entries(rows: &[TreeRow]) -> Vec<(String, usize)> {
+        rows.iter()
+            .filter_map(|row| match row {
+                TreeRow::Entry(entry, depth, _) => Some((entry.name.clone(), *depth)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn compact_paths_toggle_without_losing_expansion_or_real_file_paths() {
+        let mut tree = fixture();
+        assert_eq!(
+            entries(&tree.rows(true)),
+            vec![("src/com/example".into(), 0)]
+        );
+        assert!(tree.visible_directories.contains(Path::new("src/com")));
+        assert!(tree.toggle(Path::new("src"), Path::new("src/com/example")));
+        let rows = tree.rows(true);
+        assert_eq!(
+            entries(&rows),
+            vec![("src/com/example".into(), 0), ("main.rs".into(), 1)]
+        );
+        assert!(
+            matches!(&rows[1], TreeRow::Entry(e, _, _) if e.relative == Path::new("src/com/example/main.rs"))
+        );
+        assert_eq!(
+            entries(&tree.rows(false)),
+            vec![
+                ("src".into(), 0),
+                ("com".into(), 1),
+                ("example".into(), 2),
+                ("main.rs".into(), 3)
+            ]
+        );
+        assert!(!tree.toggle(Path::new("src"), Path::new("src/com/example")));
+        assert_eq!(entries(&tree.rows(true)).len(), 1);
+    }
+
+    #[test]
+    fn compact_paths_stop_at_branches_files_links_errors_and_unknown_children() {
+        let mut tree = fixture();
+        tree.directories
+            .get_mut(Path::new("src/com"))
+            .unwrap()
+            .entries
+            .push(entry("src/com/other", true));
+        assert_eq!(entries(&tree.rows(true))[0].0, "src/com");
+        tree.directories
+            .get_mut(Path::new("src"))
+            .unwrap()
+            .entries
+            .push(entry("src/config.json", false));
+        tree.cached_rows = None;
+        assert_eq!(entries(&tree.rows(true))[0].0, "src");
+        let mut tree = fixture();
+        tree.directories.get_mut(Path::new("src")).unwrap().entries[0].link = true;
+        assert_eq!(entries(&tree.rows(true))[0].0, "src");
+        let mut tree = fixture();
+        tree.directories.get_mut(Path::new("src")).unwrap().error = Some("unreadable".into());
+        assert_eq!(entries(&tree.rows(true))[0].0, "src");
+        let mut tree = fixture();
+        tree.directories.remove(Path::new("src/com"));
+        assert_eq!(entries(&tree.rows(true))[0].0, "src/com");
+        assert!(tree.visible_directories.contains(Path::new("src/com")));
+    }
+
+    #[test]
+    fn loaded_middle_segments_stay_open_when_compaction_is_disabled() {
+        let mut tree = fixture();
+        tree.expanded.insert(PathBuf::from("src"));
+        assert_eq!(entries(&tree.rows(true)).last().unwrap().0, "main.rs");
+        assert_eq!(
+            entries(&tree.rows(false)).last().unwrap(),
+            &("main.rs".into(), 3)
+        );
+    }
+
+    #[test]
+    fn grouping_preserves_first_opened_group_and_within_group_order() {
+        use DocumentTab::*;
+        let opened = vec![Chat(2), File(1), Settings, Chat(1), Diff(2), File(2)];
+        let grouped = grouped_tabs(&opened, |tab| match tab {
+            Settings => None,
+            Chat(id) | File(id) | Diff(id) | Usage(id) | PullRequest(id) => {
+                Some(PathBuf::from(format!("workspace-{id}")))
+            }
+        });
+        assert_eq!(
+            grouped,
+            vec![Chat(2), Diff(2), File(2), File(1), Chat(1), Settings]
+        );
+        assert_eq!(
+            opened,
+            vec![Chat(2), File(1), Settings, Chat(1), Diff(2), File(2)]
+        );
+        assert_eq!(grouped.iter().position(|t| *t == File(1)), Some(3));
     }
 }

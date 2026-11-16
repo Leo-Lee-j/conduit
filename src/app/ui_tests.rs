@@ -3,6 +3,50 @@ use crate::app::{NoticeLevel, NoticeSource};
 use gpui_kit::{TestAppContext, point, px};
 
 #[gpui_kit::test]
+fn multiline_tool_activity_does_not_push_chat_up(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx, _) = super::queue::tests::fixture(cx, "activity-layout");
+    let _sender = cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            app.startup = None;
+            app.writable = false;
+            super::queue::tests::running(app, 1)
+        })
+    });
+    for width in [850., 1100., 1600.] {
+        cx.simulate_resize(gpui_kit::size(px(width), px(700.)));
+        let mut baseline = None;
+        for activity in [
+            "Working".to_string(),
+            "Calling tool: cargo fmt --all --check\r\n\tgit diff --check\n".repeat(20),
+            "Calling tool: ".to_string() + &"long-command-".repeat(200),
+        ] {
+            cx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    app.session_control.runs.get_mut(&1).unwrap().activity = activity;
+                    cx.notify();
+                });
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                window.simulate_next_frame(cx);
+                let _ = window.draw(cx);
+            });
+            let row = cx.debug_bounds("turn-status-row").unwrap();
+            if let Some(expected) = baseline {
+                assert_eq!(row, expected, "activity changed layout at width {width}");
+            } else {
+                baseline = Some(row);
+            }
+            let text = cx.debug_bounds("engine-activity-text").unwrap();
+            let spinner = cx.debug_bounds("engine-activity-spinner").unwrap();
+            assert!(text.right() <= spinner.left());
+            assert!(spinner.bottom() <= row.bottom());
+        }
+    }
+}
+
+#[gpui_kit::test]
 fn thinking_disclosure_preserves_manual_choices_across_streaming_and_sessions(
     cx: &mut TestAppContext,
 ) {

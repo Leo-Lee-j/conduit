@@ -1,4 +1,4 @@
-//! Read-only GitHub PR snapshots through the user's existing gh authentication.
+//! GitHub PR snapshots and explicitly requested mutations through the user's gh authentication.
 use crate::child::{Child, available};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
@@ -13,6 +13,7 @@ use std::{
 
 pub mod checks;
 pub mod threads;
+pub mod write;
 
 #[derive(Clone, Debug)]
 pub struct Check {

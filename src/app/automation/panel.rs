@@ -13,7 +13,11 @@ struct AutomationPanel {
 }
 
 impl ConduitApp {
-    pub(in crate::app) fn automation_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(in crate::app) fn automation_button(
+        &self,
+        cx: &mut Context<Self>,
+        popover: Option<WeakEntity<gpui_kit::component::popover::PopoverState>>,
+    ) -> Button {
         Button::new("project-automations")
             .small()
             .compact()
@@ -22,7 +26,10 @@ impl ConduitApp {
             .accessibility_label(label("automation.title"))
             .tooltip(label("automation.title"))
             .disabled(self.selected_workspace_path().is_none())
-            .on_click(cx.listener(|this, _, window, cx| {
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if let Some(popover) = &popover {
+                    let _ = popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                }
                 let Some(workspace) = this.selected_workspace_path() else {
                     return;
                 };
