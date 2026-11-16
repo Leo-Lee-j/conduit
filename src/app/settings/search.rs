@@ -15,6 +15,13 @@ pub(in crate::app) struct SettingsResult {
 // targets open the section, including controls hidden behind disclosures.
 const ENTRIES: &[(usize, usize, &str, &str, &str)] = &[
     (
+        1,
+        1,
+        "自动将活跃工作空间排到前面",
+        "优先显示有运行中会话的工作空间，再按最近会话活动时间排序。关闭后恢复手动顺序。",
+        "工作区 侧栏 自动 排序 活跃 最近 workspace sidebar automatic sort active recent",
+    ),
+    (
         0,
         1,
         "应用语言",
@@ -27,6 +34,13 @@ const ENTRIES: &[(usize, usize, &str, &str, &str)] = &[
         "内容宽度",
         "让聊天内容铺满窗口或居中显示",
         "内容铺满 布局 width",
+    ),
+    (
+        0,
+        0,
+        "自动折叠问答记录",
+        "开启后，已完成的问答记录默认折叠；关闭后默认展开。可逐条点击切换，已手动切换的状态不受影响。",
+        "问答 问题 回答 选项 自动 折叠 question answer history automatic collapse",
     ),
     (
         0,
@@ -222,6 +236,11 @@ impl ConduitApp {
                 "wallpaper.description",
                 "wallpaper.color",
                 "wallpaper.solid_only",
+                "wallpaper.history",
+                "wallpaper.choose_local",
+                "wallpaper.resolution",
+                "wallpaper.ratio",
+                "wallpaper.top_range",
             ] {
                 background_search.push(' ');
                 background_search.push_str(&conduit::i18n::text_for(&locale, key));

@@ -1,4 +1,5 @@
 use super::*;
+mod filters;
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests;
 mod view;
@@ -12,7 +13,7 @@ impl Drop for BrowsePermit {
 }
 
 struct Tile {
-    item: Wallpaper,
+    entry: HistoryEntry,
     image: Option<Arc<RenderImage>>,
     failed: bool,
 }
@@ -24,6 +25,12 @@ pub(super) struct WallpaperBrowser {
     sort: Sort,
     color: Option<String>,
     solid_only: bool,
+    resolution: Resolution,
+    ratio: Ratio,
+    top_range: TopRange,
+    showing_history: bool,
+    advanced_filters: bool,
+    history_tiles: Vec<Tile>,
     columns: u16,
     closed: bool,
     query: Option<Query>,
@@ -47,6 +54,17 @@ impl WallpaperBrowser {
             let state = (app.background.revision, app.writable, app.closing);
             if this.observed != state {
                 this.observed = state;
+                let history = app.store.ui.background.history.clone();
+                if this.showing_history
+                    && this.cancel.is_none()
+                    && this
+                        .history_tiles
+                        .iter()
+                        .map(|tile| &tile.entry)
+                        .ne(history.iter())
+                {
+                    this.load_history(cx);
+                }
                 cx.notify();
             }
         });
@@ -55,6 +73,10 @@ impl WallpaperBrowser {
                 cancel.store(true, Ordering::Release);
             }
             release_images(this.tiles.drain(..).filter_map(|tile| tile.image), cx);
+            release_images(
+                this.history_tiles.drain(..).filter_map(|tile| tile.image),
+                cx,
+            );
         })
         .detach();
         let input = cx.new(|cx| {
@@ -65,6 +87,7 @@ impl WallpaperBrowser {
             if matches!(event, InputEvent::PressEnter { .. }) {
                 this.fresh_search(cx);
             }
+            cx.notify();
         });
         Self {
             app,
@@ -73,6 +96,12 @@ impl WallpaperBrowser {
             sort: Sort::Popular,
             color: None,
             solid_only: false,
+            resolution: Resolution::default(),
+            ratio: Ratio::default(),
+            top_range: TopRange::default(),
+            showing_history: false,
+            advanced_filters: false,
+            history_tiles: Vec::new(),
             columns: 1,
             closed: false,
             query: None,
@@ -109,9 +138,16 @@ impl WallpaperBrowser {
             cancel.store(true, Ordering::Release);
         }
         self.clear(cx);
+        release_images(
+            self.history_tiles.drain(..).filter_map(|tile| tile.image),
+            cx,
+        );
     }
 
     fn fresh_search(&mut self, cx: &mut Context<Self>) {
+        if self.showing_history {
+            return;
+        }
         self.search(
             Query {
                 text: self.input.read(cx).value().to_string(),
@@ -121,9 +157,115 @@ impl WallpaperBrowser {
                 seed: None,
                 color: self.color.clone(),
                 solid_only: self.solid_only,
+                resolution: self.resolution,
+                ratio: self.ratio,
+                top_range: self.top_range,
             },
             cx,
         );
+    }
+
+    fn filters_changed(&self, cx: &App) -> bool {
+        self.query.as_ref().is_some_and(|query| {
+            query.text.trim() != self.input.read(cx).value().trim()
+                || query.category != self.category
+                || query.sort != self.sort
+                || query.color != self.color
+                || query.solid_only != self.solid_only
+                || query.resolution != self.resolution
+                || query.ratio != self.ratio
+                || (self.sort == Sort::Popular && query.top_range != self.top_range)
+        })
+    }
+
+    fn reset_filters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.category = Category::default();
+        self.sort = Sort::default();
+        self.color = None;
+        self.solid_only = false;
+        self.resolution = Resolution::default();
+        self.ratio = Ratio::default();
+        self.top_range = TopRange::default();
+        self.error = None;
+        cx.notify();
+    }
+
+    fn load_history(&mut self, cx: &mut Context<Self>) {
+        if self.closed || self.cancel.is_some() {
+            return;
+        }
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
+        let entries = app.read(cx).store.ui.background.history.clone();
+        self.showing_history = true;
+        self.error = None;
+        release_images(
+            self.history_tiles.drain(..).filter_map(|tile| tile.image),
+            cx,
+        );
+        self.history_tiles = entries
+            .iter()
+            .cloned()
+            .map(|entry| Tile {
+                entry,
+                image: None,
+                failed: false,
+            })
+            .collect();
+        if entries.is_empty() {
+            cx.notify();
+            return;
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.cancel = Some(cancel.clone());
+        let root = wallpaper::directory(&Store::path());
+        cx.spawn(async move |this, cx| {
+            for (batch_index, batch) in entries.chunks(4).enumerate() {
+                if cancel.load(Ordering::Acquire) {
+                    break;
+                }
+                let batch = batch.to_vec();
+                let root = root.clone();
+                let ticket = cancel.clone();
+                let images = cx
+                    .background_executor()
+                    .spawn(async move {
+                        batch
+                            .iter()
+                            .map(|entry| {
+                                wallpaper::history_thumbnail(&root, &entry.id, &ticket)
+                                    .map(rendered)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .await;
+                let accepted = this
+                    .update(cx, |this, cx| {
+                        if !this.accepts(&cancel) {
+                            return false;
+                        }
+                        for (offset, result) in images.into_iter().enumerate() {
+                            if let Some(tile) = this.history_tiles.get_mut(batch_index * 4 + offset)
+                            {
+                                tile.failed = result.is_err();
+                                tile.image = result.ok();
+                            }
+                        }
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false);
+                if !accepted {
+                    break;
+                }
+            }
+            Self::finish(&this, &cancel, None, cx);
+        })
+        .detach();
+        cx.notify();
     }
 
     fn search(&mut self, query: Query, cx: &mut Context<Self>) {
@@ -134,6 +276,11 @@ impl WallpaperBrowser {
                 !app.writable || app.closing
             })
         {
+            return;
+        }
+        if let Err(error) = query.url() {
+            self.error = Some(wallpaper::error_message(&error));
+            cx.notify();
             return;
         }
         if BROWSING
@@ -176,7 +323,11 @@ impl WallpaperBrowser {
                                 .data
                                 .into_iter()
                                 .map(|item| Tile {
-                                    item,
+                                    entry: HistoryEntry {
+                                        id: item.id.clone(),
+                                        item: Some(item),
+                                        local: None,
+                                    },
                                     image: None,
                                     failed: false,
                                 })
@@ -271,6 +422,26 @@ impl WallpaperBrowser {
                     if tile.image.is_none() {
                         tile.failed = true;
                     }
+                }
+                for tile in &mut this.history_tiles {
+                    if tile.image.is_none() {
+                        tile.failed = true;
+                    }
+                }
+                // An application can finish while local previews are still loading.
+                if this.showing_history
+                    && !this.closed
+                    && !cancel.load(Ordering::Acquire)
+                    && let Some(app) = this.app.upgrade()
+                    && this.history_tiles.iter().map(|tile| &tile.entry).ne(app
+                        .read(cx)
+                        .store
+                        .ui
+                        .background
+                        .history
+                        .iter())
+                {
+                    this.load_history(cx);
                 }
                 cx.notify();
             }

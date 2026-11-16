@@ -487,6 +487,11 @@ impl ConduitApp {
             |app| app.store.ui.code_syntax_highlight,
             |app, value| app.store.ui.code_syntax_highlight = value,
         );
+        let auto_sort = switch_field(
+            view.clone(),
+            |app| app.store.ui.auto_sort_workspaces,
+            |app, value| app.store.ui.auto_sort_workspaces = value,
+        );
         let auto_collapse = switch_field(
             view.clone(),
             |app| app.store.ui.auto_collapse_inactive_workspaces,
@@ -502,6 +507,11 @@ impl ConduitApp {
                 )
                 .footer(|_, _| settings_description(conduit::i18n::text_static("settings.appearance.applies_immediately_system_mode_follows_windows_appearance")).mt_0()),
             settings_section(conduit::i18n::text_static("settings.appearance.application_interface"))
+                .item(
+                    SettingItem::new(conduit::i18n::text_static("settings.appearance.auto_sort_workspaces"), auto_sort)
+                        .description(settings_description(conduit::i18n::text_static("settings.appearance.auto_sort_workspaces_description")))
+                        .disabled(disabled),
+                )
                 .item(
                     SettingItem::new(conduit::i18n::text_static("settings.appearance.auto_collapse_inactive_workspaces"), auto_collapse)
                         .description(settings_description(conduit::i18n::text_static("settings.appearance.auto_collapse_inactive_workspaces_description")))

@@ -212,6 +212,7 @@ impl ConduitApp {
                 })
             })
             .child(self.workspace_tools_button(cx))
+            .child(self.branch_toolbar_button(cx))
             .child(self.terminal_button(cx))
             .child(self.notification_bell(cx));
         let statuses = self.render_status_contributions(window, cx);

@@ -5,6 +5,7 @@ use gpui_kit::component::menu::PopupMenu;
 use std::rc::Rc;
 
 const INACTIVE_WORKSPACE_AGE: u64 = 3 * 24 * 60 * 60;
+pub(super) const WORKSPACE_MOVE_DURATION: Duration = Duration::from_millis(240);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Row {
@@ -111,6 +112,7 @@ pub(super) struct Inputs {
     collapsed: HashSet<PathBuf>,
     auto_expanded: HashSet<PathBuf>,
     auto_collapse_inactive: bool,
+    auto_sort_workspaces: bool,
     loading: HashSet<PathBuf>,
     runs: HashSet<u64>,
     unread: HashSet<u64>,
@@ -152,6 +154,7 @@ impl Inputs {
             collapsed: app.collapsed_workspaces.clone(),
             auto_expanded: app.sidebar.auto_expanded.clone(),
             auto_collapse_inactive: app.store.ui.auto_collapse_inactive_workspaces,
+            auto_sort_workspaces: app.store.ui.auto_sort_workspaces,
             loading: app.history_loading.clone(),
             runs: app.session_control.runs.keys().copied().collect(),
             unread: app.session_control.unread_completed.clone(),
@@ -179,6 +182,7 @@ impl Inputs {
             && self.collapsed == other.collapsed
             && self.auto_expanded == other.auto_expanded
             && self.auto_collapse_inactive == other.auto_collapse_inactive
+            && self.auto_sort_workspaces == other.auto_sort_workspaces
             && self.loading == other.loading
             && self.query == other.query
             && self.results == other.results
@@ -205,6 +209,9 @@ pub(in crate::app) struct SidebarState {
     inputs: Option<Inputs>,
     latest_activity: u64,
     origins: Vec<f32>,
+    workspace_motion: HashMap<PathBuf, f32>,
+    pub(super) motion_started: Option<Instant>,
+    pub(super) motion_generation: u64,
     #[cfg(test)]
     pub(super) rendered_rows: std::cell::Cell<usize>,
     #[cfg(test)]
@@ -231,6 +238,9 @@ impl Default for SidebarState {
             inputs: None,
             latest_activity: 0,
             origins: Vec::new(),
+            workspace_motion: HashMap::new(),
+            motion_started: None,
+            motion_generation: 0,
             #[cfg(test)]
             rendered_rows: std::cell::Cell::new(0),
             #[cfg(test)]
@@ -241,6 +251,16 @@ impl Default for SidebarState {
     }
 }
 impl SidebarState {
+    pub(super) fn motion_offset(&self, path: &Path) -> Option<f32> {
+        let elapsed =
+            self.motion_started?.elapsed().as_secs_f32() / WORKSPACE_MOVE_DURATION.as_secs_f32();
+        (elapsed < 1.)
+            .then(|| {
+                self.workspace_motion.get(path).copied().unwrap_or(0.) * (1. - elapsed).powi(3)
+            })
+            .filter(|offset| offset.abs() > 0.1)
+    }
+
     fn has_recent_activity(&self, now: u64) -> bool {
         self.latest_activity != 0 && now.saturating_sub(self.latest_activity) < 60
     }
@@ -360,7 +380,18 @@ impl SidebarState {
         }
         if rebuild {
             let mut rows = vec![Row::Controls];
-            for (index, workspace) in store.workspaces.iter().enumerate() {
+            // Sort only the display projection: all stored workspace indices and
+            // the user's manual order remain valid. Stable ties keep that order.
+            let mut workspaces: Vec<_> = store.workspaces.iter().enumerate().collect();
+            if inputs.auto_sort_workspaces {
+                workspaces.sort_by_cached_key(|(_, workspace)| {
+                    let summaries = &self.groups[&workspace.path].summaries;
+                    let running = summaries.values().any(|s| s.running);
+                    let activity = summaries.values().map(|s| s.activity).max().unwrap_or(0);
+                    std::cmp::Reverse((running, activity))
+                });
+            }
+            for (index, workspace) in workspaces {
                 let group = self
                     .groups
                     .get_mut(&workspace.path)
@@ -466,6 +497,37 @@ impl SidebarState {
     }
     /// Keep the top row and its pixel offset when inserts/reorders happen above it.
     fn replace_rows(&mut self, rows: Vec<Row>, reset: bool) {
+        let old_workspace_positions: HashMap<_, _> = self
+            .rows
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| match row {
+                Row::Workspace { path, .. } => Some((path.clone(), self.origins[index])),
+                _ => None,
+            })
+            .collect();
+        let old_order: Vec<_> = self
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Workspace { path, .. } => Some(path),
+                _ => None,
+            })
+            .collect();
+        let new_order: Vec<_> = rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Workspace { path, .. } => Some(path),
+                _ => None,
+            })
+            .collect();
+        // Animate reorders, not initial population, filtering or expanding groups.
+        let reordered = !reset
+            && old_order.len() == new_order.len()
+            && old_order != new_order
+            && new_order
+                .iter()
+                .all(|path| old_workspace_positions.contains_key(*path));
         let y = -f32::from(self.scroll.offset().y);
         let top = self
             .origins
@@ -501,6 +563,33 @@ impl SidebarState {
                 self.scroll
                     .set_offset(point(px(0.), px(-origins[index] - offset)));
             }
+        }
+        let next_scroll = f32::from(self.scroll.offset().y);
+        let motion = if reordered {
+            rows.iter()
+                .enumerate()
+                .filter_map(|(index, row)| {
+                    let Row::Workspace { path, .. } = row else {
+                        return None;
+                    };
+                    let previous = old_workspace_positions.get(path)?;
+                    let offset = previous - y - origins[index] - next_scroll
+                        + self.motion_offset(path).unwrap_or(0.);
+                    // Bound travel for virtualized/offscreen groups so they don't
+                    // spend the entire transition outside the visible list.
+                    Some((
+                        path.clone(),
+                        offset.clamp(-ROW_HEIGHT * 2., ROW_HEIGHT * 2.),
+                    ))
+                })
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        self.workspace_motion = motion;
+        self.motion_started = reordered.then(Instant::now);
+        if reordered {
+            self.motion_generation = self.motion_generation.wrapping_add(1);
         }
         // Reuse the allocation when only identities change; layout sizes remain valid.
         let sizes: Vec<_> = rows
@@ -580,6 +669,36 @@ mod tests {
                 };
                 refresh(&mut app, now);
                 assert!(app.sidebar.auto_collapsed.is_empty());
+                let order = |app: &ConduitApp| -> Vec<_> {
+                    app.sidebar
+                        .rows
+                        .iter()
+                        .filter_map(|row| match row {
+                            Row::Workspace { path, .. } => Some(path.clone()),
+                            _ => None,
+                        })
+                        .collect()
+                };
+                let manual_order = vec![old_path.clone(), recent_path.clone(), empty_path.clone()];
+                assert_eq!(
+                    order(&app),
+                    vec![recent_path.clone(), old_path.clone(), empty_path.clone()]
+                );
+                // Automatic display order never mutates stored indices or manual order.
+                assert_eq!(
+                    app.store
+                        .workspaces
+                        .iter()
+                        .map(|w| w.path.clone())
+                        .collect::<Vec<_>>(),
+                    manual_order
+                );
+                app.store.ui.auto_sort_workspaces = false;
+                refresh(&mut app, now);
+                assert_eq!(order(&app), manual_order);
+                app.store.ui.auto_sort_workspaces = true;
+                refresh(&mut app, now);
+                assert_eq!(order(&app)[0], recent_path);
                 app.store.ui.auto_collapse_inactive_workspaces = true;
                 refresh(&mut app, now - 1);
                 assert!(!app.workspace_collapsed(&old_path));
@@ -596,10 +715,17 @@ mod tests {
                 let sender = crate::app::queue::tests::running(&mut app, 1);
                 refresh(&mut app, now);
                 assert!(!app.workspace_collapsed(&old_path));
+                assert_eq!(order(&app)[0], old_path);
+                let recent_sender = crate::app::queue::tests::running(&mut app, 2);
+                refresh(&mut app, now);
+                assert_eq!(order(&app)[0], recent_path);
+                app.session_control.runs.remove(&2);
+                drop(recent_sender);
                 app.session_control.runs.remove(&1);
                 drop(sender);
                 refresh(&mut app, now);
                 assert!(app.workspace_collapsed(&old_path));
+                assert_eq!(order(&app)[0], recent_path);
                 app.set_workspace_collapsed(&old_path, false);
                 refresh(&mut app, now + 1);
                 assert!(!app.workspace_collapsed(&old_path));
@@ -628,7 +754,17 @@ mod tests {
                 refresh(&mut app, now + 5);
                 assert!(!app.workspace_collapsed(&old_path));
                 assert!(app.workspace_collapsed(&empty_path));
-                for query in ["非活跃", "inactive workspace"] {
+                assert_eq!(order(&app)[0], old_path);
+                // Equal activity retains the user's stored order, including cold metadata.
+                app.session_mut(1).unwrap().created_at = now - 1;
+                refresh(&mut app, now + 5);
+                assert_eq!(order(&app), manual_order);
+                for query in [
+                    "非活跃",
+                    "inactive workspace",
+                    "活跃工作空间",
+                    "sort active",
+                ] {
                     assert!(
                         app.settings_search_matches(query)
                             .iter()

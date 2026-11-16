@@ -40,7 +40,7 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) -> (Option<AnyElement>, Option<AnyElement>) {
         self.sync_plugin_context();
-        if !self.plugins.right_visible(self.branch_navigation_open()) {
+        if !self.plugins.right_visible(false) {
             return (None, None);
         }
         let adapter = self.plugins.right_adapter();
@@ -61,7 +61,7 @@ impl ConduitApp {
                     revision: None,
                 });
             let state = HeaderState {
-                branches: self.branch_navigation_open(),
+                branches: false,
                 close_id,
                 appearance: (
                     palette().canvas,
@@ -163,7 +163,7 @@ impl ConduitApp {
         #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
         let _span = chat::profiling::host_span("dock_header_build");
         let title = self.plugins.right_title();
-        let choices = self.plugins.right_choices(self.branch_navigation_open());
+        let choices = self.plugins.right_choices(false);
         let selected = choices.iter().position(|choice| choice.selected);
         let mut tabs = TabBar::new("right-sidebar-tabs")
             .folder()

@@ -12,6 +12,16 @@ fn readonly_background_changes_preserve_preferences(cx: &mut TestAppContext) {
             let before = app.store.ui.background.clone();
             app.adjust_background_strength(5, cx);
             app.set_background_enabled(true, window, cx);
+            app.load_background(
+                crate::wallpaper::HistoryEntry {
+                    id: "aaaaaa".into(),
+                    ..Default::default()
+                },
+                true,
+                window,
+                cx,
+            );
+            app.choose_local_background(window, cx);
             assert_eq!(app.store.ui.background, before);
             assert!(app.background.operation.is_none());
         });
@@ -71,7 +81,13 @@ fn failed_cancelled_and_stale_downloads_keep_the_previous_background(cx: &mut Te
                 "bbbbbb".into(),
                 true,
                 &stale,
-                Ok(image::RgbaImage::new(8, 8)),
+                Ok((
+                    image::RgbaImage::new(8, 8),
+                    crate::wallpaper::HistoryEntry {
+                        id: "bbbbbb".into(),
+                        ..Default::default()
+                    },
+                )),
                 cx,
             );
             assert!(Arc::ptr_eq(
@@ -93,7 +109,13 @@ fn failed_cancelled_and_stale_downloads_keep_the_previous_background(cx: &mut Te
                 "bbbbbb".into(),
                 true,
                 &active,
-                Ok(image::RgbaImage::new(8, 8)),
+                Ok((
+                    image::RgbaImage::new(8, 8),
+                    crate::wallpaper::HistoryEntry {
+                        id: "bbbbbb".into(),
+                        ..Default::default()
+                    },
+                )),
                 cx,
             );
             assert_eq!(app.store.ui.background.id.as_deref(), Some("aaaaaa"));
@@ -102,7 +124,56 @@ fn failed_cancelled_and_stale_downloads_keep_the_previous_background(cx: &mut Te
                 &previous
             ));
             assert!(app.background.operation.is_none());
+            assert!(app.store.ui.background.history.is_empty());
+            let active = Arc::new(AtomicBool::new(false));
+            app.background.operation = Some(active.clone());
+            app.finish_background(
+                "bbbbbb".into(),
+                true,
+                &active,
+                Ok((
+                    image::RgbaImage::new(8, 8),
+                    crate::wallpaper::HistoryEntry {
+                        id: "bbbbbb".into(),
+                        ..Default::default()
+                    },
+                )),
+                cx,
+            );
+            assert_eq!(app.store.ui.background.history[0].id, "bbbbbb");
+            let count = app.store.ui.background.history.len();
+            app.background.operation = Some(active.clone());
+            app.finish_background(
+                "bbbbbb".into(),
+                false,
+                &active,
+                Ok((
+                    image::RgbaImage::new(8, 8),
+                    crate::wallpaper::HistoryEntry {
+                        id: "bbbbbb".into(),
+                        ..Default::default()
+                    },
+                )),
+                cx,
+            );
+            assert_eq!(app.store.ui.background.history.len(), count);
             app.writable = false;
+            let before = app.store.ui.background.clone();
+            app.background.operation = Some(active.clone());
+            app.finish_background(
+                "cccccc".into(),
+                true,
+                &active,
+                Ok((
+                    image::RgbaImage::new(8, 8),
+                    crate::wallpaper::HistoryEntry {
+                        id: "bbbbbb".into(),
+                        ..Default::default()
+                    },
+                )),
+                cx,
+            );
+            assert_eq!(app.store.ui.background, before);
         });
         gpui_kit::component::Root::new(app, window, cx)
     });

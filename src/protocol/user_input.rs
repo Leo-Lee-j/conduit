@@ -206,6 +206,48 @@ mod tests {
     }
 
     #[test]
+    fn codex_user_input_is_enabled_for_new_and_resumed_chats_but_not_text_helpers() {
+        let _locale = crate::test_support::chinese();
+        for native in [None, Some("known-thread".into())] {
+            for text_only in [false, true] {
+                let mut protocol = Protocol::new(
+                    Provider::Codex,
+                    "C:/work".into(),
+                    "test".into(),
+                    native.clone(),
+                );
+                if text_only {
+                    protocol = protocol.text_only();
+                }
+                let enabled = !text_only;
+                assert!(protocol.args().windows(2).any(|pair| {
+                    pair[0] == "-c"
+                        && pair[1] == format!("features.default_mode_request_user_input={enabled}")
+                }));
+                let step = protocol.accept(json!({"id":1,"result":{}}));
+                let thread = &step.writes[1];
+                assert_eq!(
+                    thread["method"],
+                    if native.is_some() {
+                        "thread/resume"
+                    } else {
+                        "thread/start"
+                    }
+                );
+                assert_eq!(
+                    thread["params"]["config"]["features.default_mode_request_user_input"],
+                    enabled
+                );
+                let approval = request(&mut protocol);
+                assert_eq!(
+                    protocol.automatic_approval(&approval),
+                    text_only.then_some(false)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn user_input_waits_in_every_permission_mode_and_uses_provider_answer_shapes() {
         let _locale = crate::test_support::chinese();
         for provider in [Provider::Codex, Provider::Claude] {

@@ -690,7 +690,26 @@ impl Drop for GitLogView {
 impl Render for GitLogView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let wide = window.viewport_size().width >= px(1250.);
-        let horizontal = window.viewport_size().width >= px(1100.);
+        let columns =
+            window.use_keyed_state("git-branch-columns", cx, |_, _| ResizableState::default());
+        let width = self.app.upgrade().map_or(800., |app| {
+            let app = app.read(cx);
+            let dock_width =
+                if window.viewport_size().width >= px(1100.) && app.plugins.right_visible(false) {
+                    app.plugins.dock.width + 6.
+                } else {
+                    0.
+                };
+            (f32::from(window.viewport_size().width) - app.sidebar_width - dock_width - 18.)
+                .max(240.)
+        });
+        let close_label = conduit::i18n::format(
+            "dock.close",
+            &[(
+                "title",
+                conduit::i18n::text_static("plugin_ui.git_branches_and_log").to_owned(),
+            )],
+        );
         let view = cx.entity();
         let since = match self.query.since.as_deref() {
             Some("1 day ago") => conduit::i18n::text_static("git_log.last_day"),
@@ -906,6 +925,22 @@ impl Render for GitLogView {
                                 "git_log.refresh_branches_and_log",
                             ))
                             .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                    )
+                    .child(
+                        Button::new("close-branch-panel")
+                            .debug_selector(|| "close-branch-panel".into())
+                            .ghost()
+                            .small()
+                            .compact()
+                            .icon(FullIconName::X)
+                            .tooltip(close_label.clone())
+                            .accessibility_label(close_label)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let _ = this.app.update(cx, |app, cx| {
+                                    app.leave_branch_navigation();
+                                    cx.notify();
+                                });
+                            })),
                     ),
             )
             .child(
@@ -978,40 +1013,30 @@ impl Render for GitLogView {
                             }),
                     ),
             )
-            .child(if horizontal {
-                h_flex()
-                    .items_stretch()
-                    .flex_1()
-                    .min_h_0()
-                    .min_w_0()
-                    .child(history)
-                    .child(
-                        div()
-                            .w(px(300.))
-                            .max_w(relative(0.45))
-                            .h_full()
-                            .flex_shrink_0()
-                            .border_l_1()
-                            .border_color(rgb(palette().border))
-                            .child(self.details_pane(cx)),
-                    )
-                    .into_any_element()
-            } else {
-                v_flex()
-                    .flex_1()
-                    .min_h_0()
-                    .child(history)
-                    .child(
-                        div()
-                            .h(relative(0.45))
-                            .min_h(px(132.))
-                            .flex_shrink_0()
-                            .border_t_1()
-                            .border_color(rgb(palette().border))
-                            .child(self.details_pane(cx)),
-                    )
-                    .into_any_element()
-            })
+            .child(
+                div().flex_1().min_h_0().min_w_0().overflow_hidden().child(
+                    h_resizable("git-branch-columns")
+                        .with_state(&columns)
+                        .child(
+                            resizable_panel()
+                                .size(px(width * 0.24))
+                                .size_range(px(80.)..Pixels::MAX)
+                                .child(self.tree.clone()),
+                        )
+                        .child(
+                            resizable_panel()
+                                .size(px(width * 0.46))
+                                .size_range(px(80.)..Pixels::MAX)
+                                .child(history),
+                        )
+                        .child(
+                            resizable_panel()
+                                .size(px(width * 0.30))
+                                .size_range(px(80.)..Pixels::MAX)
+                                .child(self.details_pane(cx)),
+                        ),
+                ),
+            )
     }
 }
 

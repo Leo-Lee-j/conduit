@@ -1,15 +1,16 @@
-//! Anonymous Wallhaven access and bounded image work. All I/O runs off the UI thread.
+//! Wallhaven and local backgrounds. All I/O and decoding run off the UI thread.
 
 use anyhow::{Context as _, Result, bail, ensure};
 use image::{ImageDecoder, ImageFormat, ImageReader, RgbaImage};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 mod errors;
 use errors::Failure;
 pub use errors::error_message;
 use std::{
     collections::VecDeque,
     fs,
-    io::{Cursor, Read, Write},
+    io::{BufRead, BufReader, Cursor, Read, Seek, Write},
     path::{Path, PathBuf},
     sync::{
         LazyLock, Mutex,
@@ -19,10 +20,9 @@ use std::{
 };
 
 pub const PAGE_SIZE: usize = 24;
-pub const MAX_FILE: usize = 20 * 1024 * 1024;
-pub const MAX_PIXELS: u64 = 16 * 1024 * 1024;
 pub const MIN_STRENGTH: u8 = 5;
 pub const MAX_STRENGTH: u8 = 30;
+pub const HISTORY_LIMIT: usize = 24;
 // Wallhaven accepts only these palette values for its `colors` search parameter.
 pub const COLORS: &[&str] = &[
     "660000", "990000", "cc0000", "cc3333", "ea4c88", "993399", "663399", "333399", "0066cc",
@@ -33,7 +33,6 @@ pub const COLORS: &[&str] = &[
 const MAX_JSON: usize = 512 * 1024;
 const MAX_THUMB: usize = 1024 * 1024;
 const CACHE_FILES: usize = 4;
-const CACHE_BYTES: u64 = 80 * 1024 * 1024;
 static DECODER: Mutex<()> = Mutex::new(());
 static RATE: LazyLock<Mutex<Rate>> = LazyLock::new(|| Mutex::new(Rate::default()));
 static HTTP: LazyLock<ureq::Agent> = LazyLock::new(|| {
@@ -53,6 +52,7 @@ pub struct Settings {
     pub id: Option<String>,
     #[serde(deserialize_with = "strength")]
     pub strength: u8,
+    pub history: Vec<HistoryEntry>,
 }
 
 fn strength<'de, D: serde::Deserializer<'de>>(de: D) -> Result<u8, D::Error> {
@@ -65,6 +65,7 @@ impl Default for Settings {
             enabled: false,
             id: None,
             strength: 15,
+            history: Vec::new(),
         }
     }
 }
@@ -72,10 +73,90 @@ impl Default for Settings {
 impl Settings {
     pub fn sanitize(&mut self) {
         self.strength = self.strength.clamp(MIN_STRENGTH, MAX_STRENGTH);
-        if self.id.as_deref().is_some_and(|id| !valid_id(id)) {
+        if self.id.as_deref().is_some_and(|id| !valid_cache_id(id)) {
             self.id = None;
             self.enabled = false;
         }
+        let mut seen = std::collections::HashSet::new();
+        self.history
+            .retain(|entry| entry.valid() && seen.insert(entry.id.clone()));
+        self.history.truncate(HISTORY_LIMIT);
+        // Keep the previously selected wallpaper accessible when upgrading old settings.
+        if let Some(id) = self.id.clone()
+            && !self.history.iter().any(|entry| entry.id == id)
+        {
+            self.remember(HistoryEntry {
+                id,
+                ..Default::default()
+            });
+        }
+    }
+
+    pub fn remember(&mut self, mut entry: HistoryEntry) {
+        if !entry.valid() {
+            return;
+        }
+        if entry.item.is_none() {
+            entry.item = self
+                .history
+                .iter()
+                .find(|old| old.id == entry.id)
+                .and_then(|old| old.item.clone());
+        }
+        if entry.local.is_none() {
+            entry.local = self
+                .history
+                .iter()
+                .find(|old| old.id == entry.id)
+                .and_then(|old| old.local.clone());
+        }
+        self.history.retain(|old| old.id != entry.id);
+        self.history.insert(0, entry);
+        self.history.truncate(HISTORY_LIMIT);
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    pub id: String,
+    pub item: Option<Wallpaper>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local: Option<LocalImage>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalImage {
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl HistoryEntry {
+    fn valid(&self) -> bool {
+        if is_local_id(&self.id) {
+            return self.item.is_none()
+                && self
+                    .local
+                    .as_ref()
+                    .is_none_or(|local| valid_dimensions(local.width, local.height));
+        }
+        valid_id(&self.id)
+            && self.local.is_none()
+            && self
+                .item
+                .as_ref()
+                .is_none_or(|item| item.id == self.id && item.validate().is_ok())
+    }
+
+    pub fn dimensions(&self) -> Option<(u32, u32)> {
+        self.local
+            .as_ref()
+            .map(|local| (local.width, local.height))
+            .or_else(|| {
+                self.item
+                    .as_ref()
+                    .map(|item| (item.dimension_x, item.dimension_y))
+            })
     }
 }
 
@@ -104,6 +185,69 @@ pub enum Sort {
     Popular,
     Latest,
     Random,
+    Views,
+    Favorites,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum Resolution {
+    Any,
+    #[default]
+    FullHd,
+    Qhd,
+    UltraHd,
+}
+impl Resolution {
+    fn value(self) -> Option<&'static str> {
+        match self {
+            Self::Any => None,
+            Self::FullHd => Some("1920x1080"),
+            Self::Qhd => Some("2560x1440"),
+            Self::UltraHd => Some("3840x2160"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum Ratio {
+    #[default]
+    Any,
+    Wide,
+    Ultrawide,
+    Portrait,
+    Square,
+}
+impl Ratio {
+    fn value(self) -> Option<&'static str> {
+        match self {
+            Self::Any => None,
+            Self::Wide => Some("16x9"),
+            Self::Ultrawide => Some("21x9"),
+            Self::Portrait => Some("9x16"),
+            Self::Square => Some("1x1"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum TopRange {
+    Day,
+    Week,
+    #[default]
+    Month,
+    Year,
+    HalfYear,
+}
+impl TopRange {
+    fn value(self) -> &'static str {
+        match self {
+            Self::Day => "1d",
+            Self::Week => "1w",
+            Self::Month => "1M",
+            Self::Year => "1y",
+            Self::HalfYear => "6M",
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -115,10 +259,13 @@ pub struct Query {
     pub seed: Option<String>,
     pub color: Option<String>,
     pub solid_only: bool,
+    pub resolution: Resolution,
+    pub ratio: Ratio,
+    pub top_range: TopRange,
 }
 
 impl Query {
-    fn url(&self) -> Result<String> {
+    pub(super) fn url(&self) -> Result<String> {
         ensure!(
             self.text.len() <= 200 && (1..=10_000).contains(&self.page),
             Failure::Query
@@ -142,8 +289,14 @@ impl Query {
             .append_pair("q", text.trim())
             .append_pair("purity", "100")
             .append_pair("categories", self.category.mask())
-            .append_pair("atleast", "1920x1080")
+            .append_pair("order", "desc")
             .append_pair("page", &self.page.to_string());
+        if let Some(resolution) = self.resolution.value() {
+            pairs.append_pair("atleast", resolution);
+        }
+        if let Some(ratio) = self.ratio.value() {
+            pairs.append_pair("ratios", ratio);
+        }
         if let Some(color) = &self.color {
             ensure!(COLORS.contains(&color.as_str()), Failure::Color);
             pairs.append_pair("colors", color);
@@ -152,10 +305,16 @@ impl Query {
             Sort::Popular => {
                 pairs
                     .append_pair("sorting", "toplist")
-                    .append_pair("topRange", "1M");
+                    .append_pair("topRange", self.top_range.value());
             }
             Sort::Latest => {
                 pairs.append_pair("sorting", "date_added");
+            }
+            Sort::Views => {
+                pairs.append_pair("sorting", "views");
+            }
+            Sort::Favorites => {
+                pairs.append_pair("sorting", "favorites");
             }
             Sort::Random => {
                 pairs.append_pair("sorting", "random");
@@ -170,7 +329,7 @@ impl Query {
     }
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Wallpaper {
     pub id: String,
     pub path: String,
@@ -182,7 +341,7 @@ pub struct Wallpaper {
     pub thumbs: Thumbs,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Thumbs {
     pub small: String,
 }
@@ -190,7 +349,9 @@ pub struct Thumbs {
 impl Wallpaper {
     fn validate(&self) -> Result<()> {
         ensure!(
-            valid_id(&self.id) && self.purity == "sfw",
+            valid_id(&self.id)
+                && self.purity == "sfw"
+                && valid_dimensions(self.dimension_x, self.dimension_y),
             Failure::Response
         );
         let ext = match self.file_type.as_str() {
@@ -217,10 +378,17 @@ impl Wallpaper {
         );
         Ok(())
     }
-
-    pub fn supported(&self) -> bool {
-        self.file_size <= MAX_FILE as u64 && valid_dimensions(self.dimension_x, self.dimension_y)
-    }
+}
+fn is_local_id(id: &str) -> bool {
+    id.strip_prefix("local-").is_some_and(|hash| {
+        hash.len() == 64
+            && hash
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
+}
+fn valid_cache_id(id: &str) -> bool {
+    valid_id(id) || is_local_id(id)
 }
 fn valid_id(id: &str) -> bool {
     id.len() == 6
@@ -319,6 +487,16 @@ fn read_bounded(mut reader: impl Read, limit: usize, cancel: &AtomicBool) -> Res
 }
 
 fn get(url: &str, api: bool, limit: usize, cancel: &AtomicBool) -> Result<Vec<u8>> {
+    let mut response = response(url, api, limit, cancel)?;
+    read_bounded(response.body_mut().as_reader(), limit, cancel).context(Failure::Network)
+}
+
+fn response(
+    url: &str,
+    api: bool,
+    limit: usize,
+    cancel: &AtomicBool,
+) -> Result<ureq::http::Response<ureq::Body>> {
     check_cancel(cancel)?;
     if api {
         RATE.lock().unwrap().take(Instant::now())?;
@@ -328,13 +506,15 @@ fn get(url: &str, api: bool, limit: usize, cancel: &AtomicBool) -> Result<Vec<u8
         .config()
         .timeout_global(Some(Duration::from_secs(if limit == MAX_THUMB {
             8
+        } else if limit == usize::MAX {
+            300
         } else {
             25
         })))
         .build()
         .header("User-Agent", concat!("Conduit/", env!("CARGO_PKG_VERSION")))
         .call();
-    let mut response = match response {
+    let response = match response {
         Err(ureq::Error::StatusCode(429)) => {
             RATE.lock().unwrap().blocked_until = Some(Instant::now() + Duration::from_secs(60));
             bail!(Failure::RateLimited);
@@ -342,43 +522,93 @@ fn get(url: &str, api: bool, limit: usize, cancel: &AtomicBool) -> Result<Vec<u8
         result => result.context(Failure::Network)?,
     };
     ensure!(response.status().as_u16() == 200, Failure::Response);
-    read_bounded(response.body_mut().as_reader(), limit, cancel).context(Failure::Network)
+    Ok(response)
 }
 
 pub fn search(query: &Query, cancel: &AtomicBool) -> Result<Page> {
     parse_page(&get(&query.url()?, true, MAX_JSON, cancel)?, query)
 }
 
+/// Explicit history application may recover an evicted original, including legacy ID-only entries.
+pub fn reapply(
+    root: &Path,
+    entry: HistoryEntry,
+    protected: Option<&str>,
+    cancel: &AtomicBool,
+) -> Result<(RgbaImage, HistoryEntry)> {
+    ensure!(entry.valid(), Failure::Response);
+    if let Some(item) = &entry.item {
+        return download(item, root, protected, cancel).map(|pixels| (pixels, entry));
+    }
+    let restored = restore(root, &entry.id, cancel);
+    if is_local_id(&entry.id) {
+        let pixels = restored?;
+        fs::OpenOptions::new()
+            .write(true)
+            .open(cached_path(root, &entry.id)?)?
+            .set_modified(SystemTime::now())
+            .context(Failure::CacheWrite)?;
+        let _ = save_preview(root, &entry.id, &pixels, cancel);
+        return Ok((pixels, entry));
+    }
+    if let Ok(pixels) = restored {
+        let _ = save_preview(root, &entry.id, &pixels, cancel);
+        return Ok((pixels, entry));
+    }
+    check_cancel(cancel)?;
+    #[derive(Deserialize)]
+    struct Detail {
+        data: Wallpaper,
+    }
+    let bytes = get(
+        &format!("https://wallhaven.cc/api/v1/w/{}", entry.id),
+        true,
+        MAX_JSON,
+        cancel,
+    )?;
+    let detail: Detail = serde_json::from_slice(&bytes).context(Failure::Response)?;
+    ensure!(detail.data.id == entry.id, Failure::Response);
+    download(&detail.data, root, protected, cancel).map(|pixels| {
+        (
+            pixels,
+            HistoryEntry {
+                item: Some(detail.data),
+                ..entry
+            },
+        )
+    })
+}
+
 fn valid_dimensions(width: u32, height: u32) -> bool {
-    width > 0
-        && height > 0
-        && width <= 8192
-        && height <= 8192
-        && u64::from(width) * u64::from(height) <= MAX_PIXELS
+    width > 0 && height > 0
 }
 
 /// Produces one static, straight-alpha BGRA frame for GPUI, with no UI-thread conversion.
 fn decode(bytes: &[u8], thumbnail: bool, cancel: &AtomicBool) -> Result<RgbaImage> {
+    decode_reader(Cursor::new(bytes), thumbnail, cancel)
+}
+
+fn decode_reader(
+    reader: impl BufRead + Seek,
+    thumbnail: bool,
+    cancel: &AtomicBool,
+) -> Result<RgbaImage> {
     let _guard = DECODER.lock().unwrap_or_else(|e| e.into_inner());
     check_cancel(cancel)?;
-    let mut reader = ImageReader::new(Cursor::new(bytes))
+    let mut reader = ImageReader::new(reader)
         .with_guessed_format()
         .context(Failure::Decode)?;
     ensure!(
-        matches!(reader.format(), Some(ImageFormat::Jpeg | ImageFormat::Png)),
+        matches!(
+            reader.format(),
+            Some(ImageFormat::Jpeg | ImageFormat::Png | ImageFormat::WebP | ImageFormat::Bmp)
+        ),
         Failure::Format
     );
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(8192);
-    limits.max_image_height = Some(8192);
-    limits.max_alloc = Some(MAX_PIXELS * 4);
-    reader.limits(limits);
+    reader.no_limits();
     let decoder = reader.into_decoder().context(Failure::Decode)?;
     let (width, height) = decoder.dimensions();
-    ensure!(
-        valid_dimensions(width, height) && decoder.total_bytes() <= MAX_PIXELS * 4,
-        Failure::ImageLimit
-    );
+    ensure!(valid_dimensions(width, height), Failure::Decode);
     let decoded = image::DynamicImage::from_decoder(decoder).context(Failure::Decode)?;
     check_cancel(cancel)?;
     let (max_w, max_h) = if thumbnail { (320, 200) } else { (3840, 2160) };
@@ -408,7 +638,7 @@ pub fn directory(manifest: &Path) -> PathBuf {
     manifest.with_file_name("wallpapers")
 }
 fn cached_path(root: &Path, id: &str) -> Result<PathBuf> {
-    ensure!(valid_id(id), Failure::CacheRead);
+    ensure!(valid_cache_id(id), Failure::CacheRead);
     Ok(root.join(format!("{id}.img")))
 }
 
@@ -422,15 +652,200 @@ pub fn restore(root: &Path, id: &str, cancel: &AtomicBool) -> Result<RgbaImage> 
         };
         anyhow::Error::new(error).context(failure)
     })?;
-    ensure!(
-        file.metadata().context(Failure::CacheRead)?.len() <= MAX_FILE as u64,
-        Failure::ImageLimit
+    decode_reader(BufReader::new(file), false, cancel)
+}
+
+/// History previews never access the network, including for upgraded installations.
+pub fn history_thumbnail(root: &Path, id: &str, cancel: &AtomicBool) -> Result<RgbaImage> {
+    let original = cached_path(root, id)?;
+    let preview = original.with_extension("png");
+    for path in [preview, original] {
+        check_cancel(cancel)?;
+        if let Ok(file) = fs::File::open(path)
+            && let Ok(image) = decode_reader(BufReader::new(file), true, cancel)
+        {
+            return Ok(image);
+        }
+    }
+    bail!(Failure::CacheMissing)
+}
+
+fn save_preview(root: &Path, id: &str, pixels: &RgbaImage, cancel: &AtomicBool) -> Result<()> {
+    let _guard = DECODER.lock().unwrap_or_else(|e| e.into_inner());
+    check_cancel(cancel)?;
+    let scale = (320. / f64::from(pixels.width()))
+        .min(200. / f64::from(pixels.height()))
+        .min(1.);
+    let mut preview = image::imageops::thumbnail(
+        pixels,
+        (f64::from(pixels.width()) * scale).max(1.) as u32,
+        (f64::from(pixels.height()) * scale).max(1.) as u32,
     );
-    decode(
-        &read_bounded(file, MAX_FILE, cancel).context(Failure::CacheRead)?,
-        false,
-        cancel,
-    )
+    // Render pixels use BGRA; files use RGBA.
+    for pixel in preview.pixels_mut() {
+        pixel.0.swap(0, 2);
+    }
+    let path = cached_path(root, id)?.with_extension("png");
+    let temp = path.with_extension("preview-tmp");
+    let result = (|| -> Result<()> {
+        let mut file = fs::File::create(&temp)?;
+        preview.write_to(&mut file, ImageFormat::Png)?;
+        file.sync_all()?;
+        drop(file);
+        check_cancel(cancel)?;
+        crate::store::replace_file(&temp, &path)?;
+        let mut previews = Vec::new();
+        for entry in fs::read_dir(root)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("png")
+                && path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(valid_cache_id)
+                && entry.file_type()?.is_file()
+            {
+                previews.push((entry.metadata()?.modified()?, path));
+            }
+        }
+        previews.sort_by_key(|(modified, _)| *modified);
+        let excess = previews.len().saturating_sub(HISTORY_LIMIT);
+        for (_, old) in previews
+            .into_iter()
+            .filter(|(_, old)| old != &path)
+            .take(excess)
+        {
+            fs::remove_file(old)?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temp);
+    }
+    result
+}
+
+/// Copy without a file-size ceiling; only a small buffer is held alongside the decoder.
+fn copy_image(
+    mut reader: impl Read,
+    writer: &mut impl Write,
+    cancel: &AtomicBool,
+) -> Result<String> {
+    let mut hash = Sha256::new();
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        check_cancel(cancel)?;
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        writer.write_all(&buffer[..count])?;
+        hash.update(&buffer[..count]);
+    }
+    check_cancel(cancel)?;
+    Ok(format!("local-{:x}", hash.finalize()))
+}
+
+pub fn import_local(
+    root: &Path,
+    source: &Path,
+    protected: Option<&str>,
+    cancel: &AtomicBool,
+) -> Result<(RgbaImage, HistoryEntry)> {
+    check_cancel(cancel)?;
+    let source_file = fs::File::open(source).context(Failure::LocalRead)?;
+    ensure!(
+        source_file
+            .metadata()
+            .context(Failure::LocalRead)?
+            .is_file(),
+        Failure::LocalRead
+    );
+    fs::create_dir_all(root).context(Failure::CacheWrite)?;
+    let temp = root.join(format!(
+        "local-import-{}-{}.tmp",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)?
+            .as_nanos()
+    ));
+    let result = (|| -> Result<(RgbaImage, HistoryEntry)> {
+        let mut file = fs::File::create(&temp).context(Failure::CacheWrite)?;
+        let id = copy_image(source_file, &mut file, cancel).context(Failure::LocalRead)?;
+        file.sync_all().context(Failure::CacheWrite)?;
+        drop(file);
+        let mut reader = ImageReader::open(&temp)
+            .context(Failure::CacheRead)?
+            .with_guessed_format()
+            .context(Failure::Decode)?;
+        reader.no_limits();
+        let dimensions = reader.into_dimensions().context(Failure::Decode)?;
+        let pixels = decode_reader(BufReader::new(fs::File::open(&temp)?), false, cancel)?;
+        check_cancel(cancel)?;
+        let path = cached_path(root, &id)?;
+        crate::store::replace_file(&temp, &path).context(Failure::CacheWrite)?;
+        let _ = save_preview(root, &id, &pixels, cancel);
+        prune_local(
+            root,
+            &[Some(id.as_str()), protected]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>(),
+        )?;
+        Ok((
+            pixels,
+            HistoryEntry {
+                id,
+                item: None,
+                local: Some(LocalImage {
+                    name: source
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    width: dimensions.0,
+                    height: dimensions.1,
+                }),
+            },
+        ))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temp);
+    }
+    result
+}
+
+// Local originals cannot be downloaded again; keep as many as the history can retain.
+fn prune_local(root: &Path, protected: &[&str]) -> Result<()> {
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(root).context(Failure::CacheRead)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("img")
+            && path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .is_some_and(is_local_id)
+            && entry.file_type()?.is_file()
+        {
+            entries.push((entry.metadata()?.modified()?, path));
+        }
+    }
+    entries.sort_by_key(|(modified, _)| *modified);
+    let excess = entries.len().saturating_sub(HISTORY_LIMIT);
+    for (_, path) in entries
+        .into_iter()
+        .filter(|(_, path)| {
+            !path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .is_some_and(|id| protected.contains(&id))
+        })
+        .take(excess)
+    {
+        fs::remove_file(path).context(Failure::CacheWrite)?;
+    }
+    Ok(())
 }
 
 pub fn download(
@@ -440,22 +855,21 @@ pub fn download(
     cancel: &AtomicBool,
 ) -> Result<RgbaImage> {
     item.validate()?;
-    ensure!(item.supported(), Failure::ImageLimit);
     if let Ok(image) = restore(root, &item.id, cancel) {
+        let _ = save_preview(root, &item.id, &image, cancel);
         return Ok(image);
     }
-    check_cancel(cancel)?;
-    let bytes = get(&item.path, false, MAX_FILE, cancel)?;
-    let pixels = decode(&bytes, false, cancel)?;
     check_cancel(cancel)?;
     fs::create_dir_all(root).context(Failure::CacheWrite)?;
     let path = cached_path(root, &item.id)?;
     let temp = path.with_extension("tmp");
-    let saved = (|| -> Result<()> {
+    let saved = (|| -> Result<RgbaImage> {
+        let mut response = response(&item.path, false, usize::MAX, cancel)?;
         let mut file = fs::File::create(&temp)?;
-        file.write_all(&bytes)?;
+        copy_image(response.body_mut().as_reader(), &mut file, cancel).context(Failure::Network)?;
         file.sync_all()?;
         drop(file);
+        let pixels = decode_reader(BufReader::new(fs::File::open(&temp)?), false, cancel)?;
         check_cancel(cancel)?;
         crate::store::replace_file(&temp, &path)?;
         prune(
@@ -464,12 +878,15 @@ pub fn download(
                 .into_iter()
                 .flatten()
                 .collect::<Vec<_>>(),
-        )
+        )?;
+        Ok(pixels)
     })();
     if saved.is_err() {
         let _ = fs::remove_file(&temp);
     }
-    saved.context(Failure::CacheWrite)?;
+    let pixels = saved.context(Failure::CacheWrite)?;
+    // A preview failure must not prevent a successfully saved wallpaper from being applied.
+    let _ = save_preview(root, &item.id, &pixels, cancel);
     Ok(pixels)
 }
 
@@ -496,9 +913,8 @@ fn prune(root: &Path, protected: &[&str]) -> Result<()> {
     }
     entries.sort_by_key(|(_, _, modified)| *modified);
     let mut count = entries.len();
-    let mut bytes: u64 = entries.iter().map(|(_, bytes, _)| bytes).sum();
-    for (path, size, _) in entries {
-        if count <= CACHE_FILES && bytes <= CACHE_BYTES {
+    for (path, _, _) in entries {
+        if count <= CACHE_FILES {
             break;
         }
         if path
@@ -510,12 +926,8 @@ fn prune(root: &Path, protected: &[&str]) -> Result<()> {
         }
         fs::remove_file(path)?;
         count -= 1;
-        bytes -= size;
     }
-    ensure!(
-        count <= CACHE_FILES && bytes <= CACHE_BYTES,
-        Failure::CacheLimit
-    );
+    ensure!(count <= CACHE_FILES, Failure::CacheLimit);
     Ok(())
 }
 

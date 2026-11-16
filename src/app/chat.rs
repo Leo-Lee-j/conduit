@@ -1612,7 +1612,20 @@ impl ConduitApp {
             }
             ItemKind::Tool => {
                 let detail_key = (session_id, item.key.clone());
-                let expanded = self.expanded_tools.contains(&detail_key);
+                let question_history = super::user_input::history(item).is_some();
+                let default_expanded = question_history
+                    && !self.store.ui.auto_collapse_question_history
+                    && item.approval.as_ref().is_some_and(|approval| {
+                        approval.status != crate::message_status::ApprovalStatus::Waiting
+                    });
+                let expanded = if question_history {
+                    self.question_expansion
+                        .get(&detail_key)
+                        .copied()
+                        .unwrap_or(default_expanded)
+                } else {
+                    self.expanded_tools.contains(&detail_key)
+                };
                 let tool_id = format!("tool-{}-{}", session_id, item.key);
                 let edit = is_tool_edit(item);
                 let edit_paths = if edit {
@@ -1630,7 +1643,9 @@ impl ConduitApp {
                 } else {
                     Vec::new()
                 };
-                let title = if edit {
+                let title = if question_history {
+                    conduit::i18n::text_static("user_input.question_history").to_string()
+                } else if edit {
                     conduit::i18n::text_static("chat.edit_file").to_string()
                 } else {
                     item.text.clone()
@@ -1744,7 +1759,10 @@ impl ConduitApp {
                         let detail_key = detail_key.clone();
                         move |this, _, _, cx| {
                             this.remeasure_message(index);
-                            if !this.expanded_tools.remove(&detail_key) {
+                            if question_history {
+                                this.question_expansion
+                                    .insert(detail_key.clone(), !expanded);
+                            } else if !this.expanded_tools.remove(&detail_key) {
                                 this.expanded_tools.insert(detail_key.clone());
                             }
                             cx.notify();

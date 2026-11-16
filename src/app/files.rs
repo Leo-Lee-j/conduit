@@ -1698,6 +1698,7 @@ impl ConduitApp {
                 self.plugins.selected().as_str(),
                 builtins::FILES | builtins::GIT
             ))
+            || self.branch_navigation_open()
             || self.active_diff.is_some()
     }
 
@@ -1756,15 +1757,11 @@ impl ConduitApp {
     }
 
     pub(super) fn leave_branch_navigation(&mut self) {
-        if self.branch_navigation_open() {
-            let collapsed = self.plugins.collapsed();
-            let _ = self.select_navigation(&ViewId::new(builtins::WORKSPACES).unwrap());
-            self.plugins.set_collapsed(collapsed);
-        }
+        self.branches_open = false;
     }
 
     pub(super) fn branch_navigation_open(&self) -> bool {
-        self.plugins.is_selected(builtins::BRANCHES)
+        self.branches_open
     }
 
     pub(super) fn show_branch_navigation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1782,7 +1779,9 @@ impl ConduitApp {
                 .focus_handle(cx)
                 .focus(window, cx);
         }
-        self.open_navigation(&ViewId::new(builtins::BRANCHES).unwrap(), cx);
+        self.branches_open = true;
+        self.refresh_branches();
+        cx.notify();
     }
 
     pub(super) fn toggle_git_navigation(&mut self, cx: &mut Context<Self>) {

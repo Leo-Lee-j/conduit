@@ -375,6 +375,16 @@ impl Protocol {
         self.text_only = true;
         self
     }
+    fn codex_config(&self) -> serde_json::Map<String, Value> {
+        let mut config = self.route.config.clone();
+        // Conduit renders structured questions in ordinary chat as well as plan
+        // mode. Enable the CLI tool before a thread is started or resumed.
+        config.insert(
+            "features.default_mode_request_user_input".into(),
+            json!(!self.text_only),
+        );
+        config
+    }
     fn claude_permission_mode(&self) -> &str {
         #[cfg(test)]
         if let Some(mode) = &self.test_permission_mode {
@@ -412,7 +422,7 @@ impl Protocol {
                 let mut args = vec!["app-server".into(), "--stdio".into()];
                 // Resume checks the process provider before applying request
                 // overrides, so the selected route must also be set at startup.
-                for (key, value) in &self.route.config {
+                for (key, value) in &self.codex_config() {
                     let value = toml::Value::try_from(value)
                         .expect("runtime route config must contain TOML-compatible values");
                     args.extend(["-c".into(), format!("{key}={value}")]);
@@ -584,17 +594,15 @@ impl Protocol {
             Some(1) if v.get("result").is_some() => {
                 step.writes.push(json!({"method":"initialized"}));
                 let mut params = json!({"cwd":self.cwd,"approvalPolicy":self.permission.codex_approval_policy(),"approvalsReviewer":"user","sandbox":self.permission.codex_sandbox()});
-                if !self.route.config.is_empty() {
-                    params["config"] = json!(self.route.config);
-                    if let Some(provider) = self.route.config.get("model_provider") {
-                        params["modelProvider"] = provider.clone();
-                    }
+                params["config"] = json!(self.codex_config());
+                if let Some(provider) = self.route.config.get("model_provider") {
+                    params["modelProvider"] = provider.clone();
                 }
                 if self.text_only {
                     params["sandbox"] = json!("read-only");
                     params["approvalPolicy"] = json!("never");
                     params["ephemeral"] = json!(true);
-                    let mut config = self.route.config.clone();
+                    let mut config = self.codex_config();
                     config.extend(json!({"web_search":"disabled","features.shell_tool":false,"features.hooks":false,"features.multi_agent":false}).as_object().unwrap().clone());
                     params["config"] = json!(config);
                     params["developerInstructions"] = json!(
@@ -1460,14 +1468,28 @@ mod tests {
             assert_eq!(config["model_provider"], "conduit");
             assert_eq!(config["model_providers"], route.config["model_providers"]);
             assert_eq!(config["model"], "selected-model");
+            assert_eq!(config["features"]["default_mode_request_user_input"], true);
             let step = protocol.accept(json!({"id":1,"result":{}}));
             let params = &step.writes[1]["params"];
             assert_eq!(params["modelProvider"], config["model_provider"]);
             assert_eq!(params["model"], config["model"]);
-            assert_eq!(params["config"], json!(route.config));
+            let mut expected_config = route.config.clone();
+            expected_config.insert(
+                "features.default_mode_request_user_input".into(),
+                json!(true),
+            );
+            assert_eq!(params["config"], json!(expected_config));
         }
         let native = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
-        assert_eq!(native.args(), ["app-server", "--stdio"]);
+        assert_eq!(
+            native.args(),
+            [
+                "app-server",
+                "--stdio",
+                "-c",
+                "features.default_mode_request_user_input=true"
+            ]
+        );
     }
 
     #[test]

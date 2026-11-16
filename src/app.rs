@@ -184,6 +184,7 @@ pub struct ConduitApp {
     automation: automation::AutomationUi,
     git: git_ui::GitUi,
     branch_manager: Option<Entity<git_log::GitLogView>>,
+    branches_open: bool,
     persistence: crate::persistence::Persistence,
     attachments_cleanup_pending: bool,
     session_control: session_controller::SessionController,
@@ -288,6 +289,8 @@ pub struct ConduitApp {
     tool_group_expansion: HashMap<(u64, String), bool>,
     /// Explicit choices survive streaming and changes to the default visibility.
     reasoning_expansion: HashMap<(u64, String), bool>,
+    /// Explicit question record visibility, independent of the automatic default.
+    question_expansion: HashMap<(u64, String), bool>,
     expanded_errors: HashSet<(u64, String)>,
     /// Last elapsed-label repaint: every second for turns/recent ages, otherwise every minute.
     last_live_tick: Instant,
@@ -672,6 +675,7 @@ impl ConduitApp {
             store,
             git: git_ui::GitUi::default(),
             branch_manager: None,
+            branches_open: false,
             updater: update::UpdateUi::default(),
             notifications: notifications::NotificationUi::new(writable, cx),
             connection_settings: settings::ConnectionsUi::new(new_session_provider, model_search),
@@ -779,6 +783,7 @@ impl ConduitApp {
             expanded_tools: HashSet::new(),
             tool_group_expansion: HashMap::new(),
             reasoning_expansion: HashMap::new(),
+            question_expansion: HashMap::new(),
             expanded_errors: HashSet::new(),
             last_live_tick: Instant::now(),
             tool_scrolls: HashMap::new(),

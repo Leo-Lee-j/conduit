@@ -1,7 +1,7 @@
 //! Retained wallpaper layer and explicitly opened, bounded Wallhaven browser.
 
 use super::*;
-use crate::wallpaper::{self, Category, Query, Sort, Wallpaper};
+use crate::wallpaper::{self, Category, HistoryEntry, Query, Ratio, Resolution, Sort, TopRange};
 use gpui_kit::component::switch::Switch;
 
 mod browser;
@@ -105,25 +105,83 @@ impl Render for BackgroundLayer {
 }
 
 impl ConduitApp {
+    fn choose_local_background(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.writable || self.closing || self.background.operation.is_some() {
+            return;
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.background.operation = Some(cancel.clone());
+        self.background.loading_id = Some("local-import".into());
+        self.background.error = None;
+        self.background.revision += 1;
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(conduit::i18n::text_static("wallpaper.choose_local_hint").into()),
+        });
+        let root = wallpaper::directory(&Store::path());
+        let protected = self.store.ui.background.id.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = match paths.await {
+                Ok(Ok(Some(paths))) if !cancel.load(Ordering::Acquire) => {
+                    if let Some(path) = paths.into_iter().next() {
+                        let ticket = cancel.clone();
+                        cx.background_executor()
+                            .spawn(async move {
+                                wallpaper::import_local(&root, &path, protected.as_deref(), &ticket)
+                            })
+                            .await
+                    } else {
+                        cancel.store(true, Ordering::Release);
+                        Err(anyhow::anyhow!("No image selected"))
+                    }
+                }
+                Ok(Ok(_)) => {
+                    cancel.store(true, Ordering::Release);
+                    Err(anyhow::anyhow!("Image selection cancelled"))
+                }
+                _ => Err(anyhow::anyhow!("Image picker unavailable")),
+            };
+            let id = result
+                .as_ref()
+                .map(|(_, entry)| entry.id.clone())
+                .unwrap_or_default();
+            let _ = this.update_in(cx, |app, _, cx| {
+                app.finish_background(id, true, &cancel, result, cx)
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     pub(super) fn restore_background(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.store.ui.background.enabled
             && let Some(id) = self.store.ui.background.id.clone()
         {
-            self.load_background(id, None, window, cx);
+            self.load_background(
+                HistoryEntry {
+                    id,
+                    ..Default::default()
+                },
+                false,
+                window,
+                cx,
+            );
         }
     }
 
     fn load_background(
         &mut self,
-        id: String,
-        item: Option<Wallpaper>,
+        entry: HistoryEntry,
+        apply: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.background.operation.is_some() || self.closing || (item.is_some() && !self.writable)
-        {
+        if self.background.operation.is_some() || self.closing || (apply && !self.writable) {
             return;
         }
+        let id = entry.id.clone();
         let cancel = Arc::new(AtomicBool::new(false));
         self.background.operation = Some(cancel.clone());
         self.background.loading_id = Some(id.clone());
@@ -131,18 +189,24 @@ impl ConduitApp {
         self.background.revision += 1;
         let root = wallpaper::directory(&Store::path());
         let protected = self.store.ui.background.id.clone();
-        let apply = item.is_some();
         cx.spawn_in(window, async move |this, cx| {
             let ticket = cancel.clone();
             let selected = id.clone();
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    match item {
-                        Some(item) => {
-                            wallpaper::download(&item, &root, protected.as_deref(), &ticket)
-                        }
-                        None => wallpaper::restore(&root, &selected, &ticket),
+                    if apply {
+                        wallpaper::reapply(&root, entry, protected.as_deref(), &ticket)
+                    } else {
+                        wallpaper::restore(&root, &selected, &ticket).map(|pixels| {
+                            (
+                                pixels,
+                                HistoryEntry {
+                                    id: selected,
+                                    ..Default::default()
+                                },
+                            )
+                        })
                     }
                 })
                 .await;
@@ -159,7 +223,7 @@ impl ConduitApp {
         id: String,
         apply: bool,
         cancel: &Arc<AtomicBool>,
-        result: anyhow::Result<image::RgbaImage>,
+        result: anyhow::Result<(image::RgbaImage, HistoryEntry)>,
         cx: &mut Context<Self>,
     ) {
         if !self
@@ -178,8 +242,9 @@ impl ConduitApp {
             return;
         }
         match result {
-            Ok(pixels) => {
+            Ok((pixels, entry)) => {
                 if apply {
+                    self.store.ui.background.remember(entry);
                     self.store.ui.background.id = Some(id);
                     self.store.ui.background.enabled = true;
                     self.persist();
@@ -313,6 +378,7 @@ impl ConduitApp {
         let strength = self.store.ui.background.strength;
         let toggle = view.clone();
         let browse = view.clone();
+        let local = view.clone();
         let less = view.clone();
         let more = view.clone();
         let retry = view.clone();
@@ -344,6 +410,32 @@ impl ConduitApp {
                             }),
                     )
                     .child(div().flex_1())
+                    .child(
+                        Button::new("background-local")
+                            .debug_selector(|| "background-local".into())
+                            .outline()
+                            .label(conduit::i18n::text_static("wallpaper.choose_local"))
+                            .disabled(disabled || busy)
+                            .when(
+                                self.background.loading_id.as_deref() == Some("local-import"),
+                                |button| {
+                                    button.child(
+                                        gpui_kit::component::progress::Progress::new(
+                                            "local-background-progress",
+                                        )
+                                        .loading(true)
+                                        .xsmall()
+                                        .w(px(48.))
+                                        .accessibility_label(conduit::i18n::text_static(
+                                            "wallpaper.applying",
+                                        )),
+                                    )
+                                },
+                            )
+                            .on_click(move |_, window, cx| {
+                                local.update(cx, |app, cx| app.choose_local_background(window, cx))
+                            }),
+                    )
                     .child(
                         Button::new("background-browse")
                             .debug_selector(|| "background-browse".into())

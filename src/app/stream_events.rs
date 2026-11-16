@@ -221,6 +221,16 @@ impl ConduitApp {
                             &approval.detail,
                             "等待中",
                         );
+                        if approval.is_user_input() {
+                            session.record_user_input(
+                                &prefix,
+                                &approval.id,
+                                questions
+                                    .iter()
+                                    .map(super::user_input::question_record)
+                                    .collect(),
+                            );
+                        }
                     }
                     if let Some(run) = self.session_control.runs.get_mut(&id) {
                         if approval.is_user_input() {
@@ -274,9 +284,15 @@ impl ConduitApp {
                         },
                         cx,
                     );
+                    let mut answered_questions = None;
                     let approval = self.session_control.runs.get_mut(&id).and_then(|run| {
                         run.expanded_approvals.remove(&request);
-                        run.question_drafts.remove(&request);
+                        if let Some(drafts) = run.question_drafts.remove(&request)
+                            && allow
+                        {
+                            answered_questions =
+                                Some(drafts.iter().map(|draft| draft.record(cx)).collect());
+                        }
                         let approval = run.approvals.remove(&request);
                         run.status = if run.approvals.is_empty() {
                             conduit::i18n::text_static("stream_events.running")
@@ -306,6 +322,9 @@ impl ConduitApp {
                                 "已拒绝"
                             },
                         );
+                        if let Some(questions) = answered_questions {
+                            session.record_user_input(&prefix, &request, questions);
+                        }
                     }
                 }
                 Event::Finished { error, cancelled } => {

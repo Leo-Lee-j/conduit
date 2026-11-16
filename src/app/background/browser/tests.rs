@@ -173,7 +173,17 @@ fn language_switch_preserves_wallpaper_search_and_translates_retained_messages(
                         english_error
                     );
                 }
-                for query in ["背景图", "纯色", "background", "solid-color", "Wallhaven"] {
+                for query in [
+                    "背景图",
+                    "纯色",
+                    "background",
+                    "solid-color",
+                    "Wallhaven",
+                    "已应用历史",
+                    "history",
+                    "分辨率",
+                    "Aspect ratio",
+                ] {
                     let result = app
                         .settings_search_matches(query)
                         .into_iter()
@@ -182,6 +192,59 @@ fn language_switch_preserves_wallpaper_search_and_translates_retained_messages(
                     assert_eq!(result.title, i18n::text("wallpaper.title"));
                 }
             }
+        });
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+}
+
+#[gpui_kit::test]
+fn filter_edits_invalid_searches_and_history_keep_the_previous_results(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    cx.add_window_view(|window, cx| {
+        let app =
+            cx.new(|cx| ConduitApp::with_store(window, cx, Ok(Store::default()), false, false));
+        app.update(cx, |app, cx| {
+            app.open_background_browser(window, cx);
+        });
+        let browser = app.read(cx).background.browser.clone().unwrap();
+        browser.update(cx, |browser, cx| {
+            browser.query = Some(Query {
+                page: 2,
+                ..Default::default()
+            });
+            browser.last_page = 5;
+            browser.tiles.push(super::Tile {
+                entry: super::HistoryEntry {
+                    id: "aaaaaa".into(),
+                    item: None,
+                    local: None,
+                },
+                image: None,
+                failed: true,
+            });
+            browser.ratio = super::Ratio::Square;
+            assert!(browser.filters_changed(cx));
+            browser
+                .input
+                .update(cx, |input, cx| input.set_value("x".repeat(201), window, cx));
+            browser.fresh_search(cx);
+            assert!(browser.error.is_some());
+            assert!(browser.cancel.is_none());
+            assert_eq!(browser.query.as_ref().unwrap().page, 2);
+            assert_eq!(browser.tiles.len(), 1);
+            browser.reset_filters(window, cx);
+            assert!(!browser.filters_changed(cx));
+            assert!(browser.error.is_none());
+            browser.load_history(cx);
+            assert!(browser.showing_history);
+            assert!(browser.history_tiles.is_empty());
+            assert!(browser.cancel.is_none());
+            assert_eq!(browser.query.as_ref().unwrap().page, 2);
+            assert_eq!(browser.last_page, 5);
+            assert_eq!(browser.tiles.len(), 1);
+            browser.close(cx);
+            assert!(browser.tiles.is_empty());
+            assert!(browser.history_tiles.is_empty());
         });
         gpui_kit::component::Root::new(app, window, cx)
     });

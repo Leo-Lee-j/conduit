@@ -270,6 +270,21 @@ pub struct ChatItemData {
 pub struct ToolApproval {
     pub request: String,
     pub status: crate::message_status::ApprovalStatus,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub questions: Vec<QuestionRecord>,
+}
+
+/// A question and its acknowledged answer, retained with the transcript.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionRecord {
+    pub id: String,
+    pub header: String,
+    pub question: String,
+    pub options: Vec<(String, String)>,
+    pub multiple: bool,
+    pub secret: bool,
+    pub selected: Vec<usize>,
+    pub answers: Vec<String>,
 }
 
 impl SessionRecord {
@@ -387,10 +402,36 @@ impl SessionRecord {
                     }));
                 self.messages.len() - 1
             });
+        let questions = self.messages[index]
+            .approval
+            .take()
+            .filter(|approval| approval.request == request)
+            .map(|approval| approval.questions)
+            .unwrap_or_default();
         self.messages[index].approval = Some(ToolApproval {
             request: request.into(),
             status: status.into(),
+            questions,
         });
+    }
+
+    pub fn record_user_input(
+        &mut self,
+        prefix: &str,
+        request: &str,
+        questions: Vec<QuestionRecord>,
+    ) {
+        let turn = format!("{prefix}-");
+        if let Some(approval) = self.messages.iter_mut().rev().find_map(|item| {
+            if !item.key.starts_with(&turn) {
+                return None;
+            }
+            item.approval
+                .as_mut()
+                .filter(|approval| approval.request == request)
+        }) {
+            approval.questions = questions;
+        }
     }
 
     /// Fold notices written by earlier builds into their tool cards on load.
@@ -456,6 +497,45 @@ impl Workspace {
 #[cfg(test)]
 mod snapshot_tests {
     use super::*;
+    #[test]
+    fn question_history_survives_status_updates_and_session_reload() {
+        let mut session: SessionRecord =
+            serde_json::from_str(r#"{"id":1,"provider":"Codex","created_at":0,"exit_code":null}"#)
+                .unwrap();
+        let legacy: ToolApproval =
+            serde_json::from_str(r#"{"request":"old","status":"已回答"}"#).unwrap();
+        assert!(legacy.questions.is_empty());
+        let questions = vec![QuestionRecord {
+            id: "choice".into(),
+            header: "方案".into(),
+            question: "选择方案？".into(),
+            options: vec![("A".into(), "第一项".into()), ("B".into(), "第二项".into())],
+            multiple: true,
+            secret: false,
+            selected: vec![1],
+            answers: vec!["B".into(), "补充回答".into()],
+        }];
+        // Providers may reuse request IDs on later turns.
+        session.record_tool_approval("turn-0", "request", "question", "", "已跳过");
+        session.record_tool_approval("turn-1", "request", "question", "", "等待中");
+        session.record_user_input("turn-1", "request", questions.clone());
+        session.record_tool_approval("turn-1", "request", "question", "", "已回答");
+        let restored: SessionRecord =
+            serde_json::from_str(&serde_json::to_string(&session).unwrap()).unwrap();
+        assert_eq!(restored.messages.len(), 2);
+        assert!(
+            restored.messages[0]
+                .approval
+                .as_ref()
+                .unwrap()
+                .questions
+                .is_empty()
+        );
+        let approval = restored.messages[1].approval.as_ref().unwrap();
+        assert_eq!(approval.status, "已回答");
+        assert_eq!(approval.questions, questions);
+    }
+
     #[test]
     fn old_sessions_default_to_unpinned() {
         let _locale = crate::test_support::chinese();

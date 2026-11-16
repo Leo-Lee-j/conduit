@@ -852,6 +852,12 @@ pub(super) fn tool_content(
     scroll: &ScrollHandle,
     typography: &ChatTypography,
 ) -> (AnyElement, String) {
+    if let Some(approval) = super::user_input::history(item) {
+        return (
+            super::user_input::history_content(tool_id, approval),
+            super::user_input::history_text(approval),
+        );
+    }
     let input = format_tool_text(&item.input);
     let output = format_tool_text(&item.detail);
     let copy_text = conduit::i18n::format(
@@ -954,9 +960,12 @@ pub(super) fn tool_detail_panel(
         .min_w_0()
         .overflow_hidden()
         .rounded(px(8.))
-        .border_1()
-        .border_color(rgb(palette().border))
-        .bg(rgb(palette().surface))
+        .when(super::user_input::history(item).is_none(), |panel| {
+            panel
+                .border_1()
+                .border_color(rgb(palette().border))
+                .bg(rgb(palette().surface))
+        })
         .child(
             h_flex()
                 .px_3()
@@ -969,6 +978,8 @@ pub(super) fn tool_detail_panel(
                         .text_color(rgb(palette().faint))
                         .child(if edit {
                             conduit::i18n::text_static("tools.code_changes")
+                        } else if super::user_input::history(item).is_some() {
+                            conduit::i18n::text_static("user_input.question_history")
                         } else {
                             conduit::i18n::text_static("tools.tool_call_content")
                         }),

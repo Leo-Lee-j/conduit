@@ -40,6 +40,11 @@ impl ConduitApp {
             |app| app.store.ui.collapse_reasoning,
             ConduitApp::set_reasoning_collapsed,
         );
+        let collapse_questions = switch_field(
+            view.clone(),
+            |app| app.store.ui.auto_collapse_question_history,
+            ConduitApp::set_question_history_collapsed,
+        );
         let language_view = view.clone();
         let language = self.store.ui.language.clone();
         let language_label = conduit::i18n::languages()
@@ -95,6 +100,14 @@ impl ConduitApp {
                 )
                 .description(settings_description(conduit::i18n::text_static(
                     "settings.general.collapse_reasoning_description",
+                )))
+                .disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.auto_collapse_question_history"),
+                    collapse_questions,
+                )
+                .description(settings_description(conduit::i18n::text_static(
+                    "settings.general.auto_collapse_question_history_description",
                 )))
                 .disabled(disabled),
                 SettingItem::new(

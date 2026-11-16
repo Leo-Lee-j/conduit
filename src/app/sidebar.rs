@@ -595,7 +595,7 @@ impl ConduitApp {
                 }
             }
         };
-        div()
+        let wrapper = div()
             .w_full()
             .h(px(row.height()))
             .when(
@@ -605,8 +605,30 @@ impl ConduitApp {
                     .is_some_and(|focused| focused.same_identity(row)),
                 |row| row.border_1().border_color(rgb(palette().focus)),
             )
-            .child(element)
-            .into_any_element()
+            .child(element);
+        if let Some(offset) = row.path().and_then(|path| self.sidebar.motion_offset(path))
+            && let Some(started) = self.sidebar.motion_started
+        {
+            let remaining = cache::WORKSPACE_MOVE_DURATION.saturating_sub(started.elapsed());
+            let frame_start = Instant::now();
+            return wrapper
+                .relative()
+                .with_animation(
+                    SharedString::from(format!(
+                        "workspace-move-{}-{row:?}",
+                        self.sidebar.motion_generation
+                    )),
+                    Animation::new(remaining),
+                    move |row, _| {
+                        let progress = (frame_start.elapsed().as_secs_f32()
+                            / remaining.as_secs_f32().max(0.001))
+                        .min(1.);
+                        row.top(px(offset * (1. - progress).powi(3)))
+                    },
+                )
+                .into_any_element();
+        }
+        wrapper.into_any_element()
     }
 
     fn switch_sidebar_session(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {

@@ -65,7 +65,105 @@ fn legacy_settings_and_untrusted_preferences_are_safe() {
     settings.sanitize();
     assert!(settings.enabled);
     assert_eq!(settings.strength, MIN_STRENGTH);
+    assert_eq!(settings.history[0].id, "gw1rqe");
     assert!(cached_path(Path::new("cache"), "../tmp").is_err());
+}
+
+#[test]
+fn history_is_persistent_bounded_deduplicated_and_validated() {
+    let mut settings = Settings::default();
+    let entry = HistoryEntry {
+        id: item().id.clone(),
+        item: Some(item()),
+        local: None,
+    };
+    settings.remember(entry.clone());
+    settings.remember(HistoryEntry {
+        id: "aaaaaa".into(),
+        item: None,
+        local: None,
+    });
+    settings.remember(HistoryEntry {
+        id: entry.id.clone(),
+        item: None,
+        local: None,
+    });
+    assert_eq!(
+        settings.history,
+        vec![
+            entry.clone(),
+            HistoryEntry {
+                id: "aaaaaa".into(),
+                item: None,
+                local: None
+            }
+        ]
+    );
+    let encoded = serde_json::to_vec(&settings).unwrap();
+    let mut restored: Settings = serde_json::from_slice(&encoded).unwrap();
+    restored.sanitize();
+    assert_eq!(restored, settings);
+    let mut invalid = entry.clone();
+    invalid.item.as_mut().unwrap().path = "https://example.org/image.jpg".into();
+    restored.history.extend([
+        invalid,
+        entry.clone(),
+        HistoryEntry {
+            id: "../bad".into(),
+            item: None,
+            local: None,
+        },
+    ]);
+    restored.sanitize();
+    assert_eq!(restored, settings);
+    for index in 0..HISTORY_LIMIT + 10 {
+        restored.remember(HistoryEntry {
+            id: format!("{index:06}"),
+            item: None,
+            local: None,
+        });
+    }
+    assert_eq!(restored.history.len(), HISTORY_LIMIT);
+    assert_eq!(restored.history[0].id, format!("{:06}", HISTORY_LIMIT + 9));
+    assert_eq!(restored.history.last().unwrap().id, "000010");
+}
+
+#[test]
+fn extended_search_filters_are_encoded_and_scoped_to_the_sort() {
+    let mut query = Query {
+        page: 1,
+        resolution: Resolution::Qhd,
+        ratio: Ratio::Wide,
+        top_range: TopRange::Week,
+        ..Default::default()
+    };
+    let params = |query: &Query| -> std::collections::HashMap<String, String> {
+        url::Url::parse(&query.url().unwrap())
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect()
+    };
+    let pairs = params(&query);
+    assert_eq!(pairs["atleast"], "2560x1440");
+    assert_eq!(pairs["ratios"], "16x9");
+    assert_eq!(pairs["topRange"], "1w");
+    assert_eq!(pairs["sorting"], "toplist");
+    assert_eq!(pairs["purity"], "100");
+    query.resolution = Resolution::Any;
+    query.ratio = Ratio::Any;
+    for (sort, value) in [
+        (Sort::Latest, "date_added"),
+        (Sort::Views, "views"),
+        (Sort::Favorites, "favorites"),
+    ] {
+        query.sort = sort;
+        let pairs = params(&query);
+        assert_eq!(pairs["sorting"], value);
+        assert!(!pairs.contains_key("atleast"));
+        assert!(!pairs.contains_key("ratios"));
+        assert!(!pairs.contains_key("topRange"));
+    }
 }
 
 #[test]
@@ -156,10 +254,10 @@ fn response_urls_cannot_escape_wallhaven_or_bypass_sfw() {
     value = item();
     value.dimension_x = 8192;
     value.dimension_y = 8192;
-    assert!(!value.supported());
+    value.validate().unwrap();
     value = item();
-    value.file_size = MAX_FILE as u64 + 1;
-    assert!(!value.supported());
+    value.file_size = 200 * 1024 * 1024;
+    value.validate().unwrap();
     assert!(
         parse_page(
             br#"{"data":[],"meta":{"current_page":2,"last_page":2,"seed":null}}"#,
@@ -182,7 +280,7 @@ fn image_work_is_bounded_and_outputs_gpui_channels() {
     let original = decode(&bytes, false, &cancel).unwrap();
     assert_eq!(original.dimensions(), (640, 400));
     assert!(decode(b"GIF89a", true, &cancel).is_err());
-    assert!(!valid_dimensions(8192, 8192));
+    assert!(valid_dimensions(16384, 16384));
     assert!(!valid_dimensions(0, 200));
     assert!(valid_dimensions(3840, 2160));
     assert!(read_bounded(Cursor::new([0; 30]), 20, &cancel).is_err());
@@ -218,6 +316,46 @@ fn cache_restores_offline_and_pruning_preserves_current_wallpaper() {
 }
 
 #[test]
+fn history_previews_survive_original_eviction_and_keep_correct_channels() {
+    let root = Directory::new();
+    let cancel = AtomicBool::new(false);
+    fs::write(cached_path(&root.0, "gw1rqe").unwrap(), png(640, 400)).unwrap();
+    let image = download(&item(), &root.0, None, &cancel).unwrap();
+    assert_eq!(image.dimensions(), (640, 400));
+    let (legacy, metadata) = reapply(
+        &root.0,
+        HistoryEntry {
+            id: "gw1rqe".into(),
+            item: None,
+            local: None,
+        },
+        None,
+        &cancel,
+    )
+    .unwrap();
+    assert_eq!(legacy, image);
+    assert!(metadata.item.is_none());
+    fs::remove_file(cached_path(&root.0, "gw1rqe").unwrap()).unwrap();
+    let preview = history_thumbnail(&root.0, "gw1rqe", &cancel).unwrap();
+    assert_eq!(preview.dimensions(), (320, 200));
+    assert_eq!(preview.get_pixel(0, 0).0, [80, 20, 240, 255]);
+    assert!(history_thumbnail(&root.0, "../bad", &cancel).is_err());
+    for index in 0..HISTORY_LIMIT + 2 {
+        save_preview(&root.0, &format!("{index:06}"), &image, &cancel).unwrap();
+    }
+    assert_eq!(
+        fs::read_dir(&root.0)
+            .unwrap()
+            .flatten()
+            .filter(|entry| { entry.path().extension().is_some_and(|ext| ext == "png") })
+            .count(),
+        HISTORY_LIMIT
+    );
+    cancel.store(true, Ordering::Release);
+    assert!(history_thumbnail(&root.0, "000025", &cancel).is_err());
+}
+
+#[test]
 fn rate_limit_recovers_after_a_window_without_retry_storms() {
     let now = Instant::now();
     let mut rate = Rate::default();
@@ -229,6 +367,97 @@ fn rate_limit_recovers_after_a_window_without_retry_storms() {
     rate.blocked_until = Some(now + Duration::from_secs(120));
     assert!(rate.take(now + Duration::from_secs(90)).is_err());
     rate.take(now + Duration::from_secs(121)).unwrap();
+}
+
+#[test]
+fn local_images_are_copied_deduplicated_and_restored_without_the_source() {
+    let root = Directory::new();
+    let source = root.0.join("My background.png");
+    fs::write(&source, png(640, 400)).unwrap();
+    // A valid PNG with trailing bytes exercises removal of the old 20 MiB file ceiling.
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&source)
+        .unwrap()
+        .set_len(21 * 1024 * 1024)
+        .unwrap();
+    let cache = root.0.join("cache");
+    let cancel = AtomicBool::new(false);
+    let (image, entry) = import_local(&cache, &source, None, &cancel).unwrap();
+    assert!(is_local_id(&entry.id));
+    assert_eq!(entry.dimensions(), Some((640, 400)));
+    assert_eq!(entry.local.as_ref().unwrap().name, "My background.png");
+    assert_eq!(
+        fs::metadata(cached_path(&cache, &entry.id).unwrap())
+            .unwrap()
+            .len(),
+        21 * 1024 * 1024
+    );
+    let (_, duplicate) = import_local(&cache, &source, Some(&entry.id), &cancel).unwrap();
+    assert_eq!(entry, duplicate);
+    fs::remove_file(source).unwrap();
+    let mut settings = Settings {
+        enabled: true,
+        id: Some(entry.id.clone()),
+        ..Default::default()
+    };
+    settings.remember(entry.clone());
+    settings.remember(duplicate);
+    let mut restored: Settings =
+        serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+    restored.sanitize();
+    assert_eq!(restored, settings);
+    assert_eq!(restored.history.len(), 1);
+    assert_eq!(restore(&cache, &entry.id, &cancel).unwrap(), image);
+    let (reapplied, metadata) = reapply(&cache, entry.clone(), None, &cancel).unwrap();
+    assert_eq!(reapplied, image);
+    assert_eq!(metadata, entry);
+    assert_eq!(
+        history_thumbnail(&cache, &entry.id, &cancel)
+            .unwrap()
+            .dimensions(),
+        (320, 200)
+    );
+    fs::remove_file(cached_path(&cache, &entry.id).unwrap()).unwrap();
+    assert!(matches!(
+        reapply(&cache, entry, None, &cancel)
+            .unwrap_err()
+            .downcast_ref::<Failure>(),
+        Some(Failure::CacheMissing)
+    ));
+    assert!(cached_path(&cache, "local-../../escape").is_err());
+}
+
+#[test]
+fn large_dimensions_are_accepted_and_rendered_at_background_size() {
+    let cancel = AtomicBool::new(false);
+    // Exceeds both the former 8192-pixel edge and 16 Mi-pixel limits.
+    let image = decode(&png(9000, 1900), false, &cancel).unwrap();
+    assert!(image.width() <= 3840 && image.height() <= 2160);
+    assert_eq!(image.get_pixel(0, 0).0, [80, 20, 240, 255]);
+}
+
+#[test]
+fn local_import_failures_and_cancellation_do_not_replace_cached_images() {
+    let root = Directory::new();
+    let source = root.0.join("broken.png");
+    let cache = root.0.join("cache");
+    fs::write(&source, b"not an image").unwrap();
+    assert!(import_local(&cache, &source, None, &AtomicBool::new(false)).is_err());
+    assert_eq!(fs::read_dir(&cache).unwrap().count(), 0);
+    fs::write(&source, png(12, 8)).unwrap();
+    assert!(import_local(&cache, &source, None, &AtomicBool::new(true)).is_err());
+    assert_eq!(fs::read_dir(&cache).unwrap().count(), 0);
+    for format in [ImageFormat::Bmp, ImageFormat::WebP] {
+        let mut bytes = Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(12, 8, image::Rgba([240, 20, 80, 255]))
+            .write_to(&mut bytes, format)
+            .unwrap();
+        fs::write(&source, bytes.into_inner()).unwrap();
+        let (image, _) = import_local(&cache, &source, None, &AtomicBool::new(false)).unwrap();
+        assert_eq!(image.dimensions(), (12, 8));
+        assert_eq!(image.get_pixel(0, 0).0, [80, 20, 240, 255]);
+    }
 }
 
 #[test]
@@ -343,11 +572,7 @@ fn live_wallhaven_search_download_and_offline_restore() {
         &cancel,
     )
     .unwrap();
-    let item = page
-        .data
-        .iter()
-        .find(|item| item.supported())
-        .expect("supported wallpaper");
+    let item = page.data.first().expect("wallpaper");
     let thumb = thumbnail(item, &cancel).unwrap();
     assert!(thumb.width() <= 320 && thumb.height() <= 200);
     let root = Directory::new();

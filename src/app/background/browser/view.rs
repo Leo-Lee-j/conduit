@@ -1,57 +1,7 @@
 use super::*;
+use gpui_kit::component::{progress::Progress, tag::Tag};
 
 impl WallpaperBrowser {
-    fn filters(&self, disabled: bool, cx: &mut Context<Self>) -> AnyElement {
-        let mut filters = h_flex().flex_wrap().gap_2().items_center();
-        for (index, (category, label)) in [
-            (Category::All, "wallpaper.all"),
-            (Category::General, "wallpaper.general"),
-            (Category::Anime, "wallpaper.anime"),
-            (Category::People, "wallpaper.people"),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            filters = filters.child(
-                Button::new(("wallpaper-category", index))
-                    .small()
-                    .ghost()
-                    .label(conduit::i18n::text_static(label))
-                    .selected(self.category == category)
-                    .disabled(disabled)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.category = category;
-                        this.clear(cx);
-                        cx.notify();
-                    })),
-            );
-        }
-        filters = filters.child(div().w(px(8.)));
-        for (index, (sort, label)) in [
-            (Sort::Popular, "wallpaper.popular"),
-            (Sort::Latest, "wallpaper.latest"),
-            (Sort::Random, "wallpaper.random"),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            filters = filters.child(
-                Button::new(("wallpaper-sort", index))
-                    .small()
-                    .ghost()
-                    .label(conduit::i18n::text_static(label))
-                    .selected(self.sort == sort)
-                    .disabled(disabled)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.sort = sort;
-                        this.clear(cx);
-                        cx.notify();
-                    })),
-            );
-        }
-        filters.into_any_element()
-    }
-
     fn colors(&self, disabled: bool, cx: &mut Context<Self>) -> AnyElement {
         let mut swatches = h_flex().flex_wrap().gap_2().items_center().child(
             Button::new("wallpaper-color-any")
@@ -62,7 +12,7 @@ impl WallpaperBrowser {
                 .disabled(disabled)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.color = None;
-                    this.clear(cx);
+                    this.error = None;
                     cx.notify();
                 })),
         );
@@ -102,7 +52,7 @@ impl WallpaperBrowser {
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.color = if selected { None } else { Some(color.into()) };
-                            this.clear(cx);
+                            this.error = None;
                             cx.notify();
                         })),
                 );
@@ -137,7 +87,7 @@ impl WallpaperBrowser {
                     .disabled(disabled)
                     .on_click(cx.listener(|this, value, _, cx| {
                         this.solid_only = *value;
-                        this.clear(cx);
+                        this.error = None;
                         cx.notify();
                     })),
             )
@@ -153,7 +103,7 @@ impl WallpaperBrowser {
     }
 
     fn tile(&self, index: usize, tile: &Tile, cx: &App) -> AnyElement {
-        let item = tile.item.clone();
+        let entry = tile.entry.clone();
         let (selected, loading, disabled) = self
             .app
             .upgrade()
@@ -162,15 +112,15 @@ impl WallpaperBrowser {
                 (
                     app.store.ui.background.enabled
                         && app.background.layer.read(cx).image.is_some()
-                        && app.store.ui.background.id.as_deref() == Some(&item.id),
-                    app.background.loading_id.as_deref() == Some(&item.id),
+                        && app.store.ui.background.id.as_deref() == Some(&entry.id),
+                    app.background.loading_id.as_deref() == Some(&entry.id),
                     !app.writable || app.closing || app.background.operation.is_some(),
                 )
             })
             .unwrap_or((false, false, true));
-        let supported = item.supported();
         let app = self.app.clone();
         let mut preview = div()
+            .relative()
             .w_full()
             .h(px(132.))
             .overflow_hidden()
@@ -194,6 +144,16 @@ impl WallpaperBrowser {
                     "wallpaper.preview_loading"
                 }));
         }
+        preview = preview.when_some(entry.dimensions(), |preview, (width, height)| {
+            preview.child(
+                div().absolute().top_2().right_2().child(
+                    Tag::secondary()
+                        .small()
+                        .text_size(ui_text_size(11.))
+                        .child(format!("{width} × {height}")),
+                ),
+            )
+        });
         v_flex()
             .min_w_0()
             .w_full()
@@ -209,39 +169,61 @@ impl WallpaperBrowser {
             .bg(rgb(palette().surface))
             .child(preview)
             .child(
-                h_flex()
-                    .gap_2()
-                    .justify_between()
-                    .text_size(ui_text_size(12.))
-                    .text_color(rgb(palette().muted))
-                    .child(item.id.clone())
-                    .child(format!("{} × {}", item.dimension_x, item.dimension_y)),
-            )
-            .child(
                 Button::new(("wallpaper-apply", index))
                     .debug_selector(move || format!("wallpaper-apply-{index}"))
                     .outline()
                     .w_full()
                     .h(px(32.))
+                    .py(px(3.))
                     .selected(selected)
-                    .disabled(disabled || selected || !supported)
+                    .disabled(disabled || selected)
                     .when(selected, |button| button.icon(IconName::Check))
-                    .label(conduit::i18n::text_static(if loading {
-                        "wallpaper.applying"
-                    } else if !supported {
-                        "wallpaper.too_large"
-                    } else if selected {
-                        "wallpaper.selected"
-                    } else {
-                        "wallpaper.apply"
-                    }))
+                    .when(!loading, |button| {
+                        button.label(conduit::i18n::text_static(if selected {
+                            "wallpaper.selected"
+                        } else {
+                            "wallpaper.apply"
+                        }))
+                    })
+                    .when(loading, |button| {
+                        button.child(
+                            v_flex()
+                                .w_full()
+                                .min_w_0()
+                                .gap(px(2.))
+                                .items_center()
+                                .child(
+                                    div()
+                                        .text_size(ui_text_size(12.))
+                                        .line_height(px(16.))
+                                        .child(conduit::i18n::text_static("wallpaper.applying")),
+                                )
+                                .child(
+                                    Progress::new(("wallpaper-apply-progress", index))
+                                        .loading(true)
+                                        .xsmall()
+                                        .w_full()
+                                        .flex_shrink_0()
+                                        .accessibility_label(conduit::i18n::text_static(
+                                            "wallpaper.applying",
+                                        )),
+                                ),
+                        )
+                    })
                     .accessibility_label(conduit::i18n::format(
                         "wallpaper.apply_id",
-                        &[("id", item.id.clone())],
+                        &[(
+                            "id",
+                            entry
+                                .local
+                                .as_ref()
+                                .map(|local| local.name.clone())
+                                .unwrap_or_else(|| entry.id.clone()),
+                        )],
                     ))
                     .on_click(move |_, window, cx| {
                         let _ = app.update(cx, |app, cx| {
-                            app.load_background(item.id.clone(), Some(item.clone()), window, cx)
+                            app.load_background(entry.clone(), true, window, cx)
                         });
                     }),
             )
@@ -264,6 +246,12 @@ impl Render for WallpaperBrowser {
                 )
             })
             .unwrap_or((false, true, None));
+        let changed = self.filters_changed(cx);
+        let tiles = if self.showing_history {
+            &self.history_tiles
+        } else {
+            &self.tiles
+        };
         let page = self.query.as_ref().map_or(0, |q| q.page);
         let previous = self.query.clone();
         let next = self.query.clone();
@@ -306,61 +294,167 @@ impl Render for WallpaperBrowser {
                     .child(conduit::i18n::text_static("wallpaper.browser_hint")),
             )
             .child(
-                v_flex()
-                    .w_full()
+                h_flex()
+                    .flex_wrap()
                     .gap_2()
                     .child(
-                        div()
-                            .text_size(ui_text_size(13.))
-                            .child(conduit::i18n::text_static("wallpaper.query_label")),
+                        Button::new("wallpaper-search-tab")
+                            .small()
+                            .ghost()
+                            .label(conduit::i18n::text_static("wallpaper.discover"))
+                            .selected(!self.showing_history)
+                            .disabled(busy)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.showing_history = false;
+                                this.error = None;
+                                release_images(
+                                    this.history_tiles.drain(..).filter_map(|tile| tile.image),
+                                    cx,
+                                );
+                                cx.notify();
+                            })),
                     )
                     .child(
-                        h_flex()
-                            .w_full()
-                            .flex_wrap()
-                            .gap_2()
-                            .items_center()
-                            .child(
-                                div().flex_1().min_w(px(160.)).child(
-                                    Input::new(&self.input)
-                                        .disabled(busy || disabled)
-                                        .h(px(36.))
-                                        .text_size(ui_text_size(14.)),
-                                ),
-                            )
-                            .child(
-                                Button::new("wallpaper-search")
-                                    .debug_selector(|| "wallpaper-search".into())
-                                    .primary()
-                                    .h(px(36.))
-                                    .px_4()
-                                    .text_size(ui_text_size(14.))
-                                    .label(conduit::i18n::text_static("wallpaper.search"))
-                                    .disabled(busy || disabled)
-                                    .on_click(cx.listener(|this, _, _, cx| this.fresh_search(cx))),
-                            )
-                            .when(busy, |row| {
-                                row.child(
-                                    Button::new("wallpaper-cancel")
-                                        .ghost()
-                                        .label(conduit::i18n::text_static("wallpaper.cancel"))
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            if let Some(cancel) = &this.cancel {
-                                                cancel.store(true, Ordering::Release);
-                                            }
-                                            cx.notify();
-                                        })),
-                                )
-                            }),
+                        Button::new("wallpaper-history-tab")
+                            .small()
+                            .ghost()
+                            .debug_selector(|| "wallpaper-history-tab".into())
+                            .label(conduit::i18n::text_static("wallpaper.history"))
+                            .selected(self.showing_history)
+                            .disabled(busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.load_history(cx))),
                     ),
             )
-            .child(self.filters(busy || disabled, cx))
-            .child(self.colors(busy || disabled, cx))
-            .when(busy, |body| {
+            .when(!self.showing_history, |body| {
+                body.child(
+                    v_flex()
+                        .w_full()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_size(ui_text_size(13.))
+                                .child(conduit::i18n::text_static("wallpaper.query_label")),
+                        )
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .flex_wrap()
+                                .gap_2()
+                                .items_center()
+                                .child(
+                                    div().flex_1().min_w(px(160.)).child(
+                                        Input::new(&self.input)
+                                            .disabled(busy || disabled)
+                                            .h(px(36.))
+                                            .text_size(ui_text_size(14.)),
+                                    ),
+                                )
+                                .child(
+                                    Button::new("wallpaper-search")
+                                        .debug_selector(|| "wallpaper-search".into())
+                                        .primary()
+                                        .h(px(36.))
+                                        .px_4()
+                                        .text_size(ui_text_size(14.))
+                                        .label(conduit::i18n::text_static("wallpaper.search"))
+                                        .disabled(busy || disabled)
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.fresh_search(cx)),
+                                        ),
+                                ),
+                        ),
+                )
+                .child(self.filters(busy || disabled, cx))
+                .when(self.advanced_filters, |body| {
+                    body.child(self.colors(busy || disabled, cx))
+                })
+                .child(
+                    h_flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Button::new("wallpaper-advanced")
+                                .small()
+                                .ghost()
+                                .debug_selector(|| "wallpaper-advanced".into())
+                                .label(conduit::i18n::text_static(if self.advanced_filters {
+                                    "wallpaper.fewer_filters"
+                                } else {
+                                    "wallpaper.more_filters"
+                                }))
+                                .selected(
+                                    self.advanced_filters
+                                        || self.color.is_some()
+                                        || self.solid_only
+                                        || self.resolution != Resolution::default()
+                                        || self.ratio != Ratio::default()
+                                        || (self.sort == Sort::Popular
+                                            && self.top_range != TopRange::default()),
+                                )
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.advanced_filters = !this.advanced_filters;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("wallpaper-reset")
+                                .small()
+                                .ghost()
+                                .debug_selector(|| "wallpaper-reset".into())
+                                .label(conduit::i18n::text_static("wallpaper.reset_filters"))
+                                .disabled(busy || disabled)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.reset_filters(window, cx)
+                                })),
+                        )
+                        .when(changed, |row| {
+                            row.child(
+                                div()
+                                    .text_size(ui_text_size(12.))
+                                    .text_color(rgb(palette().muted))
+                                    .child(conduit::i18n::text_static("wallpaper.filters_changed")),
+                            )
+                        }),
+                )
+                .child(
+                    div()
+                        .text_size(ui_text_size(12.))
+                        .text_color(rgb(palette().muted))
+                        .child(conduit::i18n::text_static("wallpaper.query_help")),
+                )
+            })
+            .when(self.showing_history, |body| {
                 body.child(
                     div()
                         .text_size(ui_text_size(12.))
-                        .child(conduit::i18n::text_static("wallpaper.loading")),
+                        .text_color(rgb(palette().muted))
+                        .child(conduit::i18n::text_static("wallpaper.history_hint")),
+                )
+            })
+            .when(busy, |body| {
+                body.child(
+                    h_flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_size(ui_text_size(12.))
+                                .child(conduit::i18n::text_static("wallpaper.loading")),
+                        )
+                        .child(
+                            Button::new("wallpaper-cancel")
+                                .small()
+                                .ghost()
+                                .label(conduit::i18n::text_static("wallpaper.cancel"))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Some(cancel) = &this.cancel {
+                                        cancel.store(true, Ordering::Release);
+                                    }
+                                    cx.notify();
+                                })),
+                        ),
                 )
             })
             .when(applying, |body| {
@@ -402,13 +496,15 @@ impl Render for WallpaperBrowser {
                     .id("wallpaper-results")
                     .w_full()
                     .min_w_0()
-                    .when(self.tiles.is_empty() && !busy, |body| {
+                    .when(tiles.is_empty() && !busy, |body| {
                         body.child(
                             div()
                                 .py_6()
                                 .text_size(ui_text_size(13.))
                                 .text_color(rgb(palette().muted))
-                                .child(conduit::i18n::text_static(if self.query.is_some() {
+                                .child(conduit::i18n::text_static(if self.showing_history {
+                                    "wallpaper.history_empty"
+                                } else if self.query.is_some() {
                                     "wallpaper.empty"
                                 } else {
                                     "wallpaper.start"
@@ -423,14 +519,14 @@ impl Render for WallpaperBrowser {
                             .min_w_0()
                             .gap_3()
                             .children(
-                                self.tiles
+                                tiles
                                     .iter()
                                     .enumerate()
                                     .map(|(index, tile)| self.tile(index, tile, cx)),
                             ),
                     ),
             )
-            .when(self.query.is_some(), |body| {
+            .when(!self.showing_history && self.query.is_some(), |body| {
                 body.child(
                     h_flex()
                         .flex_wrap()
@@ -440,7 +536,7 @@ impl Render for WallpaperBrowser {
                             Button::new("wallpaper-previous")
                                 .outline()
                                 .label(conduit::i18n::text_static("wallpaper.previous"))
-                                .disabled(busy || disabled || page <= 1)
+                                .disabled(busy || disabled || changed || page <= 1)
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     if let Some(mut query) = previous.clone() {
                                         query.page = query.page.saturating_sub(1).max(1);
@@ -455,7 +551,7 @@ impl Render for WallpaperBrowser {
                                     "wallpaper.page",
                                     &[
                                         ("page", page.to_string()),
-                                        ("total", self.last_page.to_string()),
+                                        ("total", self.last_page.max(1).to_string()),
                                     ],
                                 )),
                         )
@@ -463,7 +559,12 @@ impl Render for WallpaperBrowser {
                             Button::new("wallpaper-next")
                                 .outline()
                                 .label(conduit::i18n::text_static("wallpaper.next"))
-                                .disabled(busy || disabled || page == 0 || page >= self.last_page)
+                                .disabled(
+                                    busy || disabled
+                                        || changed
+                                        || page == 0
+                                        || page >= self.last_page,
+                                )
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     if let Some(mut query) = next.clone() {
                                         query.page += 1;

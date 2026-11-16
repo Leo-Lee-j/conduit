@@ -1,4 +1,6 @@
 {
+  "自动将活跃工作空间排到前面": "settings.appearance.auto_sort_workspaces",
+  "优先显示有运行中会话的工作空间，再按最近会话活动时间排序。关闭后恢复手动顺序。": "settings.appearance.auto_sort_workspaces_description",
   "自动折叠非活跃工作空间": "settings.appearance.auto_collapse_inactive_workspaces",
   "自动折叠最近 3 天内没有会话活动的工作空间。当前工作空间和正在运行的会话保持可见，仍可手动展开任意工作空间。": "settings.appearance.auto_collapse_inactive_workspaces_description",
   "运行中": "events.running",

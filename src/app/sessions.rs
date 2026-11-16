@@ -415,6 +415,8 @@ impl ConduitApp {
             .retain(|(session, _), _| *session != id);
         self.reasoning_expansion
             .retain(|(session, _), _| *session != id);
+        self.question_expansion
+            .retain(|(session, _), _| *session != id);
         self.tool_scrolls.retain(|(session, _), _| *session != id);
         self.tool_details.forget_session(id);
         self.tool_diffs.forget_session(id);
@@ -789,6 +791,8 @@ impl ConduitApp {
             self.expanded_tools.retain(|(id, _)| *id != session.id);
             self.reasoning_expansion
                 .retain(|(id, _), _| *id != session.id);
+            self.question_expansion
+                .retain(|(id, _), _| *id != session.id);
             self.tool_scrolls.retain(|(id, _), _| *id != session.id);
             self.tool_details.forget_session(session.id);
             self.tool_diffs.forget_session(session.id);
@@ -872,7 +876,7 @@ impl ConduitApp {
 
     /// Toggle the shared sidebar, retaining the last available tab.
     pub(super) fn detail_toggle(&self, cx: &mut Context<Self>) -> Button {
-        let open = self.plugins.right_visible(self.branch_navigation_open());
+        let open = self.plugins.right_visible(false);
         Button::new("toggle-sidebar")
             .debug_selector(|| "toggle-sidebar".into())
             .ghost()
@@ -892,7 +896,7 @@ impl ConduitApp {
                 conduit::i18n::text_static("sessions.show_sidebar")
             })
             .on_click(cx.listener(|this, _, window, cx| {
-                if this.plugins.right_visible(this.branch_navigation_open()) {
+                if this.plugins.right_visible(false) {
                     this.close_right_view(window, cx);
                 } else {
                     let selected = this.plugins.right().clone();

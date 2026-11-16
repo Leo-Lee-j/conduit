@@ -61,12 +61,18 @@ pub struct UiSettings {
     /// Collapse workspaces with no session activity during the last three days.
     #[serde(default)]
     pub auto_collapse_inactive_workspaces: bool,
+    /// Display running workspaces first, then the most recently active ones.
+    #[serde(default = "default_auto_sort_workspaces")]
+    pub auto_sort_workspaces: bool,
     /// Fill the available chat area instead of a centered 840px column.
     #[serde(default = "default_full_width_content")]
     pub full_width_content: bool,
     /// Initial visibility of CLI thinking; individual blocks can override it.
     #[serde(default = "default_collapse_reasoning")]
     pub collapse_reasoning: bool,
+    /// Initial visibility of completed question records; individual records can override it.
+    #[serde(default)]
+    pub auto_collapse_question_history: bool,
     /// What automatic titling reacts to.
     #[serde(default)]
     pub naming_mode: NamingMode,
@@ -138,6 +144,9 @@ fn default_sessions_per_workspace() -> usize {
     5
 }
 
+fn default_auto_sort_workspaces() -> bool {
+    true
+}
 fn default_full_width_content() -> bool {
     true
 }
@@ -209,8 +218,10 @@ impl Default for UiSettings {
             appearance: AppearanceMode::default(),
             background: Default::default(),
             auto_collapse_inactive_workspaces: false,
+            auto_sort_workspaces: true,
             full_width_content: default_full_width_content(),
             collapse_reasoning: default_collapse_reasoning(),
+            auto_collapse_question_history: false,
             max_tabs: default_max_tabs(),
             naming_mode: NamingMode::default(),
             auto_rename: true,
@@ -1059,6 +1070,12 @@ mod tests {
         assert!(store.ui.performance_monitor);
         assert_eq!(store.ui.appearance, AppearanceMode::Dark);
         assert!(!store.ui.auto_collapse_inactive_workspaces);
+        assert!(store.ui.auto_sort_workspaces);
+        assert!(
+            serde_json::from_value::<UiSettings>(serde_json::json!({}))
+                .unwrap()
+                .auto_sort_workspaces
+        );
         assert!(
             !serde_json::from_value::<UiSettings>(serde_json::json!({}))
                 .unwrap()
@@ -1067,6 +1084,12 @@ mod tests {
         assert_eq!(store.ui.max_tabs, 8);
         assert!(store.ui.full_width_content);
         assert!(!store.ui.collapse_reasoning);
+        assert!(!store.ui.auto_collapse_question_history);
+        assert!(
+            !serde_json::from_value::<UiSettings>(serde_json::json!({}))
+                .unwrap()
+                .auto_collapse_question_history
+        );
         assert!(
             !serde_json::from_value::<UiSettings>(serde_json::json!({}))
                 .unwrap()
@@ -1089,9 +1112,11 @@ mod tests {
         store.ui.performance_monitor = false;
         store.ui.appearance = AppearanceMode::System;
         store.ui.auto_collapse_inactive_workspaces = true;
+        store.ui.auto_sort_workspaces = false;
         store.ui.max_tabs = 12;
         store.ui.full_width_content = false;
         store.ui.collapse_reasoning = true;
+        store.ui.auto_collapse_question_history = true;
         store.ui.naming_mode = NamingMode::Latest;
         store.ui.ui_font_family = Some("Microsoft YaHei".into());
         store.ui.ui_font_size = 18.0;
@@ -1119,9 +1144,11 @@ mod tests {
         assert!(!reloaded.ui.performance_monitor);
         assert_eq!(reloaded.ui.appearance, AppearanceMode::System);
         assert!(reloaded.ui.auto_collapse_inactive_workspaces);
+        assert!(!reloaded.ui.auto_sort_workspaces);
         assert_eq!(reloaded.ui.max_tabs, 12);
         assert!(!reloaded.ui.full_width_content);
         assert!(reloaded.ui.collapse_reasoning);
+        assert!(reloaded.ui.auto_collapse_question_history);
         assert_eq!(reloaded.ui.naming_mode, NamingMode::Latest);
         assert_eq!(
             reloaded.ui.ui_font_family.as_deref(),

@@ -236,9 +236,6 @@ impl ConduitApp {
         else {
             return false;
         };
-        if self.branch_navigation_open() && !adapter.with_branches {
-            return false;
-        }
         let changed = !self.plugins.right_open() || self.plugins.right_key() != Some(request.key());
         if changed
             && self.plugins.right_open()

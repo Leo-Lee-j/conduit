@@ -824,6 +824,7 @@ fn empty_stream_blocks_do_not_split_tools_or_count_as_replies() {
     s.messages[2].approval = Some(crate::domain::ToolApproval {
         request: "approval".into(),
         status: "等待中".into(),
+        questions: vec![],
     });
     assert_eq!(super::contiguous_tool_group(&s, 1), Some((1, 2)));
 }

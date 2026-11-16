@@ -207,13 +207,17 @@ impl ConduitApp {
         let typography = self.chat_typography();
         let mut actions = Vec::new();
         if let Some(item) = &item {
-            let copy = conduit::i18n::format(
-                "tools.input_output_result_eddfa0",
-                &[
-                    ("arg0", format_tool_text(&item.input).to_string()),
-                    ("arg1", format_tool_text(&item.detail).to_string()),
-                ],
-            );
+            let copy = super::user_input::history(item)
+                .map(super::user_input::history_text)
+                .unwrap_or_else(|| {
+                    conduit::i18n::format(
+                        "tools.input_output_result_eddfa0",
+                        &[
+                            ("arg0", format_tool_text(&item.input).to_string()),
+                            ("arg1", format_tool_text(&item.detail).to_string()),
+                        ],
+                    )
+                });
             actions.push(
                 Button::new("copy-details")
                     .ghost()
@@ -238,7 +242,9 @@ impl ConduitApp {
             let scroll = self.tool_details.scroll(&session, &item.key);
             let running = tool_running(&item);
             let failed = tool_failed(&item);
-            let status = if running {
+            let status = if let Some(approval) = super::user_input::history(&item) {
+                approval.status.as_str()
+            } else if running {
                 conduit::i18n::text_static("tool_details.running")
             } else if failed {
                 conduit::i18n::text_static("tool_details.unsuccessful")
@@ -327,26 +333,32 @@ impl ConduitApp {
                                 .child(path),
                         ),
                 )
-                .child(detail_section(
-                    &scope,
-                    "input",
-                    conduit::i18n::text_static("tools.input"),
-                    &item.input,
-                    conduit::i18n::text_static("tools.no_input_provided"),
-                    &typography,
-                ))
-                .child(detail_section(
-                    &scope,
-                    "output",
-                    conduit::i18n::text_static("tools.output_result"),
-                    &item.detail,
-                    if running {
-                        conduit::i18n::text_static("tools.waiting_for_tool_output")
-                    } else {
-                        conduit::i18n::text_static("tools.no_output")
-                    },
-                    &typography,
-                ));
+                .when(super::user_input::history(&item).is_none(), |content| {
+                    content
+                        .child(detail_section(
+                            &scope,
+                            "input",
+                            conduit::i18n::text_static("tools.input"),
+                            &item.input,
+                            conduit::i18n::text_static("tools.no_input_provided"),
+                            &typography,
+                        ))
+                        .child(detail_section(
+                            &scope,
+                            "output",
+                            conduit::i18n::text_static("tools.output_result"),
+                            &item.detail,
+                            if running {
+                                conduit::i18n::text_static("tools.waiting_for_tool_output")
+                            } else {
+                                conduit::i18n::text_static("tools.no_output")
+                            },
+                            &typography,
+                        ))
+                })
+                .when_some(super::user_input::history(&item), |content, approval| {
+                    content.child(super::user_input::history_content(&scope, approval))
+                });
             if let Some(native_id) = native_id {
                 content = content.child(
                     v_flex()

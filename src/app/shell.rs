@@ -235,7 +235,6 @@ impl Render for ConduitApp {
         if self.store.ui.performance_monitor {
             let timeline_visible = message_count > 0
                 && !self.settings_ui.open
-                && !self.branch_navigation_open()
                 && self.active_diff.is_none()
                 && self.active_file.is_none();
             self.performance.update(cx, |monitor, _| {
@@ -286,7 +285,7 @@ impl Render for ConduitApp {
         let settings_width = (viewport_width
             - measured_sidebar
             - 6.
-            - if self.plugins.right_visible(self.branch_navigation_open()) {
+            - if self.plugins.right_visible(false) {
                 detail_width + 6.
             } else {
                 0.
@@ -300,13 +299,6 @@ impl Render for ConduitApp {
                 .h_full()
                 .child(self.session_tab_bar(cx))
                 .child(self.render_settings_workspace(window, settings_width, cx))
-        } else if self.branch_navigation_open() {
-            v_flex()
-                .flex_1()
-                .min_w_0()
-                .min_h_0()
-                .h_full()
-                .children(self.branch_manager.clone())
         } else if self.active_diff.is_some() {
             v_flex()
                 .flex_1()
@@ -899,7 +891,35 @@ impl Render for ConduitApp {
             .flex_1()
             .min_w_0()
             .h_full()
-            .child(div().flex_1().min_h_0().child(conversation))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(conversation)
+                    .when(
+                        self.branch_navigation_open() && !self.settings_ui.open,
+                        |area| {
+                            area.child(
+                                h_flex()
+                                    .id("branch-bottom-panel")
+                                    .debug_selector(|| "branch-bottom-panel".into())
+                                    .absolute()
+                                    .bottom_0()
+                                    .left_0()
+                                    .w_full()
+                                    .h(relative(1. / 3.))
+                                    .min_h_0()
+                                    .overflow_hidden()
+                                    .occlude()
+                                    .bg(rgb(palette().canvas))
+                                    .border_t_1()
+                                    .border_color(rgb(palette().border))
+                                    .children(self.branch_manager.clone()),
+                            )
+                        },
+                    ),
+            )
             .when(!self.settings_ui.open, |layout| layout.child(toolbar));
         // The left workspace rail stays a resizable group. The right sidebar is
         // laid out by hand so dragging its edge follows the pointer 1:1 and its

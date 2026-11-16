@@ -312,10 +312,10 @@ impl PluginUi {
     }
 }
 
-// Rail rows are 36px + 4px gap. Reserve the two fixed bottom controls,
+// Rail rows are 36px + 4px gap. Reserve the fixed bottom control,
 // their gaps, the spacer gap and 4px top padding. An overflow button needs one slot.
 fn visible_activity_count(count: usize, height: f32) -> usize {
-    let slots = ((height - 78.).max(0.) / 40.).floor() as usize;
+    let slots = ((height - 40.).max(0.) / 40.).floor() as usize;
     if count <= slots {
         count
     } else {
@@ -539,6 +539,74 @@ impl ConduitApp {
             })
             .into_any_element()
     }
+    pub(super) fn branch_toolbar_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        let pending_push = self.pending_push_status();
+        let branch_tooltip = pending_push.as_ref().map_or_else(
+            || conduit::i18n::text_static("plugin_ui.git_branches_and_log").to_owned(),
+            |(_, tooltip)| {
+                conduit::i18n::format(
+                    "plugin_ui.git_branches_and_log_27c010",
+                    &[("tooltip", tooltip.to_string())],
+                )
+            },
+        );
+        let button = div()
+            .relative()
+            .w(px(36.))
+            .h(px(34.))
+            .flex_shrink_0()
+            .child(
+                Button::new("nav-branches")
+                    .debug_selector(|| "git-branch-trigger".into())
+                    .ghost()
+                    .small()
+                    .compact()
+                    .w(px(36.))
+                    .h(px(34.))
+                    .flex_shrink_0()
+                    .icon(FullIconName::GitBranch)
+                    .selected(self.branch_navigation_open())
+                    .tooltip(branch_tooltip.clone())
+                    .accessibility_label(branch_tooltip)
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if this.branch_navigation_open() {
+                            this.leave_branch_navigation();
+                            cx.notify();
+                        } else {
+                            this.show_branch_navigation(window, cx);
+                        }
+                    })),
+            )
+            .when_some(pending_push, |row, (count, _)| {
+                row.child(
+                    h_flex()
+                        .id("nav-branches-badge")
+                        .test_support()
+                        .debug_selector(|| "nav-branches-badge".into())
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .min_w(px(14.))
+                        .h(px(14.))
+                        .px(px(3.))
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .bg(rgb(palette().text))
+                        .text_color(rgb(palette().on_text))
+                        .text_size(ui_text_size(10.))
+                        .line_height(relative(1.))
+                        .child(if count > 99 {
+                            "99+".to_owned()
+                        } else {
+                            count.to_string()
+                        }),
+                )
+            });
+        button.into_any_element()
+    }
+
     pub(super) fn render_navigation(
         &mut self,
         window: &Window,
@@ -634,67 +702,7 @@ impl ConduitApp {
                     }),
             );
         }
-        let pending_push = self.pending_push_status();
-        let branch_tooltip = pending_push.as_ref().map_or_else(
-            || conduit::i18n::text_static("plugin_ui.git_branches_and_log").to_owned(),
-            |(_, tooltip)| {
-                conduit::i18n::format(
-                    "plugin_ui.git_branches_and_log_27c010",
-                    &[("tooltip", tooltip.to_string())],
-                )
-            },
-        );
-        let rail = rail.child(div().flex_1()).child(
-            div()
-                .relative()
-                .w(px(36.))
-                .h(px(34.))
-                .flex_shrink_0()
-                .child(
-                    Button::new("nav-branches")
-                        .debug_selector(|| "git-branch-trigger".into())
-                        .ghost()
-                        .small()
-                        .compact()
-                        .w(px(36.))
-                        .h(px(34.))
-                        .flex_shrink_0()
-                        .icon(FullIconName::GitBranch)
-                        .selected(self.plugins.is_selected(builtins::BRANCHES))
-                        .tooltip(branch_tooltip.clone())
-                        .accessibility_label(branch_tooltip)
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.show_branch_navigation(window, cx)
-                        })),
-                )
-                .when_some(pending_push, |row, (count, _)| {
-                    row.child(
-                        h_flex()
-                            .id("nav-branches-badge")
-                            .test_support()
-                            .debug_selector(|| "nav-branches-badge".into())
-                            .absolute()
-                            .top_0()
-                            .right_0()
-                            .min_w(px(14.))
-                            .h(px(14.))
-                            .px(px(3.))
-                            .items_center()
-                            .justify_center()
-                            .rounded_full()
-                            .bg(rgb(palette().text))
-                            .text_color(rgb(palette().on_text))
-                            .text_size(ui_text_size(10.))
-                            .line_height(relative(1.))
-                            .child(if count > 99 {
-                                "99+".to_owned()
-                            } else {
-                                count.to_string()
-                            }),
-                    )
-                }),
-        );
+        let rail = rail.child(div().flex_1());
         let rail = rail.child(
             Button::new("nav-collapse")
                 .debug_selector(|| "nav-collapse".into())
