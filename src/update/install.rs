@@ -70,8 +70,7 @@ fn registered_install() -> Result<PathBuf> {
 
 pub fn installation(exe: &Path) -> Result<PathBuf> {
     ensure!(
-        exe.file_name()
-            .is_some_and(|name| name.eq_ignore_ascii_case("conduit.exe")),
+        installed_executable_name(exe),
         conduit::i18n::text(
             "update.install.development_and_portable_builds_cannot_install_updates"
         )
@@ -97,6 +96,13 @@ pub fn installation(exe: &Path) -> Result<PathBuf> {
         )
     );
     Ok(dir)
+}
+
+fn installed_executable_name(exe: &Path) -> bool {
+    exe.file_name().is_some_and(|name| {
+        name.eq_ignore_ascii_case("conduit.exe")
+            || name.eq_ignore_ascii_case(concat!("conduit-", env!("CARGO_PKG_VERSION"), ".exe"))
+    })
 }
 
 #[derive(Serialize, Deserialize)]
@@ -461,12 +467,15 @@ fn restore_registry_version(version: &str) -> Result<()> {
 }
 
 fn restart(job: &Handoff) -> Result<()> {
-    Command::new(&job.executable)
+    // The old versioned executable may have been removed. The stable launcher
+    // is replaced (or restored on rollback) together with the installed app.
+    let directory = job.executable.parent().context(conduit::i18n::text_static(
+        "update.install.install_directory_missing",
+    ))?;
+    Command::new(directory.join("conduit.exe"))
         .env("CONDUIT_DATA_DIR", &job.data_dir)
         .arg("--updated")
-        .current_dir(job.executable.parent().context(conduit::i18n::text_static(
-            "update.install.install_directory_missing",
-        ))?)
+        .current_dir(directory)
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()?;
     Ok(())
@@ -475,6 +484,18 @@ fn restart(job: &Handoff) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn accepts_current_versioned_app_and_legacy_entry_only() {
+        assert!(installed_executable_name(Path::new("conduit.exe")));
+        assert!(installed_executable_name(Path::new(concat!(
+            "CONDUIT-",
+            env!("CARGO_PKG_VERSION"),
+            ".EXE"
+        ))));
+        for name in ["conduit-0.0.0.exe", "conduit-updater.exe", "other.exe"] {
+            assert!(!installed_executable_name(Path::new(name)), "{name}");
+        }
+    }
     #[test]
     fn nsis_directory_preserves_spaces_and_unicode_without_extended_prefix() {
         let _locale = crate::test_support::chinese();
@@ -526,12 +547,20 @@ mod tests {
         let backup = root.join("backup");
         fs::create_dir_all(&install).unwrap();
         fs::write(install.join("conduit.exe"), b"old").unwrap();
+        fs::write(install.join("conduit-0.1.0.exe"), b"old app").unwrap();
         fs::write(install.join("keep.txt"), b"data").unwrap();
         snapshot(&install, &backup).unwrap();
         fs::write(install.join("conduit.exe"), b"new").unwrap();
+        fs::remove_file(install.join("conduit-0.1.0.exe")).unwrap();
+        fs::write(install.join("conduit-0.2.0.exe"), b"new app").unwrap();
         fs::write(install.join("new.dll"), b"new").unwrap();
         restore(&install, &backup).unwrap();
         assert_eq!(fs::read(install.join("conduit.exe")).unwrap(), b"old");
+        assert_eq!(
+            fs::read(install.join("conduit-0.1.0.exe")).unwrap(),
+            b"old app"
+        );
+        assert!(!install.join("conduit-0.2.0.exe").exists());
         assert_eq!(fs::read(install.join("keep.txt")).unwrap(), b"data");
         assert!(!install.join("new.dll").exists());
         fs::remove_dir_all(root).unwrap();

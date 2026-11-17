@@ -21,9 +21,14 @@ Unicode true
 !ifndef UPDATER_EXE
   !error "Pass /DUPDATER_EXE=<absolute update helper path>"
 !endif
+!ifndef LAUNCHER_EXE
+  !error "Pass /DLAUNCHER_EXE=<absolute launcher path>"
+!endif
 !ifndef OUTPUT_FILE
   !error "Pass /DOUTPUT_FILE=<absolute installer path>"
 !endif
+
+!define APP_FILENAME "conduit-${APP_VERSION}.exe"
 
 Name "Conduit"
 OutFile "${OUTPUT_FILE}"
@@ -69,7 +74,9 @@ Section "Conduit" SEC_APP
   SectionIn RO
   SetOutPath "$INSTDIR"
   ClearErrors
-  File /oname=conduit.exe "${APP_EXE}"
+  File /oname=${APP_FILENAME} "${APP_EXE}"
+  ; A short-lived launcher preserves existing shortcuts and old updater restarts.
+  File /oname=conduit.exe "${LAUNCHER_EXE}"
   File /oname=conduit-updater.exe "${UPDATER_EXE}"
   File /oname=LICENSE "${APP_LICENSE}"
   File /oname=NOTICE "${APP_NOTICE}"
@@ -105,8 +112,20 @@ install_failed:
   SetErrorLevel 1
   Quit
 install_done:
-  ; The executable's path stays the same across upgrades. Invalidate Explorer's
-  ; cached icons after all files and shortcuts have been updated, including /S.
+  ; Remove obsolete versioned apps only after the new installation is complete.
+  ; Keep the current app and updater; a locked old app can be cleaned up later.
+  FindFirst $0 $1 "$INSTDIR\conduit-*.exe"
+cleanup_versions:
+  StrCmp $1 "" cleanup_versions_done
+  StrCmp $1 "${APP_FILENAME}" cleanup_versions_next
+  StrCmp $1 "conduit-updater.exe" cleanup_versions_next
+  Delete "$INSTDIR\$1"
+cleanup_versions_next:
+  FindNext $0 $1
+  Goto cleanup_versions
+cleanup_versions_done:
+  FindClose $0
+  ; Shortcut paths stay stable. Refresh their icons, including silent upgrades.
   ; SHCNE_ASSOCCHANGED, SHCNF_IDLIST
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
 SectionEnd
@@ -118,7 +137,7 @@ FunctionEnd
 
 Section "Uninstall"
   Delete "$INSTDIR\conduit.exe"
-  Delete "$INSTDIR\conduit-updater.exe"
+  Delete "$INSTDIR\conduit-*.exe"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\NOTICE"
   Delete "$INSTDIR\conduit.install"

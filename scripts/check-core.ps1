@@ -17,7 +17,7 @@ try {
     # ui-tests includes the ordinary tests, so run the combined suite once.
     Invoke-Check cargo @('test', '--locked', '--features', 'ui-tests', '--', '--test-threads=1')
     # Also compile the shipping binaries without test-only features.
-    Invoke-Check cargo @('build', '--locked', '--bin', 'conduit', '--bin', 'conduit-updater')
+    Invoke-Check cargo @('build', '--locked', '--bin', 'conduit', '--bin', 'conduit-updater', '--bin', 'conduit-launcher')
 }
 finally {
     Pop-Location

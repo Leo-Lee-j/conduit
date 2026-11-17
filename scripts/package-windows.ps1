@@ -9,11 +9,13 @@ $taskRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Push-Location $taskRoot
 try {
     if (-not $SkipBuild) {
-        & cargo build --release --locked --bin conduit --bin conduit-updater
+        & cargo build --release --locked --bin conduit --bin conduit-updater --bin conduit-launcher
         if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
     }
     $taskExe = Join-Path $taskRoot 'target\release\conduit.exe'
     $taskUpdater = Join-Path $taskRoot 'target\release\conduit-updater.exe'
+    $taskLauncher = Join-Path $taskRoot 'target\release\conduit-launcher.exe'
+    if (-not (Test-Path -LiteralPath $taskLauncher)) { throw "Missing launcher: $taskLauncher" }
     if (-not (Test-Path -LiteralPath $taskUpdater)) { throw "Missing update helper: $taskUpdater" }
     if (-not (Test-Path -LiteralPath $taskExe)) { throw "Missing release executable: $taskExe" }
     $taskImage = [IO.File]::ReadAllBytes($taskExe)
@@ -25,6 +27,11 @@ try {
         Select-String '^version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"' |
         Select-Object -First 1).Matches.Groups[1].Value
     if (-not $taskVersion) { throw 'Cannot read package version from Cargo.toml.' }
+    foreach ($taskBinary in @($taskExe, $taskLauncher)) {
+        if ([Diagnostics.FileVersionInfo]::GetVersionInfo($taskBinary).ProductVersion -ne $taskVersion) {
+            throw "Executable version does not match Cargo.toml; rebuild before packaging: $taskBinary"
+        }
+    }
     if (-not $MakeNsis) {
         $taskCompiler = Get-Command makensis.exe -ErrorAction SilentlyContinue
         if ($taskCompiler) { $MakeNsis = $taskCompiler.Source }
@@ -58,6 +65,7 @@ try {
         "/DAPP_VERSION=$taskVersion",
         "/DAPP_EXE=$taskExe",
         "/DUPDATER_EXE=$taskUpdater",
+        "/DLAUNCHER_EXE=$taskLauncher",
         "/DAPP_ICON=$(Join-Path $taskRoot 'assets\app-icons\icon.ico')",
         "/DAPP_LICENSE=$(Join-Path $taskRoot 'LICENSE')",
         "/DAPP_NOTICE=$(Join-Path $taskRoot 'NOTICE')",

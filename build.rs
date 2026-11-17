@@ -62,9 +62,13 @@ END
         ),
     )
     .expect("write Windows resources");
-    embed_resource::compile_for(resource, ["conduit"], embed_resource::NONE)
-        .manifest_required()
-        .expect("compile Conduit icon and version resources");
+    embed_resource::compile_for(
+        resource,
+        ["conduit", "conduit-launcher"],
+        embed_resource::NONE,
+    )
+    .manifest_required()
+    .expect("compile Conduit icon and version resources");
 
     // Explicitly declare the per-user helper's execution level so Windows
     // does not need to infer it. The helper only updates HKCU and the user's
