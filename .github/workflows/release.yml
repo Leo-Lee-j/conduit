@@ -61,6 +61,12 @@ jobs:
               throw 'CI run does not belong to the release commit and repository.'
             }
             if ($ci.status -eq 'completed') {
+              if ($ci.conclusion -eq 'cancelled') {
+                # A newer branch push can cancel CI for an otherwise valid release commit.
+                Write-Host "CI run $($ci.id) was cancelled; running core verification here."
+                'reused=false' >> $env:GITHUB_OUTPUT
+                break
+              }
               if ($ci.conclusion -ne 'success') { throw "CI run $($ci.id) did not pass ($($ci.conclusion)). Re-run CI before releasing." }
               Write-Host "Reusing successful CI run $($ci.id) for $env:RELEASE_COMMIT."
               'reused=true' >> $env:GITHUB_OUTPUT
