@@ -214,8 +214,11 @@ pub fn distributions() -> Result<Vec<String>> {
 fn parse_distributions(bytes: &[u8]) -> Vec<String> {
     let text = if bytes.starts_with(&[0xff, 0xfe]) || bytes.contains(&0) {
         let words: Vec<_> = bytes
-            .chunks_exact(2)
-            .map(|v| u16::from_le_bytes([v[0], v[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .copied()
+            .map(u16::from_le_bytes)
             .collect();
         String::from_utf16_lossy(&words)
     } else {

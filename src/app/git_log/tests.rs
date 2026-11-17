@@ -159,9 +159,13 @@ fn branch_manager_navigation_filters_favorites_commit_diff_and_workspace_isolati
     let app = output.borrow().as_ref().unwrap().clone();
     draw(cx);
     let trigger = cx.debug_bounds("git-branch-trigger").unwrap();
-    let workspaces = cx.debug_bounds("nav-workspaces").unwrap();
-    assert_eq!(trigger.left(), workspaces.left());
-    assert!(trigger.top() >= workspaces.bottom());
+    let toolbar = cx.debug_bounds("conversation-toolbar").unwrap();
+    assert!(trigger.size.width > px(0.) && trigger.size.height > px(0.));
+    assert!(trigger.left() >= toolbar.left() && trigger.right() <= toolbar.right());
+    assert!(
+        trigger.top() >= toolbar.top() && trigger.bottom() <= toolbar.bottom() + px(1.),
+        "branch trigger {trigger:?} is outside toolbar {toolbar:?}"
+    );
     click(cx, "git-branch-trigger");
     wait(cx, &app);
     assert!(cx.debug_bounds("git-log-panel").is_some());
@@ -252,7 +256,7 @@ fn branch_manager_navigation_filters_favorites_commit_diff_and_workspace_isolati
         assert_commit_visible(cx);
         let branch_header = cx.debug_bounds("git-branch-header").unwrap();
         let log_header = cx.debug_bounds("git-log-header").unwrap();
-        assert_eq!(branch_header.top(), log_header.top());
+        assert!(branch_header.top() >= log_header.bottom());
         assert_eq!(branch_header.size.height, log_header.size.height);
         let panel = cx.debug_bounds("git-log-panel").unwrap();
         let details = cx.debug_bounds("git-log-details").unwrap();
@@ -298,6 +302,8 @@ fn branch_manager_navigation_filters_favorites_commit_diff_and_workspace_isolati
         );
     });
     click(cx, "nav-workspaces");
+    assert!(cx.debug_bounds("git-log-panel").is_some());
+    click(cx, "close-branch-panel");
     assert!(cx.debug_bounds("git-log-panel").is_none());
     cx.update(|_, cx| assert_eq!(app.read(cx).input.read(cx).value(), "preserved draft"));
     cx.update(|window, _| window.remove_window());

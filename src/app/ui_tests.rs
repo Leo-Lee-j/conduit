@@ -490,7 +490,7 @@ fn settings_connections_switch_engines_and_guard_service_editors(cx: &mut TestAp
 }
 
 #[gpui_kit::test]
-fn opencode_new_session_keeps_permission_selected_before_sending(cx: &mut TestAppContext) {
+fn opencode_session_permissions_respect_defaults_and_composer_selection(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     use crate::{
         domain::{PermissionLevel, Provider, Workspace},
@@ -511,7 +511,18 @@ fn opencode_new_session_keeps_permission_selected_before_sending(cx: &mut TestAp
             app.selected_session = None;
             app.new_session_provider = Provider::OpenCode;
             app.set_session_permission(PermissionLevel::FullAccess, window, cx);
+            // Sending from the empty composer keeps its explicit permission.
+            assert_eq!(
+                app.prepare_session(Provider::OpenCode).permission,
+                PermissionLevel::FullAccess
+            );
+            // The new-session action starts with the configured default instead.
             let id = app.create_session(0, Provider::OpenCode, cx).unwrap();
+            assert_eq!(
+                app.session(id).unwrap().permission,
+                app.store.ui.default_session_permission
+            );
+            app.set_session_permission(PermissionLevel::FullAccess, window, cx);
             assert_eq!(
                 app.session(id).unwrap().permission,
                 PermissionLevel::FullAccess

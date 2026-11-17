@@ -60,10 +60,9 @@ impl MockModel {
                             });
                             let delta = if latest.contains("CONDUIT_SUBAGENT_PARENT")
                                 && !tool_result
-                                && task.is_some()
+                                && let Some(task) = task
                             {
-                                let description =
-                                    task.unwrap()["function"]["description"].as_str().unwrap();
+                                let description = task["function"]["description"].as_str().unwrap();
                                 let start = description
                                     .find("conduit-")
                                     .expect("managed worker advertised");
