@@ -42,7 +42,7 @@
 
 工作区、会话、文档、只读或关闭状态变化使上下文失效并停止旧 owner。`stop_owner`、`stop_all`、注销和窗口销毁撤销代次、取消任务与票据、释放缓存；旧 PreparedCommand 不能重新激活已停止的 owner。
 
-根结构为组件/Base Root → ShellRoot → ConduitApp。浮层带运行时所有权；停止时只撤销该 owner 的 dialog/sheet/toast/HUD/tooltip，保留宿主和其他插件，并恢复有效焦点。关闭及更新准备同步接入清理；未来存储写入还需持久化屏障，见[后续方案](roadmap.md)。
+根结构为组件/Base Root → ShellRoot → ConduitApp。浮层带运行时所有权；停止时只撤销该 owner 的 dialog/sheet/toast/HUD/tooltip，保留宿主和其他插件，并恢复有效焦点。关闭及更新准备同步接入清理；未来存储写入还需持久化屏障，见[实现边界](README.md#实现边界)。
 
 ## 资源与恢复边界
 

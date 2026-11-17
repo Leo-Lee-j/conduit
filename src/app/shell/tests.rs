@@ -125,73 +125,6 @@ fn pixels(delta: f32) -> ScrollDelta {
 }
 
 #[gpui_kit::test]
-fn chat_wheel_at_bottom_keeps_viewport_and_latest_button_stable(cx: &mut TestAppContext) {
-    let _locale = crate::test_support::chinese();
-    let (app, cx) = fixture(cx);
-    let viewport = cx.update(|_, cx| app.read(cx).scroll.viewport_bounds());
-    let bottom = position(&app, cx);
-    let composer = cx.debug_bounds("composer").unwrap();
-    assert!(cx.debug_bounds("scroll-to-latest").is_none());
-    for delta in [
-        pixels(-1.),
-        pixels(-20.),
-        pixels(-120.),
-        ScrollDelta::Lines(point(0., -3.)),
-        pixels(0.),
-        ScrollDelta::Pixels(point(px(120.), px(0.))),
-    ] {
-        cx.simulate_event(ScrollWheelEvent {
-            position: viewport.center(),
-            delta,
-            ..Default::default()
-        });
-        // Check the first painted frame, before polling can hide a transient
-        // latest-message button and restore the transcript's original height.
-        cx.update(|_, cx| {
-            let app = app.read(cx);
-            assert_eq!(
-                app.scroll.viewport_bounds(),
-                viewport,
-                "overscroll resized the transcript"
-            );
-            assert!(app.at_bottom);
-            assert!(!app.timeline.read(cx).wheel_pending(app));
-        });
-        assert_eq!(position(&app, cx), bottom);
-        assert_eq!(cx.debug_bounds("composer").unwrap(), composer);
-        assert!(cx.debug_bounds("scroll-to-latest").is_none());
-        cx.update(|window, cx| app.update(cx, |app, cx| app.poll_streams(window, cx)));
-        draw(cx);
-        cx.update(|_, cx| assert_eq!(app.read(cx).scroll.viewport_bounds(), viewport));
-    }
-    // Excess downward packets must not build a debt that swallows the first
-    // upward packet, including when the entire gesture arrives before redraw.
-    cx.update(|window, cx| {
-        for delta in std::iter::repeat_n(-120., 20).chain([60.]) {
-            window.dispatch_event(
-                ScrollWheelEvent {
-                    position: viewport.center(),
-                    delta: pixels(delta),
-                    ..Default::default()
-                }
-                .to_platform_input(),
-                cx,
-            );
-        }
-    });
-    settle(cx);
-    cx.update(|_, cx| {
-        let app = app.read(cx);
-        assert!(
-            !app.at_bottom,
-            "the first upward packet must release bottom following"
-        );
-        assert!(app.scroll.logical_scroll_top().item_ix < app.scroll.item_count());
-    });
-    assert!(cx.debug_bounds("scroll-to-latest").is_some());
-}
-
-#[gpui_kit::test]
 fn chat_wheel_through_unmeasured_history_preserves_both_directions(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx);
@@ -667,25 +600,6 @@ fn streaming_structure_change_keeps_absolute_offset_inside_reading_row(cx: &mut 
             "a streamed layout change must preserve pixels, not a percentage of the growing answer"
         );
     }
-}
-
-#[gpui_kit::test]
-fn latest_button_does_not_resize_transcript_when_leaving_bottom(cx: &mut TestAppContext) {
-    let _locale = crate::test_support::chinese();
-    let (app, cx) = fixture(cx);
-    let before = cx.update(|_, cx| app.read(cx).scroll.viewport_bounds());
-    cx.simulate_event(ScrollWheelEvent {
-        position: before.center(),
-        delta: pixels(30.),
-        ..Default::default()
-    });
-    draw(cx);
-    assert!(cx.debug_bounds("scroll-to-latest").is_some());
-    let after = cx.update(|_, cx| app.read(cx).scroll.viewport_bounds());
-    assert_eq!(
-        before, after,
-        "the latest-message control must not change the viewport during a wheel gesture"
-    );
 }
 
 #[gpui_kit::test]

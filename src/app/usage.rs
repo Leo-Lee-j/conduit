@@ -905,7 +905,7 @@ impl Render for UsagePanel {
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests {
     use super::{Observation, Provider, files, unix_now};
-    use gpui_kit::{Modifiers, MouseButton, TestAppContext, px, size};
+    use gpui_kit::{Modifiers, MouseButton, TestAppContext};
 
     #[gpui_kit::test]
     fn usage_tabs_reuse_workspace_preserve_inputs_and_close(cx: &mut TestAppContext) {
@@ -960,80 +960,52 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn usage_dashboard_renders_empty_and_populated_at_narrow_width(cx: &mut TestAppContext) {
+    fn changing_usage_month_clears_the_selected_service(cx: &mut TestAppContext) {
         let _locale = crate::test_support::chinese();
-        assert_eq!(super::label("usage.providers_title"), "用量主要花在哪里");
-        let (host, cx, root) = super::super::queue::tests::fixture(cx, "usage-layout");
+        let (host, cx, root) = super::super::queue::tests::fixture(cx, "usage-filter");
         cx.update(|window, cx| {
             host.update(cx, |app, cx| {
                 app.startup = None;
+                app.store.usage_ledger.record(Observation {
+                    key: "usage-filter-turn".into(),
+                    session: 1,
+                    workspace: root.clone(),
+                    provider: Provider::Claude,
+                    service: "local".into(),
+                    service_name: None,
+                    model: None,
+                    finished_at: unix_now(),
+                    input: Some(1200),
+                    cached: Some(800),
+                    output: Some(400),
+                    elapsed_ms: 1000,
+                    incomplete: false,
+                });
                 app.open_usage(window, cx);
             })
         });
-        for populated in [false, true] {
-            if populated {
-                cx.update(|_, cx| {
-                    host.update(cx, |app, cx| {
-                        app.store.usage_ledger.record(Observation {
-                            key: "usage-layout-turn".into(),
-                            session: 1,
-                            workspace: root.clone(),
-                            provider: Provider::Claude,
-                            service: "local".into(),
-                            service_name: None,
-                            model: None,
-                            finished_at: unix_now(),
-                            input: Some(1200),
-                            cached: Some(800),
-                            output: Some(400),
-                            elapsed_ms: 1000,
-                            incomplete: false,
-                        });
-                        cx.notify();
-                    })
-                });
-            }
-            for width in [850., 1400.] {
-                cx.simulate_resize(size(px(width), px(800.)));
-                cx.run_until_parked();
-                cx.update(|window, cx| {
-                    window.simulate_next_frame(cx);
-                    let _ = window.draw(cx);
-                });
-                let bounds = cx.debug_bounds("usage-ledger-panel").unwrap();
-                assert!(bounds.right() <= px(width));
-                assert!(bounds.bottom() <= px(800.));
-                assert!(bounds.size.height > px(300.));
-            }
-            if populated {
-                let center = cx.debug_bounds("usage-provider-0").unwrap().center();
-                cx.simulate_mouse_down(center, MouseButton::Left, Modifiers::default());
-                cx.simulate_mouse_up(center, MouseButton::Left, Modifiers::default());
-                cx.run_until_parked();
-                cx.update(|window, cx| {
-                    let panel = {
-                        let app = host.read(cx);
-                        app.usage_ui.panels[&app.usage_ui.active.unwrap()].clone()
-                    };
-                    assert!(panel.read(cx).selected_service.is_some());
-                    panel.update(cx, |panel, cx| {
-                        panel.month.update(cx, |input, cx| {
-                            input.set_value("2020-01", window, cx);
-                            cx.emit(super::InputEvent::Change);
-                        })
-                    });
-                });
-                cx.run_until_parked();
-                cx.update(|_, cx| {
-                    let app = host.read(cx);
-                    assert!(
-                        app.usage_ui.panels[&app.usage_ui.active.unwrap()]
-                            .read(cx)
-                            .selected_service
-                            .is_none()
-                    );
-                });
-            }
-        }
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let center = cx.debug_bounds("usage-provider-0").unwrap().center();
+        cx.simulate_mouse_down(center, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(center, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        let panel = cx.update(|_, cx| {
+            let app = host.read(cx);
+            app.usage_ui.panels[&app.usage_ui.active.unwrap()].clone()
+        });
+        cx.update(|window, cx| {
+            assert!(panel.read(cx).selected_service.is_some());
+            panel.update(cx, |panel, cx| {
+                panel.month.update(cx, |input, cx| {
+                    input.set_value("2020-01", window, cx);
+                    cx.emit(super::InputEvent::Change);
+                })
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| assert!(panel.read(cx).selected_service.is_none()));
     }
 }

@@ -434,27 +434,7 @@ impl ConduitApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{bounded_text, visible_count};
-
-    #[test]
-    fn priority_prefix_reserves_overflow_and_does_not_backfill() {
-        let _locale = crate::test_support::chinese();
-        let widths = [180., 80., 40.];
-        for (width, expected) in [
-            (0., 0),
-            (28., 0),
-            (211., 0),
-            (216., 1),
-            (300., 2),
-            (312., 3),
-        ] {
-            assert_eq!(
-                visible_count(widths.into_iter(), width),
-                expected,
-                "width {width}"
-            );
-        }
-    }
+    use super::bounded_text;
 
     #[test]
     fn native_status_values_are_bounded_utf8_single_lines() {

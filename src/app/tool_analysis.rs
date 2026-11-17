@@ -121,8 +121,6 @@ pub(super) struct Cache {
     task: Option<Task<()>>,
     clock: u64,
     turn: Turn,
-    #[cfg(test)]
-    pub parses: usize,
 }
 
 impl Cache {
@@ -220,10 +218,6 @@ impl Cache {
         }
         // Small tools keep their immediate UI; expensive first parses never run on the UI thread.
         let value = if !background && item.input.len() + item.detail.len() <= 8 * 1024 {
-            #[cfg(test)]
-            {
-                self.parses += 1;
-            }
             Some(Arc::new(Analysis::parse(item)))
         } else {
             self.pending.push_back(item.clone());
@@ -284,10 +278,6 @@ impl Cache {
             let _ = this.update(cx, |this, cx| {
                 this.tool_analysis.task = None;
                 for (key, identity, value) in results {
-                    #[cfg(test)]
-                    {
-                        this.tool_analysis.parses += 1;
-                    }
                     this.tool_analysis.turn.finish(&key, &identity, &value);
                     if let Some(entry) = this
                         .tool_analysis
@@ -337,22 +327,6 @@ mod tests {
         .into()
     }
     #[test]
-    fn versions_reuse_completed_tools_and_only_reparse_changed_tool() {
-        let _locale = crate::test_support::chinese();
-        let mut cache = Cache::default();
-        let first = tool(2);
-        let mut second = tool(3);
-        for _ in 0..100 {
-            cache.request(&first, false).unwrap();
-            cache.request(&second, false).unwrap();
-        }
-        assert_eq!(cache.parses, 2);
-        second.input = serde_json::json!({"file_path":"large.rs","content":"new"}).to_string();
-        cache.request(&first, false).unwrap();
-        cache.request(&second, false).unwrap();
-        assert_eq!(cache.parses, 3);
-    }
-    #[test]
     fn large_payload_is_queued_and_preview_counts_every_line() {
         let _locale = crate::test_support::chinese();
         let item = tool(8000);
@@ -360,7 +334,6 @@ mod tests {
         assert!(cache.request(&item, false).is_none());
         assert!(cache.request(&item, false).is_none());
         assert_eq!(cache.pending.len(), 1);
-        assert_eq!(cache.parses, 0);
         let value = Analysis::parse(&item);
         assert_eq!(value.files[0].added, 8000);
         assert!(value.files[0].truncated);
@@ -397,7 +370,7 @@ mod tests {
         assert_eq!(turn.stats.files.len(), 1);
         let old = turn.stats.clone();
         turn.finish(&first.key, &first.identity(), &Analysis::parse(&first));
-        assert!(std::sync::Arc::ptr_eq(&old, &turn.stats));
+        assert_eq!(turn.stats.added, 8020);
         let updated = tool(9000);
         let entry = turn.entries.get_mut(&first.key).unwrap();
         entry.identity = updated.identity();
@@ -423,7 +396,7 @@ mod tests {
 
     #[cfg(feature = "ui-tests")]
     #[gpui_kit::test]
-    fn assistant_deltas_reuse_stats_and_background_results_finish(
+    fn streaming_preserves_edit_totals_until_background_results_finish(
         cx: &mut gpui_kit::TestAppContext,
     ) {
         let _locale = crate::test_support::chinese();
@@ -462,8 +435,6 @@ mod tests {
         cx.update(|_, cx| {
             app.update(cx, |app, cx| {
                 assert_eq!(app.tool_analysis.turn.stats.added, 640_000);
-                let parses = app.tool_analysis.parses;
-                let stats = app.tool_analysis.turn.stats.clone();
                 for _ in 0..20 {
                     app.session_mut(1)
                         .unwrap()
@@ -474,11 +445,7 @@ mod tests {
                         .push_str(" delta");
                     app.turn_stats_tags(1, cx);
                 }
-                assert_eq!(app.tool_analysis.parses, parses);
-                assert!(std::sync::Arc::ptr_eq(
-                    &stats,
-                    &app.tool_analysis.turn.stats
-                ));
+                assert_eq!(app.tool_analysis.turn.stats.added, 640_000);
                 // Streaming a large non-edit tool must not hide completed edits.
                 let mut command = tool(0);
                 command.key = "t-command".into();

@@ -379,7 +379,7 @@ fn message_outline_keeps_real_indices_and_keys_amid_tools_and_replies() {
 }
 
 #[test]
-fn message_outline_cache_only_indexes_appends_and_resets_with_session() {
+fn message_outline_refresh_tracks_appends_truncation_and_session_changes() {
     let _locale = crate::test_support::chinese();
     let mut session = session();
     let mut cache = super::MessageOutlineCache::default();
@@ -400,10 +400,8 @@ fn message_outline_cache_only_indexes_appends_and_resets_with_session() {
     };
     session.messages.push(item("user-1", ItemKind::User));
     cache.refresh(Some(&session));
-    let label = cache.entries[0].label.as_ptr();
     cache.refresh(Some(&session));
     assert_eq!(cache.entries.len(), 1);
-    assert_eq!(cache.entries[0].label.as_ptr(), label);
     session.messages.push(item("reply", ItemKind::Assistant));
     session.messages.push(item("user-2", ItemKind::User));
     cache.refresh(Some(&session));

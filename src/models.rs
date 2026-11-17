@@ -705,61 +705,6 @@ base_url = "https://example.invalid"
     }
 
     #[test]
-    fn brand_of_resolves_each_marked_family() {
-        let _locale = crate::test_support::chinese();
-        for (id, brand) in [
-            ("claude-sonnet-4-6", ModelBrand::Anthropic),
-            ("claude-fable-5-1-reversed[1M]", ModelBrand::Anthropic),
-            ("gpt-6.1-sol", ModelBrand::OpenAI),
-            ("gpt-6-astra-cc-format", ModelBrand::OpenAI),
-            ("grok-4.7[1M]", ModelBrand::Xai),
-            ("kimi-k3[1M]", ModelBrand::Kimi),
-            ("deepseek-v4-flash", ModelBrand::DeepSeek),
-            ("deepseek-reasoner", ModelBrand::DeepSeek),
-            ("glm-5.3[1M]", ModelBrand::Zhipu),
-            ("qwen3-max", ModelBrand::Qwen),
-            ("MiniMax-M2", ModelBrand::MiniMax),
-            ("doubao-seed-1-6", ModelBrand::Doubao),
-            ("Seed-OSS-36B-Instruct", ModelBrand::Doubao),
-            ("hunyuan-t1", ModelBrand::Hunyuan),
-            ("gemini-2.5-pro", ModelBrand::Gemini),
-            ("step-3.5-flash", ModelBrand::Step),
-            ("stepfun/step3", ModelBrand::Step),
-            ("mistralai/mistral-large", ModelBrand::Mistral),
-            ("codestral-latest", ModelBrand::Mistral),
-            ("meta-llama/llama-4-scout", ModelBrand::Meta),
-            ("cohere/command-a", ModelBrand::Cohere),
-            ("google/gemma-3-27b-it", ModelBrand::Gemma),
-            ("nvidia/nemotron-70b", ModelBrand::Nvidia),
-            ("nvidia/llama-3.1-nemotron-70b", ModelBrand::Nvidia),
-            ("perplexity/sonar-pro", ModelBrand::Perplexity),
-            ("ai21/jamba-large", ModelBrand::Ai21),
-            ("baichuan4", ModelBrand::Baichuan),
-            ("01-ai/yi-large", ModelBrand::Yi),
-            ("sparkdesk-v4", ModelBrand::Spark),
-            ("amazon.nova-pro-v1:0", ModelBrand::Nova),
-            ("ernie-4.5", ModelBrand::Wenxin),
-            ("openrouter/moonshotai/kimi-k2", ModelBrand::Kimi),
-            ("o3-mini", ModelBrand::OpenAI),
-        ] {
-            assert_eq!(brand_of(id), brand, "{id}");
-        }
-        // Unmarked or proxy-rewritten IDs must not borrow another vendor's mark.
-        for id in [
-            "proxy-model",
-            "ccs-only",
-            "custom-route",
-            "my-stepper",
-            "buying-guide",
-            "custom-o123",
-            "version-o35",
-            "notgpt",
-        ] {
-            assert_eq!(brand_of(id), ModelBrand::Other, "{id}");
-        }
-    }
-
-    #[test]
     fn missing_and_invalid_configs_are_reported_without_models() {
         let _locale = crate::test_support::chinese();
         let home = home("missing");

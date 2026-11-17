@@ -69,21 +69,11 @@ cargo run --locked -- --settings
 提交 Rust 修改前，运行：
 
 ```powershell
-cargo fmt --all --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked -- --test-threads=1
-cargo build --locked --bin conduit --bin conduit-updater
+./scripts/check-core.ps1
 git diff --check
 ```
 
-涉及应用界面时，还需运行：
-
-```powershell
-cargo clippy --locked --all-targets --features ui-tests -- -D warnings
-cargo test --locked --features ui-tests --bin conduit app:: -- --test-threads=1
-```
-
-这些检查与 [CI](.github/workflows/ci.yml) 的构建及测试范围一致。请核对测试摘要：筛选后零用例不代表验证通过。准确记录失败、跳过、中断与未验证范围。不要用笼统的 `--ignored` 启用所有忽略测试；需要真实账户、模型调用或额外软件的测试应单独选择。
+同一脚本也由 [CI](.github/workflows/ci.yml) 调用：检查翻译、格式与 Clippy，一次运行普通测试和核心 UI 测试，最后构建正式程序。请核对测试摘要：筛选后零用例不代表验证通过。准确记录失败、跳过、中断与未验证范围。不要用笼统的 `--ignored` 启用所有忽略测试；需要真实账户、模型调用或额外软件的测试应单独选择。
 
 界面修改还应在原生应用中实际操作受影响流程，检查相关主题、窗口尺寸、DPI 和键盘行为。必要时附截图说明变化；自动化测试不能替代视觉验证。
 

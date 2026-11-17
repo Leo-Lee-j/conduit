@@ -69,21 +69,11 @@ Run commands from the repository root. While developing, start with tests for th
 Before submitting Rust changes, run:
 
 ```powershell
-cargo fmt --all --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked -- --test-threads=1
-cargo build --locked --bin conduit --bin conduit-updater
+./scripts/check-core.ps1
 git diff --check
 ```
 
-For changes to the application UI, also run:
-
-```powershell
-cargo clippy --locked --all-targets --features ui-tests -- -D warnings
-cargo test --locked --features ui-tests --bin conduit app:: -- --test-threads=1
-```
-
-These checks match the build and test coverage in [CI](.github/workflows/ci.yml). Review the test summary: a filter that runs zero tests does not verify a change. Report failures, skipped tests, interruptions, and untested areas accurately. Do not enable every ignored test with a blanket `--ignored`; choose explicitly any test that needs a real account, model usage, or extra software.
+The shared script is also used by [CI](.github/workflows/ci.yml). It checks translations, formatting and Clippy, runs ordinary and core UI tests together once, and builds the shipping binaries. Review the test summary: a filter that runs zero tests does not verify a change. Report failures, skipped tests, interruptions, and untested areas accurately. Do not enable every ignored test with a blanket `--ignored`; choose explicitly any test that needs a real account, model usage, or extra software.
 
 For UI changes, exercise the affected flow in the native app and check the relevant themes, window sizes, DPI settings, and keyboard behavior. Attach screenshots when they help explain the change; automated tests do not replace visual verification.
 

@@ -25,23 +25,18 @@
 | [应用背景图](background-images.md) | Wallhaven 免 Key 接入、渲染分层、缓存预算与性能验收 |
 | [会话与存储](sessions.md) | 并发、发送确认、正文按需加载、历史导入及恢复 |
 | [CLI 适配器](cli-adapters.md) | 接入契约、进程管理、OpenCode 特有行为 |
-| [Chat 命令入口设计](chat-commands.md) | slash 面板、已接入来源及可扩展的发现与执行契约 |
+| [Chat 命令](chat-commands.md) | slash 面板、已接入来源、发现与执行约束 |
 | [测试与验收](testing.md) | 测试选择、隔离环境、人工验收和结果记录 |
 | [性能与指标](performance.md) | 有界工作、缓存、用量语义与测量边界 |
 | [发布与更新](releasing.md) | 签名密钥、CI、安装包、更新与故障恢复 |
 
 ## 实验扩展
 
-[Skill / MCP 三方目录与安装调研](skill-mcp-catalog-research-2026-11-16.md)：来源 API 实测与分阶段方案；首版已接入，操作与当前范围见[设置与 AI 连接](settings.md#在线发现与安装)。
-
-[手机操控会话调研](mobile-session-control-research-2026-11-10.md)：手机 Web/PWA、会话控制边界、网络接入、投入与验收建议；尚未实现。
-
-[插件文档](plugins/README.md)区分已接入的原生贡献机制、开发态 Shell 运行时和后续安装管理方案。Shell 生产准入尚未完成。
+[插件文档](plugins/README.md)区分已接入的原生贡献机制与开发态 Shell 运行时。Shell 生产准入尚未完成。
 
 - [原生贡献契约](plugins/contributions.md)
 - [Shell 开发运行时](plugins/runtime.md)
 - [验证与准入](plugins/validation.md)
-- [后续方案](plugins/roadmap.md)
 
 ## 工具与资源
 
