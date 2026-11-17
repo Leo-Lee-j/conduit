@@ -6,6 +6,7 @@ use gpui_kit::component::{
 };
 use std::{cell::Cell, ops::Range, rc::Rc};
 
+mod outline;
 mod search;
 
 const SEARCH_DELAY: Duration = Duration::from_millis(70);
@@ -175,6 +176,7 @@ pub(super) struct FilePreview {
     _subscriptions: Vec<Subscription>,
     location: Option<SourcePosition>,
     location_pending: Rc<Cell<bool>>,
+    outline: outline::Outline,
 }
 
 impl FilePreview {
@@ -191,6 +193,7 @@ impl FilePreview {
         });
         let subscription = cx.subscribe(&input, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
+                this.outline.cancel_reveal();
                 this.search(cx);
             }
         });
@@ -203,6 +206,7 @@ impl FilePreview {
                     this.rendered = Some(snapshot);
                     this.search(cx);
                     this.reveal_location(cx);
+                    this.reveal_outline(cx);
                 }
             }));
         }
@@ -241,6 +245,7 @@ impl FilePreview {
             _subscriptions: subscriptions,
             location: None,
             location_pending: Rc::new(Cell::new(false)),
+            outline: outline::Outline::default(),
         }
     }
 
@@ -267,6 +272,7 @@ impl FilePreview {
                 self.rendered = None;
                 markdown.update(cx, |state, cx| state.set_text(&self.source, cx));
             }
+            self.refresh_outline(cx);
             self.search(cx);
             self.reveal_location(cx);
         }
@@ -278,6 +284,7 @@ impl FilePreview {
     }
 
     pub(super) fn go_to(&mut self, position: SourcePosition, cx: &mut Context<Self>) {
+        self.outline.cancel_reveal();
         // Citation navigation takes precedence over a previous find reveal.
         self.open = false;
         self.generation += 1;
@@ -338,6 +345,7 @@ impl FilePreview {
     }
 
     pub(super) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.outline.cancel_reveal();
         self.location_pending.set(false);
         let was_open = self.open;
         let selection = (!was_open).then(|| TextSelection::selected_text(window, cx));
@@ -398,6 +406,7 @@ impl FilePreview {
         if self.composing(window, cx) {
             return;
         }
+        self.outline.cancel_reveal();
         if !self.open {
             self.open_find(window, cx);
             return;
@@ -491,6 +500,10 @@ impl FilePreview {
     }
 
     fn reveal(&mut self, cx: &mut Context<Self>) {
+        // A search already in flight may finish after the user chose a heading.
+        if self.outline.navigation_active() {
+            return;
+        }
         self.pending.set(self.open && !self.hits.is_empty());
         if self.pending.get()
             && let Some(state) = &self.markdown
@@ -724,16 +737,22 @@ impl Render for FilePreview {
         let horizontal = self.markdown.is_none() && !self.wrap;
         let viewport_size = self.viewport_size.clone();
         let owner = cx.entity().downgrade();
+        let outline_expanded = self.outline_expanded();
+        let reserve_outline = outline_expanded && self.outline_wide();
         let content = if let Some(state) = &self.markdown {
             let scroll = self.scroll.clone();
             let pending = self.pending.clone();
             let location_pending = self.location_pending.clone();
+            let outline_pending = self.outline.pending.clone();
             div()
                 .debug_selector(|| "file-markdown-content".into())
                 .w_full()
                 .min_w_0()
                 .flex_shrink_0()
                 .p(px(10.))
+                .when(reserve_outline, |content| {
+                    content.pr(px(outline::WIDTH + 32.))
+                })
                 .child(
                     super::typography::styled_markdown_view(
                         TextView::new(state),
@@ -745,7 +764,9 @@ impl Render for FilePreview {
                     .w_full()
                     .min_w_0()
                     .on_reveal(move |bounds, window, cx| {
-                        if location_pending.replace(false) || pending.get() {
+                        if outline_pending.replace(false) {
+                            outline::reveal_heading(&scroll, bounds, window);
+                        } else if location_pending.replace(false) || pending.get() {
                             reveal_bounds(&scroll, bounds, false, window, cx);
                         }
                     }),
@@ -801,6 +822,8 @@ impl Render for FilePreview {
                                 let _ = owner.update(cx, |view, cx| {
                                     if view.open {
                                         view.reveal(cx);
+                                    }
+                                    if view.open || view.markdown.is_some() {
                                         cx.notify();
                                     }
                                 });
@@ -848,7 +871,10 @@ impl Render for FilePreview {
                         } else {
                             ScrollbarAxis::Vertical
                         },
-                    ),
+                    )
+                    .when(!self.outline.headings.is_empty(), |viewport| {
+                        viewport.child(self.render_outline(outline_expanded, cx))
+                    }),
             )
     }
 }
