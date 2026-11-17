@@ -10,6 +10,32 @@ mod search;
 
 const SEARCH_DELAY: Duration = Duration::from_millis(70);
 
+/// One-based line and Unicode character column from a source citation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct SourcePosition {
+    pub line: usize,
+    pub column: usize,
+}
+
+impl SourcePosition {
+    fn range(self, source: &str) -> Range<usize> {
+        let start = std::iter::once(0)
+            .chain(source.match_indices('\n').map(|(offset, _)| offset + 1))
+            .take(self.line.max(1))
+            .last()
+            .unwrap_or(0);
+        let line = source[start..]
+            .split('\n')
+            .next()
+            .unwrap_or("")
+            .trim_end_matches('\r');
+        let column = line.char_indices().nth(self.column.saturating_sub(1));
+        let offset = column.map_or(line.len(), |(offset, _)| offset);
+        let end = column.map_or(offset, |(_, ch)| offset + ch.len_utf8());
+        start + offset..start + end
+    }
+}
+
 actions!(
     file_preview,
     [ToggleFind, NextMatch, PreviousMatch, CloseFind]
@@ -147,6 +173,8 @@ pub(super) struct FilePreview {
     task: Option<Task<()>>,
     pending: Rc<Cell<bool>>,
     _subscriptions: Vec<Subscription>,
+    location: Option<SourcePosition>,
+    location_pending: Rc<Cell<bool>>,
 }
 
 impl FilePreview {
@@ -174,6 +202,7 @@ impl FilePreview {
                 if this.rendered.as_ref() != Some(&snapshot) {
                     this.rendered = Some(snapshot);
                     this.search(cx);
+                    this.reveal_location(cx);
                 }
             }));
         }
@@ -210,6 +239,8 @@ impl FilePreview {
             task: None,
             pending: Rc::new(Cell::new(false)),
             _subscriptions: subscriptions,
+            location: None,
+            location_pending: Rc::new(Cell::new(false)),
         }
     }
 
@@ -237,11 +268,64 @@ impl FilePreview {
                 markdown.update(cx, |state, cx| state.set_text(&self.source, cx));
             }
             self.search(cx);
+            self.reveal_location(cx);
         }
         if restyled {
             self.apply_highlights(cx);
             self.reveal(cx);
             cx.notify();
+        }
+    }
+
+    pub(super) fn go_to(&mut self, position: SourcePosition, cx: &mut Context<Self>) {
+        // Citation navigation takes precedence over a previous find reveal.
+        self.open = false;
+        self.generation += 1;
+        self.task = None;
+        self.searching = false;
+        self.pending.set(false);
+        self.apply_highlights(cx);
+        self.location = Some(position);
+        self.location_pending.set(true);
+        self.reveal_location(cx);
+        cx.notify();
+    }
+
+    fn location_range(&self) -> Option<Range<usize>> {
+        if !self.location_pending.get() || self.source.is_empty() {
+            return None;
+        }
+        let range = self.location?.range(&self.source);
+        if self.markdown.is_none() {
+            return Some(range);
+        }
+        let rendered = self
+            .rendered
+            .as_ref()
+            .filter(|r| r.source() == self.source.as_ref())?;
+        // Syntax and blank lines have no rendered characters. Prefer the next
+        // visible content, then the preceding content at the end of the file.
+        rendered
+            .range_for_source(range.clone())
+            .or_else(|| {
+                rendered
+                    .range_for_source(range.start..self.source.len())
+                    .map(|range| range.start..range.start)
+            })
+            .or_else(|| {
+                rendered
+                    .range_for_source(0..range.start)
+                    .map(|range| range.end..range.end)
+            })
+    }
+
+    fn reveal_location(&self, cx: &mut Context<Self>) {
+        if let Some(state) = &self.markdown
+            && let Some(range) = self.location_range()
+        {
+            state.update(cx, |state, cx| {
+                let _ = state.reveal_range(range, cx);
+            });
         }
     }
 
@@ -254,6 +338,7 @@ impl FilePreview {
     }
 
     pub(super) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.location_pending.set(false);
         let was_open = self.open;
         let selection = (!was_open).then(|| TextSelection::selected_text(window, cx));
         let mut query_changed = false;
@@ -407,7 +492,8 @@ impl FilePreview {
 
     fn reveal(&mut self, cx: &mut Context<Self>) {
         self.pending.set(self.open && !self.hits.is_empty());
-        if let Some(state) = &self.markdown
+        if self.pending.get()
+            && let Some(state) = &self.markdown
             && let Some(hit) = self.hits.get(self.current)
         {
             state.update(cx, |state, cx| {
@@ -417,6 +503,18 @@ impl FilePreview {
     }
 
     fn code_search(&self, block: Range<usize>) -> Option<CodeSearch> {
+        if let Some(range) = self.location_range() {
+            let target = (block.contains(&range.start)
+                || (range.is_empty() && range.start == block.end))
+                .then(|| range.start - block.start..range.end.min(block.end) - block.start);
+            return target.map(|target| CodeSearch {
+                ranges: Vec::new(),
+                target: Some(target),
+                pending: self.location_pending.clone(),
+                scroll: self.scroll.clone(),
+                horizontal: self.markdown.is_none() && !self.wrap,
+            });
+        }
         if !self.open {
             return None;
         }
@@ -453,6 +551,45 @@ impl FilePreview {
     pub(super) fn block_search(&self, source: Range<usize>) -> Option<CodeSearch> {
         let block = self.rendered.as_ref()?.range_for_source(source)?;
         self.code_search(block)
+    }
+
+    pub(super) fn code_block_search(&self, source: Range<usize>, code: &str) -> Option<CodeSearch> {
+        let mut search = self.block_search(source.clone())?;
+        if self.location_pending.get() {
+            let position = self.location?;
+            let target = position.range(&self.source);
+            if !source.contains(&target.start) {
+                return Some(search);
+            }
+            // Custom Markdown nodes map as a whole. Rebase the citation onto
+            // the code's lines, excluding the fence and parser-removed indent.
+            let block = &self.source[source.clone()];
+            let first = block.lines().next().unwrap_or("").trim_start();
+            let fenced = first.starts_with("```") || first.starts_with("~~~");
+            let line = self.source[source.start..target.start]
+                .matches('\n')
+                .count()
+                .saturating_sub(usize::from(fenced))
+                + 1;
+            let code_line = code.lines().nth(line - 1).unwrap_or("");
+            let source_line = self.source[..target.start]
+                .rfind('\n')
+                .map_or(self.source.as_ref(), |start| &self.source[start + 1..])
+                .lines()
+                .next()
+                .unwrap_or("");
+            let indent = source_line
+                .strip_suffix(code_line)
+                .map_or(0, |prefix| prefix.chars().count());
+            let range = SourcePosition {
+                line,
+                column: position.column.saturating_sub(indent).max(1),
+            }
+            .range(code);
+            search.target = Some(range);
+            search.ranges.clear();
+        }
+        Some(search)
     }
 
     fn find_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
@@ -590,6 +727,7 @@ impl Render for FilePreview {
         let content = if let Some(state) = &self.markdown {
             let scroll = self.scroll.clone();
             let pending = self.pending.clone();
+            let location_pending = self.location_pending.clone();
             div()
                 .debug_selector(|| "file-markdown-content".into())
                 .w_full()
@@ -607,7 +745,7 @@ impl Render for FilePreview {
                     .w_full()
                     .min_w_0()
                     .on_reveal(move |bounds, window, cx| {
-                        if pending.get() {
+                        if location_pending.replace(false) || pending.get() {
                             reveal_bounds(&scroll, bounds, false, window, cx);
                         }
                     }),
@@ -725,5 +863,27 @@ impl FilePreview {
             )
         });
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SourcePosition;
+
+    #[test]
+    fn citation_positions_preserve_unicode_and_clamp_to_source() {
+        let source = "标题\r\n中😀文\r\nlast";
+        for (line, column, expected) in [
+            (1, 1, 0..3),
+            (2, 2, 11..15),
+            (2, 3, 15..18),
+            (2, 99, 18..18),
+            (99, 1, 20..21),
+            (usize::MAX, usize::MAX, 24..24),
+        ] {
+            assert_eq!(SourcePosition { line, column }.range(source), expected);
+        }
+        assert_eq!(SourcePosition { line: 1, column: 1 }.range(""), 0..0);
+        assert_eq!(SourcePosition { line: 2, column: 1 }.range("a\n"), 2..2);
     }
 }

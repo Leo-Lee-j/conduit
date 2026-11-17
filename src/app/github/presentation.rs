@@ -70,7 +70,7 @@ fn summary(checks: &[Check]) -> String {
         .join(" · ")
 }
 
-fn pr_state(value: &str) -> String {
+pub(super) fn pr_state(value: &str) -> String {
     match value {
         "OPEN" => label("github.pr_open").into(),
         "MERGED" => label("github.pr_merged").into(),
@@ -95,7 +95,7 @@ impl PullRequestPanel {
                         snapshot
                             .threads
                             .iter()
-                            .filter(|thread| !thread.is_resolved)
+                            .filter(|thread| thread.resolvable && !thread.is_resolved)
                             .count()
                             .to_string(),
                     )],
@@ -105,9 +105,9 @@ impl PullRequestPanel {
         let section = |title, text: String, attention| {
             v_flex()
                 .flex_1()
-                .min_w(px(180.))
+                .min_w(px(140.))
                 .gap_1()
-                .p_3()
+                .p_2()
                 .border_1()
                 .border_color(rgb(palette().border))
                 .rounded_md()
@@ -133,9 +133,13 @@ impl PullRequestPanel {
             .gap_2()
             .child(
                 div()
-                    .text_size(ui_text_size(20.))
+                    .text_size(ui_text_size(16.))
                     .font_semibold()
-                    .child(format!("#{}  {}", pr.number, pr.title)),
+                    .child(format!(
+                        "{}  {}",
+                        pr.forge.request_name(pr.number),
+                        pr.title
+                    )),
             )
             .child(
                 h_flex()
@@ -165,8 +169,12 @@ impl PullRequestPanel {
                     .flex_wrap()
                     .child(section(
                         label("github.ci_summary"),
-                        summary(&pr.checks),
-                        pr.checks.iter().any(Check::needs_attention),
+                        if pr.checks_error.is_some() {
+                            label("gitlab.checks_failed").into()
+                        } else {
+                            summary(&pr.checks)
+                        },
+                        pr.checks_error.is_some() || pr.checks.iter().any(Check::needs_attention),
                     ))
                     .child(section(label("github.review_summary"), review, false)),
             )

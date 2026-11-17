@@ -461,13 +461,3 @@ pub(super) fn update_commit_text(
         parts[index].1.push_str(&text);
     }
 }
-
-/// Drag payload (and invisible drag preview) for the right-sidebar edge.
-#[derive(Clone)]
-pub(super) struct DetailResize;
-
-impl Render for DetailResize {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-    }
-}

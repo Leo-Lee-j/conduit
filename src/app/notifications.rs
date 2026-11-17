@@ -11,7 +11,6 @@ use approvals::ApprovalBinding;
 pub(super) use approvals::approval_message;
 use gpui_kit::component::{
     alert::Alert,
-    badge::Badge,
     notification::{Notification, NotificationDelivery},
 };
 
@@ -228,39 +227,6 @@ impl ConduitApp {
         if let Some(focus) = self.notifications.return_focus.take() {
             focus.focus(window, cx);
         }
-    }
-    pub(super) fn notification_bell(&self, cx: &mut Context<Self>) -> AnyElement {
-        let unread = self.notifications.center.unread();
-        div()
-            .flex_shrink_0()
-            .pr_1()
-            .child(
-                Badge::new()
-                    .color(cx.theme().primary)
-                    .count(unread)
-                    .max(99)
-                    .child(
-                        Button::new("notification-bell")
-                            .debug_selector(|| "notification-bell".into())
-                            .ghost()
-                            .small()
-                            .compact()
-                            .icon(FullIconName::Bell)
-                            .selected(self.plugins.right_is(builtins::NOTIFICATIONS))
-                            .tooltip(conduit::i18n::format(
-                                "notifications.notifications_unread",
-                                &[("unread", format!("{}", unread))],
-                            ))
-                            .accessibility_label(conduit::i18n::format(
-                                "notifications.notifications_unread_a9fb74",
-                                &[("unread", format!("{}", unread))],
-                            ))
-                            .on_click(cx.listener(|app, _, window, cx| {
-                                app.toggle_notifications(window, cx)
-                            })),
-                    ),
-            )
-            .into_any_element()
     }
     pub(super) fn render_notification_view(
         &mut self,

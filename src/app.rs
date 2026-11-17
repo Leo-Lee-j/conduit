@@ -183,6 +183,7 @@ pub struct ConduitApp {
     store: Store,
     background: background::BackgroundState,
     automation: automation::AutomationUi,
+    workflow_panels: BTreeMap<PathBuf, Entity<workflow::WorkflowPanel>>,
     git: git_ui::GitUi,
     branch_manager: Option<Entity<git_log::GitLogView>>,
     branches_open: bool,
@@ -671,6 +672,7 @@ impl ConduitApp {
         let mut app = Self {
             background: background::BackgroundState::new(cx),
             automation: Default::default(),
+            workflow_panels: BTreeMap::new(),
             persistence: crate::persistence::Persistence::new(Store::path()),
             attachments_cleanup_pending: false,
             session_control: session_controller::SessionController::default(),

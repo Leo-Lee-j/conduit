@@ -1,12 +1,13 @@
 //! Resolve transcript links without doing filesystem work on the UI thread.
 
+use super::file_preview::SourcePosition;
 use super::*;
 use crate::workspace_files::FileKey;
 use std::path::Component;
 
 #[derive(Debug, PartialEq, Eq)]
 enum LinkTarget {
-    File(FileKey),
+    File(FileKey, Option<SourcePosition>),
     External,
     Anchor,
 }
@@ -66,6 +67,14 @@ fn resolve_link(workspace: &Path, href: &str) -> Result<LinkTarget, String> {
         return Ok(LinkTarget::External);
     }
     let native_href = display_path(Path::new(href));
+    let fragment_position = native_href.split_once('#').and_then(|(_, fragment)| {
+        let start = fragment.strip_prefix('L')?.split('-').next()?;
+        let (line, column) = start.split_once('C').unwrap_or((start, "1"));
+        Some(SourcePosition {
+            line: positive_number(line)?,
+            column: positive_number(column)?,
+        })
+    });
     let mut path = native_href
         .split(['#', '?'])
         .next()
@@ -88,21 +97,41 @@ fn resolve_link(workspace: &Path, href: &str) -> Result<LinkTarget, String> {
             conduit::i18n::text_static("file_links.this_link_cannot_be_opened_in_file").into(),
         );
     }
-    // CLI citations commonly append :line or :line:column. Leave the drive
-    // letter intact, and decode afterwards so %3A in a filename stays literal.
-    for _ in 0..2 {
-        if let Some((file, line)) = path.rsplit_once(':')
-            && !line.is_empty()
-            && line.bytes().all(|b| b.is_ascii_digit())
+    // Parse before decoding so escaped colons remain part of the filename.
+    // A Windows drive colon is never followed by a bare positive number.
+    let mut position = None;
+    if let Some((file, last)) = path.rsplit_once(':')
+        && let Some(last) = positive_number(last)
+    {
+        let (file, location) = if let Some((file, line)) = file.rsplit_once(':')
+            && let Some(line) = positive_number(line)
         {
-            path = file.to_owned();
-        }
+            (file, SourcePosition { line, column: last })
+        } else {
+            (
+                file,
+                SourcePosition {
+                    line: last,
+                    column: 1,
+                },
+            )
+        };
+        position = Some(location);
+        path = file.to_owned();
     }
     #[cfg(windows)]
     if path.starts_with('/') && path.as_bytes().get(2) == Some(&b':') {
         path.remove(0);
     }
-    resolve_file(workspace, &decode_path(&path)?).map(LinkTarget::File)
+    resolve_file(workspace, &decode_path(&path)?)
+        .map(|key| LinkTarget::File(key, fragment_position.or(position)))
+}
+
+fn positive_number(value: &str) -> Option<usize> {
+    (!value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| value.parse().ok())
+        .flatten()
+        .filter(|value| *value > 0)
 }
 
 /// Attachment references are native paths, so %, # and + stay literal.
@@ -181,7 +210,13 @@ fn workspace_relative(root: &Path, path: &Path) -> Option<PathBuf> {
 }
 
 impl ConduitApp {
-    fn open_chat_preview(&mut self, key: FileKey, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_chat_preview(
+        &mut self,
+        key: FileKey,
+        position: Option<SourcePosition>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let path = PathBuf::from(display_path(&key.workspace.join(&key.relative)));
         // Reuse the registered workspace identity for tab deduplication and
         // navigation. Unregistered paths stay standalone, read-only previews.
@@ -212,6 +247,9 @@ impl ConduitApp {
             })
             .unwrap_or(key);
         self.open_file_preview(key, false, window, cx);
+        if let Some(position) = position {
+            self.reveal_file_position(position, cx);
+        }
     }
 
     fn chat_file_error(&mut self, session: u64, error: String, cx: &mut Context<Self>) {
@@ -241,7 +279,7 @@ impl ConduitApp {
             return;
         };
         match resolve_file(&workspace.path, path) {
-            Ok(key) => self.open_chat_preview(key, window, cx),
+            Ok(key) => self.open_chat_preview(key, None, window, cx),
             Err(error) => self.chat_file_error(session, error, cx),
         }
     }
@@ -262,7 +300,9 @@ impl ConduitApp {
             return;
         };
         match resolve_link(&workspace.path, href) {
-            Ok(LinkTarget::File(key)) => self.open_chat_preview(key, window, cx),
+            Ok(LinkTarget::File(key, position)) => {
+                self.open_chat_preview(key, position, window, cx)
+            }
             Ok(LinkTarget::External) => cx.open_url(href),
             Ok(LinkTarget::Anchor) => {}
             Err(error) => self.chat_file_error(session, error, cx),
@@ -272,7 +312,7 @@ impl ConduitApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{LinkTarget, resolve_file, resolve_link};
+    use super::{LinkTarget, SourcePosition, resolve_file, resolve_link};
     use crate::{file_ref::display_path, workspace_files::FileKey};
     use std::path::PathBuf;
 
@@ -280,25 +320,34 @@ mod tests {
     fn local_links_decode_and_normalize_citations() {
         let _locale = crate::test_support::chinese();
         let root = std::env::temp_dir().join("conduit-links");
-        for href in [
-            "./src/../docs/%E4%B8%AD%E6%96%87%20notes.md#L12",
-            "docs/中文%20notes.md:12:3",
+        for (href, column) in [
+            ("./src/../docs/%E4%B8%AD%E6%96%87%20notes.md#L12", 1),
+            ("docs/中文%20notes.md:12:3", 3),
+            ("docs/中文%20notes.md:12", 1),
+            ("docs/中文%20notes.md#L12-L18", 1),
+            ("docs/中文%20notes.md#L12C3-L18C5", 3),
         ] {
             assert_eq!(
                 resolve_link(&root, href),
-                Ok(LinkTarget::File(FileKey {
-                    workspace: root.clone(),
-                    relative: PathBuf::from("docs/中文 notes.md")
-                }))
+                Ok(LinkTarget::File(
+                    FileKey {
+                        workspace: root.clone(),
+                        relative: PathBuf::from("docs/中文 notes.md")
+                    },
+                    Some(SourcePosition { line: 12, column })
+                ))
             );
         }
         let absolute = root.join("a+b.rs");
         assert_eq!(
             resolve_link(&root, &display_path(&absolute)),
-            Ok(LinkTarget::File(FileKey {
-                workspace: root.clone(),
-                relative: PathBuf::from("a+b.rs")
-            }))
+            Ok(LinkTarget::File(
+                FileKey {
+                    workspace: root.clone(),
+                    relative: PathBuf::from("a+b.rs")
+                },
+                None
+            ))
         );
         let url = format!(
             "file:///{}#L2",
@@ -308,7 +357,13 @@ mod tests {
         );
         assert_eq!(
             resolve_link(&root, &url),
-            resolve_link(&root, &display_path(&absolute))
+            Ok(LinkTarget::File(
+                FileKey {
+                    workspace: root.clone(),
+                    relative: PathBuf::from("a+b.rs"),
+                },
+                Some(SourcePosition { line: 2, column: 1 })
+            ))
         );
         assert_eq!(
             resolve_file(&root, "notes 100%#1.md"),
@@ -327,7 +382,7 @@ mod tests {
             display_path(&absolute).to_ascii_uppercase(),
         ] {
             assert!(
-                matches!(resolve_link(&root, &href), Ok(LinkTarget::File(_))),
+                matches!(resolve_link(&root, &href), Ok(LinkTarget::File(..))),
                 "{href}"
             );
         }
@@ -343,20 +398,35 @@ mod tests {
             workspace: other,
             relative: "中文 notes.md".into(),
         };
-        for href in [
-            "../conduit-links-other/中文%20notes.md".to_owned(),
-            "./%2e%2e/conduit-links-other/中文%20notes.md#L2".to_owned(),
-            format!("{}:12:3", display_path(&file)),
-            format!(
-                "file:///{}#L12",
-                display_path(&file)
-                    .replace('\\', "/")
-                    .trim_start_matches('/')
+        for (href, position) in [
+            ("../conduit-links-other/中文%20notes.md".to_owned(), None),
+            (
+                "./%2e%2e/conduit-links-other/中文%20notes.md#L2".to_owned(),
+                Some(SourcePosition { line: 2, column: 1 }),
+            ),
+            (
+                format!("{}:12:3", display_path(&file)),
+                Some(SourcePosition {
+                    line: 12,
+                    column: 3,
+                }),
+            ),
+            (
+                format!(
+                    "file:///{}#L12",
+                    display_path(&file)
+                        .replace('\\', "/")
+                        .trim_start_matches('/')
+                ),
+                Some(SourcePosition {
+                    line: 12,
+                    column: 1,
+                }),
             ),
         ] {
             assert_eq!(
                 resolve_link(&root, &href),
-                Ok(LinkTarget::File(expected.clone())),
+                Ok(LinkTarget::File(expected.clone(), position)),
                 "{href}"
             );
         }
@@ -364,10 +434,16 @@ mod tests {
         #[cfg(windows)]
         assert_eq!(
             resolve_link(std::path::Path::new(r"C:\repo"), "D:/other/file.rs:12"),
-            Ok(LinkTarget::File(FileKey {
-                workspace: PathBuf::from(r"D:\other"),
-                relative: "file.rs".into(),
-            }))
+            Ok(LinkTarget::File(
+                FileKey {
+                    workspace: PathBuf::from(r"D:\other"),
+                    relative: "file.rs".into(),
+                },
+                Some(SourcePosition {
+                    line: 12,
+                    column: 1
+                })
+            ))
         );
     }
 

@@ -2,12 +2,13 @@
 use super::plugin_ui::right::RightBody;
 use super::*;
 
-// The tab strip depends on selection/eligibility, never on the draft text.
+const HEADER_HEIGHT: f32 = 36.;
+
+// The header depends on selection/eligibility, never on the draft text.
 // Keep it separate from the body: refreshing an ancestor cache would discard
 // the independently cached ScriptView when a command changes its contents.
 #[derive(PartialEq, Eq)]
 struct HeaderState {
-    branches: bool,
     close_id: &'static str,
     appearance: (u32, u32, u32, bool),
 }
@@ -44,6 +45,13 @@ impl ConduitApp {
             return (None, None);
         }
         let adapter = self.plugins.right_adapter();
+        // Workspace changes reconcile the dock key without a click. Initialize
+        // the matching form before rendering; retained forms keep their drafts.
+        match self.plugins.right().as_str() {
+            conduit::plugins::builtins::WORKFLOW => self.activate_workflow(window, cx),
+            conduit::plugins::builtins::AUTOMATIONS => self.activate_automations(window, cx),
+            _ => {}
+        }
         let view = match (adapter, self.plugins.right_key().cloned()) {
             (Some(adapter), Some(key)) => (adapter.render)(self, &key, window, cx),
             _ => RightBody::Failed(
@@ -61,10 +69,9 @@ impl ConduitApp {
                     revision: None,
                 });
             let state = HeaderState {
-                branches: false,
                 close_id,
                 appearance: (
-                    palette().canvas,
+                    palette().sidebar_bg,
                     palette().border,
                     palette().text,
                     theme::background_visible(),
@@ -83,7 +90,7 @@ impl ConduitApp {
                 .cached(
                     StyleRefinement::default()
                         .w_full()
-                        .h(px(TAB_BAR_HEIGHT))
+                        .h(px(HEADER_HEIGHT))
                         .flex_shrink_0(),
                 )
                 .into_any_element()
@@ -151,7 +158,7 @@ impl ConduitApp {
             body,
             ["dock_body_layout", "dock_body_prepaint", "dock_body_paint"],
         );
-        self.wrap_detail_panel(header, body, window, cx)
+        self.wrap_detail_panel(header, body, window)
     }
 
     fn render_detail_header(
@@ -163,48 +170,19 @@ impl ConduitApp {
         #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
         let _span = chat::profiling::host_span("dock_header_build");
         let title = self.plugins.right_title();
-        let choices = self.plugins.right_choices(false);
-        let selected = choices.iter().position(|choice| choice.selected);
-        let mut tabs = TabBar::new("right-sidebar-tabs")
-            .folder()
-            .with_size(Size::Medium)
-            .h(px(TAB_BAR_HEIGHT))
-            .w_full()
-            .min_w_0()
-            .when_some(selected, |tabs, index| tabs.selected_index(index));
-        for choice in choices {
-            let selector = format!("right-choice-{}", choice.id);
-            let request = choice.request;
-            tabs = tabs.child(
-                Tab::new()
-                    .debug_selector(move || selector.clone())
-                    .icon(Icon::new(choice.icon).small())
-                    .aria_label(choice.title.clone())
-                    .tooltip(move |window, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(choice.title.clone())
-                            .build(window, cx)
-                    })
-                    .disabled(request.is_none())
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |app, _, window, cx| {
-                        if let Some(request) = &request {
-                            app.dispatch_right_view(request, window, cx);
-                        }
-                    })),
-            );
-        }
         let actions = h_flex()
             .items_center()
             .flex_shrink_0()
             .gap_1()
-            .pr_2()
             .children(actions)
             .child(
                 Button::new(close_id)
+                    .cursor_pointer()
                     .debug_selector(move || close_id.into())
                     .ghost()
                     .small()
                     .compact()
+                    .focus_ring(true)
                     .icon(FullIconName::X)
                     .tooltip(conduit::i18n::format(
                         "dock.close",
@@ -216,15 +194,27 @@ impl ConduitApp {
                     ))
                     .on_click(cx.listener(|app, _, window, cx| app.close_right_view(window, cx))),
             );
-        let header = h_flex()
+        let header = sidebar::navigation_header()
             .id("detail-header")
             .test_support()
             .debug_selector(|| "detail-header".into())
-            .h(px(TAB_BAR_HEIGHT))
+            .h(px(HEADER_HEIGHT))
             .w_full()
-            .min_w_0()
-            .flex_shrink_0()
-            .child(tabs.suffix(actions));
+            .gap_2()
+            .border_b_1()
+            .border_color(rgb(palette().border))
+            .child(
+                div()
+                    .id("right-sidebar-title")
+                    .debug_selector(|| "right-sidebar-title".into())
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(ui_text_size(13.))
+                    .font_semibold()
+                    .child(title),
+            )
+            .child(actions);
         header.into_any_element()
     }
 
@@ -233,7 +223,6 @@ impl ConduitApp {
         header: AnyElement,
         body: AnyElement,
         window: &Window,
-        cx: &App,
     ) -> (Option<AnyElement>, Option<AnyElement>) {
         let narrow = window.viewport_size().width < px(1100.);
         let panel = v_flex()
@@ -246,24 +235,23 @@ impl ConduitApp {
             .min_w_0()
             .overflow_hidden()
             .flex_shrink_0()
-            // Folder tabs use this same token for their selected shape.
-            .bg(cx.theme().tokens.tab_active)
+            .bg(rgb(palette().sidebar_bg))
             .when(!narrow && theme::background_visible(), |panel| {
-                panel.bg(chrome_background(palette().canvas))
+                panel.bg(chrome_background(palette().sidebar_bg))
             })
             .text_color(rgb(palette().text))
-            .border_l_1()
             .border_color(rgb(palette().border))
             .when(narrow, |panel| {
                 panel
+                    .border_l_1()
                     .w(px(self
                         .plugins
                         .dock
                         .width
-                        .min(f32::from(window.viewport_size().width) - 38.)))
+                        .min(f32::from(window.viewport_size().width) - 76.)))
                     .absolute()
                     .top_0()
-                    .right_0()
+                    .right(px(38.))
                     .h_auto()
                     .bottom(px(34.))
                     .shadow_lg()

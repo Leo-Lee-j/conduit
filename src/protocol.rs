@@ -5,7 +5,9 @@ mod claude_blocks;
 mod codex_async_input;
 mod codex_commands;
 mod codex_fork;
+mod notifications;
 mod opencode;
+pub(crate) mod presentation;
 pub use codex_commands::SOURCE as CODEX_COMMANDS;
 mod reasoning;
 mod subagents;
@@ -96,6 +98,8 @@ pub enum Event {
         allow: bool,
     },
     Notice(String),
+    /// Current CLI activity; replaces the status line without adding transcript rows.
+    Activity(String),
     /// A transient or fatal error from the CLI stream. Rendered as a banner
     /// instead of an inline notice so it does not pollute the transcript.
     ErrorBanner(String),
@@ -178,6 +182,7 @@ pub struct Protocol {
     intent: crate::commands::RequestIntent,
     provider: Provider,
     initialized: bool,
+    codex_ready: bool,
     acp: opencode::State,
     cwd: String,
     prompt: String,
@@ -199,6 +204,7 @@ pub struct Protocol {
     claude_text_blocks: claude_blocks::Blocks,
     claude_thinking_blocks: claude_blocks::Blocks,
     tool_inputs: std::collections::HashMap<String, Value>,
+    presentation: presentation::Presentation,
     #[cfg(test)]
     pub approval_test: bool,
     #[cfg(test)]
@@ -267,6 +273,7 @@ impl Protocol {
             intent: Default::default(),
             provider,
             initialized: false,
+            codex_ready: false,
             acp: Default::default(),
             cwd,
             prompt,
@@ -288,6 +295,7 @@ impl Protocol {
             claude_text_blocks: Default::default(),
             claude_thinking_blocks: Default::default(),
             tool_inputs: Default::default(),
+            presentation: Default::default(),
             #[cfg(test)]
             approval_test: false,
             #[cfg(test)]
@@ -541,6 +549,8 @@ impl Protocol {
     pub fn startup_pending(&self) -> bool {
         if self.provider == Provider::OpenCode && !self.text_only {
             self.acp.startup_pending()
+        } else if self.provider == Provider::Codex {
+            !self.codex_ready
         } else {
             !self.initialized
         }
@@ -607,6 +617,10 @@ impl Protocol {
         }
         let mut step = Step::new();
         if self.codex_async_interrupt_acknowledged(&v) {
+            return step;
+        }
+        // Observer RPC failures belong to the child, not the main turn.
+        if self.codex_agent_event(&v) {
             return step;
         }
         if let Some(error) = v.get("error")
@@ -682,6 +696,7 @@ impl Protocol {
                 self.thread_id = Some(id.into());
                 step.events.push(Event::NativeId(id.into()));
                 if self.codex_command_ready(&mut step) {
+                    self.codex_ready = step.done;
                     return step;
                 }
                 let mut params = json!({"threadId":id,"input":[{"type":"text","text":self.prompt,"text_elements":[]}]});
@@ -715,14 +730,13 @@ impl Protocol {
                     .pointer("/result/turn/id")
                     .and_then(Value::as_str)
                     .map(String::from);
+                self.codex_ready = self.turn_id.is_some()
+                    || matches!(self.intent, crate::commands::RequestIntent::Command(_));
             }
             _ => {}
         }
         if v["method"] == "conduit/agentPoll" {
             step.writes = self.poll_subagents();
-            return step;
-        }
-        if self.codex_agent_event(&v) {
             return step;
         }
         let method = text(&v, "method");
@@ -755,6 +769,7 @@ impl Protocol {
                     .pointer("/turn/id")
                     .and_then(Value::as_str)
                     .map(str::to_owned);
+                self.codex_ready = self.turn_id.is_some();
             }
             "item/completed"
                 if self.codex_compacting() && p["item"]["type"] == "contextCompaction" =>
@@ -1048,7 +1063,7 @@ impl Protocol {
                     &[("method", method.to_string())],
                 )));
             }
-            _ => {}
+            _ => self.codex_notification(method, p, &mut step),
         }
         step
     }
@@ -1190,6 +1205,10 @@ impl Protocol {
                 }
             }
             "assistant" => {
+                if let Some(error) = v["error"].as_str().filter(|error| !error.is_empty()) {
+                    step.events
+                        .push(Event::ErrorBanner(presentation::bounded(error)));
+                }
                 let message = &v["message"];
                 let id = text(message, "id");
                 if v["parent_tool_use_id"].is_null() {
@@ -1359,7 +1378,7 @@ impl Protocol {
                     );
                 }
             }
-            _ => {}
+            _ => self.claude_notification(&v, &mut step),
         }
         step
     }
@@ -1480,6 +1499,22 @@ impl Protocol {
 mod tests {
     use super::*;
 
+    #[test]
+    fn codex_startup_deadline_covers_initialize_thread_and_turn_acknowledgements() {
+        for native in [None, Some("known-thread".into())] {
+            let mut p = Protocol::new(Provider::Codex, "C:/work".into(), "hello".into(), native);
+            assert!(p.startup_pending());
+            p.initialize();
+            p.accept(json!({"id":1,"result":{}}));
+            assert!(p.startup_pending());
+            p.accept(json!({"id":2,"result":{"thread":{"id":"known-thread"}}}));
+            assert!(p.startup_pending());
+            p.accept(json!({"method":"conduit/agentPoll"}));
+            assert!(p.startup_pending());
+            p.accept(json!({"id":3,"result":{"turn":{"id":"turn"}}}));
+            assert!(!p.startup_pending());
+        }
+    }
     #[test]
     fn codex_startup_uses_selected_route_and_model_for_new_and_resumed_threads() {
         let _locale = crate::test_support::chinese();

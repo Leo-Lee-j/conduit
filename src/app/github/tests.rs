@@ -23,6 +23,7 @@ fn pr_document_preserves_workspace_drafts_tabs_and_releases_closed_panels(cx: &m
             document: true,
             scrolls: Default::default(),
             snapshot: None,
+            requested: None,
             error: Some("Offline fixture".into()),
             sync_result: None,
             loading: false,
@@ -51,14 +52,14 @@ fn pr_document_preserves_workspace_drafts_tabs_and_releases_closed_panels(cx: &m
             app.input.update(cx, |input, cx| {
                 input.set_value("keep original draft", window, cx)
             });
-            app.open_github(window, cx);
+            app.open_github_request(None, window, cx);
             assert_eq!(app.active_document(), Some(DocumentTab::PullRequest(100)));
             app.select_document(DocumentTab::Chat(2), window, cx);
             assert!(app.github_ui.active.is_none());
             app.input.update(cx, |input, cx| {
                 input.set_value("keep other draft", window, cx)
             });
-            app.open_github(window, cx);
+            app.open_github_request(None, window, cx);
             assert_eq!(app.active_document(), Some(DocumentTab::PullRequest(101)));
             app.select_document(DocumentTab::PullRequest(100), window, cx);
             assert_eq!(app.selected_workspace, Some(0));
@@ -101,7 +102,7 @@ fn pr_document_checks_fit_and_attachment_returns_to_chat_without_losing_the_page
         pr.threads = Some(snapshot());
         let panel = cx.new(|cx| PullRequestPanel {
             host: app.downgrade(), workspace: root.clone(), focus: cx.focus_handle(), document: true,
-            scrolls: Default::default(), snapshot: Some(pr), error: None, sync_result: None,
+            scrolls: Default::default(), snapshot: Some(pr), requested: None, error: None, sync_result: None,
             loading: false, shown: 20, tab: 0, expanded_threads: Default::default(),
             cancel: Arc::new(AtomicBool::new(false)), _task: Task::ready(()), _subscription: None,
         });
@@ -151,7 +152,7 @@ fn pr_document_checks_fit_and_attachment_returns_to_chat_without_losing_the_page
     });
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
-            app.open_github(window, cx);
+            app.open_github_request(None, window, cx);
             assert_eq!(app.github_ui.panels.len(), 1);
             assert_eq!(panel.read(cx).tab, 0);
         })
@@ -167,6 +168,70 @@ fn draw(cx: &mut VisualTestContext) {
     cx.update(|window, cx| {
         let _ = window.draw(cx);
     });
+}
+
+#[gpui_kit::test]
+fn gitlab_document_renders_mr_and_keeps_sync_and_composer_bound_to_gitlab(cx: &mut TestAppContext) {
+    use crate::app::files::DocumentTab;
+    let _locale = crate::test_support::chinese();
+    let (app, cx, root) = fixture(cx, "gitlab-document");
+    let panel = cx.update(|window, cx| {
+        let pr = crate::github::gitlab::tests::loaded();
+        let panel = cx.new(|cx| PullRequestPanel {
+            host: app.downgrade(),
+            workspace: root.clone(),
+            focus: cx.focus_handle(),
+            document: true,
+            scrolls: Default::default(),
+            snapshot: Some(pr),
+            requested: None,
+            error: None,
+            sync_result: None,
+            loading: false,
+            shown: 20,
+            tab: 0,
+            expanded_threads: Default::default(),
+            cancel: Arc::new(AtomicBool::new(false)),
+            _task: Task::ready(()),
+            _subscription: None,
+        });
+        app.update(cx, |app, cx| {
+            app.startup = None;
+            app.github_ui.roots.insert(100, root.clone());
+            app.github_ui.panels.insert(100, panel.clone());
+            app.open_tabs.push(DocumentTab::PullRequest(100));
+            app.select_document(DocumentTab::PullRequest(100), window, cx);
+        });
+        assert!(panel.read(cx).tab_title().starts_with("MR !7"));
+        panel
+    });
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(850.), gpui_kit::px(500.)));
+    draw(cx);
+    cx.update(|window, cx| {
+        assert!(
+            gpui_kit::base::test_support::find(window, &[], &"forge-provider".into()).is_some()
+        );
+        panel.update(cx, |panel, cx| {
+            panel.sync_threads(cx);
+            panel.tab = 2;
+            cx.notify();
+        });
+        let saved = &app.read(cx).store.reviews.remote;
+        assert_eq!(saved.len(), 1);
+        assert!(saved[0].pr.contains("/-/merge_requests/7"));
+        assert!(saved[0].feedback().unwrap().contains("#note_31"));
+    });
+    draw(cx);
+    click(cx, "github-publish-comment", &[]);
+    cx.update(|window, _| {
+        assert!(
+            gpui_kit::base::test_support::find(window, &[], &"github-comment-submit".into())
+                .is_some()
+        );
+    });
+    // Exercise the form without sending any remote mutation.
+    click(cx, "github-comment-cancel", &[]);
+    cx.update(|_, cx| assert!(app.read(cx).session_control.runs.is_empty()));
 }
 
 fn click(cx: &mut VisualTestContext, id: &str, ancestors: &[gpui_kit::ElementId]) {
@@ -209,6 +274,7 @@ fn pr_review_sync_and_attachments_keep_the_original_workspace_and_saved_status(
             host: app.downgrade(),
             workspace: root.clone(),
             snapshot: Some(pr),
+            requested: None,
             error: None,
             sync_result: None,
             loading: false,
@@ -335,6 +401,7 @@ fn pr_review_loading_missing_workspaces_and_readonly_state_block_sync(cx: &mut T
             host: app.downgrade(),
             workspace: root.clone(),
             snapshot: Some(pr),
+            requested: None,
             error: None,
             sync_result: None,
             loading: true,
@@ -385,7 +452,7 @@ fn failed_check_task_preserves_workspace_drafts_and_user_acceptance(cx: &mut Tes
         }).to_string()).unwrap();
         pr.local_head = "b".repeat(40);
         let panel = cx.new(|cx| PullRequestPanel {
-            host: app.downgrade(), workspace: root.clone(), snapshot: Some(pr),
+            host: app.downgrade(), workspace: root.clone(), snapshot: Some(pr), requested: None,
             error: None, sync_result: None, loading: false, shown: 20,
             tab: 0,
             expanded_threads: Default::default(),
@@ -411,8 +478,11 @@ fn failed_check_task_preserves_workspace_drafts_and_user_acceptance(cx: &mut Tes
     cx.simulate_mouse_down(bounds.center(), MouseButton::Left, Modifiers::default());
     cx.simulate_mouse_up(bounds.center(), MouseButton::Left, Modifiers::default());
     draw(cx);
-    let source = cx.update(|_, cx| {
+    let source = cx.update(|window, cx| {
         app.update(cx, |app, cx| {
+            assert_eq!(app.selected_workspace_path(), Some(root.clone()));
+            assert!(app.workflow_panels.contains_key(&root));
+            app.switch(1, Some(2), window, cx);
             assert_eq!(app.selected_workspace, Some(1));
             assert_eq!(app.selected_session, Some(2));
             assert_eq!(app.input.read(cx).value().as_str(), "keep other draft");
@@ -480,6 +550,7 @@ fn failed_check_task_rejects_stale_readonly_loading_and_missing_workspace_action
             host: app.downgrade(),
             workspace: root.clone(),
             snapshot: Some(pr),
+            requested: None,
             error: None,
             sync_result: None,
             loading: true,
@@ -543,6 +614,7 @@ fn github_write_form_blocks_removed_readonly_and_uncertain_resubmission(cx: &mut
             host: app.downgrade(),
             workspace: root.clone(),
             snapshot: Some(pr.clone()),
+            requested: None,
             error: None,
             sync_result: None,
             loading: false,

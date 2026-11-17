@@ -17,8 +17,13 @@ pub struct WriteError {
 }
 
 pub fn validate(expected: &PullRequest, current: &PullRequest, action: &Action) -> Result<()> {
-    let repository = threads::identity(&expected.url)?;
-    if repository.number != expected.number
+    let number = match expected.forge {
+        forge::Forge::Github => threads::identity(&expected.url)?.number,
+        forge::Forge::Gitlab => gitlab::identity(&expected.url)?.number,
+    };
+    if number != expected.number
+        || expected.forge != current.forge
+        || expected.cli_host != current.cli_host
         || expected.branch.is_empty()
         || !threads::oid(&expected.head)
         || !threads::oid(&expected.local_head)
@@ -27,6 +32,7 @@ pub fn validate(expected: &PullRequest, current: &PullRequest, action: &Action) 
         || expected.head != current.head
         || expected.local_head != current.local_head
         || expected.branch != current.branch
+        || expected.base != current.base
         || current.state != "OPEN"
     {
         bail!(conduit::i18n::text("github.write_stale"));
@@ -50,7 +56,8 @@ pub fn validate(expected: &PullRequest, current: &PullRequest, action: &Action) 
                     .comments
                     .iter()
                     .any(|c| c.state == threads::CommentState::Pending)
-                || (matches!(action, Action::Resolve(_)) && thread.is_resolved)
+                || (matches!(action, Action::Resolve(_))
+                    && (thread.is_resolved || !thread.resolvable))
             {
                 bail!(conduit::i18n::text("github.write_stale"));
             }
@@ -88,6 +95,9 @@ fn graphql_result(json: &str, action: &Action) -> Result<()> {
 }
 
 fn arguments(expected: &PullRequest, action: &Action) -> Result<Vec<String>> {
+    if expected.forge == forge::Forge::Gitlab {
+        return gitlab::write_arguments(expected, action);
+    }
     let repository = threads::identity(&expected.url)?;
     if let Action::Comment(body) = action {
         return Ok(vec![
@@ -124,6 +134,7 @@ fn arguments(expected: &PullRequest, action: &Action) -> Result<Vec<String>> {
 }
 
 pub struct Prepared {
+    forge: forge::Forge,
     gh: PathBuf,
     args: Vec<String>,
     action: Action,
@@ -144,7 +155,12 @@ pub fn prepare(
             bail!(conduit::i18n::text("github.cancelled"));
         }
         Ok((
-            executable().context(conduit::i18n::text("github.missing_cli"))?,
+            match expected.forge {
+                forge::Forge::Github => {
+                    executable().context(conduit::i18n::text("github.missing_cli"))?
+                }
+                forge::Forge::Gitlab => gitlab::executable()?,
+            },
             arguments(expected, action)?,
         ))
     };
@@ -153,6 +169,7 @@ pub fn prepare(
         uncertain: false,
     })?;
     Ok(Prepared {
+        forge: expected.forge,
         gh,
         args,
         action: action.clone(),
@@ -171,7 +188,9 @@ pub fn perform(prepared: Prepared, cancel: &AtomicBool) -> std::result::Result<(
     // No retries: timeout/cancellation can happen after the server accepted a write.
     query(&prepared.gh, &args, &prepared.workspace, cancel)
         .and_then(|json| {
-            if matches!(prepared.action, Action::Comment(_)) {
+            if prepared.forge == forge::Forge::Gitlab {
+                gitlab::write_result(&json, &prepared.action)
+            } else if matches!(prepared.action, Action::Comment(_)) {
                 Ok(())
             } else {
                 graphql_result(&json, &prepared.action)

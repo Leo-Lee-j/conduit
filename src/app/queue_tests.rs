@@ -92,6 +92,48 @@ fn draw(cx: &mut VisualTestContext) {
 }
 
 #[gpui_kit::test]
+fn cli_activity_updates_status_without_transcript_rows_or_successful_queue_dispatch(
+    cx: &mut TestAppContext,
+) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx, _) = fixture(cx, "cli-activity");
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            let sender = running(this, 1);
+            this.queued_messages.insert(
+                1,
+                crate::store::QueuedMessage {
+                    text: "retained".into(),
+                    references: vec![],
+                    paused: None,
+                },
+            );
+            sender
+                .send(Event::Activity("正在压缩对话上下文".into()))
+                .unwrap();
+            this.poll_streams(window, cx);
+            assert_eq!(this.session_control.runs[&1].activity, "正在压缩对话上下文");
+            assert!(this.session(1).unwrap().messages.is_empty());
+            sender.send(Event::Notice("不支持的消息".into())).unwrap();
+            this.poll_streams(window, cx);
+            assert_eq!(this.session(1).unwrap().messages[0].kind, ItemKind::Notice);
+            sender
+                .send(Event::Finished {
+                    error: Some(conduit::i18n::text("commands.native_cancelled")),
+                    cancelled: false,
+                })
+                .unwrap();
+            this.poll_streams(window, cx);
+            assert!(this.queued_messages[&1].paused.is_some());
+            assert!(!this.session_control.runs.contains_key(&1));
+            this.dispatch_queued_message(1, cx);
+            assert!(!this.session_control.runs.contains_key(&1));
+            this.persistence.flush();
+        });
+    });
+}
+
+#[gpui_kit::test]
 fn stop_shortcut_only_cancels_selected_run_and_retains_queue(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     let (app, cx, _) = fixture(cx, "stop-shortcut");

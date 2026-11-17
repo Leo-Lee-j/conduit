@@ -61,7 +61,7 @@ fn registered_factories_preserve_model_resume_and_handshake_contracts() {
             assert_eq!(step.writes[1]["method"], "thread/resume");
             assert_eq!(step.writes[1]["params"]["threadId"], "original");
             assert_eq!(step.writes[1]["params"]["model"], "test/model");
-            assert!(!adapter.startup_pending());
+            assert!(adapter.startup_pending());
             assert!(
                 adapter
                     .accept(json!({"id":2,"result":{"thread":{"id":"wrong"}}}))

@@ -3,6 +3,23 @@
 use super::*;
 use std::{borrow::Cow, rc::Rc};
 
+fn activates_link(event: &ClickEvent) -> bool {
+    match event {
+        ClickEvent::Mouse(click) => {
+            matches!(click.up.button, MouseButton::Left | MouseButton::Middle)
+        }
+        ClickEvent::Keyboard(_) => true,
+        ClickEvent::Touch(click) => !click.long_press,
+    }
+}
+
+fn reveal_message_action(button: Button, group: SharedString) -> Button {
+    button
+        .opacity(0.)
+        .group_hover(group, |style| style.opacity(1.))
+        .focus_visible(|style| style.opacity(1.))
+}
+
 #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
 pub(in crate::app) mod profiling;
 pub(super) mod rows;
@@ -998,10 +1015,15 @@ impl ConduitApp {
                         .size(px(13.))
                         .text_color(rgb(palette().danger_text))
                         .into_any_element()
-                } else {
+                } else if tool_succeeded(item) {
                     Icon::new(IconName::CircleCheck)
                         .size(px(13.))
                         .text_color(rgb(palette().diff_add_text))
+                        .into_any_element()
+                } else {
+                    Icon::new(FullIconName::CircleDashed)
+                        .size(px(13.))
+                        .text_color(rgb(palette().muted))
                         .into_any_element()
                 })
                 .child(
@@ -1207,45 +1229,43 @@ impl ConduitApp {
                                 .map(|workspace| display_path(&workspace.path.join(path)))
                                 .unwrap_or_else(|| mention.to_string())
                         };
-                        h_flex()
-                            .id(SharedString::from(format!(
-                                "user-file-{index}-{file_index}"
-                            )))
-                            .debug_selector(|| format!("user-file-{index}-{file_index}"))
-                            .max_w(px(200.))
-                            .h(px(24.))
-                            .flex_shrink_0()
-                            .min_w_0()
-                            .items_center()
-                            .gap_1()
-                            .px_2()
-                            .rounded(px(6.))
-                            .border_1()
-                            .border_color(rgb(palette().border))
-                            .bg(rgb(palette().surface_strong))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(rgb(palette().surface_hover)))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_chat_file(session_id, &link, window, cx);
-                            }))
-                            .tooltip(move |window, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new(full_path.clone())
-                                    .build(window, cx)
-                            })
-                            .child(
-                                Icon::new(file_ref::icon_for(path))
-                                    .small()
-                                    .text_color(rgb(palette().muted)),
-                            )
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .flex_shrink_1()
-                                    .truncate()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(palette().muted))
-                                    .child(name),
-                            )
+                        Button::new(SharedString::from(format!(
+                            "user-file-{index}-{file_index}"
+                        )))
+                        .ghost()
+                        .small()
+                        .accessibility_label(full_path.clone())
+                        .debug_selector(|| format!("user-file-{index}-{file_index}"))
+                        .max_w(px(200.))
+                        .h(px(24.))
+                        .flex_shrink_0()
+                        .min_w_0()
+                        .items_center()
+                        .gap_1()
+                        .px_2()
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(rgb(palette().border))
+                        .bg(rgb(palette().surface_strong))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.open_chat_file(session_id, &link, window, cx);
+                        }))
+                        .tooltip(full_path)
+                        .child(
+                            Icon::new(file_ref::icon_for(path))
+                                .small()
+                                .text_color(rgb(palette().muted)),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_shrink_1()
+                                .truncate()
+                                .text_size(px(11.))
+                                .text_color(rgb(palette().muted))
+                                .child(name),
+                        )
                     }));
                 let copy_id = SharedString::from(format!("user-copy-{}-{}", session_id, item.key));
                 let copied = self.copied_action.as_ref() == Some(&copy_id);
@@ -1308,36 +1328,33 @@ impl ConduitApp {
                             .items_center()
                             .gap(px(8.))
                             .child(
-                                h_flex()
-                                    .gap(px(2.))
-                                    .opacity(0.)
-                                    .group_hover(message_group.clone(), |this| this.opacity(1.))
-                                    .child(
-                                        message_action_button(
-                                            copy_id.clone(),
-                                            copy_icon,
-                                            if copied {
-                                                conduit::i18n::text_static("chat.copied")
-                                            } else {
-                                                conduit::i18n::text_static("chat.copy_message")
-                                            },
-                                        )
-                                        .on_click(
-                                            cx.listener(move |this, _, window, cx| {
-                                                let Some(text) = this
-                                                    .session(session_id)
-                                                    .and_then(|session| session.messages.get(index))
-                                                    .map(|item| item.text.clone())
-                                                else {
-                                                    return;
-                                                };
-                                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                                    text,
-                                                ));
-                                                this.show_copied(copy_id.clone(), window, cx);
-                                            }),
-                                        ),
-                                    ),
+                                h_flex().gap(px(2.)).child(
+                                    message_action_button(
+                                        copy_id.clone(),
+                                        copy_icon,
+                                        if copied {
+                                            conduit::i18n::text_static("chat.copied")
+                                        } else {
+                                            conduit::i18n::text_static("chat.copy_message")
+                                        },
+                                    )
+                                    .map(|button| {
+                                        reveal_message_action(button, message_group.clone())
+                                    })
+                                    .on_click(cx.listener(
+                                        move |this, _, window, cx| {
+                                            let Some(text) = this
+                                                .session(session_id)
+                                                .and_then(|session| session.messages.get(index))
+                                                .map(|item| item.text.clone())
+                                            else {
+                                                return;
+                                            };
+                                            cx.write_to_clipboard(ClipboardItem::new_string(text));
+                                            this.show_copied(copy_id.clone(), window, cx);
+                                        },
+                                    )),
+                                ),
                             )
                             .child(
                                 div()
@@ -1399,6 +1416,7 @@ impl ConduitApp {
                                 conduit::i18n::text_static("chat.copy_message")
                             },
                         )
+                        .map(|button| reveal_message_action(button, message_group.clone()))
                         .debug_selector(move || format!("reply-copy-button-{index}"))
                         // The 14px glyph sits centered in a 24px hit target.
                         // Align the glyph with prose while keeping that hit target.
@@ -1421,6 +1439,7 @@ impl ConduitApp {
                         Icon::new(FullIconName::GitFork),
                         conduit::i18n::text_static("workflow.branch_here"),
                     )
+                    .map(|button| reveal_message_action(button, message_group.clone()))
                     .debug_selector(move || format!("reply-branch-button-{index}"))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_handoff_at(session_id, index, window, cx)
@@ -1436,6 +1455,7 @@ impl ConduitApp {
                             Icon::new(IconName::RefreshCw),
                             conduit::i18n::text_static("chat.regenerate"),
                         )
+                        .map(|button| reveal_message_action(button, message_group.clone()))
                         .debug_selector(move || format!("reply-retry-button-{index}"))
                         .on_click(cx.listener(
                             move |this, _, window, cx| this.regenerate(index, window, cx),
@@ -1477,8 +1497,6 @@ impl ConduitApp {
                     .justify_start()
                     .items_center()
                     .gap(px(8.))
-                    .opacity(0.)
-                    .group_hover(message_group.clone(), |this| this.opacity(1.))
                     .child(controls)
                     .child(model_meta)
                     .child(timestamp_meta)
@@ -1495,6 +1513,8 @@ impl ConduitApp {
                                     .flex_shrink_0()
                                     .text_size(px(10.))
                                     .text_color(rgb(palette().faint))
+                                    .opacity(0.)
+                                    .group_hover(message_group.clone(), |style| style.opacity(1.))
                                     .child(label),
                             )
                         },
@@ -1513,15 +1533,7 @@ impl ConduitApp {
                             None,
                         )
                         .on_link_click(move |url, event, window, cx| {
-                            let activate = match event {
-                                ClickEvent::Mouse(click) => matches!(
-                                    click.up.button,
-                                    MouseButton::Left | MouseButton::Middle
-                                ),
-                                ClickEvent::Keyboard(_) => true,
-                                ClickEvent::Touch(click) => !click.long_press,
-                            };
-                            if !activate {
+                            if !activates_link(event) {
                                 return;
                             }
                             let _ = link_app.update(cx, |this, cx| {
@@ -1582,7 +1594,10 @@ impl ConduitApp {
                                 )
                                 .on_link_click({
                                     let app = cx.entity().downgrade();
-                                    move |url, _, window, cx| {
+                                    move |url, event, window, cx| {
+                                        if !activates_link(event) {
+                                            return;
+                                        }
                                         let _ = app.update(cx, |this, cx| {
                                             this.open_chat_link(session_id, url, window, cx);
                                         });
@@ -1715,7 +1730,8 @@ impl ConduitApp {
                                     .gap_2()
                                     .child(
                                         div()
-                                            .flex_shrink_0()
+                                            .min_w_0()
+                                            .flex_shrink_1()
                                             .text_left()
                                             .text_size(px(13.))
                                             .truncate()
@@ -1727,7 +1743,8 @@ impl ConduitApp {
                                             .map(|name| name.to_string_lossy().into_owned())
                                             .unwrap_or_else(|| path.clone());
                                         div()
-                                            .flex_shrink_0()
+                                            .min_w_0()
+                                            .flex_shrink_1()
                                             .max_w(px(180.))
                                             .truncate()
                                             .px_1p5()
@@ -1750,6 +1767,7 @@ impl ConduitApp {
                             )
                             .child(
                                 div()
+                                    .flex_shrink_0()
                                     .text_size(px(11.))
                                     .text_color(rgb(palette().faint))
                                     .child(item.status.label().to_string()),
@@ -1761,6 +1779,7 @@ impl ConduitApp {
                                     IconName::ChevronRight
                                 })
                                 .small()
+                                .flex_shrink_0()
                                 .text_color(rgb(palette().faint)),
                             ),
                     )

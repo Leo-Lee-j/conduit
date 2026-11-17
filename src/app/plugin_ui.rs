@@ -202,9 +202,6 @@ impl PluginUi {
             .retain(|key, _| self.renderer_registrations.contains_key(key));
         self.right_renderers
             .retain(|key, _| self.renderer_registrations.contains_key(key));
-        if !self.state.right_open() {
-            self.dock.drag = None;
-        }
         self.reconciled_revision = Some(self.registry.revision());
     }
     pub(super) fn revision(&self) -> NavigationRevision {
@@ -312,10 +309,22 @@ impl PluginUi {
     }
 }
 
+const RAIL_BUTTON_SIZE: f32 = 32.;
+
+fn navigation_button_row() -> Div {
+    h_flex()
+        .relative()
+        .w_full()
+        .h(px(TAB_BAR_HEIGHT))
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+}
+
 // Rail rows are 36px + 4px gap. Reserve the usage and collapse controls,
-// their gaps, the spacer gap and 4px top padding. An overflow button needs one slot.
+// their gaps and the spacer gap. An overflow button needs one slot.
 fn visible_activity_count(count: usize, height: f32) -> usize {
-    let slots = ((height - 80.).max(0.) / 40.).floor() as usize;
+    let slots = ((height - 76.).max(0.) / 40.).floor() as usize;
     if count <= slots {
         count
     } else {
@@ -382,7 +391,6 @@ impl ConduitApp {
                 .state
                 .reset_right(&self.plugins.registry, &self.plugins.snapshot)
                 .expect("core fallback remains registered");
-            self.plugins.dock.drag = None;
         }
         let visible = if self.startup.is_some() {
             vec![]
@@ -491,8 +499,8 @@ impl ConduitApp {
             .focus_ring(true)
             .small()
             .compact()
-            .w(px(36.))
-            .h(px(36.))
+            .w(px(RAIL_BUTTON_SIZE))
+            .h(px(RAIL_BUTTON_SIZE))
             .flex_shrink_0()
             .icon(activity_icon(&item.icon).unwrap_or(FullIconName::CirclePile))
             .selected(self.activity_selected(item))
@@ -505,11 +513,7 @@ impl ConduitApp {
                     this.dispatch_activity(request, window, cx);
                 }
             }));
-        div()
-            .relative()
-            .w(px(36.))
-            .h(px(36.))
-            .flex_shrink_0()
+        navigation_button_row()
             .child(button)
             .when(badge && pending > 0, |row| {
                 row.child(
@@ -548,19 +552,17 @@ impl ConduitApp {
                 )
             },
         );
-        let button = div()
+        let button = h_flex()
             .relative()
-            .w(px(36.))
-            .h(px(34.))
+            .items_center()
             .flex_shrink_0()
+            .cursor_pointer()
             .child(
                 Button::new("nav-branches")
                     .debug_selector(|| "git-branch-trigger".into())
                     .ghost()
                     .small()
                     .compact()
-                    .w(px(36.))
-                    .h(px(34.))
                     .flex_shrink_0()
                     .icon(FullIconName::GitBranch)
                     .selected(self.branch_navigation_open())
@@ -625,7 +627,8 @@ impl ConduitApp {
             .w(px(38.))
             .h_full()
             .flex_shrink_0()
-            .pt_1()
+            // Start at the same top edge as the navigation header and tab bar.
+            .items_center()
             .gap_1()
             .bg(chrome_background(palette().sidebar_bg))
             .border_r_1()
@@ -649,63 +652,68 @@ impl ConduitApp {
             let selected = hidden.iter().any(|(_, _, selected)| *selected);
             let app = cx.entity();
             rail = rail.child(
-                Button::new("nav-more")
-                    .debug_selector(|| "nav-more".into())
-                    .ghost()
-                    .small()
-                    .compact()
-                    .w(px(36.))
-                    .h(px(36.))
-                    .flex_shrink_0()
-                    .icon(IconName::Ellipsis)
-                    .selected(selected)
-                    .tooltip(conduit::i18n::text_static("plugin_ui.more_features"))
-                    .accessibility_label(conduit::i18n::text_static("plugin_ui.more_features"))
-                    .dropdown_menu(move |mut menu, _, _| {
-                        // Keep every contribution reachable even when the menu has
-                        // more rows than the rail or the window can display. The
-                        // menu recomputes its default height limit on each resize.
-                        menu = menu.scrollable(true);
-                        for (item, request, selected) in &hidden {
-                            let app = app.clone();
-                            let request = request.clone();
-                            let label = contribution_title(item.id.as_str(), &item.title);
-                            let debug = format!("nav-more-{}", item.id);
-                            let entry = PopupMenuItem::element(move |_, _| {
-                                div()
-                                    .id(SharedString::from(debug.clone()))
-                                    .test_support()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .debug_selector({
-                                        let debug = debug.clone();
-                                        move || debug.clone()
-                                    })
-                                    .child(label.clone())
-                            })
-                            .checked(*selected)
-                            .disabled(request.is_none())
-                            .icon(activity_icon(&item.icon).unwrap_or(FullIconName::CirclePile))
-                            .on_click(move |_, window, cx| {
-                                if let Some(request) = &request {
-                                    app.update(cx, |app, cx| {
-                                        app.dispatch_activity(request, window, cx)
-                                    });
-                                }
-                            });
-                            menu = menu.item(entry);
-                        }
-                        menu
-                    }),
+                navigation_button_row().child(
+                    Button::new("nav-more")
+                        .debug_selector(|| "nav-more".into())
+                        .ghost()
+                        .small()
+                        .compact()
+                        .w(px(RAIL_BUTTON_SIZE))
+                        .h(px(RAIL_BUTTON_SIZE))
+                        .flex_shrink_0()
+                        .icon(IconName::Ellipsis)
+                        .selected(selected)
+                        .tooltip(conduit::i18n::text_static("plugin_ui.more_features"))
+                        .accessibility_label(conduit::i18n::text_static("plugin_ui.more_features"))
+                        .dropdown_menu(move |mut menu, _, _| {
+                            // Keep every contribution reachable even when the menu has
+                            // more rows than the rail or the window can display. The
+                            // menu recomputes its default height limit on each resize.
+                            menu = menu.scrollable(true);
+                            for (item, request, selected) in &hidden {
+                                let app = app.clone();
+                                let request = request.clone();
+                                let label = contribution_title(item.id.as_str(), &item.title);
+                                let debug = format!("nav-more-{}", item.id);
+                                let entry = PopupMenuItem::element(move |_, _| {
+                                    div()
+                                        .id(SharedString::from(debug.clone()))
+                                        .test_support()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .debug_selector({
+                                            let debug = debug.clone();
+                                            move || debug.clone()
+                                        })
+                                        .child(label.clone())
+                                })
+                                .checked(*selected)
+                                .disabled(request.is_none())
+                                .icon(activity_icon(&item.icon).unwrap_or(FullIconName::CirclePile))
+                                .on_click(move |_, window, cx| {
+                                    if let Some(request) = &request {
+                                        app.update(cx, |app, cx| {
+                                            app.dispatch_activity(request, window, cx)
+                                        });
+                                    }
+                                });
+                                menu = menu.item(entry);
+                            }
+                            menu
+                        }),
+                ),
             );
         }
         let rail = rail.child(div().flex_1());
         let rail = rail.child(
-            self.usage_button(cx, None)
-                .w(px(36.))
-                .h(px(36.))
-                .debug_selector(|| "navigation-usage".into()),
+            navigation_button_row().child(
+                self.usage_button(cx, None)
+                    .w(px(RAIL_BUTTON_SIZE))
+                    .h(px(RAIL_BUTTON_SIZE))
+                    .flex_shrink_0()
+                    .debug_selector(|| "navigation-usage".into()),
+            ),
         );
         let rail = rail.child(
             Button::new("nav-collapse")
@@ -713,8 +721,8 @@ impl ConduitApp {
                 .ghost()
                 .small()
                 .compact()
-                .w(px(36.))
-                .h(px(32.))
+                .w(px(RAIL_BUTTON_SIZE))
+                .h(px(RAIL_BUTTON_SIZE))
                 .flex_shrink_0()
                 .icon(if self.plugins.collapsed() {
                     IconName::ChevronRight

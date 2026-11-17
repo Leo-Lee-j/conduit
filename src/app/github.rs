@@ -3,6 +3,7 @@ use super::*;
 mod checks;
 mod document;
 mod presentation;
+mod sidebar;
 pub(super) use document::GithubUi;
 mod composer;
 mod threads;
@@ -146,6 +147,7 @@ pub(super) struct PullRequestPanel {
     document: bool,
     scrolls: [ScrollHandle; 3],
     snapshot: Option<crate::github::PullRequest>,
+    requested: Option<(crate::github::forge::Forge, u64, String)>,
     error: Option<String>,
     sync_result: Option<String>,
     loading: bool,
@@ -157,30 +159,6 @@ pub(super) struct PullRequestPanel {
     _subscription: Option<Subscription>,
 }
 
-impl ConduitApp {
-    pub(super) fn github_button(
-        &self,
-        cx: &mut Context<Self>,
-        popover: Option<WeakEntity<gpui_kit::component::popover::PopoverState>>,
-    ) -> Button {
-        Button::new("github-pr")
-            .small()
-            .compact()
-            .ghost()
-            .icon(FullIconName::GitPullRequest)
-            .tooltip(label("github.title"))
-            .accessibility_label(label("github.title"))
-            .selected(self.github_ui.active.is_some())
-            .disabled(self.selected_workspace_path().is_none())
-            .on_click(cx.listener(move |this, _, window, cx| {
-                if let Some(popover) = &popover {
-                    let _ = popover.update(cx, |popover, cx| popover.dismiss(window, cx));
-                }
-                this.open_github(window, cx);
-            }))
-    }
-}
-
 impl PullRequestPanel {
     pub(super) fn tab_title(&self) -> String {
         let project = self
@@ -190,25 +168,61 @@ impl PullRequestPanel {
             .to_string_lossy();
         let title = self.snapshot.as_ref().map_or_else(
             || label("github.short_title").to_owned(),
-            |pr| format!("PR #{}", pr.number),
+            |pr| pr.forge.request_name(pr.number),
         );
         format!("{title} · {project}")
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
+        self.reload_with_provider(None, cx);
+    }
+
+    fn reload_with_provider(
+        &mut self,
+        provider: Option<Option<crate::github::forge::Forge>>,
+        cx: &mut Context<Self>,
+    ) {
+        if provider.is_some()
+            && self.host.upgrade().is_none_or(|host| {
+                let app = host.read(cx);
+                !app.writable
+                    || app.closing
+                    || !app
+                        .store
+                        .workspaces
+                        .iter()
+                        .any(|w| w.path == self.workspace)
+            })
+        {
+            return;
+        }
         self.cancel.store(true, Ordering::Release);
         self.cancel = Arc::new(AtomicBool::new(false));
+        if provider.is_some() {
+            self.snapshot = None;
+            self.requested = None;
+        }
         self.loading = true;
         self.error = None;
         self.sync_result = None;
         let cancel = self.cancel.clone();
         let workspace = self.workspace.clone();
+        let requested = self.requested.clone();
         self._task = cx.spawn(async move |this, cx| {
             let ticket = cancel.clone();
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    crate::github::load(&workspace, &ticket).map_err(|e| format!("{e:#}"))
+                    if let Some(provider) = provider {
+                        crate::github::forge::select(&workspace, provider, &ticket)
+                            .map_err(|e| format!("{e:#}"))?;
+                    }
+                    if let Some((forge, number, url)) = requested {
+                        crate::github::load_request(&workspace, forge, number, &url, &ticket)
+                    } else {
+                        crate::github::load(&workspace, &ticket)
+                    }
+                    .map_err(|e| format!("{e:#}"))
                 })
                 .await;
             if cancel.load(Ordering::Acquire) {
@@ -370,7 +384,7 @@ impl Render for PullRequestPanel {
                     .iter()
                     .any(|workspace| workspace.path == self.workspace)
         });
-        let mut header = v_flex().gap_3().child(
+        let mut header = v_flex().gap_2().flex_shrink_0().child(
             h_flex()
                 .gap_2()
                 .items_center()
@@ -384,6 +398,36 @@ impl Render for PullRequestPanel {
                         .text_color(rgb(palette().muted))
                         .child(self.workspace.display().to_string()),
                 )
+                .child({
+                    let panel = cx.weak_entity();
+                    Button::new("forge-provider")
+                        .small()
+                        .ghost()
+                        .label(
+                            self.snapshot
+                                .as_ref()
+                                .map_or(label("forge.select"), |pr| pr.forge.name()),
+                        )
+                        .tooltip(label("forge.select_hint"))
+                        .disabled(self.loading || !writable)
+                        .dropdown_menu(move |mut menu, _, _| {
+                            for (name, provider) in [
+                                (label("forge.auto"), None),
+                                ("GitHub", Some(crate::github::forge::Forge::Github)),
+                                ("GitLab", Some(crate::github::forge::Forge::Gitlab)),
+                            ] {
+                                let panel = panel.clone();
+                                menu = menu.item(PopupMenuItem::new(name).on_click(
+                                    move |_, _, cx| {
+                                        let _ = panel.update(cx, |this, cx| {
+                                            this.reload_with_provider(Some(provider), cx);
+                                        });
+                                    },
+                                ));
+                            }
+                            menu
+                        })
+                })
                 .when_some(self.snapshot.as_ref(), |row, pr| {
                     let url = pr.url.clone();
                     row.child(
@@ -480,6 +524,13 @@ impl Render for PullRequestPanel {
                 body = body.child(self.review_threads(writable && self.error.is_none(), cx));
             }
             if self.tab == 0 {
+                if let Some(error) = &pr.checks_error {
+                    body = body.child(
+                        div()
+                            .text_color(rgb(palette().danger_text))
+                            .child(format!("{}: {error}", label("gitlab.checks_failed"))),
+                    );
+                }
                 if pr.checks.is_empty() {
                     body = body.child(label("github.no_checks"));
                 }
@@ -689,10 +740,10 @@ impl Render for PullRequestPanel {
                     });
                 }
             })
-            .gap_3()
+            .gap_2()
             .min_h_0()
             .min_w_0()
-            .when(self.document, |page| page.size_full().p_4())
+            .when(self.document, |page| page.size_full().p_3())
             .child(header)
             .child(body)
             .child(

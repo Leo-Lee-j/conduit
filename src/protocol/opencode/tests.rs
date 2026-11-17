@@ -83,6 +83,42 @@ fn connected_with_config(
 }
 
 #[test]
+fn unexpected_native_cancel_is_an_error_and_unsupported_requests_are_visible() {
+    let _locale = crate::test_support::chinese();
+    let (mut p, writes) = connected(None, false, None);
+    let request = p.accept(json!({"id":"reverse","method":"fs/read_text_file","params":{}}));
+    assert_eq!(request.writes[0]["error"]["code"], -32601);
+    assert!(request.events.iter().any(|e| matches!(e, Event::Notice(_))));
+    let done =
+        p.accept(json!({"id":writes.last().unwrap()["id"],"result":{"stopReason":"cancelled"}}));
+    assert!(done.done && done.error.is_some());
+}
+
+#[test]
+fn opencode_resources_keep_message_identity_and_media_has_one_visible_fallback() {
+    let (mut p, _) = connected(None, false, None);
+    for content in [
+        json!({"type":"text","text":"answer"}),
+        json!({"type":"resource","resource":{"uri":"file:///report.txt","text":"report"}}),
+        json!({"type":"resource_link","uri":"https://example.com/report","name":"Report"}),
+    ] {
+        let step = p.accept(json!({"method":"session/update","params":{"sessionId":"ses_test","update":{"sessionUpdate":"agent_message_chunk","messageId":"reply","content":content}}}));
+        assert!(
+            matches!(&step.events[..], [Event::Delta { key, text }] if key == "reply" && !text.is_empty())
+        );
+    }
+    let media = json!({"method":"session/update","params":{"sessionId":"ses_test","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"image","data":"SECRET_BASE64"}}}});
+    let mut foreign = media.clone();
+    foreign["params"]["sessionId"] = json!("other");
+    assert!(p.accept(foreign).events.is_empty());
+    let step = p.accept(media.clone());
+    assert!(
+        matches!(&step.events[..], [Event::Notice(message)] if !message.contains("SECRET_BASE64"))
+    );
+    assert!(p.accept(media).events.is_empty());
+}
+
+#[test]
 fn opencode_thinking_chunks_preserve_order_and_filter_replays_and_foreign_sessions() {
     let _locale = crate::test_support::chinese();
     let mut protocol = Protocol::new(Provider::OpenCode, "C:/work".into(), "hello".into(), None);

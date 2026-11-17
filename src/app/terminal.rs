@@ -485,6 +485,7 @@ impl ConduitApp {
             .child(
                 Badge::new().count(count).child(
                     Button::new("toggle-terminal")
+                        .cursor_pointer()
                         .debug_selector(|| "toggle-terminal".into())
                         .ghost()
                         .small()
@@ -616,6 +617,7 @@ impl ConduitApp {
                         .suffix(
                             h_flex().items_center().pl_0p5().pr_1().child(
                                 Button::new(SharedString::from(close_selector.clone()))
+                                    .cursor_pointer()
                                     .debug_selector(move || close_selector.clone())
                                     .ghost()
                                     .xsmall()
@@ -662,6 +664,7 @@ impl ConduitApp {
             .child(tabs)
             .child(
                 Button::new("terminal-attach-selection")
+                    .cursor_pointer()
                     .small()
                     .compact()
                     .ghost()
@@ -716,6 +719,7 @@ impl ConduitApp {
             )
             .child(
                 Button::new("terminal-new")
+                    .cursor_pointer()
                     .debug_selector(|| "terminal-new".into())
                     .ghost()
                     .small()
@@ -730,6 +734,7 @@ impl ConduitApp {
             )
             .child(
                 Button::new("terminal-shell")
+                    .cursor_pointer()
                     .ghost()
                     .small()
                     .compact()
@@ -764,6 +769,7 @@ impl ConduitApp {
             )
             .child(
                 Button::new("terminal-maximize")
+                    .cursor_pointer()
                     .ghost()
                     .small()
                     .compact()
@@ -781,6 +787,7 @@ impl ConduitApp {
             )
             .child(
                 Button::new("terminal-hide")
+                    .cursor_pointer()
                     .ghost()
                     .small()
                     .compact()

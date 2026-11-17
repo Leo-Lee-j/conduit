@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod dialog;
+
 #[derive(Clone)]
 pub(super) struct SearchHit {
     pub(super) session: u64,
@@ -205,139 +207,6 @@ impl ConduitApp {
     }
 
     pub(super) fn open_search_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.refresh_search(cx, false);
-        self.search.read(cx).focus_handle(cx).focus(window, cx);
-        let view = cx.entity();
-        window.open_dialog(cx, move |dialog, window, _| {
-            let view = view.clone();
-            let viewport_height = f32::from(window.viewport_size().height);
-            let height = (viewport_height - 160.).clamp(320., 560.);
-            let margin_top = ((viewport_height - height) * 0.5).max(24.);
-            dialog
-                .w(px(640.))
-                .margin_top(px(margin_top))
-                .title(conduit::i18n::text_static("localization.search_sessions"))
-                .content(move |content, _, cx| {
-                    let this = view.read(cx);
-                    let input = this.search.clone();
-                    let query = this.search_query.trim().to_lowercase();
-                    let hits = this.search_ui.hits.clone();
-                    let mut body = v_flex().w_full().gap_2();
-                    body = body.child(
-                        Input::new(&input).h(px(34.)).prefix(
-                            Icon::new(IconName::Search)
-                                .small()
-                                .text_color(rgb(palette().faint)),
-                        ),
-                    );
-                    if this.search_ui.errors > 0 {
-                        body = body.child(
-                            div()
-                                .text_size(ui_text_size(12.))
-                                .text_color(rgb(palette().warning_text))
-                                .child(conduit::i18n::format(
-                                    "search.unable_to_read_messages_from_sessions_search",
-                                    &[("arg0", format!("{}", this.search_ui.errors))],
-                                )),
-                        );
-                    }
-                    if hits.is_empty() {
-                        body = body.child(
-                            div()
-                                .py_2()
-                                .text_size(ui_text_size(12.))
-                                .text_color(rgb(palette().faint))
-                                .child(if query.is_empty() {
-                                    conduit::i18n::text_static(
-                                        "search.enter_a_session_title_or_message_text",
-                                    )
-                                } else {
-                                    conduit::i18n::text_static("search.no_matching_sessions")
-                                }),
-                        );
-                    } else {
-                        let mut list = v_flex()
-                            .id("search-results")
-                            .w_full()
-                            .max_h(px((height - 150.).max(160.)))
-                            .overflow_y_scroll()
-                            .gap(px(1.));
-                        for hit in hits {
-                            let SearchHit {
-                                session,
-                                provider,
-                                workspace_name,
-                                title,
-                                archived,
-                                snippet,
-                            } = hit;
-                            let app = view.clone();
-                            list = list.child(
-                                div()
-                                    .id(("search-hit", session))
-                                    .w_full()
-                                    .px_2()
-                                    .py_2()
-                                    .gap_1()
-                                    .rounded(px(8.))
-                                    .cursor_pointer()
-                                    .hover(|style| style.bg(rgb(palette().surface_hover)))
-                                    .on_click(move |_, window, cx| {
-                                        app.update(cx, |this, cx| {
-                                            if let Some((workspace, _)) = this
-                                                .session_control
-                                                .locate(&this.store.workspaces, session)
-                                            {
-                                                this.switch(workspace, Some(session), window, cx);
-                                            }
-                                        });
-                                        window.close_dialog(cx);
-                                    })
-                                    .child(
-                                        h_flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(provider_icon(provider))
-                                            .child(div().flex_1().min_w_0().child(
-                                                highlighted_text(
-                                                    &title,
-                                                    &query,
-                                                    13.,
-                                                    palette().text,
-                                                ),
-                                            ))
-                                            .when(archived, |row| {
-                                                row.child(
-                                                    div()
-                                                        .text_size(ui_text_size(9.))
-                                                        .text_color(rgb(palette().faint))
-                                                        .child(conduit::i18n::text_static(
-                                                            "search.archived",
-                                                        )),
-                                                )
-                                            })
-                                            .child(
-                                                div()
-                                                    .text_size(ui_text_size(10.))
-                                                    .text_color(rgb(palette().faint))
-                                                    .child(workspace_name),
-                                            ),
-                                    )
-                                    .when(!snippet.is_empty(), |row| {
-                                        row.child(highlighted_text(
-                                            &snippet,
-                                            &query,
-                                            11.,
-                                            palette().muted,
-                                        ))
-                                    }),
-                            );
-                        }
-                        body = body.child(list);
-                    }
-                    content.child(body)
-                })
-        });
-        cx.notify();
+        self.open_workspace_search(false, window, cx);
     }
 }

@@ -193,15 +193,19 @@ fn plugins() -> PluginUi {
 }
 
 #[gpui_kit::test]
-fn generic_tabs_route_two_owners_and_reject_unbound_stale_revoked_views(cx: &mut TestAppContext) {
+fn rail_routes_two_owners_and_rejects_unbound_stale_revoked_views(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, tool_store(), plugins());
-    open(&app, cx, builtins::TOOL_DETAILS);
-    click_labeled(cx, Role::Tab, "View missing");
+    click(cx, "right-choice-conduit.core.tool-details");
+    click_labeled(cx, Role::Button, "View missing");
     cx.update(|_, cx| assert!(app.read(cx).plugins.right_is(builtins::TOOL_DETAILS)));
-    click_labeled(cx, Role::Tab, "View alpha");
+    click_labeled(cx, Role::Button, "View alpha");
     assert!(cx.element_bounds("rendered-test.alpha.view-1").is_some());
-    click_labeled(cx, Role::Tab, "View beta");
+    click_labeled(cx, Role::Button, "View beta");
+    assert!(cx.element_bounds("rendered-test.beta.view-1").is_some());
+    click_labeled(cx, Role::Button, "View beta");
+    assert!(cx.element_bounds("detail-panel").is_none());
+    click_labeled(cx, Role::Button, "View beta");
     assert!(cx.element_bounds("rendered-test.beta.view-1").is_some());
     let request = cx.update(|_, cx| {
         let app = app.read(cx);
@@ -219,6 +223,8 @@ fn generic_tabs_route_two_owners_and_reject_unbound_stale_revoked_views(cx: &mut
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
             assert!(!app.dispatch_right_view(&request, window, cx));
+            assert!(!app.toggle_right_view(&request, window, cx));
+            assert!(app.plugins.right_is("test.beta.view"));
         })
     });
     let revoked = cx.update(|_, cx| {
@@ -243,6 +249,7 @@ fn generic_tabs_route_two_owners_and_reject_unbound_stale_revoked_views(cx: &mut
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
             assert!(!app.dispatch_right_view(&revoked, window, cx));
+            assert!(!app.toggle_right_view(&revoked, window, cx));
             assert!(!app.plugins.right_open());
             assert_eq!(app.plugins.right().as_str(), builtins::TOOL_DETAILS);
         })
@@ -277,13 +284,15 @@ fn scope_removal_closes_dock_even_when_host_selects_another_session(cx: &mut Tes
         )
     });
     click(cx, "notification-bell");
-    assert!(cx.labeled_bounds(Role::Tab, "工具详情").is_none());
-    assert!(cx.labeled_bounds(Role::Tab, "View alpha").is_none());
-    assert!(cx.labeled_bounds(Role::Tab, "通知").is_some());
+    assert!(cx.labeled_bounds(Role::Button, "工具详情").is_none());
+    assert!(cx.labeled_bounds(Role::Button, "View alpha").is_none());
+    assert!(cx.element_bounds("project-workflow").is_none());
+    assert!(cx.element_bounds("project-automations").is_none());
+    assert!(cx.element_bounds("notification-bell").is_some());
     cx.simulate_keystrokes("escape");
     draw(cx);
     assert!(cx.element_bounds("detail-panel").is_none());
-    click(cx, "toggle-sidebar");
+    click(cx, "notification-bell");
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
             app.store.workspaces.clear();

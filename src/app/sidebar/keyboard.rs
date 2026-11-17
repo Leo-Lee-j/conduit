@@ -102,12 +102,8 @@ impl ConduitApp {
                     self.switch(index, *last, window, cx);
                 }
             }
-            cache::Row::More { path, .. } if key == "enter" || key == "right" => {
-                if let Some(index) = self.sidebar.workspace_index(path)
-                    && !self.expanded_workspaces.insert(index)
-                {
-                    self.expanded_workspaces.remove(&index);
-                }
+            cache::Row::More { path, expanded, .. } if key == "enter" || key == "right" => {
+                self.set_sidebar_sessions_expanded(path, !expanded, window, cx);
             }
             _ => {}
         }
@@ -122,9 +118,7 @@ impl ConduitApp {
                     .iter()
                     .position(|candidate| candidate.same_identity(row))
             }) {
-                self.sidebar
-                    .scroll
-                    .scroll_to_item(index, gpui_kit::ScrollStrategy::Top);
+                self.sidebar.reveal_keyboard_row(index);
             }
         }
         self.sidebar_view.update(cx, |_, cx| cx.notify());

@@ -103,6 +103,15 @@ impl ConduitApp {
                 structural_change = true;
             }
             match event {
+                Event::Activity(text) => {
+                    if let Some(run) = self.session_control.runs.get_mut(&id)
+                        && run.approvals.is_empty()
+                        && !run.runtime.is_cancelled()
+                    {
+                        run.activity = text;
+                        run.activity_message = None;
+                    }
+                }
                 Event::Subagent(agent) => {
                     if let Some(session) = self.session_mut(id) {
                         crate::subagents::upsert(&mut session.subagents, agent, &prefix);

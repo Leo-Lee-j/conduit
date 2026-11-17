@@ -1,7 +1,6 @@
 //! Workspace/session lifecycle, history import, and navigation.
 
 use super::*;
-use conduit::plugins::{builtins, ids::ViewId};
 
 pub(super) fn single_line_title(title: &str) -> String {
     title.replace(['\r', '\n'], " ")
@@ -872,43 +871,6 @@ impl ConduitApp {
                 content.child(remove)
             })
             .into_any_element()
-    }
-
-    /// Toggle the shared sidebar, retaining the last available tab.
-    pub(super) fn detail_toggle(&self, cx: &mut Context<Self>) -> Button {
-        let open = self.plugins.right_visible(false);
-        Button::new("toggle-sidebar")
-            .debug_selector(|| "toggle-sidebar".into())
-            .ghost()
-            .small()
-            .compact()
-            .icon(gpui_kit::assets::IconName::PanelRight)
-            .cursor_pointer()
-            .selected(open)
-            .tooltip(if open {
-                conduit::i18n::text_static("sessions.hide_sidebar")
-            } else {
-                conduit::i18n::text_static("sessions.show_sidebar")
-            })
-            .accessibility_label(if open {
-                conduit::i18n::text_static("sessions.hide_sidebar")
-            } else {
-                conduit::i18n::text_static("sessions.show_sidebar")
-            })
-            .on_click(cx.listener(|this, _, window, cx| {
-                if this.plugins.right_visible(false) {
-                    this.close_right_view(window, cx);
-                } else {
-                    let selected = this.plugins.right().clone();
-                    if !this.open_right_view(&selected, window, cx) {
-                        this.open_right_view(
-                            &ViewId::new(builtins::NOTIFICATIONS).unwrap(),
-                            window,
-                            cx,
-                        );
-                    }
-                }
-            }))
     }
 
     pub(super) fn clear_workspace_selection(

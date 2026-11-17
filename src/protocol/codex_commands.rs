@@ -104,6 +104,16 @@ mod tests {
         .with_intent(RequestIntent::Command(Box::new(call)))
     }
     #[test]
+    fn command_startup_remains_pending_until_native_rpc_acknowledgement() {
+        let mut p = command("compact");
+        p.accept(json!({"id":1,"result":{}}));
+        assert!(p.startup_pending());
+        p.accept(json!({"id":2,"result":{"thread":{"id":"thread"}}}));
+        assert!(p.startup_pending());
+        p.accept(json!({"id":3,"result":{}}));
+        assert!(!p.startup_pending());
+    }
+    #[test]
     fn native_discovery_sends_no_prompt_and_commands_use_explicit_rpcs() {
         let mut discover =
             Protocol::new(Provider::Codex, "C:/repo".into(), "never send".into(), None)

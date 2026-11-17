@@ -142,7 +142,10 @@ fn render_numbered_code(
             .search
             .as_ref()
             .and_then(WeakEntity::upgrade)
-            .and_then(|view| view.read(cx).block_search(node.source_range()?.clone())),
+            .and_then(|view| {
+                view.read(cx)
+                    .code_block_search(node.source_range()?.clone(), &data.code)
+            }),
     };
 
     let actions = config.copy.then(|| {

@@ -49,6 +49,7 @@ impl DiffSide {
 pub enum Subject {
     Line,
     File,
+    Discussion,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,9 +96,15 @@ pub struct Thread {
     pub original_start_line: Option<u32>,
     pub subject_type: Subject,
     pub is_resolved: bool,
+    #[serde(default = "default_resolvable")]
+    pub resolvable: bool,
     pub is_outdated: bool,
     pub comments: Vec<Comment>,
     pub total_comments: usize,
+}
+
+fn default_resolvable() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -121,6 +128,7 @@ pub(super) fn identity(value: &str) -> Result<Repository> {
     let parsed = url::Url::parse(value)?;
     let segments: Vec<_> = parsed.path_segments().context("Invalid PR path")?.collect();
     if web_url(value).is_none()
+        || parsed.scheme() != "https"
         || parsed.query().is_some()
         || parsed.fragment().is_some()
         || parsed.port().is_some()
@@ -373,6 +381,9 @@ pub(super) fn load(
 
 impl Thread {
     pub fn location(&self) -> String {
+        if self.subject_type == Subject::Discussion {
+            return conduit::i18n::text("gitlab.general_discussion");
+        }
         if self.subject_type == Subject::File {
             return conduit::i18n::text("github.thread_file");
         }
@@ -399,6 +410,9 @@ impl Thread {
     }
 
     pub fn remote_status(&self) -> String {
+        if !self.resolvable {
+            return conduit::i18n::text("gitlab.not_resolvable");
+        }
         let resolved = conduit::i18n::text_static(if self.is_resolved {
             "github.thread_resolved"
         } else {

@@ -414,6 +414,27 @@ mod tests {
         }}})
     }
     #[test]
+    fn child_observer_rpc_error_does_not_finish_main_turn() {
+        let mut p = codex();
+        p.accept(spawn("a"));
+        let writes = p.poll_subagents();
+        let step = p.accept(
+            json!({"id":writes[0]["id"],"error":{"code":-1,"message":"observer unavailable"}}),
+        );
+        assert!(!step.done);
+        assert!(step.error.is_none());
+        assert!(step.events.iter().any(
+            |event| matches!(event, Event::Subagent(agent) if agent.status == Status::Unknown)
+        ));
+        let reply = p.accept(json!({"method":"item/agentMessage/delta","params":{"threadId":"root","turnId":"main-turn","itemId":"reply","delta":"still working"}}));
+        assert!(
+            reply
+                .events
+                .iter()
+                .any(|event| matches!(event, Event::Delta { text, .. } if text == "still working"))
+        );
+    }
+    #[test]
     fn subagent_spawn_completion_is_not_task_completion_and_main_waits_for_all_children() {
         let mut p = codex();
         let mut previous = spawn("old-child");

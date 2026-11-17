@@ -57,6 +57,7 @@ pub(crate) fn event_bytes(event: &Event) -> usize {
         Event::NativeId(s)
         | Event::ApprovalCancelled(s)
         | Event::Notice(s)
+        | Event::Activity(s)
         | Event::CleanupBlocked(s)
         | Event::ErrorBanner(s) => s.len(),
         Event::ApprovalResolved { id, .. } => id.len(),
@@ -89,6 +90,16 @@ impl Sender {
             return Err(Box::new(mpsc::SendError(event)));
         }
         let cost = event_bytes(&event);
+        if let Event::Activity(_) = &event
+            && let Some(previous @ Event::Activity(_)) = queue.events.back()
+        {
+            let old_cost = event_bytes(previous);
+            if queue.bytes - old_cost + cost > MAX_BYTES {
+                return Err(Box::new(mpsc::SendError(event)));
+            }
+            queue.events.pop_back();
+            queue.bytes -= old_cost;
+        }
         if queue.bytes + cost <= MAX_BYTES
             && let Event::Delta { key, text } = &event
             && let Some(Event::Delta {
@@ -201,6 +212,21 @@ impl Drop for Receiver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn activity_updates_coalesce_preserve_barriers_and_failed_send_preserves_old_state() {
+        let (tx, rx) = channel();
+        for i in 0..MAX_EVENTS * 2 {
+            tx.send(Event::Activity(i.to_string())).unwrap();
+        }
+        let old = (MAX_EVENTS * 2 - 1).to_string();
+        assert!(tx.send(Event::Activity("x".repeat(MAX_BYTES))).is_err());
+        tx.send(Event::Notice("barrier".into())).unwrap();
+        tx.send(Event::Activity("next".into())).unwrap();
+        assert!(matches!(rx.try_recv(), Ok(Event::Activity(text)) if text == old));
+        assert!(matches!(rx.try_recv(), Ok(Event::Notice(text)) if text == "barrier"));
+        assert!(matches!(rx.try_recv(), Ok(Event::Activity(text)) if text == "next"));
+        assert_eq!(rx.0.queue.lock().unwrap().bytes, 0);
+    }
     #[test]
     fn deltas_coalesce_without_crossing_snapshots_or_message_keys() {
         let _locale = crate::test_support::chinese();

@@ -1,6 +1,9 @@
 use super::*;
+use crate::app::plugin_ui::right::{RightBody, RightView};
+use conduit::plugins::state::ViewInstanceKey;
+use gpui_kit::component::tag::Tag;
 
-struct AutomationPanel {
+pub(super) struct AutomationPanel {
     host: WeakEntity<ConduitApp>,
     workspace: PathBuf,
     preset: Option<u64>,
@@ -13,48 +16,47 @@ struct AutomationPanel {
 }
 
 impl ConduitApp {
-    pub(in crate::app) fn automation_button(
-        &self,
+    pub(in crate::app) fn activate_automations(
+        &mut self,
+        window: &mut Window,
         cx: &mut Context<Self>,
-        popover: Option<WeakEntity<gpui_kit::component::popover::PopoverState>>,
-    ) -> Button {
-        Button::new("project-automations")
-            .small()
-            .compact()
-            .ghost()
-            .icon(FullIconName::Clock)
-            .accessibility_label(label("automation.title"))
-            .tooltip(label("automation.title"))
-            .disabled(self.selected_workspace_path().is_none())
-            .on_click(cx.listener(move |this, _, window, cx| {
-                if let Some(popover) = &popover {
-                    let _ = popover.update(cx, |popover, cx| popover.dismiss(window, cx));
-                }
-                let Some(workspace) = this.selected_workspace_path() else {
-                    return;
-                };
-                let host = cx.entity();
-                let panel = cx.new(|cx| AutomationPanel {
-                    host: host.downgrade(),
-                    workspace,
-                    preset: None,
-                    hours: cx.new(|cx| InputState::new(window, cx).default_value("24")),
-                    event: false,
-                    editing: None,
-                    removing: None,
-                    error: None,
-                    _subscription: cx.observe(&host, |_, _, cx| cx.notify()),
-                });
-                window.open_dialog(cx, move |dialog, window, _| {
-                    let panel = panel.clone();
-                    dialog
-                        .title(label("automation.title"))
-                        .w(px(
-                            (f32::from(window.viewport_size().width) - 48.).clamp(280., 950.)
-                        ))
-                        .content(move |content, _, _| content.child(panel.clone()))
-                });
-            }))
+    ) {
+        self.automation
+            .panels
+            .retain(|path, _| self.store.workspaces.iter().any(|w| &w.path == path));
+        let Some(workspace) = self.selected_workspace_path() else {
+            return;
+        };
+        if self.automation.panels.contains_key(&workspace) {
+            return;
+        }
+        let host = cx.entity();
+        let panel = cx.new(|cx| AutomationPanel {
+            host: host.downgrade(),
+            workspace: workspace.clone(),
+            preset: None,
+            hours: cx.new(|cx| InputState::new(window, cx).default_value("24")),
+            event: false,
+            editing: None,
+            removing: None,
+            error: None,
+            _subscription: cx.observe(&host, |_, _, cx| cx.notify()),
+        });
+        self.automation.panels.insert(workspace, panel);
+    }
+
+    pub(in crate::app) fn render_automation_view(
+        &mut self,
+        _: &ViewInstanceKey,
+        _: &Window,
+        _: &mut Context<Self>,
+    ) -> RightView {
+        self.selected_workspace_path()
+            .and_then(|workspace| self.automation.panels.get(&workspace))
+            .map_or(RightBody::Loading, |panel| {
+                RightBody::Content(panel.clone().into_any_element())
+            })
+            .into()
     }
 }
 
@@ -208,12 +210,19 @@ impl AutomationPanel {
 }
 
 impl Render for AutomationPanel {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(host) = self.host.upgrade() else {
             return div().into_any_element();
         };
         let app = host.read(cx);
         let writable = app.writable && !app.closing;
+        let workspace_name = app
+            .store
+            .workspaces
+            .iter()
+            .find(|w| w.path == self.workspace)
+            .map(Workspace::name)
+            .unwrap_or_default();
         let presets: Vec<_> = app
             .store
             .workflow
@@ -252,15 +261,23 @@ impl Render for AutomationPanel {
         let editing = self.editing.is_some();
         let mut body = v_flex()
             .id("automation-panel")
-            .gap_2()
-            .max_h(px(
-                (f32::from(window.viewport_size().height) - 180.).max(180.)
-            ))
+            .debug_selector(|| "automation-panel".into())
+            .size_full()
+            .min_h_0()
+            .min_w_0()
+            .gap_3()
+            .p_3()
+            .text_size(ui_text_size(12.))
             .overflow_y_scroll()
             .child(
-                div()
-                    .text_size(ui_text_size(11.))
-                    .child(self.workspace.display().to_string()),
+                h_flex().min_w_0().child(
+                    Tag::secondary()
+                        .small()
+                        .max_w_full()
+                        .min_w_0()
+                        .text_size(ui_text_size(11.))
+                        .child(div().min_w_0().truncate().child(workspace_name)),
+                ),
             )
             .child(label("automation.hint"))
             .child(
@@ -437,6 +454,7 @@ impl Render for AutomationPanel {
                 row = row.child(label("automation.delete_hint")).child(
                     h_flex()
                         .gap_2()
+                        .flex_wrap()
                         .child(
                             Button::new(("automation-confirm-delete", id))
                                 .small()
@@ -501,7 +519,6 @@ impl Render for AutomationPanel {
                                     w.path == workspace && w.sessions.iter().any(|s| s.id == id)
                                 }) {
                                     app.switch(index, Some(id), window, cx);
-                                    window.close_dialog(cx);
                                     cx.notify();
                                 }
                             });

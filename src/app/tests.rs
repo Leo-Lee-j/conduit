@@ -8,6 +8,85 @@ use crate::{
 };
 
 #[test]
+fn new_delta_matching_previous_reply_is_preserved_and_snapshots_still_replace() {
+    let mut s = session();
+    apply_event(
+        &mut s,
+        "turn-1",
+        Event::Text {
+            key: "a".into(),
+            text: "hello".into(),
+        },
+    );
+    for text in ["hello", " world"] {
+        apply_event(
+            &mut s,
+            "turn-1",
+            Event::Delta {
+                key: "b".into(),
+                text: text.into(),
+            },
+        );
+    }
+    assert_eq!(s.messages.len(), 2);
+    assert_eq!(s.messages[1].text, "hello world");
+    apply_event(
+        &mut s,
+        "turn-1",
+        Event::Text {
+            key: "b".into(),
+            text: "corrected".into(),
+        },
+    );
+    assert_eq!(s.messages[1].text, "corrected");
+}
+
+#[test]
+fn tool_success_requires_explicit_completion_and_legacy_running_can_finish() {
+    for language in ["en", "zh-CN"] {
+        let _locale = crate::test_support::scoped(language);
+        let mut s = session();
+        for (i, status) in [
+            "运行中",
+            "Running",
+            "pending",
+            "inProgress",
+            "已取消",
+            "未返回结果",
+            "future-state",
+            "",
+            "已完成",
+            "completed",
+            "已失败",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            apply_event(
+                &mut s,
+                "turn-1",
+                Event::Tool {
+                    key: i.to_string(),
+                    title: "tool".into(),
+                    detail: String::new(),
+                    status: status.into(),
+                },
+            );
+            assert_eq!(
+                super::tools::tool_succeeded(&s.messages[i]),
+                matches!(status, "已完成" | "completed")
+            );
+        }
+        finish_tool_cards(&mut s, "turn-1", "已取消");
+        for item in &s.messages[..4] {
+            assert!(!super::tools::tool_running(item));
+            assert!(!super::tools::tool_succeeded(item));
+            assert_eq!(item.status, "已取消");
+        }
+    }
+}
+
+#[test]
 fn error_retry_clears_errors_and_preserves_partial_output_across_restore() {
     let _locale = crate::test_support::chinese();
     let mut s = session();

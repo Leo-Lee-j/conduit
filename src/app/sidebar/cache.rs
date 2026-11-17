@@ -9,7 +9,6 @@ pub(super) const WORKSPACE_MOVE_DURATION: Duration = Duration::from_millis(240);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Row {
-    Controls,
     Workspace {
         path: PathBuf,
         count: usize,
@@ -39,7 +38,6 @@ impl Row {
     }
     pub(super) fn height(&self) -> f32 {
         match self {
-            Self::Controls => ROW_HEIGHT,
             Self::More { .. } => 28.,
             Self::Empty => 76.,
             _ => ROW_HEIGHT,
@@ -209,6 +207,7 @@ pub(in crate::app) struct SidebarState {
     inputs: Option<Inputs>,
     latest_activity: u64,
     origins: Vec<f32>,
+    workspace_headers: Vec<usize>,
     workspace_motion: HashMap<PathBuf, f32>,
     pub(super) motion_started: Option<Instant>,
     pub(super) motion_generation: u64,
@@ -238,6 +237,7 @@ impl Default for SidebarState {
             inputs: None,
             latest_activity: 0,
             origins: Vec::new(),
+            workspace_headers: Vec::new(),
             workspace_motion: HashMap::new(),
             motion_started: None,
             motion_generation: 0,
@@ -251,6 +251,55 @@ impl Default for SidebarState {
     }
 }
 impl SidebarState {
+    /// Resolve against the live scroll offset, including scrollbar and keyboard scrolling.
+    /// Only header indices are searched, independent of the number of sessions.
+    pub(super) fn sticky_workspace(&self) -> Option<(Row, f32)> {
+        let y = -f32::from(self.scroll.offset().y);
+        let position = self
+            .workspace_headers
+            .partition_point(|&index| self.origins[index] < y)
+            .checked_sub(1)?;
+        let index = self.workspace_headers[position];
+        let row = &self.rows[index];
+        // Empty/collapsed groups have no children to keep in context.
+        if self
+            .rows
+            .get(index + 1)
+            .is_none_or(|next| matches!(next, Row::Workspace { .. }) || next.path() != row.path())
+        {
+            return None;
+        }
+        let offset = self
+            .workspace_headers
+            .get(position + 1)
+            .map_or(0., |&next| (self.origins[next] - y - ROW_HEIGHT).min(0.));
+        Some((row.clone(), offset))
+    }
+
+    pub(super) fn reveal_workspace(&mut self, path: &Path) {
+        if let Some(&index) = self
+            .workspace_headers
+            .iter()
+            .find(|&&index| self.rows[index].path() == Some(path))
+        {
+            self.keyboard_row = Some(self.rows[index].clone());
+            // Direct offset also works before the virtual list has laid out its new rows.
+            self.scroll
+                .set_offset(point(px(0.), px(-self.origins[index])));
+        }
+    }
+
+    pub(super) fn reveal_keyboard_row(&self, index: usize) {
+        // Child focus must remain below its sticky parent, including the More row.
+        let inset = if matches!(self.rows[index], Row::Session { .. } | Row::More { .. }) {
+            ROW_HEIGHT
+        } else {
+            0.
+        };
+        self.scroll
+            .set_offset(point(px(0.), px(-(self.origins[index] - inset).max(0.))));
+    }
+
     pub(super) fn motion_offset(&self, path: &Path) -> Option<f32> {
         let elapsed =
             self.motion_started?.elapsed().as_secs_f32() / WORKSPACE_MOVE_DURATION.as_secs_f32();
@@ -379,7 +428,7 @@ impl SidebarState {
             }
         }
         if rebuild {
-            let mut rows = vec![Row::Controls];
+            let mut rows = Vec::new();
             // Sort only the display projection: all stored workspace indices and
             // the user's manual order remain valid. Stable ties keep that order.
             let mut workspaces: Vec<_> = store.workspaces.iter().enumerate().collect();
@@ -600,6 +649,11 @@ impl SidebarState {
             self.sizes = Rc::new(sizes);
         }
         self.origins = origins;
+        self.workspace_headers = rows
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| matches!(row, Row::Workspace { .. }).then_some(index))
+            .collect();
         self.rows = Rc::new(rows);
     }
 }
@@ -609,6 +663,107 @@ mod tests {
     use super::{INACTIVE_WORKSPACE_AGE, Inputs, Row};
     use crate::app::{ConduitApp, Store, Workspace};
     use gpui_kit::{AppContext, TestAppContext};
+
+    #[gpui_kit::test]
+    fn long_workspace_can_return_to_summary_without_switching_chat(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
+        cx.update(gpui_kit::init);
+        cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let path = std::env::temp_dir().join("conduit-sidebar-long-workspace");
+                let sessions = (1..=100)
+                    .map(|id| {
+                        let mut session = crate::app::tests::session();
+                        session.id = id;
+                        session.created_at = id;
+                        session.pinned = id == 100;
+                        session
+                    })
+                    .collect();
+                let store = Store {
+                    workspaces: vec![
+                        Workspace {
+                            path: path.clone(),
+                            sessions,
+                        },
+                        Workspace {
+                            path: path.join("other"),
+                            sessions: vec![],
+                        },
+                    ],
+                    ..Default::default()
+                };
+                let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
+                app.writable = false;
+                app.startup = None;
+                app.store.ui.auto_sort_workspaces = false;
+                app.store.ui.sessions_per_workspace = 3;
+                app.selected_workspace = Some(0);
+                app.selected_session = Some(1);
+                app.refresh_sidebar();
+                app.set_sidebar_sessions_expanded(&path, true, window, cx);
+                let middle = app
+                    .sidebar
+                    .rows
+                    .iter()
+                    .position(|row| matches!(row, Row::Session { id: 50, .. }))
+                    .unwrap();
+                app.sidebar.scroll.set_offset(gpui_kit::point(
+                    gpui_kit::px(0.),
+                    gpui_kit::px(-app.sidebar.origins[middle]),
+                ));
+                let (sticky, _) = app
+                    .sidebar
+                    .sticky_workspace()
+                    .expect("header stays reachable");
+                assert_eq!(sticky.path(), Some(path.as_path()));
+
+                app.set_sidebar_sessions_expanded(&path, false, window, cx);
+                assert_eq!(app.selected_session, Some(1));
+                assert_eq!(app.selected_workspace, Some(0));
+                let visible: Vec<_> = app
+                    .sidebar
+                    .rows
+                    .iter()
+                    .filter_map(|row| {
+                        if let Row::Session { id, .. } = row {
+                            Some(*id)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                assert_eq!(visible, vec![100, 99, 98, 97]);
+                assert!(matches!(app.sidebar.keyboard_row.as_ref(),
+                    Some(Row::Workspace { path: focused, .. }) if focused == &path));
+                let top = app.sidebar.scroll.offset().y;
+                let header = app.sidebar.workspace_headers[0];
+                assert_eq!(f32::from(top), -app.sidebar.origins[header]);
+                assert!(
+                    app.sidebar.sticky_workspace().is_none(),
+                    "natural header is visible"
+                );
+
+                app.set_sidebar_sessions_expanded(&path, true, window, cx);
+                app.sidebar.scroll.set_offset(gpui_kit::point(
+                    gpui_kit::px(0.),
+                    gpui_kit::px(-app.sidebar.origins[middle]),
+                ));
+                app.toggle_sidebar_workspace(&path, window, cx);
+                assert!(app.workspace_collapsed(&path));
+                assert_eq!(app.selected_session, Some(1));
+                assert!(
+                    !app.sidebar
+                        .rows
+                        .iter()
+                        .any(|row| matches!(row, Row::Session { .. }))
+                );
+                assert!(app.sidebar.sticky_workspace().is_none());
+                app
+            });
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+    }
 
     #[gpui_kit::test]
     fn inactive_workspaces_follow_activity_and_preserve_manual_choices(cx: &mut TestAppContext) {

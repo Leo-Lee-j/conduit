@@ -7,14 +7,10 @@ mod tests;
 
 pub(in crate::app) struct DockLayout {
     pub width: f32,
-    pub drag: Option<(f32, f32)>,
 }
 impl Default for DockLayout {
     fn default() -> Self {
-        Self {
-            width: 340.,
-            drag: None,
-        }
+        Self { width: 340. }
     }
 }
 
@@ -82,12 +78,34 @@ pub(super) fn core_renderers() -> BTreeMap<String, RightAdapter> {
                 deactivate: ConduitApp::deactivate_notifications,
             },
         ),
+        (
+            builtins::WORKFLOW.into(),
+            RightAdapter {
+                render: ConduitApp::render_workflow_view,
+                icon: FullIconName::ListTodo,
+                close_id: "close-workflow",
+                with_branches: true,
+                activate: ConduitApp::activate_workflow,
+                deactivate: |_, _, _| {},
+            },
+        ),
+        (
+            builtins::AUTOMATIONS.into(),
+            RightAdapter {
+                render: ConduitApp::render_automation_view,
+                icon: FullIconName::Clock,
+                close_id: "close-automations",
+                with_branches: true,
+                activate: ConduitApp::activate_automations,
+                deactivate: |_, _, _| {},
+            },
+        ),
     ]
     .into_iter()
     .collect()
 }
 
-/// Selection and eligibility used by the independently cached dock tab strip.
+/// Selection and eligibility used by the independently cached sidebar header.
 pub(in crate::app) struct RightHeaderRevision {
     registration: Option<conduit::plugins::registry::Registration>,
     registry: u64,
@@ -117,7 +135,7 @@ impl PluginUi {
     ) -> bool {
         previous.is_some_and(|previous| {
             // A replacement registry can have the same numeric generation.
-            // Its old requests must never survive under a retained tab strip.
+            // Its old title must never survive under a retained header.
             previous
                 .registration
                 .as_ref()
@@ -180,7 +198,7 @@ impl PluginUi {
                     .right_renderers
                     .get(&v.renderer)
                     .map_or(FullIconName::PanelRight, |a| a.icon),
-                selected: &v.id == self.right(),
+                selected: self.right_is(v.id.as_str()),
                 request: (self.right_renderers.contains_key(&v.renderer)
                     && self.renderer_bound(&v.renderer))
                 .then(|| self.registry.prepare_view(&v.id, &self.snapshot).ok())
@@ -191,6 +209,171 @@ impl PluginUi {
 }
 
 impl ConduitApp {
+    pub(in crate::app) fn render_right_navigation(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        self.sync_plugin_context();
+        let (notifications, mut choices): (Vec<_>, Vec<_>) = self
+            .plugins
+            .right_choices(false)
+            .into_iter()
+            .partition(|choice| choice.id.as_str() == builtins::NOTIFICATIONS);
+        choices.sort_by_key(|choice| match choice.id.as_str() {
+            builtins::WORKFLOW => 0,
+            builtins::AUTOMATIONS => 1,
+            builtins::TOOL_DETAILS => 2,
+            _ => 3,
+        });
+        v_flex()
+            .id("right-navigation-rail")
+            .test_support()
+            .debug_selector(|| "right-navigation-rail".into())
+            .w(px(38.))
+            .h_full()
+            .flex_shrink_0()
+            .bg(chrome_background(palette().sidebar_bg))
+            .border_l_1()
+            .border_color(rgb(palette().border))
+            .child(
+                v_flex()
+                    .id("right-navigation-views")
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .gap_1()
+                    .items_center()
+                    .overflow_y_scroll()
+                    .children(
+                        choices
+                            .into_iter()
+                            .map(|choice| self.right_navigation_button(choice, cx)),
+                    ),
+            )
+            .when(!notifications.is_empty(), |rail| {
+                rail.child(
+                    h_flex()
+                        .w_full()
+                        .h(px(34.))
+                        .flex_shrink_0()
+                        .items_center()
+                        .justify_center()
+                        .border_t_1()
+                        .border_color(rgb(palette().border))
+                        .children(
+                            notifications
+                                .into_iter()
+                                .map(|choice| self.right_navigation_button(choice, cx)),
+                        ),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn right_navigation_button(&self, choice: RightChoice, cx: &mut Context<Self>) -> AnyElement {
+        let selector = match choice.id.as_str() {
+            builtins::WORKFLOW => "project-workflow".to_owned(),
+            builtins::AUTOMATIONS => "project-automations".to_owned(),
+            builtins::NOTIFICATIONS => "notification-bell".to_owned(),
+            _ => format!("right-choice-{}", choice.id),
+        };
+        let notification = choice.id.as_str() == builtins::NOTIFICATIONS;
+        let unread = if notification {
+            self.notifications.center.unread()
+        } else {
+            0
+        };
+        let tooltip = if notification {
+            conduit::i18n::format(
+                "notifications.notifications_unread",
+                &[("unread", unread.to_string())],
+            )
+        } else {
+            choice.title.clone()
+        };
+        let label = if notification {
+            conduit::i18n::format(
+                "notifications.notifications_unread_a9fb74",
+                &[("unread", unread.to_string())],
+            )
+        } else {
+            choice.title
+        };
+        let request = choice.request;
+        let button = Button::new(SharedString::from(selector.clone()))
+            .debug_selector(move || selector.clone())
+            .ghost()
+            .small()
+            .compact()
+            .focus_ring(true)
+            .w(px(super::RAIL_BUTTON_SIZE))
+            .h(px(if notification {
+                28.
+            } else {
+                super::RAIL_BUTTON_SIZE
+            }))
+            .flex_shrink_0()
+            .icon(choice.icon)
+            .selected(choice.selected)
+            .tooltip(tooltip)
+            .accessibility_label(label)
+            .disabled(request.is_none())
+            .cursor_pointer()
+            .on_click(cx.listener(move |app, _, window, cx| {
+                if let Some(request) = &request {
+                    app.toggle_right_view(request, window, cx);
+                }
+            }));
+        super::navigation_button_row()
+            .h(px(if notification { 28. } else { TAB_BAR_HEIGHT }))
+            .child(button)
+            .when(unread > 0, |row| {
+                row.child(
+                    h_flex()
+                        .debug_selector(|| "right-notifications-badge".into())
+                        .absolute()
+                        .top_0()
+                        .right(px(2.))
+                        .min_w(px(12.))
+                        .h(px(12.))
+                        .px(px(2.))
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .bg(rgb(palette().text))
+                        .text_color(rgb(palette().on_text))
+                        .text_size(ui_text_size(9.))
+                        .line_height(relative(1.))
+                        .child(if unread > 99 {
+                            "99+".to_owned()
+                        } else {
+                            unread.to_string()
+                        }),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn toggle_right_view(
+        &mut self,
+        request: &ViewRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.sync_plugin_context();
+        if self.plugins.right_open() && self.plugins.right_key() == Some(request.key()) {
+            if self
+                .plugins
+                .registry
+                .validate_view(request, &self.plugins.snapshot)
+                .is_err()
+            {
+                return false;
+            }
+            self.close_right_view(window, cx);
+            true
+        } else {
+            self.dispatch_right_view(request, window, cx)
+        }
+    }
+
     pub(in crate::app) fn open_right_view(
         &mut self,
         id: &ViewId,
@@ -267,7 +450,6 @@ impl ConduitApp {
         }
         self.plugins.state.close_right();
         self.plugins.reconcile_instance_visibility();
-        self.plugins.dock.drag = None;
         cx.notify();
     }
 }

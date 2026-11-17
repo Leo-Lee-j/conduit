@@ -1,6 +1,7 @@
 //! Explicit file snapshots, source context and bookmarked project outputs.
 use super::*;
 use crate::checkpoints::{Checkpoint, RestorePreview};
+use crate::workspace_files;
 
 fn label(key: &'static str) -> &'static str {
     conduit::i18n::text_static(key)
@@ -34,6 +35,7 @@ impl ConduitApp {
         popover: Option<WeakEntity<gpui_kit::component::popover::PopoverState>>,
     ) -> Button {
         Button::new("project-files")
+            .cursor_pointer()
             .small()
             .compact()
             .ghost()
@@ -51,7 +53,7 @@ impl ConduitApp {
                 let path = this
                     .current_file_key()
                     .filter(|key| key.workspace == workspace)
-                    .map(|key| key.relative.display().to_string())
+                    .map(|key| workspace_files::display_path(&key.relative))
                     .unwrap_or_default();
                 let host = cx.entity();
                 let panel = cx.new(|cx| {
@@ -230,12 +232,20 @@ impl Render for ProjectFilesPanel {
         let writable = self.writable(cx) && !self.busy;
         let mut body = v_flex()
             .id("project-files-panel")
+            .font_family(Theme::global(cx).font_family.clone())
             .gap_2()
             .max_h(px(
                 (f32::from(window.viewport_size().height) - 180.).max(160.)
             ))
             .overflow_y_scroll()
-            .child(self.workspace.display().to_string())
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .text_sm()
+                    .text_color(rgb(palette().muted))
+                    .child(workspace_files::display_path(&self.workspace)),
+            )
             .child(label("artifact.hint"))
             .child(Input::new(&self.path))
             .child(Input::new(&self.name))
@@ -367,7 +377,7 @@ impl Render for ProjectFilesPanel {
                     .label(format!(
                         "{} · {} · {}",
                         record.title,
-                        record.relative.display(),
+                        workspace_files::display_path(&record.relative),
                         message_timestamp(record.at)
                     ))
                     .disabled(self.busy)
@@ -384,7 +394,7 @@ impl Render for ProjectFilesPanel {
                 .child(format!(
                     "{} · {}",
                     label("checkpoint.preview"),
-                    preview.checkpoint.relative.display()
+                    workspace_files::display_path(&preview.checkpoint.relative)
                 ))
                 .child(
                     h_flex()

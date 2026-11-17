@@ -225,6 +225,7 @@ impl ConduitApp {
         if entry.item.command.is_some() {
             let request = entry.request.clone();
             Button::new(SharedString::from(id.clone()))
+                .cursor_pointer()
                 .debug_selector(move || id.clone())
                 .ghost()
                 .small()
@@ -267,7 +268,11 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let entries = self.status_entries();
+        let mut entries = self.status_entries();
+        let workspace = entries
+            .iter()
+            .position(|entry| entry.item.id.as_str() == builtins::WORKSPACE_STATUS)
+            .map(|index| self.status_element(&entries.remove(index), cx));
         let app = cx.weak_entity();
         let row = window.use_keyed_state("toolbar-status-cache", cx, move |_, _| StatusRow {
             app,
@@ -304,13 +309,22 @@ impl ConduitApp {
                 cx.notify();
             }
         });
-        row.cached(
-            StyleRefinement::default()
-                .flex_1()
-                .min_w(px(MORE_WIDTH + GAP))
-                .h(px(28.)),
-        )
-        .into_any_element()
+        h_flex()
+            .flex_1()
+            .min_w_0()
+            .items_center()
+            .gap_1()
+            .children(workspace)
+            .child(self.branch_toolbar_button(cx))
+            .child(
+                row.cached(
+                    StyleRefinement::default()
+                        .flex_1()
+                        .min_w(px(MORE_WIDTH + GAP))
+                        .h(px(28.)),
+                ),
+            )
+            .into_any_element()
     }
 
     fn render_status_row(&self, entries: &[StatusEntry], cx: &mut Context<Self>) -> AnyElement {
@@ -371,6 +385,7 @@ impl ConduitApp {
             let app = cx.entity();
             row = row.child(
                 Button::new("toolbar-more")
+                    .cursor_pointer()
                     .debug_selector(|| "toolbar-more".into())
                     .ghost()
                     .small()

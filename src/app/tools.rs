@@ -109,8 +109,17 @@ pub(super) fn is_tool_command(item: &ChatItem) -> bool {
 pub(super) fn tool_running(item: &ChatItem) -> bool {
     let status = item.status.trim();
     matches!(status, "运行中" | "输出中")
+        || status.eq_ignore_ascii_case("running")
         || status.eq_ignore_ascii_case("pending")
         || status.eq_ignore_ascii_case("in_progress")
+        || status.eq_ignore_ascii_case("inProgress")
+}
+
+pub(super) fn tool_succeeded(item: &ChatItem) -> bool {
+    matches!(item.status.trim(), "已完成" | "完成")
+        || ["completed", "done", "success"]
+            .iter()
+            .any(|status| item.status.eq_ignore_ascii_case(status))
 }
 
 pub(super) fn tool_failed(item: &ChatItem) -> bool {

@@ -2,7 +2,7 @@
 use super::*;
 use crate::{
     domain::Usage,
-    protocol::{AcpSettings, ApprovalKind, Event},
+    protocol::{AcpSettings, ApprovalKind, Event, presentation::Presentation},
 };
 use anyhow::{Result, ensure};
 use serde_json::json;
@@ -35,6 +35,7 @@ struct QoderAdapter {
     tools: HashMap<String, Value>,
     reply_index: u64,
     thoughts: crate::protocol::ThoughtStream,
+    presentation: Presentation,
     context_window: u64,
     context_tokens: Option<u64>,
     cancellation_requested: std::cell::Cell<bool>,
@@ -51,6 +52,7 @@ impl QoderAdapter {
             tools: HashMap::new(),
             reply_index: 0,
             thoughts: Default::default(),
+            presentation: Default::default(),
             context_window: 0,
             context_tokens: None,
             cancellation_requested: std::cell::Cell::new(false),
@@ -214,12 +216,15 @@ impl QoderAdapter {
                     self.reply_index += 1;
                 }
             }
-            Some("agent_message_chunk") if update["content"]["type"] == "text" => {
+            Some("agent_message_chunk") => {
                 self.thoughts.finish(&mut step.events);
-                if let Some(text) = update["content"]["text"].as_str() {
+                if let Some(text) = self.presentation.content(&update["content"], step) {
                     step.events.push(Event::Delta {
-                        key: format!("qoder-reply-{}", self.reply_index),
-                        text: text.into(),
+                        key: update["messageId"]
+                            .as_str()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| format!("qoder-reply-{}", self.reply_index)),
+                        text,
                     });
                 }
             }
@@ -236,9 +241,10 @@ impl QoderAdapter {
                     merged[k] = v.clone();
                 }
                 let status = match merged["status"].as_str() {
-                    Some("completed") => conduit::i18n::text_static("qoder.tool_completed"),
-                    Some("failed") => conduit::i18n::text_static("tools.failed"),
-                    _ => conduit::i18n::text_static("qoder.tool_running"),
+                    Some("completed") => "已完成",
+                    Some("failed") => "已失败",
+                    Some("pending" | "in_progress") | None => "运行中",
+                    Some(other) => other,
                 };
                 step.events.push(Event::Tool { key:id.into(), title:merged["title"].as_str().unwrap_or("Qoder tool").into(),
                     detail:serde_json::to_string_pretty(&json!({"acpKind":merged["kind"],"content":merged["content"],"output":merged["rawOutput"],"locations":merged["locations"]})).unwrap_or_default(), status:status.into() });
@@ -263,7 +269,13 @@ impl QoderAdapter {
                 self.context_window = update["size"].as_u64().unwrap_or(0);
                 self.context_tokens = update["used"].as_u64();
             }
-            _ => {}
+            Some("user_message_chunk" | "current_mode_update") => {}
+            Some(kind) => self
+                .presentation
+                .unsupported(&format!("Qoder update/{kind}"), step),
+            None => self
+                .presentation
+                .unsupported("Qoder update/malformed", step),
         }
     }
 }
@@ -353,13 +365,24 @@ impl CliAdapter for QoderAdapter {
                 } else {
                     match questions::approval(&value) {
                         Ok(approval) => step.events.push(Event::Approval(approval)),
-                        Err(_) => step.writes.push(json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32602,"message":"Unsupported elicitation form"}})),
+                        Err(_) => {
+                            step.writes.push(json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32602,"message":"Unsupported elicitation form"}}));
+                            self.presentation
+                                .unsupported("Qoder elicitation/form", &mut step);
+                        }
                     }
                 }
                 return step;
             }
             Some(_) => {
                 if value.get("id").is_some() {
+                    self.presentation.unsupported(
+                        &format!(
+                            "Qoder request/{}",
+                            value["method"].as_str().unwrap_or("unknown")
+                        ),
+                        &mut step,
+                    );
                     step.writes.push(json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32601,"message":"Unsupported client capability"}}));
                 }
                 return step;
@@ -472,6 +495,9 @@ impl CliAdapter for QoderAdapter {
                     );
                     if let Some(usage) = result.get("usage") {
                         step.events.push(Event::Usage(Usage {
+                            input_tokens_known: usage["inputTokens"].as_u64().is_some(),
+                            cached_input_tokens_known: usage["cachedReadTokens"].as_u64().is_some(),
+                            output_tokens_known: usage["outputTokens"].as_u64().is_some(),
                             input_tokens: usage["inputTokens"].as_u64().unwrap_or(0),
                             output_tokens: usage["outputTokens"].as_u64().unwrap_or(0),
                             cached_input_tokens: usage["cachedReadTokens"].as_u64().unwrap_or(0),

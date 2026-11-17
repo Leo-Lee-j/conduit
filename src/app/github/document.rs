@@ -5,6 +5,8 @@ pub(in crate::app) struct GithubUi {
     pub(in crate::app) active: Option<u64>,
     pub(in crate::app) panels: HashMap<u64, Entity<PullRequestPanel>>,
     pub(in crate::app) roots: HashMap<u64, PathBuf>,
+    pub(in crate::app) sidebar_active: bool,
+    pub(in crate::app) sidebars: HashMap<PathBuf, Entity<super::sidebar::RequestSidebar>>,
     next_id: u64,
 }
 
@@ -17,11 +19,38 @@ impl GithubUi {
 }
 
 impl ConduitApp {
-    pub(in crate::app) fn open_github(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    #[cfg(test)]
+    pub(in crate::app) fn open_github(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.github_ui.sidebar_active = true;
+        self.show_git_navigation(cx);
+    }
+
+    pub(in crate::app) fn open_github_request(
+        &mut self,
+        requested: Option<(crate::github::forge::Forge, u64, String)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(workspace) = self.selected_workspace_path() else {
             return;
         };
         if let Some(id) = self.github_ui.id_for(&workspace) {
+            if let Some(requested) = requested {
+                self.github_ui.panels[&id].update(cx, |panel, cx| {
+                    if panel.requested.as_ref() != Some(&requested)
+                        || panel.snapshot.as_ref().is_none_or(|pr| {
+                            pr.forge != requested.0
+                                || pr.number != requested.1
+                                || pr.url != requested.2
+                        })
+                    {
+                        panel.requested = Some(requested);
+                        panel.snapshot = None;
+                        panel.tab = 0;
+                        panel.reload(cx);
+                    }
+                });
+            }
             self.select_document(files::DocumentTab::PullRequest(id), window, cx);
             return;
         }
@@ -34,6 +63,7 @@ impl ConduitApp {
                 document: true,
                 scrolls: Default::default(),
                 snapshot: None,
+                requested,
                 error: None,
                 sync_result: None,
                 loading: false,

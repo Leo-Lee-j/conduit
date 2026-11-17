@@ -18,14 +18,32 @@ impl ConduitApp {
         cx: &mut Context<Self>,
         popover: Option<WeakEntity<gpui_kit::component::popover::PopoverState>>,
     ) -> Button {
+        let workspace = self.selected_workspace_path();
+        let pending = self
+            .store
+            .reviews
+            .comments
+            .iter()
+            .filter(|comment| {
+                workspace.as_ref() == Some(&comment.target.workspace)
+                    && matches!(
+                        comment.status,
+                        review::Status::Open | review::Status::NeedsReview
+                    )
+            })
+            .count();
+        let description =
+            conduit::i18n::format("review.inbox_pending", &[("count", pending.to_string())]);
         Button::new("review-inbox")
+            .cursor_pointer()
             .small()
             .ghost()
             .compact()
             .icon(FullIconName::MessageSquare)
-            .accessibility_label(label("review.inbox"))
-            .tooltip(label("review.inbox"))
-            .disabled(self.selected_workspace_path().is_none())
+            .when(pending > 0, |button| button.label(pending.to_string()))
+            .accessibility_label(description.clone())
+            .tooltip(description)
+            .disabled(workspace.is_none())
             .on_click(cx.listener(move |this, _, window, cx| {
                 if let Some(popover) = &popover {
                     let _ = popover.update(cx, |popover, cx| popover.dismiss(window, cx));

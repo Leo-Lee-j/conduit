@@ -12,6 +12,9 @@ use std::{
 };
 
 pub mod checks;
+pub mod forge;
+pub(crate) mod gitlab;
+pub mod list;
 pub mod threads;
 pub mod write;
 
@@ -29,6 +32,8 @@ pub struct Comment {
 }
 #[derive(Clone, Debug)]
 pub struct PullRequest {
+    pub forge: forge::Forge,
+    pub cli_host: Option<String>,
     pub number: u64,
     pub title: String,
     pub url: String,
@@ -38,6 +43,7 @@ pub struct PullRequest {
     pub state: String,
     pub decision: String,
     pub checks: Vec<Check>,
+    pub checks_error: Option<String>,
     pub comments: Vec<Comment>,
     pub limited: bool,
     pub local_head: String,
@@ -48,7 +54,7 @@ pub struct PullRequest {
 
 pub fn web_url(value: &str) -> Option<String> {
     let url = url::Url::parse(value).ok()?;
-    (url.scheme() == "https"
+    (matches!(url.scheme(), "https" | "http")
         && url.host_str().is_some()
         && url.username().is_empty()
         && url.password().is_none())
@@ -111,6 +117,8 @@ pub fn parse(json: &str) -> Result<PullRequest> {
         })
         .collect();
     Ok(PullRequest {
+        forge: forge::Forge::Github,
+        cli_host: None,
         number,
         title: text(&value, "title"),
         url,
@@ -126,6 +134,7 @@ pub fn parse(json: &str) -> Result<PullRequest> {
                 .as_array()
                 .is_some_and(|a| a.len() > comments.len()),
         checks,
+        checks_error: None,
         comments,
         local_head: String::new(),
         fetched_at: 0,
@@ -177,6 +186,9 @@ fn query(
         ("GH_NO_UPDATE_NOTIFIER".into(), "1".into()),
         ("GIT_TERMINAL_PROMPT".into(), "0".into()),
         ("GH_PAGER".into(), "cat".into()),
+        ("GLAB_CHECK_UPDATE".into(), "false".into()),
+        ("GLAB_DEBUG_HTTP".into(), "".into()),
+        ("NO_COLOR".into(), "1".into()),
     ]);
     let args: Vec<_> = args.iter().map(|s| (*s).to_owned()).collect();
     let (child, mut pipes) = Child::spawn_with_env(executable, &args, workspace, &environment)?;
@@ -212,6 +224,36 @@ fn query(
 }
 
 pub fn load(workspace: &Path, cancel: &AtomicBool) -> Result<PullRequest> {
+    let target = forge::target(workspace, cancel)?;
+    if target.forge == forge::Forge::Gitlab {
+        return gitlab::load(workspace, &target, cancel);
+    }
+    load_github(workspace, None, cancel)
+}
+
+pub fn load_request(
+    workspace: &Path,
+    forge: forge::Forge,
+    number: u64,
+    url: &str,
+    cancel: &AtomicBool,
+) -> Result<PullRequest> {
+    anyhow::ensure!(number > 0, "Invalid request number");
+    let target = forge::target(workspace, cancel)?;
+    anyhow::ensure!(target.forge == forge, "Repository provider changed");
+    let pr = if target.forge == forge::Forge::Gitlab {
+        gitlab::load_request(workspace, &target, Some(number), cancel)?
+    } else {
+        load_github(workspace, Some(number), cancel)?
+    };
+    anyhow::ensure!(
+        pr.url == url,
+        "Request repository changed; refresh the list"
+    );
+    Ok(pr)
+}
+
+fn load_github(workspace: &Path, number: Option<u64>, cancel: &AtomicBool) -> Result<PullRequest> {
     let gh = executable().context(conduit::i18n::text("github.missing_cli"))?;
     let git = crate::git::resolve_git().context(conduit::i18n::text("github.missing_git"))?;
     let head = query(&git, &["rev-parse", "HEAD"], workspace, cancel)?;
@@ -221,17 +263,15 @@ pub fn load(workspace: &Path, cancel: &AtomicBool) -> Result<PullRequest> {
         workspace,
         cancel,
     )?;
-    let json = query(
-        &gh,
-        &[
-            "pr",
-            "view",
-            "--json",
-            "number,title,url,headRefName,baseRefName,headRefOid,state,reviewDecision,statusCheckRollup,comments",
-        ],
-        workspace,
-        cancel,
-    )?;
+    let target = forge::target(workspace, cancel)?;
+    let repo = format!("{}/{}", target.host, target.project);
+    let number_text = number.map(|n| n.to_string());
+    let mut args = vec!["pr", "view"];
+    if let Some(number) = &number_text {
+        args.extend([number.as_str(), "--repo", &repo]);
+    }
+    args.extend(["--json", "number,title,url,headRefName,baseRefName,headRefOid,state,reviewDecision,statusCheckRollup,comments"]);
+    let json = query(&gh, &args, workspace, cancel)?;
     let mut pr = parse(&json)?;
     match threads::load(&gh, workspace, &pr, cancel) {
         Ok(snapshot) => pr.threads = Some(snapshot),
@@ -247,7 +287,10 @@ pub fn load(workspace: &Path, cancel: &AtomicBool) -> Result<PullRequest> {
     if current != head || current_branch != branch {
         bail!(conduit::i18n::text("github.branch_changed"));
     }
-    if pr.branch != branch.trim() {
+    if (number.is_none() && pr.branch != branch.trim())
+        || number.is_some_and(|number| pr.number != number)
+        || forge::target(workspace, cancel)? != target
+    {
         bail!(conduit::i18n::text("github.branch_changed"));
     }
     pr.local_head = head.trim().to_owned();

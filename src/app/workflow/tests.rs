@@ -5,6 +5,51 @@ use super::{
 use gpui_kit::{AppContext as _, TestAppContext};
 
 #[gpui_kit::test]
+fn sidebar_drafts_survive_close_and_workspace_switches(cx: &mut TestAppContext) {
+    use conduit::plugins::{builtins, ids::ViewId};
+    let _locale = crate::test_support::chinese();
+    let (app, cx, root) = crate::app::queue::tests::fixture(cx, "workflow-sidebar-drafts");
+    let other = root.join("other");
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.startup = None;
+            app.writable = false;
+            let id = ViewId::new(builtins::WORKFLOW).unwrap();
+            assert!(app.open_right_view(&id, window, cx));
+            let panel = app.workflow_panels[&root].clone();
+            panel.read(cx).title.clone().update(cx, |input, cx| {
+                input.set_value("unfinished task", window, cx)
+            });
+            app.close_right_view(window, cx);
+            assert!(app.open_right_view(&id, window, cx));
+            assert_eq!(app.workflow_panels[&root], panel);
+            assert_eq!(
+                panel.read(cx).title.read(cx).value().as_ref(),
+                "unfinished task"
+            );
+            app.switch(1, None, window, cx);
+            cx.notify();
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            assert!(app.plugins.right_is(builtins::WORKFLOW));
+            let second = app.workflow_panels[&other].read(cx);
+            assert_eq!(second.workspace, other);
+            assert!(second.title.read(cx).value().is_empty());
+            app.switch(0, Some(1), window, cx);
+            let first = app.workflow_panels[&root].read(cx);
+            assert_eq!(first.title.read(cx).value().as_ref(), "unfinished task");
+            assert!(app.session_control.runs.is_empty());
+        });
+    });
+}
+
+#[gpui_kit::test]
 fn reply_branch_opens_handoff_without_reentering_the_app(cx: &mut TestAppContext) {
     use crate::app::queue::tests::fixture;
     use gpui_kit::{Modifiers, MouseButton};

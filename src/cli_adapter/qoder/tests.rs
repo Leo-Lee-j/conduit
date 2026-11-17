@@ -60,6 +60,67 @@ fn form(session: &str) -> Value {
 }
 
 #[test]
+fn qoder_resources_media_and_unsupported_reverse_requests_are_visible() {
+    let (mut p, _) = ready(request(), true);
+    for content in [
+        json!({"type":"text","text":"answer"}),
+        json!({"type":"resource","resource":{"text":"report"}}),
+        json!({"type":"resource_link","uri":"https://example.com/report","name":"Report"}),
+    ] {
+        let step = p.accept(notification(
+            "original",
+            json!({"sessionUpdate":"agent_message_chunk","messageId":"reply","content":content}),
+        ));
+        assert!(
+            matches!(&step.events[..], [Event::Delta { key, text }] if key == "reply" && !text.is_empty())
+        );
+    }
+    let media = notification(
+        "original",
+        json!({"sessionUpdate":"agent_message_chunk","content":{"type":"audio","data":"SECRET_BASE64"}}),
+    );
+    assert!(
+        matches!(&p.accept(media.clone()).events[..], [Event::Notice(message)] if !message.contains("SECRET_BASE64"))
+    );
+    assert!(p.accept(media).events.is_empty());
+    let step = p.accept(json!({"id":"reverse","method":"fs/read_text_file","params":{}}));
+    assert_eq!(step.writes[0]["error"]["code"], -32601);
+    assert!(matches!(&step.events[..], [Event::Notice(_)]));
+    let mut invalid = form("original");
+    invalid["params"]["requestedSchema"] =
+        json!({"type":"object","properties":{"password":{"type":"string","pattern":"secret"}}});
+    let step = p.accept(invalid);
+    assert_eq!(step.writes[0]["error"]["code"], -32602);
+    assert!(matches!(&step.events[..], [Event::Notice(message)] if !message.contains("secret")));
+}
+
+#[test]
+fn qoder_tool_lifecycle_and_usage_presence_are_independent_of_locale() {
+    for language in ["en", "zh-CN"] {
+        let _locale = crate::test_support::scoped(language);
+        let (mut p, writes) = ready(request(), true);
+        for (native, expected) in [
+            ("pending", "运行中"),
+            ("in_progress", "运行中"),
+            ("completed", "已完成"),
+            ("failed", "已失败"),
+        ] {
+            let step = p.accept(notification(
+                "original",
+                json!({"sessionUpdate":"tool_call_update","toolCallId":"tool","status":native}),
+            ));
+            assert!(
+                step.events
+                    .iter()
+                    .any(|e| matches!(e, Event::Tool {status,..} if status == expected))
+            );
+        }
+        let step = p.accept(json!({"id":writes.last().unwrap()["id"],"result":{"stopReason":"end_turn","usage":{"inputTokens":0,"outputTokens":10}}}));
+        assert!(step.events.iter().any(|e| matches!(e, Event::Usage(u) if u.input_tokens_known && u.output_tokens_known && !u.cached_input_tokens_known && u.output_tokens == 10)));
+    }
+}
+
+#[test]
 fn qoder_launch_preserves_cwd_and_never_puts_prompt_or_secret_on_command_line() {
     let mut req = request();
     req.prompt = "private prompt".into();
@@ -370,7 +431,7 @@ fn qoder_elicitation_supports_choices_multi_select_validation_and_cancellation()
     let mut malformed = form("original");
     malformed["params"]["requestedSchema"]["properties"]["name"]["type"] = json!("object");
     let step = adapter.accept(malformed);
-    assert!(step.events.is_empty());
+    assert!(matches!(&step.events[..], [Event::Notice(_)]));
     assert_eq!(step.writes[0]["error"]["code"], -32602);
 }
 
@@ -462,7 +523,7 @@ fn qoder_forms_reject_unsupported_constraints_and_preserve_numeric_types() {
     message["params"]["requestedSchema"]["properties"] =
         json!({"email":{"type":"string","format":"email"}});
     let step = adapter.accept(message);
-    assert!(step.events.is_empty());
+    assert!(matches!(&step.events[..], [Event::Notice(_)]));
     assert_eq!(step.writes[0]["error"]["code"], -32602);
 }
 

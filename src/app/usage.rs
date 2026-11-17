@@ -112,6 +112,7 @@ impl ConduitApp {
         popover: Option<WeakEntity<gpui_kit::component::popover::PopoverState>>,
     ) -> Button {
         Button::new("usage-ledger")
+            .cursor_pointer()
             .small()
             .compact()
             .ghost()
@@ -324,8 +325,8 @@ impl Render for UsagePanel {
         let width = f32::from(window.viewport_size().width)
             - app.sidebar_width
             - 6.
-            - if app.plugins.right_visible(false) {
-                app.plugins.dock.width + 6.
+            - if window.viewport_size().width >= px(1100.) && app.plugins.right_visible(false) {
+                app.plugins.dock.width
             } else {
                 0.
             };

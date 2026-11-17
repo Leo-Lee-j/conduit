@@ -10,6 +10,8 @@ pub const GIT: &str = "conduit.core.git";
 pub const BRANCHES: &str = "conduit.core.branches";
 pub const TOOL_DETAILS: &str = "conduit.core.tool-details";
 pub const NOTIFICATIONS: &str = "conduit.core.notifications";
+pub const WORKFLOW: &str = "conduit.core.workflow";
+pub const AUTOMATIONS: &str = "conduit.core.automations";
 pub const SHOW_TOOL_DETAILS: &str = "conduit.core.show-tool-details";
 pub const TOGGLE_TERMINAL: &str = "conduit.core.toggle-terminal";
 pub const NEW_TERMINAL: &str = "conduit.core.new-terminal";
@@ -82,6 +84,18 @@ pub fn core() -> Result<ContributionSet> {
             conduit::i18n::text_static("plugins.builtins.notifications"),
             Location::Right,
             Scope::Global,
+        )?,
+        view(
+            WORKFLOW,
+            conduit::i18n::text_static("workflow.title"),
+            Location::Right,
+            Scope::Workspace,
+        )?,
+        view(
+            AUTOMATIONS,
+            conduit::i18n::text_static("automation.title"),
+            Location::Right,
+            Scope::Workspace,
         )?,
     ];
     set.activity_items = vec![

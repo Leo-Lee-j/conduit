@@ -739,6 +739,7 @@ impl ConduitApp {
     }
 
     pub(super) fn forget_workspace_files(&mut self, root: &Path) {
+        self.github_ui.sidebars.remove(root);
         let github_ids: HashSet<_> = self
             .github_ui
             .roots
@@ -833,6 +834,21 @@ impl ConduitApp {
         self.active_file
             .and_then(|id| self.files.documents.get(&id))
             .map(|d| d.key.clone())
+    }
+
+    pub(super) fn reveal_file_position(
+        &self,
+        position: super::file_preview::SourcePosition,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(document) = self
+            .active_file
+            .and_then(|id| self.files.documents.get(&id))
+        {
+            document
+                .preview
+                .update(cx, |preview, cx| preview.go_to(position, cx));
+        }
     }
 
     pub(super) fn open_file_preview(
@@ -1355,6 +1371,10 @@ impl ConduitApp {
                 sidebar::navigation_header()
                     .child(div().flex_1().min_w_0().overflow_hidden().child(header))
                     .child(
+                        self.project_files_button(cx, None)
+                            .debug_selector(|| "context-file-tools".into()),
+                    )
+                    .child(
                         Button::new("files-view-options")
                             .debug_selector(|| "files-view-options".into())
                             .ghost()
@@ -1454,15 +1474,6 @@ impl ConduitApp {
                                 this.refresh_tree(refresh_root.clone(), cx)
                             })),
                     ),
-            )
-            .child(
-                sidebar::navigation_content().py_1().child(
-                    self.project_files_button(cx, None)
-                        .debug_selector(|| "context-file-tools".into())
-                        .w_full()
-                        .justify_start()
-                        .label(conduit::i18n::text_static("artifact.title")),
-                ),
             )
             .child(sidebar::navigation_content().flex_1().min_h_0().child(list))
             .into_any_element()
@@ -1789,6 +1800,7 @@ impl ConduitApp {
             .track_scroll(&self.files.tab_scroll)
             .with_size(Size::Medium)
             .h(px(TAB_BAR_HEIGHT))
+            .pr(px(8.))
             .when_some(selected, |bar, i| bar.selected_index(i));
         let mut previous_workspace = None;
         for tab in tabs.iter().copied() {
@@ -2063,7 +2075,7 @@ impl ConduitApp {
                     }
                 });
             })
-            .child(bar.suffix(self.detail_toggle(cx)))
+            .child(bar)
             .context_menu(move |menu, _, cx| {
                 let Some(target) = app.read(cx).tab_menu_target else {
                     return menu;
@@ -2251,10 +2263,21 @@ impl ConduitApp {
             .map(|w| (w.path.clone(), w.name()))
             .collect();
         Button::new(id)
+            .debug_selector(move || id.into())
             .ghost()
             .small()
-            .label(name)
-            .icon(IconName::ChevronDown)
+            .w_full()
+            .min_w_0()
+            .accessibility_label(name.clone())
+            .child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_1()
+                    .items_center()
+                    .child(div().flex_1().min_w_0().truncate().child(name))
+                    .child(Icon::new(IconName::ChevronDown).small().flex_shrink_0()),
+            )
             .tooltip(root.display().to_string())
             .cursor_pointer()
             .dropdown_menu(move |mut menu, _, _| {
@@ -2308,36 +2331,112 @@ impl ConduitApp {
             .id("git-navigation")
             .test_support()
             .debug_selector(|| "git-navigation".into());
+        let requests_active = self.github_ui.sidebar_active;
+        let request_content = requests_active.then(|| self.request_sidebar(cx));
+        let request_sidebar = self
+            .selected_workspace_path()
+            .and_then(|path| self.github_ui.sidebars.get(&path).cloned());
+        let request_title = request_sidebar
+            .as_ref()
+            .map_or("PR", |sidebar| sidebar.read(cx).tab_title());
+        let tabs = TabBar::new("git-navigation-tabs")
+            .small()
+            .underline()
+            .flex_shrink_0()
+            .selected_index(usize::from(requests_active))
+            .child(
+                Tab::new()
+                    .label(conduit::i18n::text_static("files.commit"))
+                    .debug_selector(|| "git-commit-tab".into())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.github_ui.sidebar_active = false;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Tab::new()
+                    .label(request_title)
+                    .debug_selector(|| "context-pr".into())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.github_ui.sidebar_active = true;
+                        cx.notify();
+                    })),
+            );
         if let Some(i) = self.selected_workspace {
             let workspace = &self.store.workspaces[i];
             pane = pane.child(
                 sidebar::navigation_header()
                     .overflow_hidden()
-                    .gap_2()
+                    .gap_1()
                     .border_b_1()
                     .border_color(rgb(palette().border))
-                    .child(
-                        div()
-                            .h(px(26.))
-                            .flex_shrink_0()
-                            .px_2()
-                            .flex()
-                            .items_center()
-                            .rounded(px(4.))
-                            .bg(rgb(palette().surface_strong))
-                            .text_color(rgb(palette().activity_running))
-                            .text_size(ui_text_size(12.))
-                            .font_semibold()
-                            .child(conduit::i18n::text_static("files.commit")),
-                    )
+                    .child(tabs)
                     .child(div().flex_1())
-                    .child(self.navigation_workspace_picker(
+                    .when(!requests_active, |header| {
+                        header.child(
+                            self.review_inbox_button(cx, None)
+                                .debug_selector(|| "context-review".into()),
+                        )
+                    }),
+            );
+            let mut context = h_flex()
+                .id("git-repository-context")
+                .debug_selector(|| "git-repository-context".into())
+                .h(px(34.))
+                .border_b_1()
+                .border_color(rgb(palette().border))
+                .flex_shrink_0()
+                .min_w_0()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .child(div().flex_1().min_w_0().overflow_hidden().child(
+                    self.navigation_workspace_picker(
                         "git-workspace",
                         workspace.name(),
                         workspace.path.clone(),
                         cx,
-                    )),
-            );
+                    ),
+                ));
+            if requests_active {
+                if let Some(sidebar) = request_sidebar {
+                    let loading = sidebar.read(cx).is_loading();
+                    context = context.child(
+                        Button::new("request-refresh")
+                            .debug_selector(|| "request-refresh".into())
+                            .ghost()
+                            .small()
+                            .compact()
+                            .icon(IconName::RefreshCw)
+                            .loading(loading)
+                            .disabled(loading)
+                            .tooltip(conduit::i18n::text_static("github.refresh"))
+                            .accessibility_label(conduit::i18n::text_static("github.refresh"))
+                            .on_click(move |_, _, cx| {
+                                sidebar.update(cx, |sidebar, cx| sidebar.refresh(cx));
+                            }),
+                    );
+                }
+            } else {
+                context = context.child(
+                    Button::new("git-refresh")
+                        .debug_selector(|| "git-refresh".into())
+                        .ghost()
+                        .small()
+                        .compact()
+                        .icon(IconName::RefreshCw)
+                        .loading(self.git.probe.is_some())
+                        .tooltip(conduit::i18n::text_static("git_ui.refresh_git_status"))
+                        .accessibility_label(conduit::i18n::text_static(
+                            "git_ui.refresh_git_status",
+                        ))
+                        .on_click(cx.listener(|this, _, _, cx| this.refresh_git(cx))),
+                );
+                if let Some(snapshot) = &self.git.snapshot {
+                    context = context.child(self.git_staging_actions(snapshot, app.clone()));
+                }
+            }
+            pane = pane.child(context);
         } else {
             pane = pane.child(
                 sidebar::navigation_header()
@@ -2347,23 +2446,9 @@ impl ConduitApp {
                     )),
             );
         }
-        pane = pane.child(
-            h_flex()
-                .px_2()
-                .py_1()
-                .gap_1()
-                .flex_wrap()
-                .child(
-                    self.github_button(cx, None)
-                        .debug_selector(|| "context-pr".into())
-                        .label(conduit::i18n::text_static("github.title")),
-                )
-                .child(
-                    self.review_inbox_button(cx, None)
-                        .debug_selector(|| "context-review".into())
-                        .label(conduit::i18n::text_static("navigation.review")),
-                ),
-        );
+        if let Some(content) = request_content {
+            return pane.child(content).into_any_element();
+        }
         pane.child(
             v_flex()
                 .flex_1()
@@ -2767,6 +2852,123 @@ mod tests {
                     }
                     assert!(app.message.is_none());
                     assert_eq!(app.notifications.center.records().len(), notices);
+                });
+            });
+        }
+        cx.update(|window, _| window.remove_window());
+        slot.borrow_mut().take();
+        drop(app);
+        cx.run_until_parked();
+    }
+
+    // Protect citation navigation across asynchronous loading/parsing and tab reuse.
+    #[gpui_kit::test]
+    fn chat_citations_reveal_loaded_source_and_markdown(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
+        cx.update(gpui_kit::init);
+        let fixture = Fixture::new();
+        let code: String = (1..=220).map(|n| format!("// line {n}: 中文\n")).collect();
+        let prose: String = (1..=220)
+            .map(|n| format!("Paragraph {n}: **中文**.\n\n"))
+            .collect();
+        for (path, text) in [
+            ("src/main.rs", code.clone()),
+            ("README.md", prose),
+            ("code.md", format!("# Code\n\n```rust\n{code}```\n")),
+            ("stock-code.md", format!("# Code\n\n```rust\n{code}```\n")),
+        ] {
+            std::fs::write(fixture.0.join("alpha").join(path), text).unwrap();
+        }
+        let mut store = fixture.store();
+        store.ui.code_line_numbers = true;
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|cx| {
+                let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
+                app.startup = None;
+                app.selected_workspace = Some(0);
+                app.selected_session = Some(1);
+                app.open_tabs = vec![DocumentTab::Chat(1)];
+                app
+            });
+            *output.borrow_mut() = Some(app.clone());
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        let app = slot.borrow().as_ref().unwrap().clone();
+        cx.run_until_parked();
+        for (path, citation, numbered) in [
+            ("src/main.rs", ":180:4", true),
+            ("README.md", "#L359", true),
+            ("code.md", "#L183C4", true),
+            ("stock-code.md", "#L183C4", false),
+        ] {
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    app.store.ui.code_line_numbers = numbered;
+                    app.open_chat_link(1, &format!("{path}{citation}"), window, cx);
+                    assert!(app.files.documents[&app.active_file.unwrap()].loading);
+                });
+            });
+            // File IO, Markdown parsing, layout and deferred reveals finish on
+            // separate turns. Drain each stage before observing the viewport.
+            for _ in 0..4 {
+                cx.run_until_parked();
+                cx.update(|window, cx| {
+                    window.simulate_next_frame(cx);
+                    let _ = window.draw(cx);
+                });
+            }
+            let id = cx.update(|_, cx| {
+                let app = app.read(cx);
+                let id = app.active_file.unwrap();
+                let document = &app.files.documents[&id];
+                assert!(!document.loading);
+                assert!(document.error.is_none(), "{:?}", document.error);
+                let scroll = &document.preview.read(cx).scroll;
+                assert!(
+                    scroll.offset().y < -scroll.bounds().size.height,
+                    "{path}: {:?}",
+                    scroll.offset()
+                );
+                id
+            });
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    app.open_chat_link(1, &format!("{path}#L1"), window, cx);
+                    assert_eq!(app.active_file, Some(id));
+                    assert_eq!(app.files.documents.len(), 1);
+                });
+            });
+            for _ in 0..3 {
+                cx.run_until_parked();
+                cx.update(|window, cx| {
+                    window.simulate_next_frame(cx);
+                    let _ = window.draw(cx);
+                });
+            }
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    let scroll = &app.files.documents[&id].preview.read(cx).scroll;
+                    assert_eq!(scroll.offset().y, px(0.), "{path}");
+                    app.open_chat_link(1, &format!("{path}#L999999C999999"), window, cx);
+                });
+            });
+            for _ in 0..3 {
+                cx.run_until_parked();
+                cx.update(|window, cx| {
+                    window.simulate_next_frame(cx);
+                    let _ = window.draw(cx);
+                });
+            }
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    let scroll = &app.files.documents[&id].preview.read(cx).scroll;
+                    assert!(
+                        scroll.offset().y < -scroll.bounds().size.height,
+                        "{path}: EOF"
+                    );
+                    app.close_documents(&[DocumentTab::File(id)], window, cx);
                 });
             });
         }

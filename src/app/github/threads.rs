@@ -221,7 +221,7 @@ impl PullRequestPanel {
                     .comments
                     .iter()
                     .any(|comment| comment.state == CommentState::Pending);
-            let can_resolve = !thread.is_resolved && can_write;
+            let can_resolve = thread.resolvable && !thread.is_resolved && can_write;
             body = body.child(
                 v_flex()
                     .id(SharedString::from(format!("pr-thread-{id}")))

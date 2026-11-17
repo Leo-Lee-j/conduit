@@ -696,7 +696,7 @@ impl Render for GitLogView {
             let app = app.read(cx);
             let dock_width =
                 if window.viewport_size().width >= px(1100.) && app.plugins.right_visible(false) {
-                    app.plugins.dock.width + 6.
+                    app.plugins.dock.width
                 } else {
                     0.
                 };

@@ -549,7 +549,7 @@ fn execute(
         let mut lines = Lines::new();
         let mut stderr = Vec::new();
         let mut approvals = ApprovalBroker::default();
-        let mut last_message = Instant::now();
+        let startup_started = Instant::now();
         let mut exited_at = None;
         let mut cancel_started: Option<Instant> = None;
         let mut question_poll = Instant::now();
@@ -583,7 +583,6 @@ fn execute(
                 question_poll = Instant::now();
             }
             for message in messages {
-                last_message = Instant::now();
                 let step = protocol.accept(message);
                 for write in step.writes {
                     // A queued configuration reply must not start a new prompt
@@ -720,7 +719,7 @@ fn execute(
                     ));
                 }
             }
-            if protocol.startup_pending() && last_message.elapsed() > Duration::from_secs(60) {
+            if protocol.startup_pending() && startup_started.elapsed() > Duration::from_secs(60) {
                 bail!(conduit::i18n::text(
                     "chat_runtime.cli_initialization_exceeded_60_seconds_check_sign"
                 ));

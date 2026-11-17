@@ -32,6 +32,7 @@ impl ConduitApp {
         popover: Option<WeakEntity<gpui_kit::component::popover::PopoverState>>,
     ) -> Button {
         Button::new("project-environments")
+            .cursor_pointer()
             .small()
             .compact()
             .ghost()

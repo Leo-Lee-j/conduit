@@ -257,8 +257,10 @@ impl ConduitApp {
                 palette().activity_running
             } else if failed {
                 palette().diff_remove_text
-            } else {
+            } else if tool_succeeded(&item) {
                 palette().diff_add_text
+            } else {
+                palette().muted
             };
             let path = self
                 .selected_workspace
@@ -304,8 +306,10 @@ impl ConduitApp {
                                                 FullIconName::Clock
                                             } else if failed {
                                                 FullIconName::CircleX
-                                            } else {
+                                            } else if tool_succeeded(&item) {
                                                 FullIconName::CircleCheck
+                                            } else {
+                                                FullIconName::CircleDashed
                                             })
                                             .small(),
                                         )

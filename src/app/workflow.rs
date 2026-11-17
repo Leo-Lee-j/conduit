@@ -1,6 +1,9 @@
-//! Project task and preset dialogs. Every model invocation starts from a draft.
+//! Project task and preset sidebar. Every model invocation starts from a draft.
+use super::plugin_ui::right::{RightBody, RightView};
 use super::*;
 use crate::workflow::{self, Criterion, Preset, TaskStatus, WorkItem};
+use conduit::plugins::{builtins, ids::ViewId, state::ViewInstanceKey};
+use gpui_kit::component::tag::Tag;
 mod branching;
 
 #[cfg(all(test, feature = "ui-tests"))]
@@ -25,7 +28,7 @@ pub(super) struct SessionDraft<'a> {
     pub preset: Option<&'a Preset>,
 }
 
-struct WorkflowPanel {
+pub(super) struct WorkflowPanel {
     host: WeakEntity<ConduitApp>,
     workspace: PathBuf,
     page: Page,
@@ -45,29 +48,28 @@ struct WorkflowPanel {
 }
 
 impl ConduitApp {
-    pub(super) fn workflow_button(
-        &self,
-        cx: &mut Context<Self>,
-        popover: Option<WeakEntity<gpui_kit::component::popover::PopoverState>>,
-    ) -> Button {
-        Button::new("project-workflow")
-            .small()
-            .compact()
-            .ghost()
-            .icon(FullIconName::ListTodo)
-            .accessibility_label(label("workflow.title"))
-            .tooltip(label("workflow.title"))
-            .disabled(self.selected_workspace_path().is_none())
-            .on_click(cx.listener(move |this, _, window, cx| {
-                if let Some(popover) = &popover {
-                    let _ = popover.update(cx, |popover, cx| popover.dismiss(window, cx));
-                }
-                this.open_workflow(window, cx);
-            }))
+    pub(super) fn activate_workflow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.workflow_panels
+            .retain(|path, _| self.store.workspaces.iter().any(|w| &w.path == path));
+        if let Some(workspace) = self.selected_workspace_path()
+            && !self.workflow_panels.contains_key(&workspace)
+        {
+            self.open_workflow_at(None, None, window, cx);
+        }
     }
 
-    fn open_workflow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_workflow_at(None, None, window, cx);
+    pub(super) fn render_workflow_view(
+        &mut self,
+        _: &ViewInstanceKey,
+        _: &Window,
+        _: &mut Context<Self>,
+    ) -> RightView {
+        self.selected_workspace_path()
+            .and_then(|workspace| self.workflow_panels.get(&workspace))
+            .map_or(RightBody::Loading, |panel| {
+                RightBody::Content(panel.clone().into_any_element())
+            })
+            .into()
     }
 
     pub(super) fn open_workflow_task(
@@ -113,6 +115,17 @@ impl ConduitApp {
             return;
         };
         let archived = selected_task.as_ref().is_some_and(|task| task.archived);
+        if self.selected_workspace_path().as_ref() != Some(&workspace) {
+            let Some(index) = self
+                .store
+                .workspaces
+                .iter()
+                .position(|w| w.path == workspace)
+            else {
+                return;
+            };
+            self.switch(index, None, window, cx);
+        }
         let source_session = (self.selected_workspace_path().as_ref() == Some(&workspace))
             .then_some(self.selected_session)
             .flatten();
@@ -151,7 +164,7 @@ impl ConduitApp {
             ];
             WorkflowPanel {
                 host: host.downgrade(),
-                workspace,
+                workspace: workspace.clone(),
                 page: if message.is_some() {
                     Page::Handoff
                 } else {
@@ -178,15 +191,8 @@ impl ConduitApp {
         if selected_task.is_some() {
             view.update(cx, |panel, cx| panel.fill_task(selected_task, window, cx));
         }
-        window.open_dialog(cx, move |dialog, window, _| {
-            let view = view.clone();
-            dialog
-                .title(label("workflow.title"))
-                .w(px(
-                    (f32::from(window.viewport_size().width) - 48.).clamp(280., 950.)
-                ))
-                .content(move |content, _, _| content.child(view.clone()))
-        });
+        self.workflow_panels.insert(workspace, view);
+        self.open_right_view(&ViewId::new(builtins::WORKFLOW).unwrap(), window, cx);
     }
 
     pub(super) fn workflow_session(
@@ -480,9 +486,6 @@ impl WorkflowPanel {
             task.sessions.push(session);
             Ok(())
         });
-        if result.is_ok() {
-            window.close_dialog(cx);
-        }
         self.result(result, cx);
     }
 
@@ -534,9 +537,6 @@ impl WorkflowPanel {
                 cx,
             )
         });
-        if result.is_ok() {
-            window.close_dialog(cx);
-        }
         self.result(result, cx);
     }
 
@@ -596,9 +596,6 @@ impl WorkflowPanel {
                 cx,
             )
         });
-        if result.is_ok() {
-            window.close_dialog(cx);
-        }
         self.result(result, cx);
     }
 
@@ -620,10 +617,24 @@ impl WorkflowPanel {
             .unwrap_or_default();
         tasks.sort_by_key(|task| Some(task.id) != self.editing);
         let mut page = v_flex()
+            .w_full()
+            .min_w_0()
             .gap_2()
+            .child(
+                div()
+                    .font_semibold()
+                    .child(label(if self.editing.is_some() {
+                        "workflow.edit"
+                    } else {
+                        "workflow.new_task"
+                    })),
+            )
+            .child(label("workflow.name"))
             .child(Input::new(&self.title))
-            .child(Textarea::new(&self.goal).h(px(70.)))
-            .child(Textarea::new(&self.criteria).h(px(60.)))
+            .child(label("workflow.goal"))
+            .child(Textarea::new(&self.goal).h(px(90.)))
+            .child(label("workflow.criteria_hint"))
+            .child(Textarea::new(&self.criteria).h(px(80.)))
             .child(
                 h_flex()
                     .gap_2()
@@ -666,14 +677,16 @@ impl WorkflowPanel {
             let engines_owner = owner.clone();
             let mut card = v_flex()
                 .id(("work-item", id))
-                .p_2()
-                .gap_1()
-                .border_1()
+                .w_full()
+                .min_w_0()
+                .py_3()
+                .gap_2()
+                .border_t_1()
                 .border_color(rgb(palette().border))
-                .rounded_md()
                 .child(
                     div()
                         .text_size(ui_text_size(13.))
+                        .font_semibold()
                         .child(format!("#{} · {}", id, task.title)),
                 )
                 .child(div().text_size(ui_text_size(12.)).child(task.goal.clone()));
@@ -734,7 +747,6 @@ impl WorkflowPanel {
                                             && w.sessions.iter().any(|s| s.id == session)
                                     }) {
                                         app.switch(index, Some(session), window, cx);
-                                        window.close_dialog(cx);
                                         cx.notify();
                                     }
                                 });
@@ -965,6 +977,7 @@ impl WorkflowPanel {
                     .child(
                         h_flex()
                             .gap_2()
+                            .flex_wrap()
                             .child(
                                 Button::new(("preset-use", id))
                                     .small()
@@ -1082,24 +1095,28 @@ impl WorkflowPanel {
 }
 
 impl Render for WorkflowPanel {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let writable = self
-            .host()
-            .ok()
-            .is_some_and(|host| host.read(cx).writable && !host.read(cx).closing);
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let host = self.host().ok();
+        let app = host.as_ref().map(|host| host.read(cx));
+        let writable = app.is_some_and(|app| app.writable && !app.closing);
+        let workspace_name = app
+            .and_then(|app| {
+                app.store
+                    .workspaces
+                    .iter()
+                    .find(|w| w.path == self.workspace)
+            })
+            .map(Workspace::name)
+            .unwrap_or_default();
         let mut body = v_flex()
-            .id("project-workflow-panel")
-            .gap_2()
-            .max_h(px(
-                (f32::from(window.viewport_size().height) - 180.).max(180.)
-            ))
-            .overflow_y_scroll()
-            .child(
-                div()
-                    .text_size(ui_text_size(11.))
-                    .text_color(rgb(palette().muted))
-                    .child(self.workspace.display().to_string()),
-            );
+            .id("project-workflow-content")
+            .w_full()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .gap_3()
+            .p_3()
+            .overflow_y_scroll();
         let mut tabs = h_flex().gap_1().flex_wrap();
         for (id, page, key) in [
             ("tasks", Page::Tasks, "workflow.tasks"),
@@ -1120,7 +1137,24 @@ impl Render for WorkflowPanel {
                     })),
             );
         }
-        body = body.child(tabs);
+        let header = v_flex()
+            .w_full()
+            .flex_shrink_0()
+            .p_3()
+            .gap_2()
+            .border_b_1()
+            .border_color(rgb(palette().border))
+            .child(
+                h_flex().min_w_0().child(
+                    Tag::secondary()
+                        .small()
+                        .max_w_full()
+                        .min_w_0()
+                        .text_size(ui_text_size(11.))
+                        .child(div().min_w_0().truncate().child(workspace_name)),
+                ),
+            )
+            .child(tabs);
         if let Some(error) = &self.error {
             body = body.child(
                 div()
@@ -1137,10 +1171,19 @@ impl Render for WorkflowPanel {
                     .child(error.clone()),
             );
         }
-        body.child(match self.page {
-            Page::Tasks => self.task_page(writable, cx),
-            Page::Presets => self.preset_page(writable, cx),
-            Page::Handoff => self.handoff_page(writable, cx),
-        })
+        v_flex()
+            .id("project-workflow-panel")
+            .debug_selector(|| "project-workflow-panel".into())
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden()
+            .text_size(ui_text_size(12.))
+            .child(header)
+            .child(body.child(match self.page {
+                Page::Tasks => self.task_page(writable, cx),
+                Page::Presets => self.preset_page(writable, cx),
+                Page::Handoff => self.handoff_page(writable, cx),
+            }))
     }
 }

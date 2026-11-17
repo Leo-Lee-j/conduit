@@ -346,7 +346,11 @@ impl ConduitApp {
         });
     }
 
-    fn git_staging_actions(&self, snapshot: &git::Snapshot, view: Entity<Self>) -> AnyElement {
+    pub(super) fn git_staging_actions(
+        &self,
+        snapshot: &git::Snapshot,
+        view: Entity<Self>,
+    ) -> AnyElement {
         let path = self.selected_workspace_path().unwrap_or_default();
         let available: Vec<String> = snapshot
             .files
@@ -395,78 +399,139 @@ impl ConduitApp {
                 .is_some_and(|set| set.contains(file))
         });
         let selected_for_unstage = selected_staged.clone();
-        h_flex()
-            .w_full()
-            .gap_1()
-            .items_center()
-            .h(px(30.))
-            .child(
-                Button::new("git-select-unstaged")
-                    .debug_selector(|| "git-select-unstaged".into())
-                    .ghost()
-                    .small()
-                    .compact()
-                    .icon(IconName::Check)
-                    .accessibility_label(conduit::i18n::text_static(
-                        "git_ui.select_all_changed_files",
-                    ))
-                    .tooltip(if all_selected {
-                        conduit::i18n::text_static("git_ui.deselect_all")
-                    } else {
-                        conduit::i18n::text_static("git_ui.select_all_changed_files")
-                    })
-                    .disabled(snapshot.is_clean())
-                    .on_click(move |_, _, cx| {
-                        select_app.update(cx, |this, cx| {
-                            let set = this.git.selected_files.entry(path.clone()).or_default();
-                            if all_selected {
-                                set.clear();
-                            } else {
-                                set.extend(all_for_select.iter().cloned());
-                            }
-                            cx.notify();
-                        });
-                    }),
-            )
-            .child(
-                Button::new("git-stage-selected")
-                    .debug_selector(|| "git-stage-selected".into())
-                    .ghost()
-                    .small()
-                    .compact()
-                    .icon(IconName::Plus)
-                    .accessibility_label(conduit::i18n::text_static("git_ui.stage_selected_files"))
-                    .tooltip(conduit::i18n::format(
-                        "git_ui.stage_selected_files_640698",
-                        &[("arg0", format!("{}", selected.len()))],
-                    ))
-                    .disabled(!self.can_stage_files() || selected.is_empty())
-                    .on_click(move |_, _, cx| {
-                        selected_app
-                            .update(cx, |this, cx| this.stage_git_files(selected.clone(), cx));
-                    }),
-            )
-            .child(
-                Button::new("git-unstage-selected")
-                    .debug_selector(|| "git-unstage-selected".into())
-                    .ghost()
-                    .small()
-                    .compact()
-                    .icon(IconName::Minus)
-                    .accessibility_label(conduit::i18n::text_static(
-                        "git_ui.unstage_selected_files",
-                    ))
-                    .tooltip(conduit::i18n::format(
-                        "git_ui.unstage_selected_files_4f792b",
-                        &[("arg0", format!("{}", selected_staged.len()))],
-                    ))
-                    .disabled(!self.can_stage_files() || selected_staged.is_empty())
-                    .on_click(move |_, _, cx| {
-                        unstage_selected_app.update(cx, |this, cx| {
-                            this.unstage_git_files(selected_for_unstage.clone(), cx)
-                        });
-                    }),
-            )
+        let clean = snapshot.is_clean();
+        let can_stage = self.can_stage_files();
+        let active_groups = if self.git.group_by_status {
+            GitChangeGroup::STATUS.to_vec()
+        } else {
+            GitChangeGroup::ALL.to_vec()
+        };
+        let collapsed = active_groups
+            .iter()
+            .all(|kind| self.git.collapsed_groups.contains(kind));
+        let group_by_status = self.git.group_by_status;
+        let collapse_app = view.clone();
+        Button::new("git-group-options")
+            .debug_selector(|| "git-group-options".into())
+            .ghost()
+            .small()
+            .compact()
+            .icon(IconName::Ellipsis)
+            .tooltip(conduit::i18n::text_static("git_ui.more_actions"))
+            .accessibility_label(conduit::i18n::text_static("git_ui.more_actions"))
+            .dropdown_menu(move |mut menu, _, _| {
+                let select_app = select_app.clone();
+                let selected_app = selected_app.clone();
+                let unstage_app = unstage_selected_app.clone();
+                let collapse_app = collapse_app.clone();
+                let select_path = path.clone();
+                let stage_path = path.clone();
+                let unstage_path = path.clone();
+                let collapse_path = path.clone();
+                let all_for_select = all_for_select.clone();
+                let selected = selected.clone();
+                let selected_staged = selected_for_unstage.clone();
+                let active_groups = active_groups.clone();
+                menu = menu
+                    .item(
+                        PopupMenuItem::new(conduit::i18n::text_static(if all_selected {
+                            "git_ui.deselect_all"
+                        } else {
+                            "git_ui.select_all_changed_files"
+                        }))
+                        .disabled(clean)
+                        .on_click(move |_, _, cx| {
+                            select_app.update(cx, |this, cx| {
+                                if this.selected_workspace_path().as_ref() != Some(&select_path) {
+                                    return;
+                                }
+                                let set = this
+                                    .git
+                                    .selected_files
+                                    .entry(select_path.clone())
+                                    .or_default();
+                                if all_selected {
+                                    set.clear();
+                                } else {
+                                    set.extend(all_for_select.iter().cloned());
+                                }
+                                cx.notify();
+                            });
+                        }),
+                    )
+                    .item(
+                        PopupMenuItem::new(conduit::i18n::format(
+                            "git_ui.stage_selected_files_640698",
+                            &[("arg0", selected.len().to_string())],
+                        ))
+                        .disabled(!can_stage || selected.is_empty())
+                        .on_click(move |_, _, cx| {
+                            selected_app.update(cx, |this, cx| {
+                                if this.selected_workspace_path().as_ref() == Some(&stage_path) {
+                                    this.stage_git_files(selected.clone(), cx);
+                                }
+                            });
+                        }),
+                    )
+                    .item(
+                        PopupMenuItem::new(conduit::i18n::format(
+                            "git_ui.unstage_selected_files_4f792b",
+                            &[("arg0", selected_staged.len().to_string())],
+                        ))
+                        .disabled(!can_stage || selected_staged.is_empty())
+                        .on_click(move |_, _, cx| {
+                            unstage_app.update(cx, |this, cx| {
+                                if this.selected_workspace_path().as_ref() == Some(&unstage_path) {
+                                    this.unstage_git_files(selected_staged.clone(), cx);
+                                }
+                            });
+                        }),
+                    )
+                    .separator()
+                    .item(
+                        PopupMenuItem::new(conduit::i18n::text_static(if collapsed {
+                            "git_ui.expand_all_change_groups"
+                        } else {
+                            "git_ui.collapse_all_change_groups"
+                        }))
+                        .on_click(move |_, _, cx| {
+                            collapse_app.update(cx, |this, cx| {
+                                if this.selected_workspace_path().as_ref() != Some(&collapse_path) {
+                                    return;
+                                }
+                                if collapsed {
+                                    this.git.collapsed_groups.clear();
+                                } else {
+                                    this.git
+                                        .collapsed_groups
+                                        .extend(active_groups.iter().copied());
+                                }
+                                cx.notify();
+                            });
+                        }),
+                    )
+                    .separator();
+                for (status, key) in [
+                    (false, "git_ui.group_by_version_control_status"),
+                    (true, "git_ui.group_by_added_modified_deleted"),
+                ] {
+                    let app = view.clone();
+                    let workspace = path.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(conduit::i18n::text_static(key))
+                            .checked(group_by_status == status)
+                            .on_click(move |_, _, cx| {
+                                app.update(cx, |this, cx| {
+                                    if this.selected_workspace_path().as_ref() == Some(&workspace) {
+                                        this.git.group_by_status = status;
+                                        cx.notify();
+                                    }
+                                });
+                            }),
+                    );
+                }
+                menu
+            })
             .into_any_element()
     }
 
@@ -1842,22 +1907,6 @@ impl ConduitApp {
 
     /// Git status and staging list in the contextual left navigation.
     pub(super) fn git_panel(&self, view: Entity<Self>) -> AnyElement {
-        let refresh_icon = |id: &'static str| -> AnyElement {
-            let app = view.clone();
-            Button::new(id)
-                .ghost()
-                .small()
-                .compact()
-                .icon(IconName::RefreshCw)
-                .loading(self.git.probe.is_some())
-                .accessibility_label(conduit::i18n::text_static("git_ui.refresh_git_status"))
-                .tooltip(conduit::i18n::text_static("git_ui.refresh_git_status"))
-                .cursor_pointer()
-                .on_click(move |_, _, cx| {
-                    app.update(cx, |this, cx| this.refresh_git(cx));
-                })
-                .into_any_element()
-        };
         let retry = |id: &'static str| -> AnyElement {
             let app = view.clone();
             Button::new(id)
@@ -2459,104 +2508,22 @@ impl ConduitApp {
                 ));
             }
         }
-        let collapse_app = view.clone();
-        let active_groups = if self.git.group_by_status {
-            GitChangeGroup::STATUS.to_vec()
-        } else {
-            GitChangeGroup::ALL.to_vec()
-        };
-        let collapsed = active_groups
-            .iter()
-            .all(|kind| self.git.collapsed_groups.contains(kind));
-        let options_app = view.clone();
-        let group_by_status = self.git.group_by_status;
+        let branch_tooltip = format!(
+            "{}\n{}",
+            snapshot.branch,
+            conduit::i18n::format(
+                "git_ui.staged_unstaged_untracked",
+                &[
+                    ("arg0", snapshot.staged_count().to_string()),
+                    ("arg1", snapshot.unstaged_count().to_string()),
+                    ("arg2", snapshot.untracked_count().to_string()),
+                ],
+            ),
+        );
         v_flex()
             .size_full()
             .min_w_0()
             .min_h_0()
-            .child(
-                h_flex()
-                    .h(px(32.))
-                    .flex_shrink_0()
-                    .items_center()
-                    .px_1()
-                    .gap_1()
-                    .child(refresh_icon("git-refresh"))
-                    .child(self.git_staging_actions(snapshot, view))
-                    .child(
-                        Button::new("git-collapse-all")
-                            .debug_selector(|| "git-collapse-all".into())
-                            .ghost()
-                            .small()
-                            .compact()
-                            .icon(if collapsed {
-                                IconName::ChevronDown
-                            } else {
-                                IconName::ChevronRight
-                            })
-                            .accessibility_label(if collapsed {
-                                conduit::i18n::text_static("git_ui.expand_all_change_groups")
-                            } else {
-                                conduit::i18n::text_static("git_ui.collapse_all_change_groups")
-                            })
-                            .tooltip(if collapsed {
-                                conduit::i18n::text_static("git_ui.expand_all_change_groups")
-                            } else {
-                                conduit::i18n::text_static("git_ui.collapse_all_change_groups")
-                            })
-                            .on_click(move |_, _, cx| {
-                                collapse_app.update(cx, |this, cx| {
-                                    if collapsed {
-                                        this.git.collapsed_groups.clear();
-                                    } else {
-                                        this.git
-                                            .collapsed_groups
-                                            .extend(active_groups.iter().copied());
-                                    }
-                                    cx.notify();
-                                });
-                            }),
-                    )
-                    .child(
-                        Button::new("git-group-options")
-                            .debug_selector(|| "git-group-options".into())
-                            .ghost()
-                            .small()
-                            .compact()
-                            .icon(IconName::Ellipsis)
-                            .accessibility_label(conduit::i18n::text_static("git_ui.group_changes"))
-                            .tooltip(conduit::i18n::text_static("git_ui.group_changes"))
-                            .dropdown_menu(move |mut menu, _, _| {
-                                for (status, label) in [
-                                    (
-                                        false,
-                                        conduit::i18n::text_static(
-                                            "git_ui.group_by_version_control_status",
-                                        ),
-                                    ),
-                                    (
-                                        true,
-                                        conduit::i18n::text_static(
-                                            "git_ui.group_by_added_modified_deleted",
-                                        ),
-                                    ),
-                                ] {
-                                    let app = options_app.clone();
-                                    menu = menu.item(
-                                        PopupMenuItem::new(label)
-                                            .checked(group_by_status == status)
-                                            .on_click(move |_, _, cx| {
-                                                app.update(cx, |this, cx| {
-                                                    this.git.group_by_status = status;
-                                                    cx.notify();
-                                                });
-                                            }),
-                                    );
-                                }
-                                menu
-                            }),
-                    ),
-            )
             .child(
                 h_flex()
                     .h(px(26.))
@@ -2570,19 +2537,17 @@ impl ConduitApp {
                     .child(Icon::new(gpui_kit::assets::IconName::GitBranch).size(px(13.)))
                     .child(
                         div()
+                            .id("git-sidebar-branch-label")
                             .min_w_0()
                             .flex_1()
                             .truncate()
-                            .child(snapshot.branch.clone()),
-                    )
-                    .child(conduit::i18n::format(
-                        "git_ui.staged_unstaged_untracked",
-                        &[
-                            ("arg0", format!("{}", snapshot.staged_count())),
-                            ("arg1", format!("{}", snapshot.unstaged_count())),
-                            ("arg2", format!("{}", snapshot.untracked_count())),
-                        ],
-                    )),
+                            .child(snapshot.branch.clone())
+                            .id("git-branch-context-label")
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(branch_tooltip.clone())
+                                    .build(window, cx)
+                            }),
+                    ),
             )
             .child(body)
             .into_any_element()

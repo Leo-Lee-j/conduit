@@ -20,8 +20,9 @@ impl Render for GithubCommentPanel {
                 .rounded_md()
                 .bg(rgb(palette().surface_strong))
                 .child(div().text_size(ui_text_size(13.)).child(format!(
-                    "#{} · {}",
-                    self.expected.number, self.expected.title
+                    "{} · {}",
+                    self.expected.forge.request_name(self.expected.number),
+                    self.expected.title
                 )))
                 .child(
                     div()

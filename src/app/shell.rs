@@ -216,7 +216,6 @@ impl Render for ConduitApp {
         }
         self.ensure_selected_transcript(cx);
         let render_started = Instant::now();
-        let app_entity = cx.entity();
         let selected = self
             .selected_session
             .and_then(|id| self.session(id))
@@ -280,15 +279,24 @@ impl Render for ConduitApp {
             measured_sidebar
         };
         self.sidebar_width = measured_sidebar;
-        let content_width = (viewport_width - measured_sidebar - 6.).max(320.);
+        let detail_state =
+            window.use_keyed_state("detail-resizable", cx, |_, _| ResizableState::default());
+        let content_width = (viewport_width - measured_sidebar - 38.).max(320.);
         let max_detail_width = (content_width * 0.5).max(260.);
-        self.plugins.dock.width = self.plugins.dock.width.clamp(260., max_detail_width);
+        let measured_detail = detail_state
+            .read(cx)
+            .sizes()
+            .get(1)
+            .map(|width| f32::from(*width))
+            .filter(|width| *width > 0.)
+            .unwrap_or(self.plugins.dock.width);
+        self.plugins.dock.width = measured_detail.clamp(260., max_detail_width);
         let detail_width = self.plugins.dock.width;
         let settings_width = (viewport_width
             - measured_sidebar
-            - 6.
-            - if self.plugins.right_visible(false) {
-                detail_width + 6.
+            - 38.
+            - if viewport_width >= 1100. && self.plugins.right_visible(false) {
+                detail_width
             } else {
                 0.
             })
@@ -960,9 +968,8 @@ impl Render for ConduitApp {
                     && self.github_ui.active.is_none(),
                 |layout| layout.child(toolbar),
             );
-        // The left workspace rail stays a resizable group. The right sidebar is
-        // laid out by hand so dragging its edge follows the pointer 1:1 and its
-        // width can be capped at half of the remaining content area.
+        // Both sidebars use the same resizable panels and overlay handles.
+        // A nested group keeps the right sidebar independent of left navigation.
         let (detail_panel, overlay) = self.render_detail_dock(window, cx);
         #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
         let detail_panel = detail_panel.map(|panel| {
@@ -977,45 +984,17 @@ impl Render for ConduitApp {
                 .child(sidebar),
         );
         let conversation_area: AnyElement = match detail_panel {
-            Some(panel) => {
-                let drag_app = app_entity.clone();
-                let band = div()
-                    .id("detail-resize")
-                    .test_support()
-                    .debug_selector(|| "detail-resize".into())
-                    .relative()
-                    .w(px(6.))
-                    .h_full()
-                    .flex_shrink_0()
-                    .cursor_col_resize()
-                    .hover(|style| style.bg(rgb(palette().surface_hover)))
-                    .on_drag(DetailResize, move |_, position, window, cx| {
-                        // `position` is relative to the band; the panel's right
-                        // edge is the window edge, so recover the pointer's
-                        // window x to keep the grab offset constant while dragging.
-                        let viewport = f32::from(window.viewport_size().width);
-                        let local = f32::from(position.x);
-                        drag_app.update(cx, |this, cx| {
-                            let start_x = viewport - this.plugins.dock.width - 6. + local;
-                            this.plugins.dock.drag = Some((start_x, this.plugins.dock.width));
-                            cx.notify();
-                        });
-                        cx.new(|_| DetailResize)
-                    });
-                h_flex()
-                    .h_full()
-                    .w_full()
-                    .child(conversation)
-                    .child(band)
-                    .child(
-                        div()
-                            .w(px(detail_width))
-                            .h_full()
-                            .flex_shrink_0()
-                            .child(panel),
-                    )
-                    .into_any_element()
-            }
+            Some(panel) => h_resizable("detail-split")
+                .with_state(&detail_state)
+                .child(resizable_panel().child(conversation))
+                .child(
+                    resizable_panel()
+                        .size(px(detail_width))
+                        .size_range(px(260.)..px(max_detail_width))
+                        .fixed()
+                        .child(panel),
+                )
+                .into_any_element(),
             None => conversation.into_any_element(),
         };
         let body = if self.plugins.collapsed() {
@@ -1035,28 +1014,12 @@ impl Render for ConduitApp {
                 .into_any_element()
         };
 
-        let drag_app = app_entity.clone();
-        let mut main_area = div()
-            .relative()
-            .flex_1()
-            .min_h_0()
-            .on_drag_move(move |event: &DragMoveEvent<DetailResize>, window, cx| {
-                let x = f32::from(event.event.position.x);
-                let viewport = f32::from(window.viewport_size().width);
-                drag_app.update(cx, |this, cx| {
-                    let Some((start_x, start_width)) = this.plugins.dock.drag else {
-                        return;
-                    };
-                    let content = (viewport - this.sidebar_width - 6.).max(320.);
-                    let max = (content * 0.5).max(260.);
-                    let width = (start_width + (start_x - x)).clamp(260., max);
-                    if (width - this.plugins.dock.width).abs() > 0.5 {
-                        this.plugins.dock.width = width;
-                        cx.notify();
-                    }
-                });
-            })
-            .child(body);
+        let mut main_area = div().relative().flex_1().min_h_0().child(
+            h_flex()
+                .size_full()
+                .child(div().flex_1().min_w_0().h_full().child(body))
+                .child(self.render_right_navigation(cx)),
+        );
         if let Some(panel) = overlay {
             main_area = main_area.child(panel);
         }

@@ -349,6 +349,8 @@ impl Protocol {
             if method == "session/update" {
                 self.acp_update(&value["params"], &mut step);
             } else if value.get("id").is_some() {
+                self.presentation
+                    .unsupported(&format!("OpenCode request/{method}"), &mut step);
                 step.writes.push(json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32601,"message":"Conduit does not implement this client capability"}}));
             }
             return step;
@@ -491,9 +493,9 @@ impl Protocol {
                 match result["stopReason"].as_str() {
                     Some("end_turn") => {}
                     Some("cancelled") => {
-                        if matches!(self.intent, crate::commands::RequestIntent::Command(_)) {
-                            step.error = Some(conduit::i18n::text("commands.native_cancelled"));
-                        }
+                        // Local cancellation is carried by the runtime flag. An
+                        // unsolicited native stop must never look like success.
+                        step.error = Some(conduit::i18n::text("commands.native_cancelled"));
                     }
                     Some("max_tokens") => {
                         step.error = Some(
@@ -692,15 +694,17 @@ impl Protocol {
                     self.acp.reply_index += 1;
                 }
             }
-            Some("agent_message_chunk") if update["content"]["type"] == "text" => {
+            Some("agent_message_chunk") => {
                 self.acp.thoughts.finish(&mut step.events);
-                step.events.push(Event::Delta {
-                    key: update["messageId"]
-                        .as_str()
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| format!("acp-reply-{}", self.acp.reply_index)),
-                    text: text(&update["content"], "text").into(),
-                });
+                if let Some(text) = self.presentation.content(&update["content"], step) {
+                    step.events.push(Event::Delta {
+                        key: update["messageId"]
+                            .as_str()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| format!("acp-reply-{}", self.acp.reply_index)),
+                        text,
+                    });
+                }
             }
             Some("tool_call" | "tool_call_update") => {
                 let Some(id) = update["toolCallId"].as_str() else {
@@ -716,8 +720,9 @@ impl Protocol {
                 }
                 let status = match merged["status"].as_str() {
                     Some("completed") => "已完成",
-                    Some("failed") => conduit::i18n::text_static("tools.failed"),
-                    _ => "运行中",
+                    Some("failed") => "已失败",
+                    Some("pending" | "in_progress") | None => "运行中",
+                    Some(other) => other,
                 };
                 step.events.push(Event::Tool {
                     key: id.into(),
@@ -752,7 +757,13 @@ impl Protocol {
                 // Full token counts arrive with the prompt response. Context
                 // updates are not a cumulative session token counter.
             }
-            _ => {}
+            Some("user_message_chunk" | "current_mode_update" | "available_commands_update") => {}
+            Some(kind) => self
+                .presentation
+                .unsupported(&format!("OpenCode update/{kind}"), step),
+            None => self
+                .presentation
+                .unsupported("OpenCode update/malformed", step),
         }
     }
 

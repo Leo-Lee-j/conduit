@@ -4,6 +4,7 @@ use crate::automation::{Status, Trigger};
 mod panel;
 
 pub(super) struct AutomationUi {
+    panels: BTreeMap<PathBuf, Entity<panel::AutomationPanel>>,
     recovered: bool,
     last_poll: Instant,
     pending: Vec<(u64, crate::persistence::SaveReceipt)>,
@@ -11,6 +12,7 @@ pub(super) struct AutomationUi {
 impl Default for AutomationUi {
     fn default() -> Self {
         Self {
+            panels: BTreeMap::new(),
             recovered: false,
             last_poll: Instant::now(),
             pending: vec![],

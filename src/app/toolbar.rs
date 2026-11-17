@@ -2,177 +2,17 @@
 
 use super::*;
 
-#[derive(Clone, Copy)]
-enum ToolGroup {
-    Tasks,
-    Terminal,
-}
-
-impl ToolGroup {
-    fn id(self) -> &'static str {
-        match self {
-            Self::Tasks => "task-tools",
-            Self::Terminal => "terminal-options",
-        }
-    }
-    fn title(self) -> &'static str {
-        conduit::i18n::text_static(match self {
-            Self::Tasks => "navigation.tasks",
-            Self::Terminal => "navigation.terminal_options",
-        })
-    }
-}
-
-struct ContextTools {
-    host: WeakEntity<ConduitApp>,
-    popover: WeakEntity<gpui_kit::component::popover::PopoverState>,
-    group: ToolGroup,
-    availability: Option<(Option<PathBuf>, bool, bool, bool)>,
-    _subscription: Subscription,
-}
-impl Render for ContextTools {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(host) = self.host.upgrade() else {
-            return div().into_any_element();
-        };
-        let popover = self.popover.clone();
-        let group = self.group;
-        host.update(cx, |app, cx| {
-            let items = match group {
-                ToolGroup::Tasks => vec![
-                    (
-                        "workflow.title",
-                        app.workflow_button(cx, Some(popover.clone())),
-                    ),
-                    (
-                        "automation.title",
-                        app.automation_button(cx, Some(popover.clone())),
-                    ),
-                ],
-                ToolGroup::Terminal => vec![
-                    (
-                        "shortcuts.new_terminal",
-                        Button::new("context-new-terminal")
-                            .small()
-                            .ghost()
-                            .icon(FullIconName::Plus)
-                            .disabled(
-                                !app.writable
-                                    || app.closing
-                                    || app.updater.preparing()
-                                    || app.selected_workspace_path().is_none(),
-                            )
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                let _ =
-                                    popover.update(cx, |popover, cx| popover.dismiss(window, cx));
-                                this.terminal_command(true, window, cx);
-                            })),
-                    ),
-                    (
-                        "environment.title",
-                        app.environments_button(cx, Some(self.popover.clone())),
-                    ),
-                ],
-            };
-            v_flex()
-                .w(px(260.))
-                .p_2()
-                .gap_1()
-                .debug_selector(move || format!("{}-list", group.id()))
-                .children(items.into_iter().enumerate().map(|(index, (key, button))| {
-                    button
-                        .debug_selector(move || format!("{}-{index}", group.id()))
-                        .w_full()
-                        .justify_start()
-                        .label(conduit::i18n::text(key))
-                }))
-                .into_any_element()
-        })
-    }
-}
-
 impl ConduitApp {
-    fn contextual_tools_button(
-        &self,
-        group: ToolGroup,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let host = cx.weak_entity();
-        Popover::new(group.id())
-            .anchor(Anchor::BottomRight)
-            .trigger(
-                Button::new(group.id())
-                    .debug_selector(move || group.id().into())
-                    .small()
-                    .ghost()
-                    .icon(match group {
-                        ToolGroup::Tasks => FullIconName::ListTodo,
-                        ToolGroup::Terminal => FullIconName::ChevronDown,
-                    })
-                    .when(matches!(group, ToolGroup::Tasks), |button| {
-                        button.label(group.title())
-                    })
-                    .tooltip(group.title())
-                    .accessibility_label(group.title())
-                    .disabled(self.selected_workspace_path().is_none()),
-            )
-            .content(move |_, window, cx| {
-                let popover = cx.weak_entity();
-                window.use_keyed_state((group.id(), 0usize), cx, |_, cx| ContextTools {
-                    _subscription: cx.observe(
-                        &host.upgrade().expect("host is alive"),
-                        |this: &mut ContextTools, host, cx| {
-                            let app = host.read(cx);
-                            let availability = (
-                                app.selected_workspace_path(),
-                                app.writable,
-                                app.closing,
-                                app.updater.preparing(),
-                            );
-                            if this.availability.as_ref() != Some(&availability) {
-                                this.availability = Some(availability);
-                                cx.notify();
-                            }
-                        },
-                    ),
-                    host: host.clone(),
-                    popover,
-                    group,
-                    availability: None,
-                })
-            })
-    }
-
-    pub(super) fn task_tools_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        self.contextual_tools_button(ToolGroup::Tasks, cx)
-    }
-
-    pub(super) fn terminal_options_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        self.contextual_tools_button(ToolGroup::Terminal, cx)
-    }
     pub(super) fn render_toolbar(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.sync_plugin_context();
-        let active = self
-            .selected_session
-            .is_some_and(|id| self.session_control.runs.contains_key(&id));
-        let status = self
-            .selected_session
-            .and_then(|id| self.session_control.runs.get(&id))
-            .map(|run| run.status.clone());
         // The toolbar belongs to the conversation; workspace navigation and
         // the independent right dock use their full height.
         let toolbar_hint: Option<String> = if self.closing {
             Some(conduit::i18n::text_static("toolbar.cleaning_up_processes").into())
-        } else if active {
-            Some(
-                status
-                    .clone()
-                    .unwrap_or_else(|| conduit::i18n::text_static("stream_events.running").into()),
-            )
         } else {
             None
         };
@@ -295,24 +135,11 @@ impl ConduitApp {
                         )
                 })
             })
-            .child(self.branch_toolbar_button(cx))
-            .child(
-                self.github_button(cx, None)
-                    .label(conduit::i18n::text_static("github.short_title"))
-                    .debug_selector(|| "branch-pr".into()),
-            )
-            .child(
-                h_flex()
-                    .items_center()
-                    .gap_0()
-                    .child(self.terminal_button(cx))
-                    .child(self.terminal_options_button(cx)),
-            )
+            .child(self.terminal_button(cx))
             .child(
                 self.environments_button(cx, None)
                     .debug_selector(|| "toolbar-environments".into()),
-            )
-            .child(self.notification_bell(cx));
+            );
         let statuses = self.render_status_contributions(window, cx);
         #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
         let statuses = chat::profiling::host_element(
@@ -361,7 +188,76 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn contextual_menus_fit_the_minimum_window_and_close_with_escape(cx: &mut TestAppContext) {
+    fn right_sidebar_entries_share_the_rail_and_toggle_without_dialogs(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
+        let (app, cx, _) = crate::app::queue::tests::fixture(cx, "task-sidebar-bounds");
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.startup = None;
+                app.writable = false;
+                cx.notify();
+            })
+        });
+        for (width, height) in [(850., 500.), (1200., 800.)] {
+            cx.simulate_resize(size(px(width), px(height)));
+            draw(cx);
+            assert!(cx.debug_bounds("task-tools").is_none());
+            assert!(cx.debug_bounds("toggle-sidebar").is_none());
+            let rail = cx.debug_bounds("right-navigation-rail").unwrap();
+            assert_eq!(rail.right(), px(width));
+            for (trigger, content, close) in [
+                (
+                    "project-workflow",
+                    "project-workflow-panel",
+                    "close-workflow",
+                ),
+                (
+                    "project-automations",
+                    "automation-panel",
+                    "close-automations",
+                ),
+                (
+                    "right-choice-conduit.core.tool-details",
+                    "detail-empty",
+                    "close-details",
+                ),
+                (
+                    "notification-bell",
+                    "notification-panel",
+                    "close-notifications",
+                ),
+            ] {
+                let button = cx.debug_bounds(trigger).unwrap();
+                assert!(button.left() >= rail.left() && button.right() <= rail.right());
+                click(cx, trigger);
+                assert!(cx.debug_bounds("right-sidebar-tabs").is_none());
+                assert!(cx.debug_bounds("right-sidebar-title").is_some());
+                let panel = cx.debug_bounds("detail-panel").unwrap();
+                let content = cx.debug_bounds(content).unwrap();
+                assert!(panel.left() >= px(0.) && panel.right() <= rail.left());
+                assert!(content.left() >= panel.left() && content.right() <= panel.right());
+                assert!(content.top() >= panel.top() && content.bottom() <= panel.bottom());
+                cx.update(|window, cx| assert!(!window.has_active_dialog(cx)));
+                click(cx, close);
+                assert!(cx.debug_bounds("detail-panel").is_none());
+                cx.update(|_, cx| {
+                    assert!(
+                        app.read(cx)
+                            .plugins
+                            .right_choices(false)
+                            .iter()
+                            .all(|choice| !choice.selected)
+                    );
+                });
+                click(cx, trigger);
+                click(cx, trigger);
+                assert!(cx.debug_bounds("detail-panel").is_none());
+            }
+        }
+    }
+
+    #[gpui_kit::test]
+    fn direct_entries_fit_the_minimum_window(cx: &mut TestAppContext) {
         let _locale = crate::test_support::chinese();
         let (app, cx, _) = crate::app::queue::tests::fixture(cx, "context-tool-bounds");
         cx.update(|_, cx| {
@@ -380,19 +276,15 @@ mod tests {
             assert!(connections.top() >= px(0.) && connections.bottom() <= px(height));
             let usage = cx.debug_bounds("navigation-usage").unwrap();
             assert!(usage.right() <= px(width) && usage.bottom() <= px(height));
-            for (trigger, list) in [
-                ("task-tools", "task-tools-list"),
-                ("terminal-options", "terminal-options-list"),
-            ] {
-                let button = cx.debug_bounds(trigger).unwrap();
-                assert!(button.right() <= px(width) && button.bottom() <= px(height));
-                click(cx, trigger);
-                let menu = cx.debug_bounds(list).unwrap();
-                assert!(menu.left() >= px(0.) && menu.top() >= px(0.));
-                assert!(menu.right() <= px(width) && menu.bottom() <= px(height));
-                cx.simulate_keystrokes("escape");
-                draw(cx);
-                assert!(cx.debug_bounds(list).is_none());
+            assert!(cx.debug_bounds("terminal-options").is_none());
+            let workspace = cx.debug_bounds("toolbar-workspace").unwrap();
+            let branch = cx.debug_bounds("git-branch-trigger").unwrap();
+            assert!(cx.debug_bounds("branch-pr").is_none());
+            let toolbar = cx.debug_bounds("conversation-toolbar").unwrap();
+            assert!(workspace.right() <= branch.left());
+            assert!(branch.right() <= connections.left());
+            for bounds in [workspace, branch] {
+                assert!(bounds.top() >= toolbar.top() && bounds.bottom() <= toolbar.bottom());
             }
             for (navigation, selectors) in [
                 ("nav-git", &["context-pr", "context-review"][..]),
@@ -410,7 +302,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn contextual_entries_open_their_panels_and_dismiss_the_menu(cx: &mut TestAppContext) {
+    fn direct_entries_open_their_panels(cx: &mut TestAppContext) {
         let _locale = crate::test_support::chinese();
         let (app, cx, _) = crate::app::queue::tests::fixture(cx, "context-tool-clicks");
         cx.update(|_, cx| {
@@ -427,49 +319,36 @@ mod tests {
             assert!(window.has_active_dialog(cx));
             window.close_all_dialogs(cx);
         });
-        for (trigger, list, selector) in [
-            ("task-tools", "task-tools-list", "task-tools-0"),
-            ("task-tools", "task-tools-list", "task-tools-1"),
-            (
-                "terminal-options",
-                "terminal-options-list",
-                "terminal-options-1",
-            ),
-        ] {
-            draw(cx);
-            click(cx, trigger);
-            click(cx, selector);
-            assert!(
-                cx.debug_bounds(list).is_none(),
-                "menu remained open for {selector}"
-            );
-            cx.update(|window, cx| {
-                assert!(
-                    window.has_active_dialog(cx),
-                    "{selector} did not open its panel"
-                );
-                window.close_all_dialogs(cx);
-            });
-            draw(cx);
-        }
+        draw(cx);
+        click(cx, "git-branch-trigger");
+        cx.update(|_, cx| assert!(app.read(cx).branch_navigation_open()));
+        click(cx, "git-branch-trigger");
+        cx.update(|_, cx| assert!(!app.read(cx).branch_navigation_open()));
+        click(cx, "nav-git");
+        click(cx, "context-pr");
+        cx.update(|window, cx| {
+            assert!(!window.has_active_dialog(cx));
+            let app = app.read(cx);
+            assert!(app.git_navigation_open());
+            assert!(app.github_ui.sidebar_active);
+            assert!(app.github_ui.active.is_none());
+        });
+        draw(cx);
         for (navigation, selector) in [
             ("nav-git", "context-pr"),
             ("nav-git", "context-review"),
             ("nav-files", "context-file-tools"),
         ] {
             click(cx, navigation);
+            if selector == "context-review" {
+                click(cx, "git-commit-tab");
+            }
             click(cx, selector);
             cx.update(|window, cx| {
                 if selector == "context-pr" {
                     assert!(!window.has_active_dialog(cx));
-                    app.update(cx, |app, cx| {
-                        let id = app.github_ui.active.expect("PR document opened");
-                        app.close_documents(
-                            &[super::files::DocumentTab::PullRequest(id)],
-                            window,
-                            cx,
-                        );
-                    });
+                    assert!(app.read(cx).github_ui.sidebar_active);
+                    assert!(app.read(cx).github_ui.active.is_none());
                 } else {
                     assert!(
                         window.has_active_dialog(cx),

@@ -6,6 +6,7 @@ use gpui_kit::component::status_bar::StatusBar;
 
 mod cache;
 mod keyboard;
+mod sticky;
 pub(super) use cache::SidebarState;
 
 // Keep the virtual-list estimates and rendered navigation rows in agreement.
@@ -180,6 +181,89 @@ impl ConduitApp {
             .refresh(&self.store, &self.session_control, &self.search_ui, inputs)
     }
 
+    fn set_sidebar_sessions_expanded(
+        &mut self,
+        path: &Path,
+        expanded: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.sidebar.workspace_index(path) else {
+            return;
+        };
+        if expanded {
+            self.expanded_workspaces.insert(index);
+        } else {
+            self.expanded_workspaces.remove(&index);
+        }
+        self.refresh_sidebar();
+        if !expanded {
+            self.sidebar.reveal_workspace(path);
+        }
+        self.focus_sidebar(window, cx);
+    }
+
+    fn toggle_sidebar_workspace(
+        &mut self,
+        path: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let collapsed = !self.workspace_collapsed(path);
+        self.set_workspace_collapsed(path, collapsed);
+        self.refresh_sidebar();
+        if collapsed {
+            self.sidebar.reveal_workspace(path);
+        }
+        self.focus_sidebar(window, cx);
+    }
+
+    fn focus_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(focus) = &self.sidebar.focus {
+            focus.focus(window, cx);
+        }
+        self.sidebar_view.update(cx, |_, cx| cx.notify());
+        cx.notify();
+    }
+
+    fn sidebar_compact_list_tooltip(&self) -> String {
+        conduit::i18n::format(
+            "sidebar.collapse_session_list_hint",
+            &[(
+                "count",
+                self.store
+                    .ui
+                    .sessions_per_workspace
+                    .clamp(1, 30)
+                    .to_string(),
+            )],
+        )
+    }
+
+    fn sidebar_focus_indicator(&self) -> AnyElement {
+        let focus = self.sidebar.focus.clone();
+        // Paint independently of layout and use the live input modality, including
+        // when the virtual list reuses a cached row after a mouse/keyboard change.
+        canvas(
+            |_, _, _| (),
+            move |bounds, _, window, _| {
+                if window.last_input_was_keyboard()
+                    && focus.as_ref().is_some_and(|focus| focus.is_focused(window))
+                {
+                    let mut ring =
+                        gpui_kit::outline(bounds, rgb(palette().focus), Default::default());
+                    ring.corner_radii = px(8.).into();
+                    window.paint_quad(ring);
+                }
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .into_any_element()
+    }
+
     /// Reorder by stable paths and remap all index-based navigation state.
     pub(super) fn reorder_workspace(
         &mut self,
@@ -232,84 +316,38 @@ impl ConduitApp {
             .focus
             .get_or_insert_with(|| cx.focus_handle())
             .clone();
-        let can_edit = self.writable && !self.closing;
-        let mut sidebar =
-            navigation_pane()
-                .id("sidebar")
-                .debug_selector(|| "sidebar".into())
-                .relative()
-                .track_focus(&focus)
-                .role(Role::Tree)
-                .aria_label(conduit::i18n::text_static(
-                    "sidebar.workspaces_and_sessions",
-                ))
-                .aria_description(conduit::i18n::text_static(
-                    "sidebar.arrow_keys_to_move_left_right_to",
-                ))
-                .tab_index(0)
-                .focus_visible(|style| style.border_1().border_color(rgb(palette().focus)))
-                .on_key_down(cx.listener(Self::sidebar_key))
-                .on_scroll_wheel(cx.listener(|this, _, _, cx| {
-                    // A row-owned confirmation should not reopen when its row is recycled.
-                    if this.delete_target.take().is_some() {
-                        cx.notify();
-                    }
-                }))
-                // No bottom padding: the bottom bar aligns with the conversation toolbar.
-                .gap_0()
-                .child(
-                    navigation_header()
-                        .gap_1()
-                        .child(
-                            Button::new("sidebar-new-session")
-                                .ghost()
-                                .small()
-                                .compact()
-                                .icon(IconName::Plus)
-                                .tooltip(conduit::i18n::format(
-                                    "sidebar.new_session",
-                                    &[("arg0", self.new_session_provider.label().to_string())],
-                                ))
-                                .disabled(!can_edit || self.selected_workspace.is_none())
-                                .when(can_edit && self.selected_workspace.is_some(), |button| {
-                                    button.cursor_pointer()
-                                })
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    if let Some(index) = this.selected_workspace {
-                                        this.new_session_here(index, window, cx);
-                                    }
-                                })),
-                        )
-                        .child(
-                            Button::new("sidebar-search")
-                                .ghost()
-                                .small()
-                                .compact()
-                                .icon(IconName::Search)
-                                .tooltip(conduit::i18n::text_static("localization.search_sessions"))
-                                .cursor_pointer()
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.open_search_dialog(window, cx)
-                                })),
-                        )
-                        .child(
-                            Button::new("sidebar-file-search")
-                                .icon(FullIconName::FileSearch)
-                                .small()
-                                .ghost()
-                                .tooltip(conduit::i18n::text_static(
-                                    "sidebar.search_files_double_shift",
-                                ))
-                                .accessibility_label(conduit::i18n::text_static(
-                                    "file_picker.search_files",
-                                ))
-                                .disabled(self.selected_workspace.is_none())
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.open_file_search(window, cx)
-                                })),
-                        )
-                        .child(div().flex_1()),
-                );
+        let mut sidebar = navigation_pane()
+            .id("sidebar")
+            .debug_selector(|| "sidebar".into())
+            .relative()
+            .track_focus(&focus)
+            .role(Role::Tree)
+            .aria_label(conduit::i18n::text_static(
+                "sidebar.workspaces_and_sessions",
+            ))
+            .aria_description(conduit::i18n::text_static(
+                "sidebar.arrow_keys_to_move_left_right_to",
+            ))
+            .tab_index(0)
+            .focus_visible(|style| {
+                style.shadow(vec![BoxShadow {
+                    color: rgb(palette().focus).into(),
+                    offset: point(px(0.), px(0.)),
+                    blur_radius: px(0.),
+                    spread_radius: px(1.),
+                    inset: true,
+                }])
+            })
+            .on_key_down(cx.listener(Self::sidebar_key))
+            .on_scroll_wheel(cx.listener(|this, _, _, cx| {
+                // A row-owned confirmation should not reopen when its row is recycled.
+                if this.delete_target.take().is_some() {
+                    cx.notify();
+                }
+            }))
+            // No bottom padding: the bottom bar aligns with the conversation toolbar.
+            .gap_0()
+            .child(self.sidebar_controls(cx));
         let rows = self.sidebar.rows.clone();
         let list = gpui_kit::component::v_virtual_list(
             cx.entity(),
@@ -328,19 +366,29 @@ impl ConduitApp {
         .gap(px(4.));
         // Mirrors the conversation toolbar height so the two bottom bars read
         // as one strip.
-        sidebar = sidebar.child(list).child(
-            StatusBar::new()
-                .h(px(34.))
-                .min_w_0()
-                .flex_shrink_0()
-                .py_0()
-                .bg(chrome_background(palette().sidebar_bg))
-                .px_2()
-                .gap_1()
-                .items_center()
-                .border_t_1()
-                .border_color(rgb(palette().border)),
-        );
+        sidebar = sidebar
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(list)
+                    .child(self.sticky_workspace_header(cx)),
+            )
+            .child(
+                StatusBar::new()
+                    .h(px(34.))
+                    .min_w_0()
+                    .flex_shrink_0()
+                    .py_0()
+                    .bg(chrome_background(palette().sidebar_bg))
+                    .px_2()
+                    .gap_1()
+                    .items_center()
+                    .border_t_1()
+                    .border_color(rgb(palette().border)),
+            );
         sidebar
             .when_some(self.sidebar.menu.clone(), |sidebar, menu| {
                 sidebar.child(deferred(div().absolute().top(px(36.)).left_2().child(menu)))
@@ -355,7 +403,6 @@ impl ConduitApp {
             .set(self.sidebar.rendered_rows.get() + 1);
         let app_entity = cx.entity();
         let element = match row {
-            cache::Row::Controls => self.sidebar_controls(cx),
             cache::Row::Empty => v_flex()
                 .flex_shrink_0()
                 .px_2()
@@ -540,12 +587,15 @@ impl ConduitApp {
                             .into_any_element()
                     }
                     cache::Row::More {
-                        total, expanded, ..
+                        path,
+                        total,
+                        expanded,
                     } => {
                         let total = *total;
                         let expanded = *expanded;
                         let limit = self.store.ui.sessions_per_workspace.clamp(1, 30);
                         let toggle_app = app_entity.clone();
+                        let toggle_path = path.clone();
                         let more_label = if expanded {
                             conduit::i18n::text_static("sidebar.collapse_session_list").to_string()
                         } else {
@@ -553,6 +603,11 @@ impl ConduitApp {
                                 "sidebar.show_more_remaining",
                                 &[("arg0", format!("{}", total - limit))],
                             )
+                        };
+                        let tooltip = if expanded {
+                            self.sidebar_compact_list_tooltip()
+                        } else {
+                            more_label.clone()
                         };
 
                         h_flex()
@@ -567,27 +622,32 @@ impl ConduitApp {
                                 )))
                                 .debug_selector(move || format!("workspace-more-{index}"))
                                 .icon(if expanded {
-                                    IconName::ChevronUp
+                                    FullIconName::ListChevronsDownUp
                                 } else {
-                                    IconName::Ellipsis
+                                    FullIconName::Ellipsis
                                 })
-                                .tooltip(more_label.clone())
-                                .accessibility_label(more_label)
+                                .tooltip(tooltip.clone())
+                                .accessibility_label(tooltip)
+                                .label(more_label)
                                 .small()
                                 .compact()
                                 .ghost()
                                 .h(px(28.))
-                                .w(px(28.))
+                                .max_w_full()
                                 .text_color(rgb(palette().muted))
-                                .on_click(move |_, _, cx| {
-                                    cx.stop_propagation();
-                                    toggle_app.update(cx, |this, cx| {
-                                        if !this.expanded_workspaces.insert(index) {
-                                            this.expanded_workspaces.remove(&index);
-                                        }
-                                        cx.notify();
-                                    });
-                                }),
+                                .on_click(
+                                    move |_, window, cx| {
+                                        cx.stop_propagation();
+                                        toggle_app.update(cx, |this, cx| {
+                                            this.set_sidebar_sessions_expanded(
+                                                &toggle_path,
+                                                !expanded,
+                                                window,
+                                                cx,
+                                            );
+                                        });
+                                    },
+                                ),
                             )
                             .into_any_element()
                     }
@@ -596,16 +656,19 @@ impl ConduitApp {
             }
         };
         let wrapper = div()
+            .relative()
             .w_full()
             .h(px(row.height()))
+            .child(element)
             .when(
-                self.sidebar
-                    .keyboard_row
-                    .as_ref()
-                    .is_some_and(|focused| focused.same_identity(row)),
-                |row| row.border_1().border_color(rgb(palette().focus)),
-            )
-            .child(element);
+                !matches!(row, cache::Row::Workspace { .. })
+                    && self
+                        .sidebar
+                        .keyboard_row
+                        .as_ref()
+                        .is_some_and(|focused| focused.same_identity(row)),
+                |row| row.child(self.sidebar_focus_indicator()),
+            );
         if let Some(offset) = row.path().and_then(|path| self.sidebar.motion_offset(path))
             && let Some(started) = self.sidebar.motion_started
         {
@@ -640,8 +703,11 @@ impl ConduitApp {
     fn sidebar_controls(&self, cx: &mut Context<Self>) -> AnyElement {
         let can_edit = self.writable && !self.closing;
         h_flex()
+            .id("workspace-controls")
+            .debug_selector(|| "workspace-controls".into())
             .w_full()
             .h(px(ROW_HEIGHT))
+            .flex_shrink_0()
             .px_2()
             .items_center()
             .justify_between()
@@ -654,14 +720,18 @@ impl ConduitApp {
             .child(
                 h_flex()
                     .gap_1()
-                    .child(self.task_tools_button(cx))
                     .child(
                         Button::new("toggle-archived")
-                            .label(conduit::i18n::text_static("search.archived"))
+                            .cursor_pointer()
+                            .debug_selector(|| "toggle-archived".into())
                             .icon(IconName::Inbox)
                             .small()
                             .ghost()
+                            .compact()
+                            .w(px(28.))
                             .h(px(28.))
+                            .tooltip(conduit::i18n::text_static("search.archived"))
+                            .accessibility_label(conduit::i18n::text_static("search.archived"))
                             .selected(self.show_archived)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.show_archived = !this.show_archived;
@@ -669,7 +739,25 @@ impl ConduitApp {
                             })),
                     )
                     .child(
+                        Button::new("sidebar-search")
+                            .cursor_pointer()
+                            .debug_selector(|| "sidebar-search".into())
+                            .icon(IconName::Search)
+                            .small()
+                            .compact()
+                            .ghost()
+                            .w(px(28.))
+                            .h(px(28.))
+                            .tooltip(conduit::i18n::text_static("search.everything"))
+                            .accessibility_label(conduit::i18n::text_static("search.everything"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_search_dialog(window, cx)
+                            })),
+                    )
+                    .child(
                         Button::new("add-workspace")
+                            .cursor_pointer()
+                            .debug_selector(|| "add-workspace".into())
                             .icon(IconName::Plus)
                             .small()
                             .ghost()
@@ -700,6 +788,7 @@ impl ConduitApp {
         let collapsed = self.workspace_collapsed(&workspace.path);
         let importing = self.history_loading.contains(&workspace.path);
         let toggle_path = workspace.path.clone();
+        let compact_path = workspace.path.clone();
         let drag_path = workspace.path.clone();
         let drop_path = workspace.path.clone();
         let hover_path = workspace.path.clone();
@@ -789,10 +878,9 @@ impl ConduitApp {
                     } else {
                         conduit::i18n::text_static("sidebar.collapse_workspace")
                     })
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
-                        this.set_workspace_collapsed(&toggle_path, !this.workspace_collapsed(&toggle_path));
-                        cx.notify();
+                        this.toggle_sidebar_workspace(&toggle_path, window, cx);
                     })),
             )
             .child(
@@ -800,7 +888,7 @@ impl ConduitApp {
                     .small()
                     .text_color(rgb(palette().faint)),
             )
-            .child(div().flex_1().truncate().child(workspace.name()))
+            .child(div().flex_1().min_w_0().truncate().child(workspace.name()))
             .child(
                 h_flex()
                     // Share one slot so the count and actions swap
@@ -865,6 +953,33 @@ impl ConduitApp {
                     )
                     .child(self.workspace_menu(index, app_entity.clone())),
             )
+            .when(!collapsed && self.expanded_workspaces.contains(&index), |row| {
+                row.child(
+                    Button::new(("workspace-show-fewer", index))
+                        .debug_selector(move || format!("workspace-show-fewer-{index}"))
+                        .ghost()
+                        .small()
+                        .compact()
+                        .w(px(24.))
+                        .h(px(24.))
+                        .p_0()
+                        .flex_shrink_0()
+                        .rounded(px(5.))
+                        .bg(rgb(palette().surface_strong))
+                        .text_color(rgb(palette().muted))
+                        // Button installs its own hover style while rendering.
+                        // Adding InteractiveElement::hover here would set it twice.
+                        .icon(FullIconName::ListChevronsDownUp)
+                        .tooltip(self.sidebar_compact_list_tooltip())
+                        .accessibility_label(self.sidebar_compact_list_tooltip())
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.set_sidebar_sessions_expanded(&compact_path, false, window, cx);
+                        })),
+                )
+            })
+            .when(self.sidebar.keyboard_row.as_ref().is_some_and(|row| matches!(row, cache::Row::Workspace { path, .. } if *path == workspace.path)), |row| row.child(self.sidebar_focus_indicator()))
             .into_any_element()
     }
 }

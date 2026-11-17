@@ -200,9 +200,6 @@ impl WorkflowPanel {
                                     app.create_native_fork(id, through, window, cx)
                                 })
                             });
-                            if result.is_ok() {
-                                window.close_dialog(cx);
-                            }
                             this.result(result, cx);
                         })),
                 ),

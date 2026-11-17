@@ -112,11 +112,7 @@ pub(super) fn finish_tool_cards(session: &mut SessionRecord, prefix: &str, statu
         }
         if matches!(item.kind, ItemKind::Tool | ItemKind::Reasoning)
             && item.key.starts_with(&prefix)
-            && matches!(
-                item.status,
-                crate::message_status::ToolStatus::Running
-                    | crate::message_status::ToolStatus::Output
-            )
+            && super::tools::tool_running(item)
         {
             item.status = if item.kind == ItemKind::Reasoning
                 && status == crate::message_status::ToolStatus::MissingResult.as_str()
@@ -358,6 +354,7 @@ pub(super) fn apply_event_indexed(
         // Guard against a provider resending the same completed block under a
         // new item key; keep one visible copy per consecutive run.
         let duplicate_text = kind == ItemKind::Assistant
+            && !delta
             && !text.trim().is_empty()
             && session.messages.last().is_some_and(|last| {
                 last.kind == ItemKind::Assistant && last.text.trim() == text.trim()
