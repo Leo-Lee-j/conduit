@@ -130,11 +130,13 @@ OpenCode 普通聊天提供一个具有相同权限配置的托管 worker，并�
 - 只读模式将内置工具限制为 `Read,Grep,Glob`，保留原生 MCP；普通模式通过 `permissions.ask=["*"]` 将内置工具调用交给应用审批，MCP 请求自动放行；完全访问模式自动批准工具请求。MCP 身份使用 ACP 的 `_meta.qoder.toolName`，不依赖展示标题。所有模式禁用 hooks。权限约束依赖 CLI 的工具策略，不构成文件系统沙箱。
 - 标题与 Git 说明等纯文本辅助任务使用同一 ACP 流程，但禁用全部工具、MCP 与 hooks；切换完全访问也不能解除限制。提示词通过 stdin 的两段文本发送，避免被当成 `/allow` 等原生命令执行。
 - 工具审批按 `kind` 选择真实 `optionId`。表单问答支持字符串、布尔/数值及单选/多选，校验数值、长度和数量限制；显示的字段需逐一填写。不支持的格式、正则等约束明确拒绝。取消后沿用运行时的软取消与进程树清理。
-- 保留公开回复、工具、计划、用量和会话配置；不展示 `agent_thought_chunk`。Skills/MCP 的发现与编辑、终端历史自动导入、Conduit 自定义 Provider / CCS 路由暂未接入，相关配置仍由原生 CLI 管理。
+- 保留公开回复、工具、计划、用量和会话配置；`agent_thought_chunk` 中公开的文本独立显示为思考内容。Skills/MCP 的发现与编辑、终端历史自动导入、Conduit 自定义 Provider / CCS 路由暂未接入，相关配置仍由原生 CLI 管理。
 
 实现见 [qoder.rs](../src/cli_adapter/qoder.rs)，协议回归见 [qoder/tests.rs](../src/cli_adapter/qoder/tests.rs)，跨进程回归见 [adapter_tests.rs](../src/chat_runtime/adapter_tests.rs)。
 
 ## 验证边界
+
+各 CLI 的消息、异常和兼容降级行为，以及本轮缺陷与回归用例，见[CLI 消息审查](cli-message-review.md)。进度通知只更新运行状态；ACP 回复中的文本资源和安全资源链接可阅读，图片、音频、二进制资源等暂以去重的兼容提示呈现。不支持的反向请求仍返回协议错误，并提示交互未完成。
 
 离线夹具覆盖握手、流式事件、准确续接、完成、审批、问答、辅助任务、取消与进程清理。独立测试适配器证明通用运行时不依赖已有 Provider 分支。
 
