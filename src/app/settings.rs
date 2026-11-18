@@ -76,7 +76,7 @@ fn settings_actions_style() -> StyleRefinement {
 
 /// Section headings live in the card. Leaving the library's group title unset
 /// keeps the sidebar flat instead of duplicating every section as a submenu.
-fn settings_section(title: impl Into<SharedString>) -> SettingGroup {
+pub(super) fn settings_section(title: impl Into<SharedString>) -> SettingGroup {
     let title = title.into();
     let keywords = [title.clone()];
     SettingGroup::new().variant(GroupBoxVariant::Fill).item(
@@ -97,7 +97,9 @@ fn settings_section(title: impl Into<SharedString>) -> SettingGroup {
 /// Use its styled text variant to keep supporting copy at 12px, with the same
 /// UI-font scaling as the rest of settings. Escape copy so translated text is
 /// always displayed literally, even if it contains markup characters.
-fn settings_description(text: impl Into<SharedString>) -> gpui_kit::component::text::TextView {
+pub(super) fn settings_description(
+    text: impl Into<SharedString>,
+) -> gpui_kit::component::text::TextView {
     let text: SharedString = text.into();
     let escaped = text
         .replace('&', "&amp;")

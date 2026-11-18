@@ -411,6 +411,9 @@ impl ConduitApp {
             let session = self.session(id).ok_or(conduit::i18n::text_static(
                 "runtime.the_session_no_longer_exists",
             ))?;
+            if session.archived {
+                return Err(conduit::i18n::text("remote.restore_before_sending"));
+            }
             if let crate::commands::RequestIntent::Fork(request) = &intent {
                 if crate::branching::request(session).as_ref() != Ok(request) {
                     return Err(conduit::i18n::text("branching.changed"));
@@ -625,6 +628,8 @@ impl ConduitApp {
             run.activity = run.status.clone();
             run.pending_save = Some(PendingTurn {
                 receipt,
+                #[cfg(feature = "remote")]
+                remote: None,
                 release,
                 before,
                 composer: None,
@@ -868,6 +873,8 @@ impl ConduitApp {
             cx.notify();
         }
         self.poll_streams(window, cx);
+        #[cfg(feature = "remote")]
+        self.poll_remote(cx);
         if self.closing
             && !self.updater.preparing()
             && !self.terminals.active()

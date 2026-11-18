@@ -3060,5 +3060,18 @@
   "session_data.category_failures": "失败 %{count}",
   "session_data.timing_summary": "%{turns} 轮 · %{duration}",
   "session_data.empty_turns_title": "还没有记录的轮次",
-  "session_data.empty_turns_description": "有用量上报后，这里会显示 Token、缓存命中和耗时。"
+  "session_data.empty_turns_description": "有用量上报后，这里会显示 Token、缓存命中和耗时。",
+  "remote": {
+    "title": "Web 远控",
+    "status": "状态",
+    "access": "浏览器访问",
+    "off": "已关闭",
+    "setup": "开启 Web 远控",
+    "stop": "关闭并撤销配对",
+    "copy_pair": "复制配对链接",
+    "scope": "开启时向一个配对浏览器开放当前工作区。",
+    "copied": "配对链接已复制，五分钟内有效。",
+    "hint": "输入 Tailscale Serve 显示的 HTTPS 地址。留空可在这台电脑的浏览器预览。开启后会复制配对链接。",
+    "restore_before_sending": "请先取消归档，再发送消息。"
+  }
 }

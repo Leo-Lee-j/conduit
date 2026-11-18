@@ -31,6 +31,8 @@ mod performance;
 mod persistence;
 mod protocol;
 mod providers;
+#[cfg(feature = "remote")]
+mod remote;
 mod review;
 mod store;
 mod subagents;

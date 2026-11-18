@@ -1,0 +1,10 @@
+{
+  "name": "Conduit Web 远控",
+  "short_name": "Conduit",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#141918",
+  "background_color": "#141918",
+  "icons": [{ "src": "/icon.png", "sizes": "150x150", "type": "image/png" }]
+}

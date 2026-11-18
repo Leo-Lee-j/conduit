@@ -246,6 +246,12 @@ impl ConduitApp {
             cx.notify();
             return;
         }
+        self.set_session_title(id, &title);
+        self.persist();
+        cx.notify();
+    }
+
+    pub(super) fn set_session_title(&mut self, id: u64, title: &str) {
         // A manual rename wins over any title the naming engine still owes us.
         if let Some(naming) = self.session_control.namings.remove(&id) {
             naming.runtime.cancel();
@@ -254,8 +260,6 @@ impl ConduitApp {
         if let Some(session) = self.session_mut(id) {
             session.title = title.chars().take(80).collect();
         }
-        self.persist();
-        cx.notify();
     }
 
     pub(super) fn request_delete_session(&mut self, id: u64, cx: &mut Context<Self>) {
@@ -609,6 +613,10 @@ impl ConduitApp {
             return;
         }
         let removed = self.store.workspaces.remove(index);
+        #[cfg(feature = "remote")]
+        if self.remote.applies_to(&removed.path) {
+            self.remote.stop();
+        }
         self.terminals.forget_workspace(&removed.path);
         self.history_loading.remove(&removed.path);
         self.collapsed_workspaces.remove(&removed.path);
@@ -1269,6 +1277,14 @@ impl ConduitApp {
     /// Build the exact selection for validation without creating an empty session
     /// or consuming the composer's pending model selection.
     pub(super) fn prepare_session(&mut self, provider: Provider) -> SessionRecord {
+        self.prepare_session_with_defaults(provider, true)
+    }
+
+    pub(super) fn prepare_session_with_defaults(
+        &mut self,
+        provider: Provider,
+        use_composer: bool,
+    ) -> SessionRecord {
         let id = self.next_id;
         if provider != Provider::OpenCode {
             self.catalogs.insert(provider, models::load(provider));
@@ -1300,16 +1316,21 @@ impl ConduitApp {
             channel: Default::default(),
             reasoning_effort: ReasoningEffort::for_provider(provider),
             opencode: Default::default(),
-            permission: self.pending_permission,
+            permission: if use_composer {
+                self.pending_permission
+            } else {
+                self.store.ui.default_session_permission
+            },
             usage: Usage::default(),
         };
         if self.store.session_defaults.contains_key(&provider) {
             self.default_selection(provider).apply(&mut session);
         }
-        if let Some(selection) = self
-            .pending_model_selection
-            .as_ref()
-            .filter(|s| s.engine == provider)
+        if use_composer
+            && let Some(selection) = self
+                .pending_model_selection
+                .as_ref()
+                .filter(|s| s.engine == provider)
         {
             selection.clone().apply(&mut session);
         }

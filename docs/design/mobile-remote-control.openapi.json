@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Conduit Remote Control — proposed contract",
-    "version": "0.1.0",
-    "description": "DESIGN ONLY — NOT IMPLEMENTED. Baseline 2026-11-18. Business writes return 202; only operation receipts confirm application/save. All responses use Cache-Control: no-store. Cookie authentication is required except pairing. Writes additionally check exact Origin, Host and CSRF. read/control are workspace-scoped; configure grants host-wide configuration access. Every target, grant and version is rechecked on the GPUI owner thread. Payloads are sanitized; no endpoint returns saved API keys or protected key blobs."
+    "version": "0.2.0",
+    "description": "DESIGN ONLY — NOT IMPLEMENTED. Session control review 2026-11-18. Business writes return 202; only operation receipts confirm application/save. All responses use Cache-Control: no-store. Cookie authentication is required except pairing. Writes additionally check exact Origin, Host and CSRF. read/control are workspace-scoped; configure grants host-wide configuration access. Every target, grant and version is rechecked on the GPUI owner thread. Payloads are sanitized; no endpoint returns saved API keys or protected key blobs."
   },
   "servers": [
     {
@@ -202,7 +202,7 @@
       "get": {
         "operationId": "listSessions",
         "summary": "List sessions in an authorized workspace.",
-        "description": " Required scope: read.",
+        "description": "Pinned first, then last_activity_at descending, then id ascending. Cursor binds workspace, archive filter, grant and list ordering revision. If membership or ordering in the filtered list changes, an older cursor returns 409 session_list_changed. Required scope: read.",
         "security": [
           {
             "RemoteCookie": []
@@ -233,6 +233,9 @@
               "minLength": 1,
               "maxLength": 128
             }
+          },
+          {
+            "$ref": "#/components/parameters/ArchiveFilter"
           },
           {
             "$ref": "#/components/parameters/Cursor"
@@ -347,6 +350,123 @@
             }
           }
         ]
+      }
+    },
+    "/sessions/{session_id}/metadata": {
+      "get": {
+        "operationId": "getSessionMetadata",
+        "summary": "Read session title, pin and archive settings.",
+        "description": "The strong ETag changes with metadata, independently of transcript or configuration updates. Required scope: read.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionMetadata"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Strong resource version; use unchanged in If-Match.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patchSessionMetadata",
+        "summary": "Rename, pin or archive a session.",
+        "description": "Send explicit values and the ETag from GET on this path. Archiving preserves transcript, existing desktop tabs and drafts. Archiving during a run or cleanup returns 409 session_busy; a queued desktop message returns 409 queued_message_exists. Renaming or archiving during a pending send returns 409 send_pending. A successful receipt returns session_id and the metadata version. Required scope: control.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Queued only; poll the returned operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "Operation query path.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Csrf"
+          },
+          {
+            "$ref": "#/components/parameters/Epoch"
+          },
+          {
+            "$ref": "#/components/parameters/Key"
+          },
+          {
+            "$ref": "#/components/parameters/Expires"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionMetadataPatch"
+              }
+            }
+          }
+        }
       }
     },
     "/sessions/{session_id}/messages": {
@@ -530,7 +650,7 @@
       "post": {
         "operationId": "startSessionRun",
         "summary": "Save a message, then release the existing runtime.",
-        "description": "If-Match is the session configuration ETag. succeeded means saved and released, not completion of the model task. Required scope: control.",
+        "description": "Use the session configuration ETag. Only starts an explicit text turn. Busy sessions or native aliases, archived sessions, and sessions with a desktop queued message fail with 409 session_busy, session_archived, or queued_message_exists respectively. A succeeded operation means saved and released, not completion of the model task. Before release the saving operation result includes session_id and run_id, also available in the authorized session projection and run events. Required scope: control.",
         "security": [
           {
             "RemoteCookie": []
@@ -651,7 +771,7 @@
       "post": {
         "operationId": "cancelSessionRun",
         "summary": "Request cancellation of the exact run.",
-        "description": "No body required. succeeded is a cancellation request; process cleanup completes asynchronously. Required scope: control.",
+        "description": "No body required. Success records a cancellation request for the exact run and pauses its desktop queued message. In pending_save the launch gate stays closed and the send operation fails with 409 send_cancelled. Once started, cleanup is asynchronous and cleanup_blocked is nonterminal. An already stopping run can confirm the same request; a completed or replaced run returns 409 stale_run. Required scope: control.",
         "security": [
           {
             "RemoteCookie": []
@@ -1496,7 +1616,7 @@
       "get": {
         "operationId": "getOperation",
         "summary": "Read a command receipt belonging to this device.",
-        "description": "Result is retained in the current host epoch only. No cross-restart exactly-once guarantee. Required scope: read.",
+        "description": "The current device must own the operation and retain the original command scope and target grant. Results are retained in the current host epoch only.",
         "security": [
           {
             "RemoteCookie": []
@@ -1749,6 +1869,20 @@
           "minLength": 1,
           "maxLength": 128
         }
+      },
+      "ArchiveFilter": {
+        "name": "archive",
+        "in": "query",
+        "description": "Filter on the archived flag. This does not change run or pending-approval visibility.",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "active",
+            "archived",
+            "all"
+          ],
+          "default": "active"
+        }
       }
     },
     "responses": {
@@ -1825,7 +1959,12 @@
                 "configure"
               ]
             },
-            "maxItems": 3
+            "maxItems": 3,
+            "description": "All grants include read. control and configure are granted independently.",
+            "uniqueItems": true,
+            "contains": {
+              "const": "read"
+            }
           },
           "workspace_ids": {
             "type": "array",
@@ -1918,17 +2057,28 @@
             "type": "integer",
             "minimum": 1
           },
+          "reserved_control_slots": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Portion of command_queue_items reserved for stop, approval and question-answer commands."
+          },
           "command_queue_bytes": {
             "type": "integer",
             "minimum": 1
           },
-          "reserved_control_slots": {
+          "reserved_control_bytes": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "description": "Portion of command_queue_bytes reserved for stop, approval and question-answer commands."
           },
           "per_device_inflight": {
             "type": "integer",
             "minimum": 1
+          },
+          "reserved_control_per_device_inflight": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Portion of per_device_inflight reserved for stop, approval and question-answer commands."
           },
           "request_retention_seconds": {
             "type": "integer",
@@ -1937,6 +2087,11 @@
           "request_capacity": {
             "type": "integer",
             "minimum": 1
+          },
+          "reserved_control_request_capacity": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Portion of request_capacity reserved for stop, approval and question-answer commands."
           },
           "replay_frames": {
             "type": "integer",
@@ -1965,9 +2120,14 @@
         },
         "required": [
           "command_queue_items",
+          "reserved_control_slots",
           "command_queue_bytes",
+          "reserved_control_bytes",
+          "per_device_inflight",
+          "reserved_control_per_device_inflight",
           "request_retention_seconds",
           "request_capacity",
+          "reserved_control_request_capacity",
           "replay_frames",
           "replay_bytes",
           "message_preview_bytes",
@@ -2259,6 +2419,23 @@
           "archived": {
             "type": "boolean"
           },
+          "pinned": {
+            "type": "boolean"
+          },
+          "metadata_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "queued_message_state": {
+            "type": "string",
+            "enum": [
+              "none",
+              "queued",
+              "paused"
+            ],
+            "description": "Desktop queue state only. No queued text or attachments are exposed."
+          },
           "run_id": {
             "anyOf": [
               {
@@ -2291,9 +2468,64 @@
           "created_at",
           "last_activity_at",
           "archived",
+          "pinned",
+          "metadata_version",
+          "queued_message_state",
           "run_id",
           "transcript_state"
         ]
+      },
+      "SessionMetadata": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "archived": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "session_id",
+          "version",
+          "title",
+          "pinned",
+          "archived"
+        ]
+      },
+      "SessionMetadataPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "Clients trim outer whitespace before sending. The host also trims before validating nonempty input of at most 80 Unicode characters."
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "archived": {
+            "type": "boolean"
+          }
+        },
+        "minProperties": 1
       },
       "CreateSession": {
         "type": "object",
@@ -2392,6 +2624,7 @@
               "waiting_approval",
               "waiting_input",
               "cancelling",
+              "cleanup_blocked",
               "completed",
               "failed",
               "cancelled"
@@ -3176,7 +3409,8 @@
           "version": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 128
+            "maxLength": 128,
+            "description": "Version of the resource changed by the command, such as the session metadata version after patchSessionMetadata."
           },
           "applied": {
             "type": "boolean"
@@ -3238,7 +3472,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "For a send in saving, session_id and run_id identify the pending run. The operation state indicates whether the save succeeded."
           },
           "error": {
             "anyOf": [
@@ -3876,7 +4111,8 @@
                   "resource",
                   "resource_id",
                   "version"
-                ]
+                ],
+                "description": "For a send rollback, resource is session_messages and resource_id is the session id. Discard cached messages and pagination cursors for that session."
               }
             },
             "required": [

@@ -528,20 +528,25 @@ impl ConduitApp {
             return;
         }
         if let Some(id) = self.selected_session
-            && self.session_control.runs.contains_key(&id)
+            && self.stop_session_run(id)
         {
-            self.pause_queued_message(
-                id,
-                conduit::i18n::text_static(
-                    "composer.the_current_response_has_stopped_queued_messages",
-                ),
-            );
-            if let Some(run) = self.session_control.runs.get_mut(&id) {
-                run.cancel();
-            }
             self.input.read(cx).focus_handle(cx).focus(window, cx);
             cx.notify();
         }
+    }
+
+    pub(super) fn stop_session_run(&mut self, id: u64) -> bool {
+        if !self.session_control.runs.contains_key(&id) {
+            return false;
+        }
+        self.pause_queued_message(
+            id,
+            conduit::i18n::text_static("composer.the_current_response_has_stopped_queued_messages"),
+        );
+        if let Some(run) = self.session_control.runs.get_mut(&id) {
+            run.cancel();
+        }
+        true
     }
 
     pub(super) fn render_composer(

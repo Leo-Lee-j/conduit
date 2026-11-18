@@ -15,6 +15,8 @@ pub(in crate::app) struct SentComposer {
 
 pub(in crate::app) struct PendingTurn {
     pub(super) receipt: SaveReceipt,
+    #[cfg(feature = "remote")]
+    pub(in crate::app) remote: Option<super::super::remote::RemoteSend>,
     pub(super) release: std::sync::mpsc::Sender<()>,
     pub(super) before: Option<SessionRecord>,
     pub(in crate::app) composer: Option<SentComposer>,
@@ -225,8 +227,21 @@ impl ConduitApp {
                     .into()
                 })
             });
+            #[cfg(feature = "remote")]
+            let remote = pending.remote.take();
+            #[cfg(feature = "remote")]
+            let withdrawn = self.closing
+                || self
+                    .session_control
+                    .runs
+                    .get(&id)
+                    .is_some_and(|run| run.runtime.is_cancelled());
             match result {
                 Ok(()) => {
+                    #[cfg(feature = "remote")]
+                    if let Some(remote) = remote {
+                        remote.complete(id);
+                    }
                     self.session_control.plans.remove(&id);
                     self.session_control.unread_completed.remove(&id);
                     let composer_cleared = pending
@@ -310,6 +325,10 @@ impl ConduitApp {
                     };
                     self.session_control.runs.remove(&id);
                     self.restore_unsent_turn(id, pending.before);
+                    #[cfg(feature = "remote")]
+                    if let Some(remote) = remote {
+                        remote.fail(withdrawn);
+                    }
                     if let Some(mut queued) = pending.queued {
                         queued.paused = Some(error.clone());
                         self.queued_messages.insert(id, queued);

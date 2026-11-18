@@ -3060,5 +3060,18 @@
   "session_data.category_failures": "%{count} failed",
   "session_data.timing_summary": "%{turns} turns · %{duration}",
   "session_data.empty_turns_title": "No recorded turns yet",
-  "session_data.empty_turns_description": "Token use, cache hits, and timing appear here after the CLI reports usage."
+  "session_data.empty_turns_description": "Token use, cache hits, and timing appear here after the CLI reports usage.",
+  "remote": {
+    "restore_before_sending": "Restore this archived session before sending.",
+    "title": "Web control",
+    "status": "Status",
+    "access": "Browser access",
+    "off": "Off",
+    "setup": "Enable Web control",
+    "stop": "Stop and revoke pairing",
+    "copy_pair": "Copy pairing link",
+    "scope": "Share the selected workspace with one paired browser.",
+    "copied": "Pairing link copied. It expires in five minutes.",
+    "hint": "Enter the HTTPS address shown by Tailscale Serve. Leave blank to preview on this computer. Enabling Web control copies the pairing link."
+  }
 }

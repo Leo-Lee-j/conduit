@@ -97,6 +97,8 @@ mod performance_view;
 mod plugin_ui;
 mod project_files;
 mod queue;
+#[cfg(feature = "remote")]
+mod remote;
 mod runtime;
 mod search;
 mod search_worker;
@@ -191,6 +193,8 @@ pub struct ConduitApp {
     persistence: crate::persistence::Persistence,
     attachments_cleanup_pending: bool,
     session_control: session_controller::SessionController,
+    #[cfg(feature = "remote")]
+    remote: remote::RemoteUi,
     transcripts: transcripts::TranscriptUi,
     terminals: terminal::TerminalUi,
     updater: update::UpdateUi,
@@ -737,6 +741,8 @@ impl ConduitApp {
             persistence: crate::persistence::Persistence::new(Store::path()),
             attachments_cleanup_pending: false,
             session_control: session_controller::SessionController::default(),
+            #[cfg(feature = "remote")]
+            remote: Default::default(),
             transcripts: Default::default(),
             terminals: Default::default(),
             store,
@@ -927,6 +933,8 @@ impl ConduitApp {
             return false;
         }
         self.closing = true;
+        #[cfg(feature = "remote")]
+        self.remote.stop();
         self.terminals.stop_all();
         self.session_control.cancel_imports();
         self.history_loading.clear();

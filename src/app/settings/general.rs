@@ -200,6 +200,8 @@ impl ConduitApp {
                     )))
                     .disabled(disabled),
             ]),
+            #[cfg(feature = "remote")]
+            self.remote_settings_section(view, disabled),
         ])
     }
 

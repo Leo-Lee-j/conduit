@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#141918">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icon.png">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+  <title>Conduit · Web 远控</title>
+</head>
+<body>
+  <header class="masthead">
+    <a class="brand" href="/" aria-label="Conduit 首页"><img src="/icon.png" width="30" height="30" alt="">Conduit</a>
+    <span class="connection" id="connection" role="status">正在连接</span>
+  </header>
+  <main>
+    <p id="notice" class="notice" role="status" hidden></p>
+    <section id="pairing" class="pairing" hidden>
+      <p class="eyebrow">桌面会话</p>
+      <h1>连接电脑</h1>
+      <p class="muted">请在电脑的「设置 → 通用 → Web 远控」生成配对链接，然后在此浏览器打开。</p>
+      <form id="pair-form" hidden>
+        <label for="device">设备名称</label>
+        <input id="device" maxlength="80" value="手机浏览器" required>
+        <button class="primary">配对</button>
+      </form>
+    </section>
+    <section id="home" hidden>
+      <div class="heading">
+        <div><p class="eyebrow" id="workspace"></p><h1>会话</h1></div>
+        <button class="primary" id="new-session">新建</button>
+      </div>
+      <nav class="tabs" aria-label="会话分类">
+        <button id="active-tab" aria-pressed="true">未归档</button>
+        <button id="archived-tab" aria-pressed="false">已归档</button>
+      </nav>
+      <div id="sessions" class="sessions"></div>
+      <button id="more-sessions" class="load" hidden>更多会话</button>
+      <button id="logout" class="quiet logout">断开配对</button>
+    </section>
+    <section id="chat" hidden>
+      <div class="chat-header">
+        <button id="back" class="quiet">← 会话</button>
+        <div class="chat-title"><h1 id="title"></h1><span id="state" class="muted"></span></div>
+        <button id="manage" class="quiet">管理</button>
+      </div>
+      <div id="messages-scroll" class="transcript" tabindex="0" aria-label="消息记录">
+        <button id="older" class="load" hidden>更早消息</button>
+        <div id="messages"></div>
+      </div>
+      <form id="composer">
+        <label for="draft" class="sr-only">消息</label>
+        <textarea id="draft" rows="2" placeholder="发送消息到电脑…"></textarea>
+        <div class="compose-actions"><span id="hint" class="muted" role="status"></span>
+          <button id="stop" type="button" class="danger" hidden>停止本轮</button>
+          <button id="send" class="primary">发送</button>
+        </div>
+      </form>
+    </section>
+  </main>
+  <dialog id="create-dialog">
+    <form id="create-form">
+      <h2>新建会话</h2>
+      <label for="engine">引擎</label>
+      <select id="engine" required></select>
+      <div class="dialog-actions"><button type="button" data-close>返回</button><button class="primary">新建</button></div>
+    </form>
+  </dialog>
+  <dialog id="manage-dialog">
+    <form id="manage-form">
+      <h2>会话管理</h2>
+      <label for="session-title">名称</label>
+      <input id="session-title" maxlength="80" required>
+      <label class="check"><input type="checkbox" id="pinned">置顶</label>
+      <label class="check"><input type="checkbox" id="archived">归档</label>
+      <div class="dialog-actions"><button type="button" data-close>返回</button><button class="primary">保存</button></div>
+    </form>
+  </dialog>
+</body>
+</html>

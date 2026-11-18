@@ -265,6 +265,18 @@ impl ConduitApp {
         let content = v_flex()
             .size_full()
             .track_focus(&self.notifications.focus)
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|app, _, window, cx| {
+                    // A selection must receive Copy even if the composer held focus.
+                    if TextSelection::has_selection(window, cx) {
+                        app.notifications.focus.focus(window, cx);
+                    }
+                    if let Some(view) = &app.notifications.view {
+                        view.update(cx, |_, cx| cx.notify());
+                    }
+                }),
+            )
             .on_key_down(cx.listener(|app, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" {
                     app.close_right_view(window, cx);
@@ -297,7 +309,15 @@ impl ConduitApp {
             .p_3()
             .gap_2()
             .overflow_y_scroll()
-            .track_scroll(&self.notifications.scroll);
+            .track_scroll(&self.notifications.scroll)
+            .on_mouse_move(cx.listener(|app, event: &MouseMoveEvent, _, cx| {
+                // Invalidate the cached panel so drag selection repaints its highlight.
+                if event.pressed_button == Some(MouseButton::Left)
+                    && let Some(view) = &app.notifications.view
+                {
+                    view.update(cx, |_, cx| cx.notify());
+                }
+            }));
         if records.is_empty() {
             list = list.child(
                 v_flex()
@@ -481,7 +501,11 @@ impl ConduitApp {
                             .flex_1()
                             .text_sm()
                             .font_semibold()
-                            .child(record.display_title()),
+                            .cursor_text()
+                            .child(gpui_kit::base::SelectableText::new(
+                                ("notification-title-text", id),
+                                record.display_title(),
+                            )),
                     )
                     .when(unread, |row| {
                         row.child(
@@ -517,13 +541,18 @@ impl ConduitApp {
             .child(
                 div()
                     .id(("notification-message", id))
+                    .debug_selector(move || format!("notification-message-{id}"))
                     .role(Role::Label)
                     .aria_value(record.display_message())
                     .min_w_0()
                     .overflow_x_hidden()
                     .text_size(ui_text_size(12.))
                     .text_color(rgb(palette().text))
-                    .child(record.display_message()),
+                    .cursor_text()
+                    .child(gpui_kit::base::SelectableText::new(
+                        ("notification-message-text", id),
+                        record.display_message(),
+                    )),
             )
             .child(
                 div()

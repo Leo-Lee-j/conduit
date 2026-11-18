@@ -180,3 +180,73 @@ fn background_completion_and_approval_publish_once_without_switching_sessions(
         })
     });
 }
+
+#[gpui_kit::test]
+fn notification_text_selection_copies_without_changing_draft_or_read_state(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::{ClipboardItem, Focusable as _, base::TextSelection, point};
+
+    let _locale = crate::test_support::chinese();
+    let (app, cx) = fixture(cx, true);
+    let title = "通知标题";
+    let message = "第一行：通知详情\n第二行：错误原因";
+    let id = cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.selected_workspace = Some(0);
+            app.selected_session = Some(1);
+            app.input
+                .update(cx, |input, cx| input.set_value("保留草稿", window, cx));
+            let id = app.notify_user(
+                Notice::new(Source::App, Level::Error, title, message)
+                    .presentation(super::Presentation::History),
+                cx,
+            );
+            app.toggle_notifications(window, cx);
+            id
+        })
+    });
+    draw(cx);
+
+    for (kind, expected) in [("title", title), ("message", message)] {
+        // The composer may retain focus while a notification is being selected.
+        cx.update(|window, cx| {
+            app.read(cx)
+                .input
+                .read(cx)
+                .focus_handle(cx)
+                .focus(window, cx);
+            cx.write_to_clipboard(ClipboardItem::new_string("SENTINEL".into()));
+        });
+        let bounds = cx
+            .debug_bounds(format!("notification-{kind}-{id}").leak())
+            .unwrap();
+        let start = bounds.origin + point(px(1.), px(4.));
+        let end = point(bounds.right() - px(1.), bounds.bottom() - px(4.));
+        cx.simulate_mouse_move(start, None, Modifiers::default());
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+        draw(cx);
+        assert_eq!(cx.update(TextSelection::selected_text), expected);
+        cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+        draw(cx);
+        cx.update(|window, cx| {
+            assert!(app.read(cx).notifications.focus.is_focused(window));
+            window.dispatch_action(Box::new(gpui_kit::component::input::Copy), cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())),
+            Some(expected.to_owned())
+        );
+        // Selection survives the cached panel's next frame.
+        draw(cx);
+        assert_eq!(cx.update(TextSelection::selected_text), expected);
+    }
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert_eq!(app.input.read(cx).value(), "保留草稿");
+        assert_eq!(app.selected_session, Some(1));
+        assert!(app.notifications.center.get(id).unwrap().read_at.is_none());
+    });
+}
