@@ -3,6 +3,57 @@ use crate::domain::{ChatItem, ItemKind, SessionRecord};
 
 mod diagnostics;
 
+/// A stream failure may recover. Keep its native retry state separate from the
+/// diagnostic retained by the error card; the UI must not parse JSON for it.
+#[derive(Clone, Debug)]
+pub struct StreamFailure {
+    pub diagnostic: String,
+    pub will_retry: Option<bool>,
+    pub retry: Option<conduit::i18n::Message>,
+}
+
+impl StreamFailure {
+    pub fn codex(params: &serde_json::Value) -> Self {
+        let (will_retry, retry) = diagnostics::retry_value(params);
+        Self {
+            diagnostic: serde_json::to_string_pretty(params).unwrap_or_default(),
+            will_retry,
+            retry,
+        }
+    }
+    pub fn retry_message(&self) -> Option<conduit::i18n::Message> {
+        if self.will_retry == Some(false) {
+            None
+        } else {
+            self.retry.clone()
+        }
+    }
+}
+
+impl From<String> for StreamFailure {
+    fn from(diagnostic: String) -> Self {
+        let retry = retry_activity_message(&diagnostic);
+        Self {
+            diagnostic,
+            will_retry: None,
+            retry,
+        }
+    }
+}
+
+impl From<&str> for StreamFailure {
+    fn from(diagnostic: &str) -> Self {
+        diagnostic.to_owned().into()
+    }
+}
+
+impl std::ops::Deref for StreamFailure {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.diagnostic
+    }
+}
+
 /// Extract the original cause from native JSON diagnostics.
 pub(crate) fn friendly_failure(error: &str) -> String {
     if codex_client_restricted(error) {
@@ -157,11 +208,12 @@ fn retry_notice(item: &ChatItem) -> bool {
     if item.kind != ItemKind::Notice {
         return false;
     }
-    let text = item.text.to_ascii_lowercase();
-    text.contains("reconnect")
-        || text.contains("retry")
-        || text.contains("重试")
-        || text.contains("重新连接")
+    // Current retries use Activity events. Only recognize legacy retry rows by
+    // their anchored native/localized prefix, never by words in an unrelated notice.
+    retry_activity_message(&item.text).is_some()
+        || ["正在重试", "正在重新连接", "重试", "重新连接"]
+            .iter()
+            .any(|prefix| item.text.trim_start().starts_with(prefix))
 }
 
 /// Coalesce only consecutive errors/retry notices within the same user turn.
@@ -242,6 +294,58 @@ mod tests {
     fn session() -> SessionRecord {
         serde_json::from_str(r#"{"id":1,"provider":"Codex","created_at":0,"exit_code":null}"#)
             .unwrap()
+    }
+    #[test]
+    fn native_retry_flags_are_structured_and_override_message_words() {
+        let _locale = crate::test_support::chinese();
+        let params = serde_json::json!({"error":{"message":"Reconnecting... 2/5: stream disconnected"},"willRetry":true});
+        let retry = StreamFailure::codex(&params);
+        assert_eq!(retry.will_retry, Some(true));
+        assert_eq!(
+            retry.retry_message().unwrap().render(),
+            "正在重新连接（2/5）…"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&retry.diagnostic).unwrap(),
+            params
+        );
+        let terminal = StreamFailure::codex(
+            &serde_json::json!({"error":{"message":"Reconnecting... 5/5"},"willRetry":false}),
+        );
+        assert_eq!(terminal.will_retry, Some(false));
+        assert!(terminal.retry_message().is_none());
+        let service = StreamFailure::codex(&serde_json::json!({
+            "error":{"message":"Reconnecting... 2/5: stream disconnected before completion",
+                "codexErrorInfo":{"responseStreamDisconnected":{"httpStatusCode":502}}},
+            "willRetry":true
+        }));
+        assert_eq!(
+            service.retry_message().unwrap().render(),
+            "正在自动重试（2/5）…"
+        );
+        let disconnected = StreamFailure::codex(&serde_json::json!({
+            "error":{"message":"request ended early","codexErrorInfo":"responseStreamDisconnected"},
+            "willRetry":true
+        }));
+        assert_eq!(
+            disconnected.retry_message().unwrap().render(),
+            "正在重新连接…"
+        );
+    }
+
+    #[test]
+    fn unrelated_notices_containing_retry_do_not_merge_distinct_errors() {
+        let mut record = session();
+        record_failure(&mut record, "turn", "network timeout", false);
+        record.messages.push(
+            serde_json::from_value(serde_json::json!({
+                "key":"notice", "kind":"Notice", "text":"Please retry signing in to the MCP server"
+            }))
+            .unwrap(),
+        );
+        record_failure(&mut record, "turn", "network timeout", false);
+        coalesce_restored_failures(&mut record);
+        assert_eq!(record.messages.len(), 3);
     }
     #[test]
     fn repeated_errors_and_completion_echo_share_one_persisted_card() {

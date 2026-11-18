@@ -1,11 +1,10 @@
 //! Application palette and appearance synchronization.
 
-use gpui_kit::component::{Theme, ThemeConfig, ThemeRegistry, ThemeSet};
+use gpui_kit::component::{Theme, ThemeConfig, ThemeMode, ThemeRegistry};
 use std::rc::Rc;
 
-/// Application colors that are not owned by the component theme. The dark
-/// values preserve the original palette; the light variant is derived from the
-/// same roles so both modes stay consistent.
+/// Application roles projected from the selected component theme. The original
+/// Conduit themes retain their palettes for existing installations.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct Palette {
     pub(super) canvas: u32,
@@ -173,56 +172,282 @@ pub(super) fn palette_for_mode(mode: gpui_kit::component::ThemeMode) -> Palette 
     }
 }
 
-const THEME_PACKS: &str = include_str!("../../assets/themes/conduit.json");
+const THEME_PACKS: &[&str] = &[
+    include_str!("../../assets/themes/conduit.json"),
+    include_str!("../../assets/themes/adventure.json"),
+    include_str!("../../assets/themes/alduin.json"),
+    include_str!("../../assets/themes/asciinema.json"),
+    include_str!("../../assets/themes/aurora.json"),
+    include_str!("../../assets/themes/ayu.json"),
+    include_str!("../../assets/themes/catppuccin.json"),
+    include_str!("../../assets/themes/everforest.json"),
+    include_str!("../../assets/themes/fahrenheit.json"),
+    include_str!("../../assets/themes/flexoki.json"),
+    include_str!("../../assets/themes/gruvbox.json"),
+    include_str!("../../assets/themes/harper.json"),
+    include_str!("../../assets/themes/hybrid.json"),
+    include_str!("../../assets/themes/jellybeans.json"),
+    include_str!("../../assets/themes/kibble.json"),
+    include_str!("../../assets/themes/macos-classic.json"),
+    include_str!("../../assets/themes/mellifluous.json"),
+    include_str!("../../assets/themes/molokai.json"),
+    include_str!("../../assets/themes/solarized.json"),
+    include_str!("../../assets/themes/spaceduck.json"),
+    include_str!("../../assets/themes/tokyonight.json"),
+    include_str!("../../assets/themes/twilight.json"),
+];
 
-/// Installs the built-in theme packs as the light/dark themes, so
-/// `Theme::change` reloads the pack instead of the library defaults. A pack
-/// owns the shared input and focus colors; other tokens fall back to the library.
+/// Embed the catalog so installed builds work offline and from any directory.
 pub(crate) fn install_theme_packs(cx: &mut gpui_kit::App) {
-    let packs = match serde_json::from_str::<ThemeSet>(THEME_PACKS) {
-        Ok(set) => set.themes,
-        Err(error) => {
+    if ThemeRegistry::global(cx)
+        .themes()
+        .contains_key("Conduit Dark")
+    {
+        return;
+    }
+    for pack in THEME_PACKS {
+        if let Err(error) = ThemeRegistry::global_mut(cx).load_themes_from_str(pack) {
             eprintln!(
                 "{}",
                 conduit::i18n::format(
-                    "theme.failed_to_parse_bundled_themes",
+                    "theme.failed_to_register_bundled_themes",
                     &[("error", format!("{}", error))]
                 )
             );
-            return;
         }
-    };
-    let mut light: Option<Rc<ThemeConfig>> = None;
-    let mut dark: Option<Rc<ThemeConfig>> = None;
-    for pack in packs {
-        let pack = Rc::new(pack);
-        if pack.mode.is_dark() {
-            dark = Some(pack);
-        } else {
-            light = Some(pack);
-        }
-    }
-    // Register the packs so the registry's name-based reload resolves them
-    // instead of dropping back to the library themes.
-    if let Err(error) = ThemeRegistry::global_mut(cx).load_themes_from_str(THEME_PACKS) {
-        eprintln!(
-            "{}",
-            conduit::i18n::format(
-                "theme.failed_to_register_bundled_themes",
-                &[("error", format!("{}", error))]
-            )
-        );
     }
     Theme::update(cx, |theme| {
         // Keep the 1px focus border without the library's extra 3px outer band.
         // Borderless controls retain an inset focus line. This app-level setting
         // survives Theme::change; the light/dark packs supply its color.
         theme.focus_ring = false;
-        if let Some(light) = light {
-            theme.light_theme = light;
-        }
-        if let Some(dark) = dark {
-            theme.dark_theme = dark;
-        }
     });
+}
+
+fn resolve_theme(name: &str, mode: ThemeMode, cx: &gpui_kit::App) -> Rc<ThemeConfig> {
+    let registry = ThemeRegistry::global(cx);
+    registry
+        .themes()
+        .get(name)
+        .filter(|theme| theme.mode == mode)
+        .or_else(|| {
+            registry.themes().get(if mode.is_dark() {
+                "Conduit Dark"
+            } else {
+                "Conduit Light"
+            })
+        })
+        .unwrap_or_else(|| {
+            if mode.is_dark() {
+                registry.default_dark_theme()
+            } else {
+                registry.default_light_theme()
+            }
+        })
+        .clone()
+}
+
+pub(crate) fn apply_theme(mode: ThemeMode, light: &str, dark: &str, cx: &mut gpui_kit::App) {
+    let light = resolve_theme(light, ThemeMode::Light, cx);
+    let dark = resolve_theme(dark, ThemeMode::Dark, cx);
+    let current = Theme::global(cx);
+    let changed = current.mode != mode
+        || current.light_theme.name != light.name
+        || current.dark_theme.name != dark.name;
+    if changed {
+        Theme::update(cx, |theme| {
+            theme.light_theme = light;
+            theme.dark_theme = dark;
+        });
+        Theme::change(mode, None, cx);
+    }
+    set_palette(mode);
+    let current = Theme::global(cx);
+    if !matches!(
+        current.theme_name().as_ref(),
+        "Conduit Light" | "Conduit Dark"
+    ) {
+        *ACTIVE_PALETTE.write().unwrap() = palette_from_theme(current);
+    }
+}
+
+pub(super) fn theme_preview(name: &str, mode: ThemeMode, cx: &gpui_kit::App) -> Palette {
+    let config = resolve_theme(name, mode, cx);
+    if matches!(config.name.as_ref(), "Conduit Light" | "Conduit Dark") {
+        return palette_for_mode(mode);
+    }
+    let mut theme = Theme::default();
+    theme.apply_config(&config);
+    palette_from_theme(&theme)
+}
+
+fn blend(foreground: u32, background: u32, alpha: f32) -> u32 {
+    let channel = |shift: u32| {
+        let fg = ((foreground >> shift) & 255) as f32;
+        let bg = ((background >> shift) & 255) as f32;
+        (fg * alpha + bg * (1. - alpha)).round() as u32
+    };
+    channel(16) << 16 | channel(8) << 8 | channel(0)
+}
+
+fn color_on(color: gpui_kit::Hsla, background: u32) -> u32 {
+    let color: gpui_kit::Rgba = color.into();
+    let rgb = ((color.r * 255.).round() as u32) << 16
+        | ((color.g * 255.).round() as u32) << 8
+        | (color.b * 255.).round() as u32;
+    blend(rgb, background, color.a)
+}
+
+fn contrast(a: u32, b: u32) -> f32 {
+    let luminance = |color: u32| {
+        let channel = |shift: u32| {
+            let value = ((color >> shift) & 255) as f32 / 255.;
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+    };
+    let a = luminance(a);
+    let b = luminance(b);
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+fn readable(color: u32, backgrounds: &[u32]) -> u32 {
+    let minimum = |color| {
+        backgrounds
+            .iter()
+            .map(|background| contrast(color, *background))
+            .fold(f32::INFINITY, f32::min)
+    };
+    let target = if minimum(0xffffff) > minimum(0) {
+        0xffffff
+    } else {
+        0
+    };
+    for step in 0..=20 {
+        let candidate = blend(target, color, step as f32 / 20.);
+        if minimum(candidate) >= 4.5 {
+            return candidate;
+        }
+    }
+    target
+}
+
+fn palette_from_theme(theme: &Theme) -> Palette {
+    let canvas = color_on(theme.background, if theme.is_dark() { 0 } else { 0xffffff });
+    let surface = color_on(theme.popover, canvas);
+    let sidebar_bg = color_on(theme.tab_bar, canvas);
+    let surface_hover = color_on(theme.secondary_hover, canvas);
+    let surface_strong = color_on(theme.group_box, canvas);
+    let backgrounds = [canvas, sidebar_bg, surface, surface_hover, surface_strong];
+    let text = readable(color_on(theme.foreground, canvas), &backgrounds);
+    let muted = readable(color_on(theme.muted_foreground, canvas), &backgrounds);
+    let primary = readable(color_on(theme.primary, canvas), &backgrounds);
+    let success = readable(color_on(theme.success, canvas), &backgrounds);
+    let danger = readable(color_on(theme.danger, canvas), &backgrounds);
+    let warning = readable(color_on(theme.warning, canvas), &backgrounds);
+    Palette {
+        canvas,
+        sidebar_bg,
+        surface,
+        surface_hover,
+        surface_strong,
+        border: color_on(theme.border, canvas),
+        text,
+        muted,
+        faint: muted,
+        loading: primary,
+        activity_running: primary,
+        activity_completed: success,
+        focus: color_on(theme.ring, canvas),
+        on_text: canvas,
+        highlight_text: warning,
+        highlight_bg: blend(warning, canvas, 0.12),
+        diff_add_text: success,
+        diff_remove_text: danger,
+        inline_code_bg: color_on(theme.secondary, canvas),
+        git_added_text: success,
+        git_modified_text: warning,
+        git_deleted_text: danger,
+        danger_border: blend(danger, canvas, 0.4),
+        danger_bg: blend(danger, canvas, 0.08),
+        danger_text: danger,
+        warning_border: blend(warning, canvas, 0.4),
+        warning_bg: blend(warning, canvas, 0.06),
+        warning_icon_bg: blend(warning, canvas, 0.12),
+        warning_text: warning,
+        warning_chip_bg: blend(warning, canvas, 0.12),
+        warning_chip_text: warning,
+        warning_muted: muted,
+        warning_inner_border: blend(warning, canvas, 0.25),
+        warning_code_bg: canvas,
+        warning_code_text: text,
+        warning_accent: warning,
+        error_text: danger,
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct ThemeChoice {
+    pub(super) name: gpui_kit::SharedString,
+    colors: Palette,
+}
+
+impl gpui_kit::component::searchable_list::SearchableListItem for ThemeChoice {
+    type Value = gpui_kit::SharedString;
+
+    fn title(&self) -> gpui_kit::SharedString {
+        self.name.clone()
+    }
+    fn value(&self) -> &Self::Value {
+        &self.name
+    }
+
+    fn render(
+        &self,
+        _: &mut gpui_kit::Window,
+        _: &mut gpui_kit::App,
+    ) -> impl gpui_kit::IntoElement {
+        use gpui_kit::{ParentElement as _, Styled as _, component::h_flex, div, px, rgb};
+        h_flex()
+            .gap_2()
+            .child(
+                h_flex()
+                    .border_1()
+                    .border_color(rgb(self.colors.border))
+                    .rounded(px(3.))
+                    .overflow_hidden()
+                    .children(
+                        [
+                            self.colors.canvas,
+                            self.colors.sidebar_bg,
+                            self.colors.focus,
+                        ]
+                        .map(|color| div().w(px(10.)).h(px(16.)).bg(rgb(color))),
+                    ),
+            )
+            .child(self.name.clone())
+    }
+}
+
+pub(super) fn theme_choices(mode: ThemeMode, cx: &gpui_kit::App) -> Vec<ThemeChoice> {
+    let default = if mode.is_dark() {
+        "Conduit Dark"
+    } else {
+        "Conduit Light"
+    };
+    let mut choices: Vec<_> = ThemeRegistry::global(cx)
+        .sorted_themes()
+        .into_iter()
+        .filter(|theme| theme.mode == mode && !theme.is_default)
+        .map(|theme| ThemeChoice {
+            name: theme.name.clone(),
+            colors: theme_preview(&theme.name, mode, cx),
+        })
+        .collect();
+    choices.sort_by_key(|theme| (theme.name.as_ref() != default, theme.name.to_lowercase()));
+    choices
 }

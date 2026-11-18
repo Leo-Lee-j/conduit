@@ -1,4 +1,4 @@
-//! GitHub PR snapshots and explicitly requested mutations through the user's gh authentication.
+//! PR / MR snapshots and explicitly requested mutations over the forge HTTP APIs.
 use crate::child::{Child, available};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
@@ -11,10 +11,13 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod api;
+pub mod auth;
 pub mod checks;
 pub mod forge;
 pub(crate) mod gitlab;
 pub mod list;
+mod pulls;
 pub mod threads;
 pub mod write;
 
@@ -33,7 +36,7 @@ pub struct Comment {
 #[derive(Clone, Debug)]
 pub struct PullRequest {
     pub forge: forge::Forge,
-    pub cli_host: Option<String>,
+    pub api_host: Option<String>,
     pub number: u64,
     pub title: String,
     pub url: String,
@@ -118,7 +121,7 @@ pub fn parse(json: &str) -> Result<PullRequest> {
         .collect();
     Ok(PullRequest {
         forge: forge::Forge::Github,
-        cli_host: None,
+        api_host: None,
         number,
         title: text(&value, "title"),
         url,
@@ -178,6 +181,17 @@ fn query(
     workspace: &Path,
     cancel: &AtomicBool,
 ) -> Result<String> {
+    query_with_input(executable, args, workspace, cancel, None)
+}
+
+/// Run a non-interactive child process; optional `input` is written to stdin before it closes.
+fn query_with_input(
+    executable: &Path,
+    args: &[&str],
+    workspace: &Path,
+    cancel: &AtomicBool,
+    input: Option<&[u8]>,
+) -> Result<String> {
     if cancel.load(Ordering::Acquire) {
         bail!(conduit::i18n::text("github.cancelled"));
     }
@@ -185,6 +199,11 @@ fn query(
         ("GH_PROMPT_DISABLED".into(), "1".into()),
         ("GH_NO_UPDATE_NOTIFIER".into(), "1".into()),
         ("GIT_TERMINAL_PROMPT".into(), "0".into()),
+        // Git Credential Manager must never open a sign-in window from a background refresh.
+        ("GCM_INTERACTIVE".into(), "never".into()),
+        // Git falls back to askpass programs before honoring GIT_TERMINAL_PROMPT.
+        ("GIT_ASKPASS".into(), "".into()),
+        ("SSH_ASKPASS".into(), "".into()),
         ("GH_PAGER".into(), "cat".into()),
         ("GLAB_CHECK_UPDATE".into(), "false".into()),
         ("GLAB_DEBUG_HTTP".into(), "".into()),
@@ -192,6 +211,13 @@ fn query(
     ]);
     let args: Vec<_> = args.iter().map(|s| (*s).to_owned()).collect();
     let (child, mut pipes) = Child::spawn_with_env(executable, &args, workspace, &environment)?;
+    if let Some(input) = input {
+        use std::io::Write;
+        if let Err(error) = pipes.stdin.write_all(input) {
+            child.terminate()?;
+            return Err(error.into());
+        }
+    }
     drop(pipes.stdin);
     let result = (|| {
         let started = Instant::now();
@@ -254,7 +280,6 @@ pub fn load_request(
 }
 
 fn load_github(workspace: &Path, number: Option<u64>, cancel: &AtomicBool) -> Result<PullRequest> {
-    let gh = executable().context(conduit::i18n::text("github.missing_cli"))?;
     let git = crate::git::resolve_git().context(conduit::i18n::text("github.missing_git"))?;
     let head = query(&git, &["rev-parse", "HEAD"], workspace, cancel)?;
     let branch = query(
@@ -264,16 +289,9 @@ fn load_github(workspace: &Path, number: Option<u64>, cancel: &AtomicBool) -> Re
         cancel,
     )?;
     let target = forge::target(workspace, cancel)?;
-    let repo = format!("{}/{}", target.host, target.project);
-    let number_text = number.map(|n| n.to_string());
-    let mut args = vec!["pr", "view"];
-    if let Some(number) = &number_text {
-        args.extend([number.as_str(), "--repo", &repo]);
-    }
-    args.extend(["--json", "number,title,url,headRefName,baseRefName,headRefOid,state,reviewDecision,statusCheckRollup,comments"]);
-    let json = query(&gh, &args, workspace, cancel)?;
-    let mut pr = parse(&json)?;
-    match threads::load(&gh, workspace, &pr, cancel) {
+    let mut client = api::Client::new(forge::Forge::Github, &target.host, workspace, cancel);
+    let mut pr = pulls::load(&mut client, &target, branch.trim(), number)?;
+    match threads::load(&mut client, &pr) {
         Ok(snapshot) => pr.threads = Some(snapshot),
         Err(error) => pr.threads_error = Some(format!("{error:#}")),
     }

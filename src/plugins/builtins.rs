@@ -9,6 +9,7 @@ pub const FILES: &str = "conduit.core.files";
 pub const GIT: &str = "conduit.core.git";
 pub const BRANCHES: &str = "conduit.core.branches";
 pub const TOOL_DETAILS: &str = "conduit.core.tool-details";
+pub const SESSION_DATA: &str = "conduit.core.session-data";
 pub const NOTIFICATIONS: &str = "conduit.core.notifications";
 pub const WORKFLOW: &str = "conduit.core.workflow";
 pub const AUTOMATIONS: &str = "conduit.core.automations";
@@ -72,6 +73,12 @@ pub fn core() -> Result<ContributionSet> {
             conduit::i18n::text_static("plugin_ui.git_branches_and_log"),
             Location::Navigation,
             Scope::Global,
+        )?,
+        view(
+            SESSION_DATA,
+            conduit::i18n::text_static("session_data.title"),
+            Location::Right,
+            Scope::Session,
         )?,
         view(
             TOOL_DETAILS,

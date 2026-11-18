@@ -5,6 +5,7 @@ mod claude_blocks;
 mod codex_async_input;
 mod codex_commands;
 mod codex_fork;
+mod codex_items;
 mod notifications;
 mod opencode;
 pub(crate) mod presentation;
@@ -85,7 +86,7 @@ pub enum Event {
         key: String,
         title: String,
         detail: String,
-        status: String,
+        status: crate::message_status::ToolStatus,
     },
     ToolInput {
         key: String,
@@ -98,11 +99,17 @@ pub enum Event {
         allow: bool,
     },
     Notice(String),
+    /// A recurring, actionable problem, deduplicated across turns and restarts
+    /// within this session. Ordinary progress notices remain turn-scoped.
+    SessionNotice {
+        key: String,
+        message: String,
+    },
     /// Current CLI activity; replaces the status line without adding transcript rows.
     Activity(String),
-    /// A transient or fatal error from the CLI stream. Rendered as a banner
-    /// instead of an inline notice so it does not pollute the transcript.
-    ErrorBanner(String),
+    /// A recoverable or fatal CLI error. The application coalesces these into
+    /// persisted error cards and presents retry progress in the activity line.
+    Failure(crate::failure::StreamFailure),
     /// Cleanup has timed out; the process tree is still owned and monitored.
     CleanupBlocked(String),
     Finished {
@@ -192,6 +199,7 @@ pub struct Protocol {
     reasoning_effort: crate::providers::ReasoningEffort,
     codex_reasoning: reasoning::CodexReasoning,
     codex_async_input: Option<codex_async_input::PendingInput>,
+    codex_fork_id: Option<String>,
     agents: subagents::Agents,
     route: crate::providers::RuntimeRoute,
     text_only: bool,
@@ -217,8 +225,8 @@ fn text<'a>(v: &'a Value, key: &str) -> &'a str {
 }
 /// Keep the native cause and top-level retry flag for localized presentation.
 /// Reducing this to a message string loses retry state and diagnostic details.
-fn codex_error_diagnostic(params: &Value) -> String {
-    pretty(params)
+fn codex_error_diagnostic(params: &Value) -> crate::failure::StreamFailure {
+    crate::failure::StreamFailure::codex(params)
 }
 fn pretty(v: &Value) -> String {
     serde_json::to_string_pretty(v).unwrap_or_default()
@@ -282,6 +290,7 @@ impl Protocol {
             reasoning_effort: Default::default(),
             codex_reasoning: Default::default(),
             codex_async_input: None,
+            codex_fork_id: None,
             agents: Default::default(),
             route: Default::default(),
             permission: PermissionLevel::default(),
@@ -400,6 +409,11 @@ impl Protocol {
             "features.default_mode_request_user_input".into(),
             json!(!self.text_only),
         );
+        // That flag is Conduit's choice, so the CLI's "under-development
+        // features enabled" warning is not something the user can act on.
+        if !self.text_only {
+            config.insert("suppress_unstable_features_warning".into(), json!(true));
+        }
         config
     }
     fn claude_permission_mode(&self) -> &str {
@@ -659,6 +673,9 @@ impl Protocol {
                 }
                 let method = if let Some(id) = &self.native_id {
                     params["threadId"] = json!(id);
+                    // Only the thread id is read back; the transcript is local.
+                    // Full-history hydration is deprecated and grows with the thread.
+                    params["excludeTurns"] = json!(true);
                     "thread/resume"
                 } else {
                     "thread/start"
@@ -816,51 +833,8 @@ impl Protocol {
                     } else {
                         self.codex_reasoning.start(item);
                     }
-                } else if kind != "userMessage" {
-                    let input = match kind {
-                        "commandExecution" => json!({"command":item["command"],"cwd":item["cwd"]}),
-                        "fileChange" => item["changes"].clone(),
-                        "mcpToolCall" => {
-                            json!({"server":item["server"],"tool":item["tool"],"arguments":item["arguments"]})
-                        }
-                        _ => item.clone(),
-                    };
-                    if method == "item/started" {
-                        self.tool_inputs.insert(key.clone(), input.clone());
-                        step.events.push(Event::ToolInput {
-                            key: key.clone(),
-                            input: pretty(&input),
-                        });
-                    }
-                    let title = match kind {
-                        "commandExecution" => text(item, "command"),
-                        "fileChange" => "修改文件",
-                        "mcpToolCall" => text(item, "tool"),
-                        _ => kind,
-                    }
-                    .to_string();
-                    let detail = match kind {
-                        "commandExecution" if method == "item/completed" => pretty(
-                            &json!({"output":item["aggregatedOutput"],"exitCode":item["exitCode"]}),
-                        ),
-                        "commandExecution" => String::new(),
-                        "fileChange" => pretty(&item["changes"]),
-                        "mcpToolCall" if method == "item/completed" => {
-                            pretty(&json!({"result":item["result"],"error":item["error"]}))
-                        }
-                        "mcpToolCall" => String::new(),
-                        _ => pretty(item),
-                    };
-                    step.events.push(Event::Tool {
-                        key,
-                        title,
-                        detail,
-                        status: if method == "item/completed" {
-                            text(item, "status").to_string()
-                        } else {
-                            "运行中".into()
-                        },
-                    });
+                } else {
+                    self.codex_item(item, method == "item/completed", &mut step);
                 }
             }
             "item/commandExecution/outputDelta" => step.events.push(Event::Tool {
@@ -927,8 +901,7 @@ impl Protocol {
                 }
             }
             "error" => {
-                step.events
-                    .push(Event::ErrorBanner(codex_error_diagnostic(p)));
+                step.events.push(Event::Failure(codex_error_diagnostic(p)));
             }
             "serverRequest/resolved" => {
                 if let Some(id) = p
@@ -1057,7 +1030,7 @@ impl Protocol {
             }
             _ if v.get("id").is_some() && !method.is_empty() => {
                 // Unknown interactive protocols are rejected, never silently approved.
-                step.writes.push(json!({"id":v["id"],"error":{"code":-32601,"message":"Conduit 尚不支持该交互，请取消任务并使用官方 CLI"}}));
+                step.writes.push(json!({"id":v["id"],"error":{"code":-32601,"message":conduit::i18n::text("protocol.unsupported_interaction_reply")}}));
                 step.events.push(Event::Notice(conduit::i18n::format(
                     "protocol.unsupported_cli_interaction",
                     &[("method", method.to_string())],
@@ -1207,7 +1180,7 @@ impl Protocol {
             "assistant" => {
                 if let Some(error) = v["error"].as_str().filter(|error| !error.is_empty()) {
                     step.events
-                        .push(Event::ErrorBanner(presentation::bounded(error)));
+                        .push(Event::Failure(presentation::bounded(error).into()));
                 }
                 let message = &v["message"];
                 let id = text(message, "id");
@@ -1489,7 +1462,7 @@ impl Protocol {
             },
             Provider::Claude => {
                 json!({"type":"control_response","response":{"subtype":"success","request_id":approval.wire_id,
-                "response": if allow { json!({"behavior":"allow","updatedInput":approval.input}) } else { json!({"behavior":"deny","message":"用户拒绝了本次操作"}) }}})
+                "response": if allow { json!({"behavior":"allow","updatedInput":approval.input}) } else { json!({"behavior":"deny","message":conduit::i18n::text("protocol.operation_denied")}) }}})
             }
         }
     }
@@ -1520,6 +1493,7 @@ mod tests {
         let _locale = crate::test_support::chinese();
         use crate::providers::RuntimeRoute;
         for native in [None, Some("known-thread".into())] {
+            let native_resumes = native.is_some();
             let mut route = RuntimeRoute::endpoint(
                 Provider::Codex,
                 "Proxy \"测试\" \\ route",
@@ -1561,7 +1535,13 @@ mod tests {
                 "features.default_mode_request_user_input".into(),
                 json!(true),
             );
+            expected_config.insert("suppress_unstable_features_warning".into(), json!(true));
             assert_eq!(params["config"], json!(expected_config));
+            // Resume reads back only the thread id, never the turn history.
+            assert_eq!(
+                params.get("excludeTurns"),
+                native_resumes.then_some(&json!(true))
+            );
         }
         let native = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
         assert_eq!(
@@ -1570,7 +1550,9 @@ mod tests {
                 "app-server",
                 "--stdio",
                 "-c",
-                "features.default_mode_request_user_input=true"
+                "features.default_mode_request_user_input=true",
+                "-c",
+                "suppress_unstable_features_warning=true"
             ]
         );
     }

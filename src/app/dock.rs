@@ -41,7 +41,7 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) -> (Option<AnyElement>, Option<AnyElement>) {
         self.sync_plugin_context();
-        if !self.plugins.right_visible(false) {
+        if !self.right_view_visible() {
             return (None, None);
         }
         let adapter = self.plugins.right_adapter();

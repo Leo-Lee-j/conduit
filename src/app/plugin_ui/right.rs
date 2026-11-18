@@ -57,6 +57,17 @@ pub(in crate::app) struct RightAdapter {
 pub(super) fn core_renderers() -> BTreeMap<String, RightAdapter> {
     [
         (
+            builtins::SESSION_DATA.into(),
+            RightAdapter {
+                render: ConduitApp::render_session_data,
+                icon: FullIconName::ChartColumn,
+                close_id: "close-session-data",
+                with_branches: false,
+                activate: |_, _, _| {},
+                deactivate: |_, _, _| {},
+            },
+        ),
+        (
             builtins::TOOL_DETAILS.into(),
             RightAdapter {
                 render: ConduitApp::render_tool_details,
@@ -209,18 +220,36 @@ impl PluginUi {
 }
 
 impl ConduitApp {
+    pub(in crate::app) fn session_data_available(&self) -> bool {
+        !self.settings_ui.open
+            && self.active_file.is_none()
+            && self.active_diff.is_none()
+            && self.usage_ui.active.is_none()
+            && self.github_ui.active.is_none()
+    }
+
+    pub(in crate::app) fn right_view_visible(&self) -> bool {
+        self.plugins.right_visible(false)
+            && (self.plugins.right().as_str() != builtins::SESSION_DATA
+                || self.session_data_available())
+    }
+
     pub(in crate::app) fn render_right_navigation(&mut self, cx: &mut Context<Self>) -> AnyElement {
         self.sync_plugin_context();
         let (notifications, mut choices): (Vec<_>, Vec<_>) = self
             .plugins
             .right_choices(false)
             .into_iter()
+            .filter(|choice| {
+                choice.id.as_str() != builtins::SESSION_DATA || self.session_data_available()
+            })
             .partition(|choice| choice.id.as_str() == builtins::NOTIFICATIONS);
         choices.sort_by_key(|choice| match choice.id.as_str() {
-            builtins::WORKFLOW => 0,
-            builtins::AUTOMATIONS => 1,
-            builtins::TOOL_DETAILS => 2,
-            _ => 3,
+            builtins::SESSION_DATA => 0,
+            builtins::WORKFLOW => 1,
+            builtins::AUTOMATIONS => 2,
+            builtins::TOOL_DETAILS => 3,
+            _ => 4,
         });
         v_flex()
             .id("right-navigation-rail")

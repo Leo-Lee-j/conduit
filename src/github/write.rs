@@ -23,7 +23,7 @@ pub fn validate(expected: &PullRequest, current: &PullRequest, action: &Action) 
     };
     if number != expected.number
         || expected.forge != current.forge
-        || expected.cli_host != current.cli_host
+        || expected.api_host != current.api_host
         || expected.branch.is_empty()
         || !threads::oid(&expected.head)
         || !threads::oid(&expected.local_head)
@@ -94,49 +94,69 @@ fn graphql_result(json: &str, action: &Action) -> Result<()> {
     Ok(())
 }
 
-fn arguments(expected: &PullRequest, action: &Action) -> Result<Vec<String>> {
+/// One fully resolved remote write; built during preflight and sent exactly once.
+#[derive(Clone, Debug)]
+pub(super) struct Request {
+    pub host: String,
+    pub method: api::Method,
+    pub url: String,
+    pub body: Value,
+}
+
+const REPLY: &str = "mutation($thread:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$thread,body:$body}){comment{id}}}";
+const RESOLVE: &str =
+    "mutation($thread:ID!){resolveReviewThread(input:{threadId:$thread}){thread{id isResolved}}}";
+
+fn request(expected: &PullRequest, action: &Action) -> Result<Request> {
     if expected.forge == forge::Forge::Gitlab {
-        return gitlab::write_arguments(expected, action);
+        return gitlab::write_request(expected, action);
     }
     let repository = threads::identity(&expected.url)?;
-    if let Action::Comment(body) = action {
-        return Ok(vec![
-            "pr".into(),
-            "comment".into(),
-            expected.url.clone(),
-            "--body".into(),
-            body.clone(),
-        ]);
+    let (method, url, body) = match action {
+        Action::Comment(body) => (
+            api::Method::Post,
+            format!(
+                "{}/repos/{}/{}/issues/{}/comments",
+                api::rest_base(forge::Forge::Github, &repository.host),
+                repository.owner,
+                repository.name,
+                repository.number
+            ),
+            serde_json::json!({ "body": body }),
+        ),
+        Action::Reply { thread, body } => (
+            api::Method::Post,
+            api::graphql_url(&repository.host),
+            serde_json::json!({
+                "query": REPLY,
+                "variables": { "thread": thread.id, "body": body },
+            }),
+        ),
+        Action::Resolve(thread) => (
+            api::Method::Post,
+            api::graphql_url(&repository.host),
+            serde_json::json!({ "query": RESOLVE, "variables": { "thread": thread.id } }),
+        ),
+    };
+    Ok(Request {
+        host: repository.host,
+        method,
+        url,
+        body,
+    })
+}
+
+fn rest_comment_result(json: &str, body: &str) -> Result<()> {
+    let value: Value = serde_json::from_str(json)?;
+    if value["id"].as_u64().is_none_or(|id| id == 0) || value["body"].as_str() != Some(body) {
+        bail!(conduit::i18n::text("github.write_failed"));
     }
-    let mut args = vec![
-        "api".into(),
-        "graphql".into(),
-        "--hostname".into(),
-        repository.host,
-        "-f".into(),
-    ];
-    match action {
-        Action::Reply { thread, body } => {
-            args.extend([
-                "query=mutation($thread:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$thread,body:$body}){comment{id}}}".into(),
-                "-f".into(), format!("thread={}", thread.id), "-f".into(), format!("body={body}")
-            ]);
-        }
-        Action::Resolve(thread) => {
-            args.extend([
-                "query=mutation($thread:ID!){resolveReviewThread(input:{threadId:$thread}){thread{id isResolved}}}".into(),
-                "-f".into(), format!("thread={}", thread.id)
-            ]);
-        }
-        Action::Comment(_) => unreachable!(),
-    }
-    Ok(args)
+    Ok(())
 }
 
 pub struct Prepared {
     forge: forge::Forge,
-    gh: PathBuf,
-    args: Vec<String>,
+    request: Request,
     action: Action,
     workspace: PathBuf,
 }
@@ -147,58 +167,59 @@ pub fn prepare(
     action: &Action,
     cancel: &AtomicBool,
 ) -> std::result::Result<Prepared, WriteError> {
-    let prepare = || -> Result<(PathBuf, Vec<String>)> {
+    let prepare = || -> Result<Request> {
         validate(expected, expected, action)?;
         let current = load(workspace, cancel)?;
         validate(expected, &current, action)?;
         if cancel.load(Ordering::Acquire) {
             bail!(conduit::i18n::text("github.cancelled"));
         }
-        Ok((
-            match expected.forge {
-                forge::Forge::Github => {
-                    executable().context(conduit::i18n::text("github.missing_cli"))?
-                }
-                forge::Forge::Gitlab => gitlab::executable()?,
-            },
-            arguments(expected, action)?,
-        ))
+        request(expected, action)
     };
-    let (gh, args) = prepare().map_err(|e| WriteError {
+    let request = prepare().map_err(|e| WriteError {
         message: format!("{e:#}"),
         uncertain: false,
     })?;
     Ok(Prepared {
         forge: expected.forge,
-        gh,
-        args,
+        request,
         action: action.clone(),
         workspace: workspace.to_owned(),
     })
 }
 
 pub fn perform(prepared: Prepared, cancel: &AtomicBool) -> std::result::Result<(), WriteError> {
+    let certain = |e: anyhow::Error| WriteError {
+        message: format!("{e:#}"),
+        uncertain: false,
+    };
     if cancel.load(Ordering::Acquire) {
-        return Err(WriteError {
-            message: conduit::i18n::text("github.cancelled"),
-            uncertain: false,
-        });
+        return Err(certain(anyhow::anyhow!(conduit::i18n::text(
+            "github.cancelled"
+        ))));
     }
-    let args: Vec<_> = prepared.args.iter().map(String::as_str).collect();
-    // No retries: timeout/cancellation can happen after the server accepted a write.
-    query(&prepared.gh, &args, &prepared.workspace, cancel)
-        .and_then(|json| {
-            if prepared.forge == forge::Forge::Gitlab {
-                gitlab::write_result(&json, &prepared.action)
-            } else if matches!(prepared.action, Action::Comment(_)) {
-                Ok(())
-            } else {
-                graphql_result(&json, &prepared.action)
-            }
+    let Request {
+        host,
+        method,
+        url,
+        body,
+    } = &prepared.request;
+    let mut client = api::Client::new(prepared.forge, host, &prepared.workspace, cancel);
+    // Resolve credentials before sending so a missing sign-in is not reported as uncertain.
+    client.authenticate().map_err(certain)?;
+    // Only a 401 is retried, with the next credential: the server rejected it before acting.
+    // Nothing else is resent: timeout/cancellation can happen after the server accepted a write.
+    client
+        .send(*method, url, Some(body))
+        .and_then(|json| match (&prepared.action, prepared.forge) {
+            (_, forge::Forge::Gitlab) => gitlab::write_result(&json, &prepared.action),
+            (Action::Comment(body), forge::Forge::Github) => rest_comment_result(&json, body),
+            (_, forge::Forge::Github) => graphql_result(&json, &prepared.action),
         })
         .map_err(|e| WriteError {
             message: format!("{e:#}"),
-            uncertain: true,
+            // A 4xx or rejected credential means the server did not apply the write.
+            uncertain: !api::rejected(&e),
         })
 }
 
@@ -260,7 +281,7 @@ mod tests {
         expected.url = "https://git.example.com/example/repo/pull/7".into();
         let body = "中文\n$(echo secret) 'literal' \"quoted\"";
         let thread = expected.threads.as_ref().unwrap().threads[0].clone();
-        let args = arguments(
+        let request = request(
             &expected,
             &Action::Reply {
                 thread,
@@ -268,11 +289,17 @@ mod tests {
             },
         )
         .unwrap();
+        assert_eq!(request.host, "git.example.com");
+        assert_eq!(request.url, "https://git.example.com/api/graphql");
+        assert_eq!(request.body["variables"]["body"], body);
+        let comment = super::request(&expected, &Action::Comment(body.into())).unwrap();
         assert_eq!(
-            &args[..4],
-            ["api", "graphql", "--hostname", "git.example.com"]
+            comment.url,
+            "https://git.example.com/api/v3/repos/example/repo/issues/7/comments"
         );
-        assert_eq!(args.last().unwrap(), &format!("body={body}"));
+        assert_eq!(comment.body["body"], body);
+        assert!(rest_comment_result(&json!({"id": 1, "body": body}).to_string(), body).is_ok());
+        assert!(rest_comment_result(&json!({"id": 1, "body": "other"}).to_string(), body).is_err());
         for body in [
             "".to_owned(),
             " \n".into(),

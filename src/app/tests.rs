@@ -8,6 +8,90 @@ use crate::{
 };
 
 #[test]
+fn recurring_notices_are_session_scoped_and_survive_restore() {
+    let mut record = session();
+    let warning = || Event::SessionNotice {
+        key: "codex:mcp:context7".into(),
+        message: "context7 requires sign-in".into(),
+    };
+    apply_event(&mut record, "turn-1", warning());
+    apply_event(
+        &mut record,
+        "turn-1",
+        Event::Text {
+            key: "reply".into(),
+            text: "reply".into(),
+        },
+    );
+    apply_event(&mut record, "turn-2", warning());
+    assert_eq!(record.messages.len(), 2);
+    let mut restored: SessionRecord =
+        serde_json::from_str(&serde_json::to_string(&record).unwrap()).unwrap();
+    apply_event(&mut restored, "turn-3", warning());
+    assert_eq!(restored.messages.len(), 2);
+    apply_event(
+        &mut restored,
+        "turn-3",
+        Event::SessionNotice {
+            key: "codex:mcp:context7".into(),
+            message: "context7 failed for another reason".into(),
+        },
+    );
+    assert_eq!(restored.messages.len(), 2);
+    assert_eq!(
+        restored.messages[0].text,
+        "context7 failed for another reason"
+    );
+    let mut other = session();
+    apply_event(&mut other, "turn-1", warning());
+    assert_eq!(other.messages.len(), 1);
+    for prefix in ["turn-4", "turn-5"] {
+        apply_event(
+            &mut restored,
+            prefix,
+            Event::Text {
+                key: "reply".into(),
+                text: prefix.into(),
+            },
+        );
+        apply_event(&mut restored, prefix, Event::Notice("compacted".into()));
+    }
+    assert_eq!(
+        restored
+            .messages
+            .iter()
+            .filter(|item| item.text == "compacted")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn declined_tools_display_as_failures_in_both_languages_and_after_restore() {
+    for locale in ["en", "zh-CN"] {
+        let _locale = crate::test_support::scoped(locale);
+        for status in [crate::message_status::ToolStatus::Denied, "declined".into()] {
+            let mut record = session();
+            apply_event(
+                &mut record,
+                "turn",
+                Event::Tool {
+                    key: "tool".into(),
+                    title: "cargo test".into(),
+                    detail: String::new(),
+                    status,
+                },
+            );
+            let restored: SessionRecord =
+                serde_json::from_str(&serde_json::to_string(&record).unwrap()).unwrap();
+            assert!(super::tools::tool_failed(&restored.messages[0]));
+            assert!(!super::tools::tool_succeeded(&restored.messages[0]));
+            assert!(!super::tools::tool_running(&restored.messages[0]));
+        }
+    }
+}
+
+#[test]
 fn new_delta_matching_previous_reply_is_preserved_and_snapshots_still_replace() {
     let mut s = session();
     apply_event(
@@ -125,7 +209,7 @@ fn error_retry_clears_errors_and_preserves_partial_output_across_restore() {
     apply_event(
         &mut s,
         "turn-0",
-        Event::ErrorBanner("API Error: 503 unavailable".into()),
+        Event::Failure("API Error: 503 unavailable".into()),
     );
     let original = serde_json::to_value(&s.messages[..3]).unwrap();
     assert_eq!(
@@ -148,7 +232,7 @@ fn error_retry_clears_errors_and_preserves_partial_output_across_restore() {
     apply_event(
         &mut s,
         &prefix,
-        Event::ErrorBanner("API Error: 503 unavailable".into()),
+        Event::Failure("API Error: 503 unavailable".into()),
     );
     assert_eq!(serde_json::to_value(&s.messages[..3]).unwrap(), original);
     assert_eq!(
@@ -241,7 +325,7 @@ fn error_retry_clears_repeated_failures_before_any_reply() {
     for _ in 0..3 {
         let prefix = super::runtime::next_turn_prefix(&s);
         for error in ["API Error: 503 unavailable", "API Error: 429 rate limit"] {
-            apply_event(&mut s, &prefix, Event::ErrorBanner(error.into()));
+            apply_event(&mut s, &prefix, Event::Failure(error.into()));
         }
         assert_eq!(s.messages.len(), 4);
         assert_eq!(super::runtime::error_retry_prompt(&s, 3), Some("question"));
@@ -254,11 +338,7 @@ fn error_retry_clears_repeated_failures_before_any_reply() {
 fn error_retry_only_targets_a_failure_in_the_latest_exchange() {
     let _locale = crate::test_support::chinese();
     let mut s = session();
-    apply_event(
-        &mut s,
-        "turn-0",
-        Event::ErrorBanner("API Error: 503".into()),
-    );
+    apply_event(&mut s, "turn-0", Event::Failure("API Error: 503".into()));
     assert_eq!(super::runtime::error_retry_prompt(&s, 0), None);
     assert_eq!(super::runtime::error_retry_prompt(&s, usize::MAX), None);
     for (kind, text) in [

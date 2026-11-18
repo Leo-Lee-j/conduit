@@ -60,7 +60,7 @@ impl MessageIndex {
             | Event::Approval(_)
             | Event::Finished { .. }
             | Event::CleanupBlocked(_)
-            | Event::ErrorBanner(_) => true,
+            | Event::Failure(_) => true,
             _ => false,
         };
         let changed = if closes {
@@ -269,7 +269,36 @@ pub(super) fn apply_event_indexed(
         }
         return Some(session.messages.len() - 1);
     }
-    if let Event::ErrorBanner(error) = &event {
+    if let Event::SessionNotice { key, message } = event {
+        // This identity deliberately excludes the per-turn prefix. It persists
+        // with the chat item, so reopening the session keeps deduplication.
+        let key = format!("session-notice:{key}");
+        if let Some(position) = index.find(&session.messages, &key) {
+            let item = &mut session.messages[position];
+            if item.text == message {
+                return None;
+            }
+            item.text = message;
+            return Some(position);
+        }
+        session
+            .messages
+            .push(ChatItem::from(crate::domain::ChatItemData {
+                key,
+                created_at: unix_now(),
+                kind: ItemKind::Notice,
+                text: message,
+                input: String::new(),
+                detail: String::new(),
+                status: Default::default(),
+                reasoning_summary: None,
+                elapsed_ms: None,
+                approval: None,
+                model: None,
+            }));
+        return Some(session.messages.len() - 1);
+    }
+    if let Event::Failure(error) = &event {
         return Some(record_failure(session, prefix, error, false));
     }
     if let Event::Text { key, text } = &event
@@ -291,7 +320,7 @@ pub(super) fn apply_event_indexed(
             ItemKind::Assistant,
             text,
             String::new(),
-            String::new(),
+            crate::message_status::ToolStatus::Unspecified,
             true,
         ),
         Event::Text { key, text } => (
@@ -299,7 +328,7 @@ pub(super) fn apply_event_indexed(
             ItemKind::Assistant,
             text,
             String::new(),
-            String::new(),
+            crate::message_status::ToolStatus::Unspecified,
             false,
         ),
         Event::Tool {
@@ -316,15 +345,7 @@ pub(super) fn apply_event_indexed(
             ItemKind::Notice,
             text,
             String::new(),
-            String::new(),
-            false,
-        ),
-        Event::ErrorBanner(text) => (
-            format!("error-{}", session.messages.len()),
-            ItemKind::Error,
-            text,
-            String::new(),
-            String::new(),
+            crate::message_status::ToolStatus::Unspecified,
             false,
         ),
         _ => return None,
@@ -347,7 +368,7 @@ pub(super) fn apply_event_indexed(
             } else if !detail.is_empty() {
                 item.detail = detail;
             }
-            item.status = status.into();
+            item.status = status;
         }
         Some(position)
     } else {
@@ -376,7 +397,7 @@ pub(super) fn apply_event_indexed(
                     text,
                     input: String::new(),
                     detail,
-                    status: status.into(),
+                    status,
                     approval: None,
                     model: None,
                 }));

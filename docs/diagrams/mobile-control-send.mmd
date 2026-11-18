@@ -1,0 +1,32 @@
+%% Proposed send/recovery contract; not implemented. 2026-11-18.
+%%{init: {"theme":"neutral","themeVariables":{"fontFamily":"Arial, sans-serif","fontSize":"16px"},"sequence":{"messageMargin":30,"diagramMarginX":20}}}%%
+sequenceDiagram
+    autonumber
+    participant P as Phone
+    participant G as Remote gateway
+    participant A as GPUI / RemoteHost
+    participant S as Persistence
+    participant R as ChatRuntime
+    P->>G: POST run (epoch, key, expiry, If-Match)
+    G->>G: Authenticate, deduplicate, enqueue
+    G-->>P: 202 operation_id
+    G->>A: Targeted command
+    A->>A: Recheck grant, version, session busy
+    A->>S: Persist user message
+    A-->>G: Operation saving + run pending
+    S-->>A: SaveReceipt success
+    A->>R: Release launch barrier
+    A-->>G: Operation succeeded + run_id
+    G-->>P: SSE operation.changed
+    R-->>A: Existing runtime events
+    A-->>G: Merged state commits
+    G-->>P: SSE message / run updates
+    Note over P,R: Phone disconnect does not cancel the run
+    P->>G: Reconnect with saved cursor
+    alt Cursor retained
+        G-->>P: Replay then live events
+    else Replay gap or epoch changed
+        G-->>P: Resync required
+        P->>G: GET snapshot and operation
+        G-->>P: Current state and new cursor
+    end

@@ -14,6 +14,7 @@ mod commands;
 mod example;
 pub(super) mod management;
 pub(super) mod right;
+mod session_data;
 #[cfg(conduit_shell_desktop)]
 #[path = "plugin_ui/plugin_shell.rs"]
 pub(super) mod shell;
@@ -41,6 +42,7 @@ pub(super) struct PluginUi {
     state: WorkbenchState,
     renderers: BTreeMap<String, NavigationAdapter>,
     right_renderers: BTreeMap<String, right::RightAdapter>,
+    session_data: BTreeMap<SessionKey, Entity<session_data::Sections>>,
     renderer_registrations: BTreeMap<String, conduit::plugins::registry::Registration>,
     commands: BTreeMap<conduit::plugins::ids::CommandId, commands::NativeCommand>,
     status_providers: BTreeMap<conduit::plugins::ids::ItemId, status::StatusProvider>,
@@ -138,6 +140,7 @@ impl PluginUi {
             state,
             renderers,
             right_renderers: right::core_renderers(),
+            session_data: BTreeMap::new(),
             renderer_registrations,
             commands: BTreeMap::new(),
             status_providers: BTreeMap::new(),
@@ -179,6 +182,7 @@ impl PluginUi {
         {
             return;
         }
+        let session_changed = self.snapshot.input().session != input.session;
         self.snapshot = self
             .context
             .update(input)
@@ -192,6 +196,17 @@ impl PluginUi {
         self.state
             .reconcile(&self.registry, &self.snapshot)
             .expect("core fallbacks remain registered");
+        // Open the inspector once on entering a conversation. Streaming/context
+        // updates must respect a panel the user closed or selected manually.
+        if session_changed
+            && self.snapshot.input().session.is_some()
+            && let Ok(request) = self.registry.prepare_view(
+                &ViewId::new(builtins::SESSION_DATA).unwrap(),
+                &self.snapshot,
+            )
+        {
+            let _ = self.state.open(&self.registry, &request, &self.snapshot);
+        }
         self.commands
             .retain(|_, binding| self.registry.is_registered(&binding.registration));
         self.status_providers
@@ -385,6 +400,15 @@ impl ConduitApp {
             session_running,
             writable: self.writable,
             closing: self.closing,
+        });
+        self.plugins.session_data.retain(|key, _| {
+            self.store.workspaces.iter().any(|workspace| {
+                workspace.path == key.workspace.path()
+                    && workspace
+                        .sessions
+                        .iter()
+                        .any(|session| session.id == key.id)
+            })
         });
         if removed {
             self.plugins

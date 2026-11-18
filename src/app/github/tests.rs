@@ -26,6 +26,7 @@ fn pr_document_preserves_workspace_drafts_tabs_and_releases_closed_panels(cx: &m
             requested: None,
             error: Some("Offline fixture".into()),
             sync_result: None,
+            sign_in: Default::default(),
             loading: false,
             shown: 40,
             tab: 1,
@@ -102,7 +103,7 @@ fn pr_document_checks_fit_and_attachment_returns_to_chat_without_losing_the_page
         pr.threads = Some(snapshot());
         let panel = cx.new(|cx| PullRequestPanel {
             host: app.downgrade(), workspace: root.clone(), focus: cx.focus_handle(), document: true,
-            scrolls: Default::default(), snapshot: Some(pr), requested: None, error: None, sync_result: None,
+            scrolls: Default::default(), snapshot: Some(pr), requested: None, error: None, sign_in: Default::default(), sync_result: None,
             loading: false, shown: 20, tab: 0, expanded_threads: Default::default(),
             cancel: Arc::new(AtomicBool::new(false)), _task: Task::ready(()), _subscription: None,
         });
@@ -187,6 +188,7 @@ fn gitlab_document_renders_mr_and_keeps_sync_and_composer_bound_to_gitlab(cx: &m
             requested: None,
             error: None,
             sync_result: None,
+            sign_in: Default::default(),
             loading: false,
             shown: 20,
             tab: 0,
@@ -277,6 +279,7 @@ fn pr_review_sync_and_attachments_keep_the_original_workspace_and_saved_status(
             requested: None,
             error: None,
             sync_result: None,
+            sign_in: Default::default(),
             loading: false,
             shown: 20,
             tab: 1,
@@ -404,6 +407,7 @@ fn pr_review_loading_missing_workspaces_and_readonly_state_block_sync(cx: &mut T
             requested: None,
             error: None,
             sync_result: None,
+            sign_in: Default::default(),
             loading: true,
             shown: 20,
             tab: 0,
@@ -453,7 +457,7 @@ fn failed_check_task_preserves_workspace_drafts_and_user_acceptance(cx: &mut Tes
         pr.local_head = "b".repeat(40);
         let panel = cx.new(|cx| PullRequestPanel {
             host: app.downgrade(), workspace: root.clone(), snapshot: Some(pr), requested: None,
-            error: None, sync_result: None, loading: false, shown: 20,
+            error: None, sign_in: Default::default(), sync_result: None, loading: false, shown: 20,
             tab: 0,
             expanded_threads: Default::default(),
             focus: cx.focus_handle(),
@@ -553,6 +557,7 @@ fn failed_check_task_rejects_stale_readonly_loading_and_missing_workspace_action
             requested: None,
             error: None,
             sync_result: None,
+            sign_in: Default::default(),
             loading: true,
             shown: 20,
             tab: 0,
@@ -617,6 +622,7 @@ fn github_write_form_blocks_removed_readonly_and_uncertain_resubmission(cx: &mut
             requested: None,
             error: None,
             sync_result: None,
+            sign_in: Default::default(),
             loading: false,
             shown: 20,
             tab: 0,

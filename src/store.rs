@@ -55,9 +55,13 @@ pub struct UiSettings {
     /// Shows the in-app performance monitor and collects its samples.
     #[serde(default = "default_performance_monitor")]
     pub performance_monitor: bool,
-    /// Follow the system appearance or force one of the bundled palettes.
+    /// Follow the system appearance or force light/dark mode.
     #[serde(default)]
     pub appearance: AppearanceMode,
+    #[serde(default = "default_light_theme")]
+    pub light_theme: String,
+    #[serde(default = "default_dark_theme")]
+    pub dark_theme: String,
     #[serde(default)]
     pub background: crate::wallpaper::Settings,
     /// Collapse workspaces with no session activity during the last three days.
@@ -135,6 +139,14 @@ pub struct UiSettings {
 
 fn default_terminal_height() -> f32 {
     280.
+}
+
+fn default_light_theme() -> String {
+    "Conduit Light".into()
+}
+
+fn default_dark_theme() -> String {
+    "Conduit Dark".into()
 }
 
 pub const DEFAULT_UI_FONT_SIZE: f32 = 16.0;
@@ -233,6 +245,8 @@ impl Default for UiSettings {
             last_provider: None,
             performance_monitor: default_performance_monitor(),
             appearance: AppearanceMode::default(),
+            light_theme: default_light_theme(),
+            dark_theme: default_dark_theme(),
             background: Default::default(),
             auto_collapse_inactive_workspaces: false,
             auto_sort_workspaces: true,
@@ -445,7 +459,13 @@ impl Store {
                 }
                 #[cfg(not(test))]
                 PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_else(|| ".".into()))
-                    .join("Conduit")
+                    // Keep cargo run separate from the installed app, including
+                    // both its state files and the data-directory instance lock.
+                    .join(if cfg!(debug_assertions) {
+                        "Conduit-dev"
+                    } else {
+                        "Conduit"
+                    })
             });
         // Detached saves can outlive a test even with --test-threads=1. Give
         // each test thread its own files, including under an explicit data root.
@@ -1091,6 +1111,8 @@ mod tests {
         assert_eq!(store.ui.last_provider, None);
         assert!(store.ui.performance_monitor);
         assert_eq!(store.ui.appearance, AppearanceMode::Dark);
+        assert_eq!(store.ui.light_theme, "Conduit Light");
+        assert_eq!(store.ui.dark_theme, "Conduit Dark");
         assert!(!store.ui.auto_collapse_inactive_workspaces);
         assert!(store.ui.auto_sort_workspaces);
         assert!(
@@ -1135,6 +1157,8 @@ mod tests {
         store.ui.last_provider = Some(crate::domain::Provider::Codex);
         store.ui.performance_monitor = false;
         store.ui.appearance = AppearanceMode::System;
+        store.ui.light_theme = "Catppuccin Latte".into();
+        store.ui.dark_theme = "Tokyo Night".into();
         store.ui.auto_collapse_inactive_workspaces = true;
         store.ui.auto_sort_workspaces = false;
         store.ui.max_tabs = 12;
@@ -1169,6 +1193,8 @@ mod tests {
         );
         assert!(!reloaded.ui.performance_monitor);
         assert_eq!(reloaded.ui.appearance, AppearanceMode::System);
+        assert_eq!(reloaded.ui.light_theme, "Catppuccin Latte");
+        assert_eq!(reloaded.ui.dark_theme, "Tokyo Night");
         assert!(reloaded.ui.auto_collapse_inactive_workspaces);
         assert!(!reloaded.ui.auto_sort_workspaces);
         assert_eq!(reloaded.ui.max_tabs, 12);

@@ -6,6 +6,7 @@ mod presentation;
 mod sidebar;
 pub(super) use document::GithubUi;
 mod composer;
+mod sign_in;
 mod threads;
 pub(in crate::app) use threads::thread_body;
 #[cfg(all(test, feature = "ui-tests"))]
@@ -149,6 +150,7 @@ pub(super) struct PullRequestPanel {
     snapshot: Option<crate::github::PullRequest>,
     requested: Option<(crate::github::forge::Forge, u64, String)>,
     error: Option<String>,
+    sign_in: sign_in::SignInSlot,
     sync_result: Option<String>,
     loading: bool,
     shown: usize,
@@ -204,6 +206,7 @@ impl PullRequestPanel {
         }
         self.loading = true;
         self.error = None;
+        self.sign_in.set(None);
         self.sync_result = None;
         let cancel = self.cancel.clone();
         let workspace = self.workspace.clone();
@@ -215,14 +218,14 @@ impl PullRequestPanel {
                 .spawn(async move {
                     if let Some(provider) = provider {
                         crate::github::forge::select(&workspace, provider, &ticket)
-                            .map_err(|e| format!("{e:#}"))?;
+                            .map_err(sign_in::describe)?;
                     }
                     if let Some((forge, number, url)) = requested {
                         crate::github::load_request(&workspace, forge, number, &url, &ticket)
                     } else {
                         crate::github::load(&workspace, &ticket)
                     }
-                    .map_err(|e| format!("{e:#}"))
+                    .map_err(sign_in::describe)
                 })
                 .await;
             if cancel.load(Ordering::Acquire) {
@@ -245,7 +248,10 @@ impl PullRequestPanel {
                         }
                         this.snapshot = Some(snapshot);
                     }
-                    Err(error) => this.error = Some(error),
+                    Err((error, required)) => {
+                        this.error = Some(error);
+                        this.sign_in.set(required);
+                    }
                 }
                 cx.notify();
             });
@@ -473,6 +479,9 @@ impl Render for PullRequestPanel {
                     .text_color(rgb(palette().danger_text))
                     .child(error.clone()),
             );
+        }
+        if let Some(form) = self.sign_in.view(window, cx, Self::reload) {
+            header = header.child(form);
         }
         if let Some(pr) = &self.snapshot {
             header = header.child(self.overview(pr));

@@ -78,7 +78,7 @@ impl Protocol {
             && let Some((id, generation, _)) = self.agents.pending_reads.remove(request)
         {
             if let Some(agent) = self.agents.records.get_mut(&id) {
-                if agent.task_id != generation {
+                if agent.task_id != generation || agent.status.terminal() {
                     return true;
                 }
                 if v.get("error").is_some() {
@@ -86,11 +86,21 @@ impl Protocol {
                         agent.set_status(Status::Unknown);
                     }
                 } else {
-                    let thread = &v["result"]["thread"];
-                    if thread["id"] == id {
-                        update_thread(
+                    if let Some(turn) = v["result"]["data"]
+                        .as_array()
+                        .and_then(|turns| turns.first())
+                    {
+                        // Persistence can lag the live turn/started event. An
+                        // older saved completion cannot finish the current task.
+                        if !agent.task_id.is_empty()
+                            && !agent.task_id.starts_with("call:")
+                            && agent.task_id != text(turn, "id")
+                        {
+                            return true;
+                        }
+                        update_turn(
                             agent,
-                            thread,
+                            turn,
                             self.agents.prior_turns.get(&id).map(String::as_str),
                         );
                     }
@@ -288,7 +298,9 @@ impl Protocol {
                 key.clone(),
                 (id.clone(), self.agents.records[id].task_id.clone(), now),
             );
-            writes.push(json!({"id":key,"method":"thread/read","params":{"threadId":id,"includeTurns":true}}));
+            writes.push(json!({"id":key,"method":"thread/turns/list","params":{
+                "threadId":id,"limit":1,"sortDirection":"desc","itemsView":"full"
+            }}));
         }
         writes
     }
@@ -366,35 +378,38 @@ fn update_thread(agent: &mut Agent, thread: &Value, prior_turn: Option<&str>) {
     {
         agent.name = name.into();
     }
-    let status = thread_status(&thread["status"]);
     if let Some(turn) = thread["turns"].as_array().and_then(|turns| turns.last()) {
-        let id = text(turn, "id");
-        if agent.task_id.starts_with("call:") && prior_turn == Some(id) {
-            return;
-        }
-        let turn_status = native_status(text(turn, "status"));
-        if turn_status.active() {
-            agent.restart(id);
-        }
-        if turn_status.terminal() || (agent.task_id == id && !agent.status.terminal()) {
-            agent.task_id = id.into();
-            agent.set_status(turn_status);
-        }
-        if !turn["error"].is_null() {
-            agent.result = pretty(&turn["error"]);
-        }
-        for item in turn["items"].as_array().into_iter().flatten() {
-            match text(item, "type") {
-                "agentMessage" => agent.result = text(item, "text").into(),
-                "commandExecution" => agent.activity = text(item, "command").into(),
-                "mcpToolCall" => agent.activity = text(item, "tool").into(),
-                "fileChange" => agent.activity = conduit::i18n::text("tools.edit_code"),
-                _ => {}
-            }
-        }
+        update_turn(agent, turn, prior_turn);
     }
     if !agent.status.terminal() {
-        agent.set_status(status);
+        agent.set_status(thread_status(&thread["status"]));
+    }
+}
+
+fn update_turn(agent: &mut Agent, turn: &Value, prior_turn: Option<&str>) {
+    let id = text(turn, "id");
+    if agent.task_id.starts_with("call:") && prior_turn == Some(id) {
+        return;
+    }
+    let turn_status = native_status(text(turn, "status"));
+    if turn_status.active() {
+        agent.restart(id);
+    }
+    if turn_status.terminal() || (agent.task_id == id && !agent.status.terminal()) {
+        agent.task_id = id.into();
+        agent.set_status(turn_status);
+    }
+    if !turn["error"].is_null() {
+        agent.result = pretty(&turn["error"]);
+    }
+    for item in turn["items"].as_array().into_iter().flatten() {
+        match text(item, "type") {
+            "agentMessage" => agent.result = text(item, "text").into(),
+            "commandExecution" => agent.activity = text(item, "command").into(),
+            "mcpToolCall" => agent.activity = text(item, "tool").into(),
+            "fileChange" => agent.activity = conduit::i18n::text("tools.edit_code"),
+            _ => {}
+        }
     }
 }
 
@@ -488,7 +503,12 @@ mod tests {
         p.accept(spawn("a"));
         let writes = p.poll_subagents();
         assert_eq!(writes.len(), 1);
-        let step = p.accept(json!({"id":writes[0]["id"],"result":{"thread":{"id":"a","status":{"type":"idle"},"turns":[{"id":"child-turn","status":"completed","items":[{"type":"agentMessage","text":"verified"}]}]}}}));
+        assert_eq!(writes[0]["method"], "thread/turns/list");
+        assert_eq!(
+            writes[0]["params"],
+            json!({"threadId":"a","limit":1,"sortDirection":"desc","itemsView":"full"})
+        );
+        let step = p.accept(json!({"id":writes[0]["id"],"result":{"data":[{"id":"child-turn","status":"completed","items":[{"type":"agentMessage","text":"verified"}]}]}}));
         assert!(step.events.iter().any(|event| matches!(event, Event::Subagent(a) if a.status == Status::Completed && a.result == "verified")));
     }
     #[test]
@@ -500,8 +520,28 @@ mod tests {
         next["params"]["item"]["id"] = json!("send-next");
         next["params"]["item"]["tool"] = json!("sendInput");
         p.accept(next);
-        p.accept(json!({"id":writes[0]["id"],"result":{"thread":{"id":"a","status":{"type":"idle"},"turns":[{"id":"old","status":"completed"}]}}}));
+        p.accept(
+            json!({"id":writes[0]["id"],"result":{"data":[{"id":"old","status":"completed"}]}}),
+        );
         assert_eq!(p.agents.records["a"].status, Status::Running);
+    }
+    #[test]
+    fn stale_pages_cannot_complete_a_different_turn_or_revive_a_completed_child() {
+        let mut p = codex();
+        p.accept(spawn("a"));
+        p.accept(
+            json!({"method":"turn/started","params":{"threadId":"a","turn":{"id":"current"}}}),
+        );
+        let writes = p.poll_subagents();
+        p.accept(
+            json!({"id":writes[0]["id"],"result":{"data":[{"id":"old","status":"completed"}]}}),
+        );
+        assert_eq!(p.agents.records["a"].status, Status::Running);
+        p.agents.last_poll = None;
+        let writes = p.poll_subagents();
+        p.accept(json!({"method":"turn/completed","params":{"threadId":"a","turn":{"id":"current","status":"completed"}}}));
+        p.accept(json!({"id":writes[0]["id"],"result":{"data":[{"id":"current","status":"inProgress"}]}}));
+        assert_eq!(p.agents.records["a"].status, Status::Completed);
     }
     #[test]
     fn subagent_claude_progress_end_and_out_of_order_start() {

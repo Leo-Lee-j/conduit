@@ -70,6 +70,88 @@ fn copied(cx: &mut VisualTestContext) -> String {
 }
 
 #[gpui_kit::test]
+fn session_data_opens_on_session_entry_and_respects_manual_changes(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let mut store = tool_store();
+    store
+        .usage_ledger
+        .observations
+        .push(crate::usage_ledger::Observation {
+            key: "session-data-test".into(),
+            session: 1,
+            workspace: store.workspaces[0].path.clone(),
+            provider: crate::app::Provider::Claude,
+            service: "cli".into(),
+            service_name: None,
+            model: None,
+            finished_at: 1,
+            input: Some(1_000),
+            cached: Some(800),
+            output: Some(100),
+            elapsed_ms: 1_000,
+            incomplete: false,
+        });
+    let (app, cx) = fixture(cx, store, PluginUi::new());
+    assert!(cx.element_bounds("session-data-panel").is_some());
+    assert!(cx.element_bounds("session-data-usage-summary").is_some());
+    assert!(cx.element_bounds("session-data-token-details").is_none());
+    click_labeled(cx, Role::Button, "Token 明细");
+    draw(cx);
+    assert!(cx.element_bounds("session-data-token-details").is_some());
+    cx.update(|window, cx| app.update(cx, |app, cx| app.open_usage(window, cx)));
+    draw(cx);
+    assert!(cx.element_bounds("session-data-panel").is_none());
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.select_document(crate::app::files::DocumentTab::Chat(1), window, cx);
+        })
+    });
+    draw(cx);
+    assert!(cx.element_bounds("session-data-panel").is_some());
+    click(cx, "close-session-data");
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            // Refreshes, document changes, and readonly changes stay in the same session.
+            app.writable = !app.writable;
+            app.sync_plugin_context();
+            assert!(!app.plugins.right_open());
+            cx.notify();
+        })
+    });
+    draw(cx);
+    assert!(cx.element_bounds("session-data-panel").is_none());
+    cx.update(|window, cx| app.update(cx, |app, cx| app.open_usage(window, cx)));
+    draw(cx);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.select_document(crate::app::files::DocumentTab::Chat(1), window, cx);
+        })
+    });
+    draw(cx);
+    assert!(cx.element_bounds("session-data-panel").is_none());
+    choose_tool(&app, cx, 1);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.writable = !app.writable;
+            app.sync_plugin_context();
+            assert!(app.plugins.right_is(builtins::TOOL_DETAILS));
+            cx.notify();
+        })
+    });
+    cx.update(|window, cx| app.update(cx, |app, cx| app.switch(1, Some(2), window, cx)));
+    draw(cx);
+    assert!(cx.element_bounds("session-data-panel").is_some());
+    assert!(cx.element_bounds("session-data-token-details").is_none());
+    cx.update(|_, cx| assert!(app.read(cx).plugins.right_is(builtins::SESSION_DATA)));
+    assert!(cx.element_bounds("session-data-empty-state").is_some());
+    assert!(cx.element_bounds("session-data-usage-summary").is_none());
+    cx.update(|window, cx| app.update(cx, |app, cx| app.switch(0, Some(1), window, cx)));
+    draw(cx);
+    assert!(cx.element_bounds("session-data-panel").is_some());
+    assert!(cx.element_bounds("session-data-token-details").is_some());
+}
+
+#[gpui_kit::test]
 fn tool_state_isolated_across_sessions_workspaces_and_stale_clicks(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, tool_store(), PluginUi::new());
@@ -89,10 +171,10 @@ fn tool_state_isolated_across_sessions_workspaces_and_stale_clicks(cx: &mut Test
             })
         });
         draw(cx);
-        assert!(cx.element_bounds("detail-empty").is_some());
+        assert!(cx.element_bounds("session-data-panel").is_some());
         // A click queued from the old chat cannot select the new session's same message key.
         choose_tool(&app, cx, 1);
-        assert!(cx.element_bounds("detail-empty").is_some());
+        assert!(cx.element_bounds("session-data-panel").is_some());
         choose_tool(&app, cx, session);
         assert!(copied(cx).contains(&format!("session {session} output")));
         cx.update(|_, cx| {
@@ -105,6 +187,7 @@ fn tool_state_isolated_across_sessions_workspaces_and_stale_clicks(cx: &mut Test
     cx.update(|window, cx| app.update(cx, |app, cx| app.switch(0, Some(1), window, cx)));
     draw(cx);
     assert_eq!(scroll.offset().y, px(-150.));
+    choose_tool(&app, cx, 1);
     assert!(copied(cx).contains("session 1 output"));
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
@@ -219,7 +302,8 @@ fn rail_routes_two_owners_and_rejects_unbound_stale_revoked_views(cx: &mut TestA
     });
     cx.update(|window, cx| app.update(cx, |app, cx| app.switch(1, Some(2), window, cx)));
     draw(cx);
-    assert!(cx.element_bounds("rendered-test.beta.view-2").is_some());
+    assert!(cx.element_bounds("session-data-panel").is_some());
+    open(&app, cx, "test.beta.view");
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
             assert!(!app.dispatch_right_view(&request, window, cx));

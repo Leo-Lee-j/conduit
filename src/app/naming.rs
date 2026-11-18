@@ -143,7 +143,7 @@ impl ConduitApp {
                         );
                         naming.runtime.cancel();
                     }
-                    Ok(Event::ErrorBanner(error)) => {
+                    Ok(Event::Failure(error)) => {
                         naming.error = Some(naming_failure_text(&error));
                         cx.notify();
                     }

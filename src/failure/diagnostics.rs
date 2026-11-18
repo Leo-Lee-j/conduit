@@ -95,22 +95,23 @@ pub(super) fn fingerprint(raw: &str) -> String {
     }
 }
 
-fn status_code(raw: &str) -> Option<u16> {
-    fn visit(value: &Value) -> Option<u16> {
-        let object = value.as_object()?;
-        for key in ["httpStatusCode", "status_code", "status", "code"] {
-            if let Some(code) = object.get(key).and_then(Value::as_u64)
-                && (400..600).contains(&code)
-            {
-                return Some(code as u16);
-            }
+fn value_status_code(value: &Value) -> Option<u16> {
+    let object = value.as_object()?;
+    for key in ["httpStatusCode", "status_code", "status", "code"] {
+        if let Some(code) = object.get(key).and_then(Value::as_u64)
+            && (400..600).contains(&code)
+        {
+            return Some(code as u16);
         }
-        object.values().find_map(visit)
     }
+    object.values().find_map(value_status_code)
+}
+
+fn status_code(raw: &str) -> Option<u16> {
     serde_json::from_str::<Value>(raw)
         .ok()
         .as_ref()
-        .and_then(visit)
+        .and_then(value_status_code)
         .or_else(|| {
             let text = message(raw).to_ascii_lowercase();
             let words = text
@@ -143,8 +144,11 @@ pub(super) enum Cause {
 
 impl Cause {
     pub(super) fn detect(raw: &str) -> Self {
+        Self::detect_with_status(raw, status_code(raw))
+    }
+
+    fn detect_with_status(raw: &str, code: Option<u16>) -> Self {
         let text = raw.to_ascii_lowercase();
-        let code = status_code(raw);
         if code == Some(401)
             || text.contains("invalid_api_key")
             || text.contains("invalid api key")
@@ -258,13 +262,54 @@ pub(super) fn retry_message(raw: &str) -> Option<conduit::i18n::Message> {
         .as_ref()
         .and_then(|v| v.get("willRetry").or_else(|| payload(v).get("willRetry")))
         .and_then(Value::as_bool);
-    let message = message(raw);
-    let prefix = retry_prefix(&message);
+    retry_presentation(
+        explicit,
+        &message(raw),
+        Cause::detect(raw) == Cause::Connection,
+    )
+}
+
+pub(super) fn retry_value(value: &Value) -> (Option<bool>, Option<conduit::i18n::Message>) {
+    let explicit = value
+        .get("willRetry")
+        .or_else(|| payload(value).get("willRetry"))
+        .and_then(Value::as_bool);
+    let error = payload(value);
+    let message = error
+        .as_str()
+        .or_else(|| error.get("message").and_then(Value::as_str))
+        .unwrap_or_default();
+    let native_cause = error
+        .get("codexErrorInfo")
+        .and_then(|info| {
+            info.as_str()
+                .or_else(|| info.as_object()?.keys().next().map(String::as_str))
+        })
+        .unwrap_or_default();
+    let cause_hint = format!("{message} {native_cause}");
+    (
+        explicit,
+        retry_presentation(
+            explicit,
+            message,
+            Cause::detect_with_status(
+                &cause_hint,
+                value_status_code(value).or_else(|| status_code(message)),
+            ) == Cause::Connection,
+        ),
+    )
+}
+
+fn retry_presentation(
+    explicit: Option<bool>,
+    message: &str,
+    reconnect: bool,
+) -> Option<conduit::i18n::Message> {
+    let prefix = retry_prefix(message);
     if explicit == Some(false) || explicit.is_none() && prefix.is_none() {
         return None;
     }
     let attempt = prefix.and_then(|prefix| prefix.attempt);
-    let reconnect = Cause::detect(raw) == Cause::Connection;
     Some(if let Some((current, total)) = attempt {
         conduit::i18n::Message::new(
             if reconnect {

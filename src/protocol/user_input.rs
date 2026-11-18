@@ -241,6 +241,11 @@ mod tests {
                     thread["params"]["config"]["features.default_mode_request_user_input"],
                     enabled
                 );
+                // Conduit silences the CLI warning only for the flag it sets itself.
+                assert_eq!(
+                    thread["params"]["config"].get("suppress_unstable_features_warning"),
+                    enabled.then_some(&json!(true))
+                );
                 let approval = request(&mut protocol);
                 assert_eq!(
                     protocol.automatic_approval(&approval),

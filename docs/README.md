@@ -22,6 +22,7 @@
 | --- | --- |
 | [参与贡献](../CONTRIBUTING.zh-CN.md) | 开发环境、提交前检查和文档维护规则 |
 | [架构](architecture.md) | 产品边界、模块职责与主要数据流 |
+| [手机远程控制设计](design/mobile-remote-control.md) | 待实现：外网手机控制、配置接口、恢复协议和分阶段验收 |
 | [应用背景图](background-images.md) | Wallhaven 免 Key 接入、渲染分层、缓存预算与性能验收 |
 | [会话与存储](sessions.md) | 并发、发送确认、正文按需加载、历史导入及恢复 |
 | [CLI 适配器](cli-adapters.md) | 接入契约、进程管理、OpenCode 特有行为 |

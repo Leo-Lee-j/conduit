@@ -1,4 +1,4 @@
-//! Self-managed GitLab REST snapshots through the user's authenticated glab CLI.
+//! GitLab (including self-managed) REST snapshots over `/api/v4`.
 use super::*;
 use anyhow::ensure;
 use forge::{Forge, Target};
@@ -8,7 +8,8 @@ use threads::{Author, CommentState, Commit, DiffSide, Snapshot, Subject, Thread}
 const PAGE_SIZE: usize = 25;
 const MAX_PAGES: usize = 8;
 
-pub(super) fn executable() -> Result<PathBuf> {
+/// Optional glab install, used only as a last-resort source of an existing sign-in.
+pub(super) fn executable() -> Option<PathBuf> {
     let mut candidates: Vec<_> = std::env::var_os("PATH")
         .map(|p| {
             std::env::split_paths(&p)
@@ -20,10 +21,7 @@ pub(super) fn executable() -> Result<PathBuf> {
     if let Some(root) = std::env::var_os("ProgramFiles") {
         candidates.push(PathBuf::from(root).join("glab/glab.exe"));
     }
-    candidates
-        .into_iter()
-        .find(|p| p.is_file())
-        .context(conduit::i18n::text("gitlab.missing_cli"))
+    candidates.into_iter().find(|p| p.is_file())
 }
 
 pub(super) fn encode(value: &str) -> String {
@@ -80,50 +78,6 @@ pub(super) fn identity(value: &str) -> Result<Identity> {
     })
 }
 
-fn api_args(host: &str, endpoint: &str, method: &str) -> Vec<String> {
-    vec![
-        "api".into(),
-        endpoint.into(),
-        "--hostname".into(),
-        host.into(),
-        "--method".into(),
-        method.into(),
-    ]
-}
-
-struct Api<'a> {
-    cli: PathBuf,
-    workspace: &'a Path,
-    target: &'a Target,
-    cancel: &'a AtomicBool,
-    started: Instant,
-    bytes: usize,
-}
-
-impl Api<'_> {
-    fn get(&mut self, endpoint: &str) -> Result<Value> {
-        ensure!(
-            self.started.elapsed() < Duration::from_secs(90),
-            "{}",
-            conduit::i18n::text("github.timeout")
-        );
-        let args = api_args(&self.target.host, endpoint, "GET");
-        let json = query(
-            &self.cli,
-            &args.iter().map(String::as_str).collect::<Vec<_>>(),
-            self.workspace,
-            self.cancel,
-        )?;
-        self.bytes = self.bytes.saturating_add(json.len());
-        ensure!(
-            self.bytes <= 8 * 1024 * 1024,
-            "{}",
-            conduit::i18n::text("github.output_limit")
-        );
-        Ok(serde_json::from_str(&json)?)
-    }
-}
-
 fn pages(
     endpoint: &str,
     max_pages: usize,
@@ -178,7 +132,7 @@ fn parse_mr(value: &Value, project_url: &str, branch: &str, source: u64) -> Resu
     ensure!(threads::oid(&head), "Invalid MR head");
     Ok(PullRequest {
         forge: Forge::Gitlab,
-        cli_host: None,
+        api_host: None,
         number,
         title: text(value, "title"),
         url,
@@ -563,7 +517,7 @@ fn snapshot_request(
         conduit::i18n::text("github.threads_changed")
     );
     pr.local_head = local_head.into();
-    pr.cli_host = Some(target.host.clone());
+    pr.api_host = Some(target.host.clone());
     pr.fetched_at = timestamp();
     Ok(pr)
 }
@@ -578,7 +532,6 @@ pub(super) fn load_request(
     number: Option<u64>,
     cancel: &AtomicBool,
 ) -> Result<PullRequest> {
-    let cli = executable()?;
     let git = crate::git::resolve_git().context(conduit::i18n::text("github.missing_git"))?;
     let head = query(&git, &["rev-parse", "HEAD"], workspace, cancel)?;
     let branch = query(
@@ -587,15 +540,8 @@ pub(super) fn load_request(
         workspace,
         cancel,
     )?;
-    let mut api = Api {
-        cli,
-        workspace,
-        target,
-        cancel,
-        started: Instant::now(),
-        bytes: 0,
-    };
-    let mut fetch = |endpoint: &str| api.get(endpoint);
+    let mut client = api::Client::new(Forge::Gitlab, &target.host, workspace, cancel);
+    let mut fetch = |endpoint: &str| client.get(endpoint);
     let pr = if number.is_some() {
         snapshot_request(target, branch.trim(), head.trim(), number, &mut fetch)?
     } else {
@@ -616,53 +562,56 @@ pub(super) fn load_request(
     Ok(pr)
 }
 
-pub(super) fn write_arguments(
+pub(super) fn write_request(
     expected: &PullRequest,
     action: &write::Action,
-) -> Result<Vec<String>> {
+) -> Result<write::Request> {
     let target = identity(&expected.url)?;
+    let host = expected
+        .api_host
+        .as_deref()
+        .context("Missing GitLab authentication host")?;
     let base = format!(
-        "projects/{}/merge_requests/{}",
+        "{}/projects/{}/merge_requests/{}",
+        api::rest_base(Forge::Gitlab, host),
         encode(&target.project),
         target.number
     );
-    let (path, method, body) = match action {
-        write::Action::Comment(body) => (format!("{base}/notes"), "POST", Some(body)),
+    let valid_thread = |thread: &threads::Thread| {
+        !thread.id.is_empty() && thread.id.bytes().all(|b| b.is_ascii_alphanumeric())
+    };
+    let (url, method, body) = match action {
+        write::Action::Comment(body) => (
+            format!("{base}/notes"),
+            api::Method::Post,
+            serde_json::json!({ "body": body }),
+        ),
         write::Action::Reply { thread, body } => {
-            ensure!(
-                !thread.id.is_empty() && thread.id.bytes().all(|b| b.is_ascii_alphanumeric()),
-                "Invalid discussion ID"
-            );
+            ensure!(valid_thread(thread), "Invalid discussion ID");
             (
                 format!("{base}/discussions/{}/notes", thread.id),
-                "POST",
-                Some(body),
+                api::Method::Post,
+                serde_json::json!({ "body": body }),
             )
         }
         write::Action::Resolve(thread) => {
             ensure!(
-                thread.resolvable
-                    && !thread.id.is_empty()
-                    && thread.id.bytes().all(|b| b.is_ascii_alphanumeric()),
+                thread.resolvable && valid_thread(thread),
                 "Discussion cannot be resolved"
             );
-            (format!("{base}/discussions/{}", thread.id), "PUT", None)
+            (
+                format!("{base}/discussions/{}", thread.id),
+                api::Method::Put,
+                serde_json::json!({ "resolved": true }),
+            )
         }
     };
-    let mut args = api_args(
-        expected
-            .cli_host
-            .as_deref()
-            .context("Missing GitLab authentication host")?,
-        &path,
+    Ok(write::Request {
+        host: host.into(),
         method,
-    );
-    if let Some(body) = body {
-        args.extend(["--raw-field".into(), format!("body={body}")]);
-    } else {
-        args.extend(["--field".into(), "resolved=true".into()]);
-    }
-    Ok(args)
+        url,
+        body,
+    })
 }
 
 pub(super) fn write_result(json: &str, action: &write::Action) -> Result<()> {

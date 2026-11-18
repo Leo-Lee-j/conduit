@@ -68,9 +68,9 @@ $env:CONDUIT_UPDATE_PUBLIC_KEY = '<Base64 公钥>'
 
 1. 先合并/提交功能与版本号变更，更新 `Cargo.toml` 和 `Cargo.lock`，运行项目验证。
 2. 创建并推送与 Cargo 版本完全一致的稳定标签，格式为 `vX.Y.Z`。推送后的标签不可移动；构建失败时修复代码并提升版本号发布新标签。
-3. `Release Windows` workflow 并行验证标签提交和构建安装包。验证只复用该提交在本仓库 `ci.yml` 中由分支 push 触发的最新 CI：已成功则跳过重复检查，尚未结束则最多等待 60 分钟，失败或取消则阻止发布；没有对应 CI 时通过 `scripts/check-core.ps1` 补跑相同的核心检查。手动发布旧标签也按标签实际提交查询，不使用主分支最新提交的 CI 结果。
+3. `Release Windows` workflow 并行验证标签提交和构建安装包。验证只复用该提交在本仓库 `ci.yml` 中由分支 push 触发的最新 CI：已成功则跳过重复检查，尚未结束则最多等待 60 分钟，失败则阻止发布；CI 被取消或没有对应记录时，在标签提交上通过 `scripts/check-core.ps1` 补跑相同的核心检查。手动发布旧标签也按标签实际提交查询。
 4. 打包 job 在 `windows-2025` 上使用 Rust 1.99.1 构建，安装 NSIS，打包主程序、更新助手及 MSVC CRT，并预编译清单签名工具。验证和打包均成功且提交一致后，发布 job 下载本次运行的构建产物，生成 Release notes，签名清单，再将安装包、SHA-256、`update.json`、`update.json.sig` 上传到 draft Release。
-5. 所有资产上传并通过大小校验后，才发布并设置 Latest。失败保留 draft；可手动指定同一标签重跑。已经发布的版本不能被此 workflow 覆盖，修复请使用新版本。
+5. 所有资产上传并通过大小校验后，才发布并设置 Latest。失败保留 draft。若发布工作流已在 `main` 上修复，到 Actions → `Release Windows` → `Run workflow`，选择 `main` 并在 `tag` 中填原标签。这样会用新版工作流验证和构建原标签提交；重跑旧的标签 push 任务仍会使用原来的工作流版本。已经发布的版本不能被此 workflow 覆盖，修复请使用新版本。
 
 Release notes 根据 `.github/release.yml` 的 PR 标签分类。没有 PR 记录时，尚无已发布版本的首版使用 README 功能简介，后续版本使用上一个已发布版本标签以来的提交记录。仅有失败构建的标签不算已发布版本。预发布标签目前会被拒绝；首版只支持稳定版，不做 beta 通道或差分包。仓库必须允许 Actions 发布 Release，并为 `release` Environment 配置所需权限。若配置了 Environment 审批，GitHub 会在发布 job 前等待维护者审批。
 

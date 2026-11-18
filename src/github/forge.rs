@@ -1,4 +1,4 @@
-//! Select the repository's hosting service without probing unrelated hosts.
+//! Select the repository's hosting service. Only the repository's own host is ever probed.
 use super::*;
 use anyhow::ensure;
 
@@ -42,6 +42,15 @@ fn valid_project(project: &str) -> bool {
         })
 }
 
+fn valid_host(host: &str) -> bool {
+    host.len() <= 255
+        && url::Url::parse(&format!("https://{host}/")).is_ok_and(|url| {
+            url.host_str().is_some()
+                && url[url::Position::BeforeHost..url::Position::AfterPort]
+                    .eq_ignore_ascii_case(host)
+        })
+}
+
 pub fn parse_remote(remote: &str) -> Result<Target> {
     ensure!(
         !remote.contains(['\n', '\r', '\0', '\\']),
@@ -65,7 +74,7 @@ pub fn parse_remote(remote: &str) -> Result<Target> {
     let host = if parsed.scheme() != "ssh" {
         parsed[url::Position::BeforeHost..url::Position::AfterPort].to_owned()
     } else {
-        // An SSH port is not the web/API port. glab's api_host handles that separately.
+        // An SSH port is not the web/API port; API requests use HTTPS on the default port.
         hostname.to_owned()
     };
     let project = parsed.path().trim_start_matches('/').trim_end_matches('/');
@@ -139,8 +148,22 @@ pub fn target(workspace: &Path, cancel: &AtomicBool) -> Result<Target> {
     let urls: Vec<_> = urls.lines().collect();
     ensure!(urls.len() == 1, "Multiple remote URLs are ambiguous");
     let mut target = parse_remote(urls[0])?;
+    // SSH host aliases or a separate web/API host: `git config conduit.forgeHost host[:port]`.
+    let host = config(&git, workspace, "conduit.forgeHost", cancel)?;
+    if !host.is_empty() {
+        ensure!(valid_host(&host), "Invalid conduit.forgeHost");
+        target.host = host;
+    }
     match config(&git, workspace, "conduit.forge", cancel)?.as_str() {
-        "" | "auto" => {}
+        "" | "auto" => {
+            // Self-hosted GitLab often lacks a `gitlab` label in its hostname.
+            if target.forge == Forge::Github
+                && !target.host.eq_ignore_ascii_case("github.com")
+                && api::is_gitlab(&target.host)
+            {
+                target.forge = Forge::Gitlab;
+            }
+        }
         "github" => target.forge = Forge::Github,
         "gitlab" => target.forge = Forge::Gitlab,
         _ => bail!(conduit::i18n::text("forge.invalid_provider")),
@@ -203,6 +226,16 @@ mod tests {
         ]);
         run(&["config", "branch.topic.pushRemote", "fork"]);
         assert_eq!(target(&root, &cancel).unwrap().project, "me/repo");
+        run(&["config", "conduit.forgeHost", "api.code.example.test:8443"]);
+        assert_eq!(
+            target(&root, &cancel).unwrap().host,
+            "api.code.example.test:8443"
+        );
+        for invalid in ["a/b", "user@host", "host?x"] {
+            run(&["config", "conduit.forgeHost", invalid]);
+            assert!(target(&root, &cancel).is_err(), "{invalid}");
+        }
+        run(&["config", "--unset", "conduit.forgeHost"]);
         run(&["config", "--unset", "branch.topic.pushRemote"]);
         select(&root, None, &cancel).unwrap();
         assert_eq!(target(&root, &cancel).unwrap().project, "team/sub/repo");

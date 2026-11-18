@@ -40,19 +40,18 @@ Conduit 当前面向 **Windows x64**。修改 Rust 代码需要：
 git clone https://github.com/Leo-Lee-j/conduit.git
 cd conduit
 git switch -c fix/describe-your-change
-$env:CONDUIT_DATA_DIR = Join-Path (Get-Location).Path 'target/dev-data'
 cargo run --locked
 ```
 
-`CONDUIT_DATA_DIR` 将开发实例的 Conduit 数据与日常安装版分开保存，但不会隔离所选 CLI 的配置或打开的工作区文件。测试文件修改和 Git 操作时，请使用临时项目或独立 Git worktree。
+Debug 构建默认使用 `%LOCALAPPDATA%\Conduit-dev`，Release 构建默认使用 `%LOCALAPPDATA%\Conduit`，因此 `cargo run --locked` 可以与已安装的正式版同时运行。每个数据目录只允许一个实例。`CONDUIT_DATA_DIR` 可覆盖任一默认目录，例如为不同检出目录设置 `$env:CONDUIT_DATA_DIR = Join-Path (Get-Location).Path 'target/dev-data'`。数据目录隔离不会隔离所选 CLI 的配置或打开的工作区文件。测试文件修改和 Git 操作时，请使用临时项目或独立 Git worktree。
 
-如需直接进入设置，保留上述数据目录设置并运行：
+如需直接进入设置，运行：
 
 ```powershell
 cargo run --locked -- --settings
 ```
 
-该环境变量对当前 PowerShell 会话中启动的命令生效。排查启动失败时，请保留终端及其输出。
+如果设置了该环境变量，它对当前 PowerShell 会话中启动的命令生效。排查启动失败时，请保留终端及其输出。
 
 ## 聚焦修改范围
 

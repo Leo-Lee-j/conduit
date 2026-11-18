@@ -136,7 +136,7 @@ use sessions::*;
 use settings::*;
 use state::*;
 use theme::*;
-pub(crate) use theme::{install_theme_packs, set_palette};
+pub(crate) use theme::{apply_theme, install_theme_packs};
 use tools::*;
 use typography::*;
 
@@ -235,6 +235,8 @@ pub struct ConduitApp {
     ui_font_select: Entity<SelectState<SearchableVec<FontChoice>>>,
     chat_font_select: Entity<SelectState<SearchableVec<FontChoice>>>,
     code_font_select: Entity<SelectState<SearchableVec<FontChoice>>>,
+    light_theme_select: Entity<SelectState<SearchableVec<ThemeChoice>>>,
+    dark_theme_select: Entity<SelectState<SearchableVec<ThemeChoice>>>,
     /// The theme's original UI family, also the independent chat default.
     default_ui_font: SharedString,
     /// The theme's platform monospace family, restored when no code font is set.
@@ -373,8 +375,20 @@ impl ConduitApp {
             AppearanceMode::Light => gpui_kit::component::ThemeMode::Light,
             AppearanceMode::Dark => gpui_kit::component::ThemeMode::Dark,
         };
-        set_palette(initial_mode);
-        gpui_kit::component::Theme::change(initial_mode, Some(window), cx);
+        apply_theme(
+            initial_mode,
+            &store.ui.light_theme,
+            &store.ui.dark_theme,
+            cx,
+        );
+        store.ui.light_theme = gpui_kit::component::Theme::global(cx)
+            .light_theme
+            .name
+            .to_string();
+        store.ui.dark_theme = gpui_kit::component::Theme::global(cx)
+            .dark_theme
+            .name
+            .to_string();
         // GPUI panics while laying out a family the machine does not have, so a
         // saved family that has since been uninstalled falls back to the default.
         let mut installed_fonts = cx.text_system().all_font_names();
@@ -429,6 +443,52 @@ impl ConduitApp {
         let ui_font_index = font_index(&store.ui.ui_font_family);
         let chat_font_index = font_index(&store.ui.chat_font_family);
         let code_font_index = font_index(&store.ui.code_font_family);
+        let theme_select = |mode, name: &str, window: &mut Window, cx: &mut Context<Self>| {
+            let choices = theme_choices(mode, cx);
+            let index = choices
+                .iter()
+                .position(|theme| theme.name.as_ref() == name)
+                .unwrap_or(0);
+            cx.new(|cx| {
+                SelectState::new(
+                    SearchableVec::new(choices),
+                    Some(IndexPath::new(index)),
+                    window,
+                    cx,
+                )
+                .searchable(true)
+            })
+        };
+        let light_theme_select = theme_select(
+            gpui_kit::component::ThemeMode::Light,
+            &store.ui.light_theme,
+            window,
+            cx,
+        );
+        let dark_theme_select = theme_select(
+            gpui_kit::component::ThemeMode::Dark,
+            &store.ui.dark_theme,
+            window,
+            cx,
+        );
+        let light_theme_subscription = cx.subscribe_in(
+            &light_theme_select,
+            window,
+            |this, _, event: &SelectEvent<SearchableVec<ThemeChoice>>, window, cx| {
+                if let SelectEvent::Confirm(Some(name)) = event {
+                    this.select_theme(gpui_kit::component::ThemeMode::Light, name, window, cx);
+                }
+            },
+        );
+        let dark_theme_subscription = cx.subscribe_in(
+            &dark_theme_select,
+            window,
+            |this, _, event: &SelectEvent<SearchableVec<ThemeChoice>>, window, cx| {
+                if let SelectEvent::Confirm(Some(name)) = event {
+                    this.select_theme(gpui_kit::component::ThemeMode::Dark, name, window, cx);
+                }
+            },
+        );
         let ui_font_select = cx.new(|cx| {
             SelectState::new(
                 SearchableVec::new(font_choices(conduit::i18n::text_static(
@@ -737,6 +797,8 @@ impl ConduitApp {
             ui_font_select,
             chat_font_select,
             code_font_select,
+            light_theme_select,
+            dark_theme_select,
             default_ui_font,
             default_mono_font,
             next_id,
@@ -773,6 +835,8 @@ impl ConduitApp {
                 ui_font_subscription,
                 chat_font_subscription,
                 code_font_subscription,
+                light_theme_subscription,
+                dark_theme_subscription,
             ],
             dirty: false,
             last_save: Instant::now(),

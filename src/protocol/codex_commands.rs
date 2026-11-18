@@ -105,6 +105,9 @@ mod tests {
     }
     #[test]
     fn command_startup_remains_pending_until_native_rpc_acknowledgement() {
+        // The catalog embeds localized summaries; a concurrent locale switch
+        // would make the prepared call look stale.
+        let _locale = crate::test_support::chinese();
         let mut p = command("compact");
         p.accept(json!({"id":1,"result":{}}));
         assert!(p.startup_pending());
@@ -115,6 +118,7 @@ mod tests {
     }
     #[test]
     fn native_discovery_sends_no_prompt_and_commands_use_explicit_rpcs() {
+        let _locale = crate::test_support::chinese();
         let mut discover =
             Protocol::new(Provider::Codex, "C:/repo".into(), "never send".into(), None)
                 .with_intent(RequestIntent::Discover);
@@ -137,6 +141,7 @@ mod tests {
     }
     #[test]
     fn compact_ack_is_not_completion_and_other_thread_items_are_ignored() {
+        let _locale = crate::test_support::chinese();
         let mut protocol = command("compact");
         protocol.accept(json!({"id":2,"result":{"thread":{"id":"thread"}}}));
         assert!(!protocol.accept(json!({"id":3,"result":{}})).done);

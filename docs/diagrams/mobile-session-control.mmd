@@ -1,28 +1,40 @@
-%% Proposed architecture; not implemented. Research date: 2026-11-10.
-%%{init: {"theme":"base","themeVariables":{"background":"#ffffff","fontFamily":"Arial, sans-serif","fontSize":"16px","clusterBkg":"#f8fafc","clusterBorder":"#cbd5e1","lineColor":"#475569"},"flowchart":{"nodeSpacing":28,"rankSpacing":32,"wrappingWidth":230}}}%%
+%% Proposed architecture; not implemented. Design baseline: 2026-11-18.
+%%{init: {"theme":"base","themeVariables":{"background":"#ffffff","fontFamily":"Arial, sans-serif","fontSize":"16px","clusterBkg":"#f8fafc","clusterBorder":"#cbd5e1","lineColor":"#475569"},"flowchart":{"nodeSpacing":25,"rankSpacing":32,"wrappingWidth":240}}}%%
 flowchart TB
-    PHONE["Mobile Web / PWA"]
-    NETWORK["Private HTTPS<br/>or managed tunnel"]
-    subgraph HOST["Desktop application — proposed architecture"]
-        GATEWAY["Remote gateway<br/>Pairing and access"]
-        COMMANDS["Targeted commands<br/>Session, run, ticket"]
-        DESKTOP["Existing desktop UI"]
-        CORE["Session runtime<br/>Save, approve, cancel"]
-        EVENTS["State projection<br/>Snapshot and replay"]
-        STORE[("Local storage<br/>One writer")]
-        CLI["CLI adapters<br/>Local execution"]
+    PHONE["Mobile Web / PWA<br/>Independent selection and drafts"]
+    NETWORK["Tailscale Serve<br/>Tailnet HTTPS, first release"]
+    FUTURE["Future relay<br/>Separate design and validation"]
+    subgraph HOST["Conduit desktop process — proposed architecture"]
+        subgraph NET["Network runtime — loopback listener"]
+            GATEWAY["REST + SSE gateway<br/>Pairing, scopes, CSRF, operations"]
+            EVENTS["Sanitized projection<br/>Snapshot, epoch, seq, replay"]
+            ACCESS[("Access metadata<br/>Device token hashes and grants")]
+        end
+        COMMANDS["Bounded command bridge<br/>Target IDs, versions, run identity"]
+        subgraph UI["GPUI owner thread"]
+            DESKTOP["Existing desktop UI"]
+            CORE["Shared business commands<br/>Session and configuration validation"]
+            RUN["Existing ChatRuntime<br/>Save barrier, approval, cancellation"]
+        end
+        STORE[("Existing persistence<br/>Single writer and SaveReceipt")]
+        CLI["Existing CLI adapters<br/>Local execution"]
     end
     PHONE <-->|"Same-origin HTTPS"| NETWORK
-    NETWORK <-->|"Authenticated connection"| GATEWAY
+    NETWORK <-->|"HTTP to loopback"| GATEWAY
+    FUTURE -.->|"Adapter boundary"| GATEWAY
+    GATEWAY <--> ACCESS
     GATEWAY -->|"Typed commands"| COMMANDS
-    DESKTOP --> COMMANDS
-    COMMANDS --> CORE
-    CORE <-->|"Save before launch"| STORE
-    CORE <-->|"Existing engine protocols"| CLI
-    CORE -->|"Merged state"| DESKTOP
-    CORE --> EVENTS
-    EVENTS -->|"SSE and snapshots"| GATEWAY
+    COMMANDS -->|"Revalidate on execution"| CORE
+    DESKTOP --> CORE
+    CORE <-->|"Save and receipt"| STORE
+    CORE -->|"Release after save"| RUN
+    RUN <--> CLI
+    RUN -->|"Existing event consumer"| CORE
+    CORE -->|"Merged state commits"| EVENTS
+    EVENTS -->|"Snapshots and replay"| GATEWAY
     classDef proposed fill:#e8f4ff,stroke:#2563a6,color:#172b4d;
     classDef existing fill:#f1f5f9,stroke:#64748b,color:#172b4d;
-    class GATEWAY,COMMANDS,EVENTS,PHONE,NETWORK proposed;
-    class CORE,DESKTOP,STORE,CLI existing;
+    classDef future fill:#fff7ed,stroke:#c27a36,color:#7c4322,stroke-dasharray:5 5;
+    class GATEWAY,COMMANDS,EVENTS,PHONE,NETWORK,ACCESS,CORE proposed;
+    class RUN,DESKTOP,STORE,CLI existing;
+    class FUTURE future;

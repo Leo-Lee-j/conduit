@@ -94,9 +94,9 @@ fn main() {
     // Load once: the constructor would otherwise parse the same state file a
     // second time after the window already exists.
     let loaded = store::Store::load().map_err(|error| format!("{error:#}"));
-    let appearance = loaded
+    let ui = loaded
         .as_ref()
-        .map(|store| store.ui.appearance)
+        .map(|store| store.ui.clone())
         .unwrap_or_default();
     let language = loaded
         .as_ref()
@@ -114,15 +114,14 @@ fn main() {
             gpui_shell::init(cx);
             conduit::i18n::set_locale(&language);
             app::install_theme_packs(cx);
-            let initial_mode = match appearance {
+            let initial_mode = match ui.appearance {
                 store::AppearanceMode::System => {
                     gpui_kit::component::ThemeMode::from(cx.window_appearance())
                 }
                 store::AppearanceMode::Light => gpui_kit::component::ThemeMode::Light,
                 store::AppearanceMode::Dark => gpui_kit::component::ThemeMode::Dark,
             };
-            app::set_palette(initial_mode);
-            gpui_kit::component::Theme::change(initial_mode, None, cx);
+            app::apply_theme(initial_mode, &ui.light_theme, &ui.dark_theme, cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1200.), px(800.)), cx)),
                 window_min_size: Some(size(px(850.), px(500.))),
@@ -275,6 +274,12 @@ fn civil_from_days(z: i64) -> (i64, u64, u64) {
 }
 
 fn single_instance() -> anyhow::Result<std::os::windows::io::OwnedHandle> {
+    single_instance_for(&store::Store::path())
+}
+
+fn single_instance_for(
+    path: &std::path::Path,
+) -> anyhow::Result<std::os::windows::io::OwnedHandle> {
     use std::{
         hash::{Hash, Hasher},
         os::windows::io::{FromRawHandle, OwnedHandle},
@@ -284,15 +289,11 @@ fn single_instance() -> anyhow::Result<std::os::windows::io::OwnedHandle> {
         System::Threading::CreateMutexW,
     };
     let mut hash = std::collections::hash_map::DefaultHasher::new();
-    let path = store::Store::path();
     let parent = path.parent().unwrap();
-    let parent = parent.canonicalize().unwrap_or_else(|_| {
-        if parent.is_absolute() {
-            parent.to_path_buf()
-        } else {
-            std::env::current_dir().unwrap_or_default().join(parent)
-        }
-    });
+    // First launch must use the same canonical identity as later launches,
+    // even when the development data directory has not been created yet.
+    std::fs::create_dir_all(parent)?;
+    let parent = parent.canonicalize()?;
     parent
         .join("state.json")
         .to_string_lossy()
@@ -315,6 +316,32 @@ fn single_instance() -> anyhow::Result<std::os::windows::io::OwnedHandle> {
             ));
         }
         Ok(handle)
+    }
+}
+
+#[cfg(test)]
+mod instance_tests {
+    #[test]
+    fn fresh_data_directories_keep_independent_single_instance_locks() {
+        let root = std::env::temp_dir().join(format!(
+            "conduit-instance-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = root.join("dev/state.json");
+        assert!(!path.parent().unwrap().exists());
+        let first = super::single_instance_for(&path).unwrap();
+        assert!(super::single_instance_for(&path).is_err());
+        let other = super::single_instance_for(&root.join("release/state.json")).unwrap();
+        drop(first);
+        let reopened = super::single_instance_for(&path).unwrap();
+        drop((other, reopened));
+        std::fs::remove_dir(root.join("dev")).unwrap();
+        std::fs::remove_dir(root.join("release")).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
 }
 

@@ -9,7 +9,7 @@ const PAGE_SIZE: usize = 25;
 const RECENT_COMMENTS: usize = 20;
 
 // Keep the first comment (original code evidence) and the most recent replies.
-// Cursor pagination is explicit so neither gh nor a large PR can bypass our bounds.
+// Cursor pagination is explicit so a large PR cannot bypass our bounds.
 const QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!,$cursor:String) {
   repository(owner:$owner,name:$name) { pullRequest(number:$number) {
     url headRefOid reviewThreads(first:25,after:$cursor) {
@@ -119,8 +119,8 @@ pub struct Snapshot {
 
 pub(super) struct Repository {
     pub(super) host: String,
-    owner: String,
-    name: String,
+    pub(super) owner: String,
+    pub(super) name: String,
     pub(super) number: u64,
 }
 
@@ -333,44 +333,25 @@ fn collect(
     Ok(snapshot)
 }
 
-pub(super) fn load(
-    gh: &Path,
-    workspace: &Path,
-    pr: &PullRequest,
-    cancel: &AtomicBool,
-) -> Result<Snapshot> {
+pub(super) fn load(client: &mut api::Client, pr: &PullRequest) -> Result<Snapshot> {
     let repository = identity(&pr.url)?;
-    if repository.number != pr.number {
+    if repository.number != pr.number || !repository.host.eq_ignore_ascii_case(&client.host) {
         bail!("Invalid PR identity");
     }
-    let started = Instant::now();
     let requested_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_nanos()
         .min(u64::MAX as u128) as u64;
     let mut snapshot = collect(&pr.url, &pr.head, |cursor| {
-        if started.elapsed() >= Duration::from_secs(90) {
-            bail!(conduit::i18n::text("github.timeout"));
-        }
-        let mut args = vec![
-            "api".into(),
-            "graphql".into(),
-            "--hostname".into(),
-            repository.host.clone(),
-            "-f".into(),
-            format!("query={QUERY}"),
-            "-f".into(),
-            format!("owner={}", repository.owner),
-            "-f".into(),
-            format!("name={}", repository.name),
-            "-F".into(),
-            format!("number={}", repository.number),
-        ];
-        if let Some(cursor) = cursor {
-            args.extend(["-f".into(), format!("cursor={cursor}")]);
-        }
-        let args: Vec<_> = args.iter().map(String::as_str).collect();
-        query(gh, &args, workspace, cancel)
+        client.graphql(
+            QUERY,
+            serde_json::json!({
+                "owner": repository.owner,
+                "name": repository.name,
+                "number": repository.number,
+                "cursor": cursor,
+            }),
+        )
     })?;
     snapshot.fetched_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?

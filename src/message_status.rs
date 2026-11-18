@@ -22,8 +22,23 @@ macro_rules! status {
 }
 status!(ToolStatus {
     Running=>"运行中", Output=>"输出中", Completed=>"已完成",
-    Cancelled=>"已取消", Interrupted=>"已中断", MissingResult=>"未返回结果", Failed=>"已失败",
+    Cancelled=>"已取消", Interrupted=>"已中断", MissingResult=>"未返回结果", Failed=>"已失败", Denied=>"已拒绝",
 });
+impl ToolStatus {
+    /// Normalize provider wire states at the protocol boundary. The legacy
+    /// string representation on disk remains unchanged.
+    pub fn from_wire(value: &str) -> Self {
+        match value {
+            "running" | "pending" | "in_progress" | "inProgress" => Self::Running,
+            "completed" | "done" | "success" => Self::Completed,
+            "failed" | "error" | "aborted" => Self::Failed,
+            "declined" | "denied" => Self::Denied,
+            "cancelled" | "canceled" => Self::Cancelled,
+            "interrupted" => Self::Interrupted,
+            _ => value.into(),
+        }
+    }
+}
 status!(ApprovalStatus {
     Waiting=>"等待中", Allowed=>"已允许", Denied=>"已拒绝", Answered=>"已回答",
     Skipped=>"已跳过", Cancelled=>"已取消", Interrupted=>"已中断",

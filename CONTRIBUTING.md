@@ -40,19 +40,18 @@ Fork the repository if you do not have write access. The commands below clone up
 git clone https://github.com/Leo-Lee-j/conduit.git
 cd conduit
 git switch -c fix/describe-your-change
-$env:CONDUIT_DATA_DIR = Join-Path (Get-Location).Path 'target/dev-data'
 cargo run --locked
 ```
 
-`CONDUIT_DATA_DIR` keeps this development instance's Conduit data separate from your everyday installation. It does not isolate the selected CLI's configuration or the files in an opened workspace. Use a disposable project or a separate Git worktree when testing file changes or Git operations.
+Debug builds use `%LOCALAPPDATA%\Conduit-dev` by default; release builds use `%LOCALAPPDATA%\Conduit`. This lets `cargo run --locked` run alongside an installed release. Each data directory allows one instance. Set `CONDUIT_DATA_DIR` to override either default, for example `$env:CONDUIT_DATA_DIR = Join-Path (Get-Location).Path 'target/dev-data'` for a separate checkout. Data-directory isolation does not isolate the selected CLI's configuration or the files in an opened workspace. Use a disposable project or a separate Git worktree when testing file changes or Git operations.
 
-To open Settings directly, keep the same data-directory setting and run:
+To open Settings directly, run:
 
 ```powershell
 cargo run --locked -- --settings
 ```
 
-The environment variable applies to commands launched from the current PowerShell session. Keep the terminal and its output available while investigating startup failures.
+If set, the environment variable applies to commands launched from the current PowerShell session. Keep the terminal and its output available while investigating startup failures.
 
 ## Make a focused change
 

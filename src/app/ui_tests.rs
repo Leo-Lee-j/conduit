@@ -141,7 +141,7 @@ fn error_retry_keeps_partial_output_when_context_validation_fails(cx: &mut TestA
             super::apply_event(
                 &mut session,
                 "turn-0",
-                Event::ErrorBanner("API Error: 503 unavailable".into()),
+                Event::Failure("API Error: 503 unavailable".into()),
             );
             let before = serde_json::to_value(&session.messages).unwrap();
             let store = Store {
@@ -266,7 +266,7 @@ fn error_retry_clears_cards_before_repeated_failures_and_preserves_output(cx: &m
                 super::apply_event(
                     session,
                     &run.prefix,
-                    Event::ErrorBanner("API Error: 503 unavailable".into()),
+                    Event::Failure("API Error: 503 unavailable".into()),
                 );
                 assert_eq!(
                     serde_json::to_value(&session.messages[..kept.len()]).unwrap(),
@@ -1633,7 +1633,7 @@ fn commit_generation_recovers_from_transient_errors_and_preserves_edited_drafts(
             })
         });
         if let Some(error) = diagnostic {
-            sender.send(Event::ErrorBanner(error.into())).unwrap();
+            sender.send(Event::Failure(error.into())).unwrap();
         }
         sender
             .send(Event::Text {
@@ -1937,8 +1937,8 @@ fn cli_retry_progress_keeps_native_details_and_recovers_with_output(cx: &mut Tes
             "willRetry":true
         }}));
         for event in step.events {
-            if let Event::ErrorBanner(raw) = &event {
-                expected_detail = raw.clone();
+            if let Event::Failure(raw) = &event {
+                expected_detail = raw.diagnostic.clone();
             }
             sender.send(event).unwrap();
         }

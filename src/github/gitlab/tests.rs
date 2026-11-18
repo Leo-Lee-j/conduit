@@ -98,7 +98,7 @@ fn self_hosted_snapshot_keeps_pipeline_sha_comments_and_outdated_discussion_evid
     let pr = loaded();
     assert_eq!(pr.forge, Forge::Gitlab);
     assert_eq!(pr.forge.request_name(pr.number), "MR !7");
-    assert_eq!(pr.cli_host.as_deref(), Some("code.example.test"));
+    assert_eq!(pr.api_host.as_deref(), Some("code.example.test"));
     assert_eq!(pr.checks.len(), 3);
     assert!(pr.checks[0].name.contains("cccccccccccc"));
     assert_eq!(pr.checks[1].state, "FAILURE");
@@ -277,23 +277,22 @@ fn writes_pin_authentication_host_and_preserve_literal_bodies() {
         body: body.into(),
     };
     assert!(write::validate(&pr, &pr, &action).is_ok());
-    let args = write_arguments(&pr, &action).unwrap();
+    let request = write_request(&pr, &action).unwrap();
     assert_eq!(
-        args[1],
-        "projects/team%2Fsub%2Frepo/merge_requests/7/discussions/abc123/notes"
+        request.url,
+        "https://code.example.test/api/v4/projects/team%2Fsub%2Frepo/merge_requests/7/discussions/abc123/notes"
     );
-    assert_eq!(args[3], "code.example.test");
-    assert_eq!(args[5], "POST");
-    assert_eq!(args[6], "--raw-field");
-    assert_eq!(args[7], format!("body={body}"));
+    assert_eq!(request.host, "code.example.test");
+    assert_eq!(request.method, api::Method::Post);
+    assert_eq!(request.body, json!({ "body": body }));
     assert!(write_result(&json!({"id":100,"body":body}).to_string(), &action).is_ok());
     for invalid in ["{}", "[]", "{\"id\":100,\"body\":\"different\"}"] {
         assert!(write_result(invalid, &action).is_err());
     }
     let resolve = write::Action::Resolve(thread);
-    let args = write_arguments(&pr, &resolve).unwrap();
-    assert_eq!(args[5], "PUT");
-    assert_eq!(&args[6..], ["--field", "resolved=true"]);
+    let request = write_request(&pr, &resolve).unwrap();
+    assert_eq!(request.method, api::Method::Put);
+    assert_eq!(request.body, json!({ "resolved": true }));
     assert!(
         write_result(
             r#"{"id":"abc123","notes":[{"resolvable":true,"resolved":true}]}"#,
@@ -303,7 +302,7 @@ fn writes_pin_authentication_host_and_preserve_literal_bodies() {
     );
     assert!(write_result(r#"{"id":"other","notes":[]}"#, &resolve).is_err());
     let mut changed = pr.clone();
-    changed.cli_host = Some("other.test".into());
+    changed.api_host = Some("other.test".into());
     assert!(write::validate(&pr, &changed, &action).is_err());
     changed = pr.clone();
     changed.head = "d".repeat(40);

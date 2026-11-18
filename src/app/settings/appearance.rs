@@ -2,7 +2,16 @@
 
 use super::*;
 
-fn theme_options(selected: AppearanceMode, view: Entity<ConduitApp>, disabled: bool) -> AnyElement {
+#[cfg(all(test, feature = "ui-tests"))]
+mod tests;
+
+fn theme_options(
+    selected: AppearanceMode,
+    view: Entity<ConduitApp>,
+    disabled: bool,
+    cx: &App,
+) -> AnyElement {
+    let ui = &view.read(cx).store.ui;
     let theme_option = |mode: AppearanceMode,
                         label: &'static str,
                         detail: &'static str,
@@ -11,12 +20,17 @@ fn theme_options(selected: AppearanceMode, view: Entity<ConduitApp>, disabled: b
      -> AnyElement {
         let view = view.clone();
         let active = selected == mode;
-        let preview = palette_for_mode(match mode {
+        let preview_mode = match mode {
             AppearanceMode::Light => gpui_kit::component::ThemeMode::Light,
             AppearanceMode::Dark => gpui_kit::component::ThemeMode::Dark,
-            AppearanceMode::System if is_dark_mode() => gpui_kit::component::ThemeMode::Dark,
-            AppearanceMode::System => gpui_kit::component::ThemeMode::Light,
-        });
+            AppearanceMode::System => gpui_kit::component::ThemeMode::from(cx.window_appearance()),
+        };
+        let name = if preview_mode.is_dark() {
+            &ui.dark_theme
+        } else {
+            &ui.light_theme
+        };
+        let preview = theme_preview(name, preview_mode, cx);
         let label_color = if disabled {
             palette().faint
         } else {
@@ -184,6 +198,45 @@ enum FontTarget {
     Code,
 }
 
+fn theme_select_field(
+    view: Entity<ConduitApp>,
+    mode: gpui_kit::component::ThemeMode,
+    disabled: bool,
+) -> SettingField<SharedString> {
+    SettingField::render(move |_, _, cx| {
+        let app = view.read(cx);
+        let (select, selector, label) = if mode.is_dark() {
+            (
+                &app.dark_theme_select,
+                "appearance-dark-theme",
+                conduit::i18n::text_static("settings.appearance.dark_theme"),
+            )
+        } else {
+            (
+                &app.light_theme_select,
+                "appearance-light-theme",
+                conduit::i18n::text_static("settings.appearance.light_theme"),
+            )
+        };
+        div()
+            .debug_selector(move || selector.into())
+            .w(px(224.))
+            .min_w_0()
+            .child(
+                Select::new(select)
+                    .with_size(Size::Small)
+                    .w_full()
+                    .menu_width(px(280.))
+                    .menu_max_h(px(320.))
+                    .search_placeholder(conduit::i18n::text_static(
+                        "settings.appearance.search_themes",
+                    ))
+                    .accessibility_label(label)
+                    .disabled(disabled),
+            )
+    })
+}
+
 fn font_select_field(
     view: Entity<ConduitApp>,
     target: FontTarget,
@@ -229,16 +282,46 @@ fn font_select_field(
 }
 
 impl ConduitApp {
+    pub(in crate::app) fn select_theme(
+        &mut self,
+        mode: gpui_kit::component::ThemeMode,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.writable
+            || self.closing
+            || !gpui_kit::component::ThemeRegistry::global(cx)
+                .themes()
+                .get(name)
+                .is_some_and(|theme| theme.mode == mode)
+        {
+            return;
+        }
+        let selected = if mode.is_dark() {
+            &mut self.store.ui.dark_theme
+        } else {
+            &mut self.store.ui.light_theme
+        };
+        if selected != name {
+            *selected = name.into();
+            self.persist();
+        }
+        self.apply_appearance(window, cx);
+    }
+
     pub(in crate::app) fn apply_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mode = match self.store.ui.appearance {
             AppearanceMode::System => gpui_kit::component::ThemeMode::from(window.appearance()),
             AppearanceMode::Light => gpui_kit::component::ThemeMode::Light,
             AppearanceMode::Dark => gpui_kit::component::ThemeMode::Dark,
         };
-        set_palette(mode);
-        if gpui_kit::component::Theme::global(cx).mode != mode {
-            gpui_kit::component::Theme::change(mode, Some(window), cx);
-        }
+        apply_theme(
+            mode,
+            &self.store.ui.light_theme,
+            &self.store.ui.dark_theme,
+            cx,
+        );
         // Theme changes reload font tokens. Restore both user choices afterward.
         self.apply_ui_font(cx);
         self.apply_code_font(cx);
@@ -500,11 +583,17 @@ impl ConduitApp {
         settings_page(conduit::i18n::text_static("settings.appearance.appearance"), FullIconName::Palette).groups(vec![
             settings_section(conduit::i18n::text_static("settings.appearance.theme"))
                 .item(
-                    SettingItem::render(move |_, _, _| {
-                        theme_options(selected, theme_view.clone(), disabled)
+                    SettingItem::render(move |_, _, cx| {
+                        theme_options(selected, theme_view.clone(), disabled, cx)
                     })
                     .keywords([conduit::i18n::text_static("settings.appearance.theme"), conduit::i18n::text_static("settings.appearance.light"), conduit::i18n::text_static("settings.appearance.dark"), conduit::i18n::text_static("settings.appearance.system")]),
                 )
+                .item(SettingItem::new(conduit::i18n::text_static("settings.appearance.light_theme"), theme_select_field(view.clone(), gpui_kit::component::ThemeMode::Light, disabled))
+                    .description(settings_description(conduit::i18n::text_static("settings.appearance.light_theme_description")))
+                    .disabled(disabled))
+                .item(SettingItem::new(conduit::i18n::text_static("settings.appearance.dark_theme"), theme_select_field(view.clone(), gpui_kit::component::ThemeMode::Dark, disabled))
+                    .description(settings_description(conduit::i18n::text_static("settings.appearance.dark_theme_description")))
+                    .disabled(disabled))
                 .footer(|_, _| settings_description(conduit::i18n::text_static("settings.appearance.applies_immediately_system_mode_follows_windows_appearance")).mt_0()),
             settings_section(conduit::i18n::text_static("settings.appearance.application_interface"))
                 .item(

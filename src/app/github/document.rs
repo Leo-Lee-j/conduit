@@ -66,6 +66,7 @@ impl ConduitApp {
                 requested,
                 error: None,
                 sync_result: None,
+                sign_in: Default::default(),
                 loading: false,
                 shown: 20,
                 tab: 0,

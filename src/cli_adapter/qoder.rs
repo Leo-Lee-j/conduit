@@ -240,14 +240,11 @@ impl QoderAdapter {
                 for (k, v) in update.as_object().into_iter().flatten() {
                     merged[k] = v.clone();
                 }
-                let status = match merged["status"].as_str() {
-                    Some("completed") => "已完成",
-                    Some("failed") => "已失败",
-                    Some("pending" | "in_progress") | None => "运行中",
-                    Some(other) => other,
-                };
+                let status = crate::message_status::ToolStatus::from_wire(
+                    merged["status"].as_str().unwrap_or("running"),
+                );
                 step.events.push(Event::Tool { key:id.into(), title:merged["title"].as_str().unwrap_or("Qoder tool").into(),
-                    detail:serde_json::to_string_pretty(&json!({"acpKind":merged["kind"],"content":merged["content"],"output":merged["rawOutput"],"locations":merged["locations"]})).unwrap_or_default(), status:status.into() });
+                    detail:serde_json::to_string_pretty(&json!({"acpKind":merged["kind"],"content":merged["content"],"output":merged["rawOutput"],"locations":merged["locations"]})).unwrap_or_default(), status });
                 if let Some(input) = merged.get("rawInput") {
                     step.events.push(Event::ToolInput {
                         key: id.into(),
@@ -270,12 +267,8 @@ impl QoderAdapter {
                 self.context_tokens = update["used"].as_u64();
             }
             Some("user_message_chunk" | "current_mode_update") => {}
-            Some(kind) => self
-                .presentation
-                .unsupported(&format!("Qoder update/{kind}"), step),
-            None => self
-                .presentation
-                .unsupported("Qoder update/malformed", step),
+            Some(kind) => self.presentation.ignored(&format!("Qoder update/{kind}")),
+            None => self.presentation.ignored("Qoder update/malformed"),
         }
     }
 }

@@ -112,7 +112,7 @@ fn qoder_tool_lifecycle_and_usage_presence_are_independent_of_locale() {
             assert!(
                 step.events
                     .iter()
-                    .any(|e| matches!(e, Event::Tool {status,..} if status == expected))
+                    .any(|e| matches!(e, Event::Tool {status,..} if *status == expected))
             );
         }
         let step = p.accept(json!({"id":writes.last().unwrap()["id"],"result":{"stopReason":"end_turn","usage":{"inputTokens":0,"outputTokens":10}}}));

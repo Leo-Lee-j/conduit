@@ -15,9 +15,9 @@ impl Protocol {
                     };
                     self.presentation.activity(key, &[], step);
                     if value["compact_result"] == "failed" {
-                        step.events.push(Event::ErrorBanner(conduit::i18n::text(
-                            "protocol.compaction_failed",
-                        )));
+                        step.events.push(Event::Failure(
+                            conduit::i18n::text("protocol.compaction_failed").into(),
+                        ));
                     }
                 }
                 "compact_boundary" => self.presentation.notice(
@@ -41,8 +41,8 @@ impl Protocol {
                 ),
                 "hook_response" => {
                     if value["outcome"] == "error" {
-                        self.presentation.notice(
-                            "claude:hook_error",
+                        self.presentation.session_notice(
+                            &format!("claude:hook_error:{}", bounded(text(value, "hook_name"))),
                             conduit::i18n::format(
                                 "protocol.hook_failed",
                                 &[("name", bounded(text(value, "hook_name")))],
@@ -63,7 +63,7 @@ impl Protocol {
                 }
                 subtype => self
                     .presentation
-                    .unsupported(&format!("Claude/system/{subtype}"), step),
+                    .ignored(&format!("Claude/system/{subtype}")),
             },
             "tool_progress" if value["parent_tool_use_id"].is_null() => self.presentation.activity(
                 "protocol.activity_tool",
@@ -74,9 +74,9 @@ impl Protocol {
                 // Auth output may contain credentials or a device login code.
                 // Only expose state; never copy output/error payloads.
                 if value.get("error").is_some_and(|v| !v.is_null() && v != "") {
-                    step.events.push(Event::ErrorBanner(conduit::i18n::text(
-                        "protocol.auth_failed",
-                    )));
+                    step.events.push(Event::Failure(
+                        conduit::i18n::text("protocol.auth_failed").into(),
+                    ));
                 } else if value["isAuthenticating"] == true {
                     self.presentation
                         .activity("protocol.activity_authenticating", &[], step);
@@ -98,9 +98,7 @@ impl Protocol {
             // Keep-alives and summaries duplicate data already represented by tools.
             "keep_alive" | "tool_use_summary" | "tool_progress" => {}
             "" => {}
-            _ => self
-                .presentation
-                .unsupported(&format!("Claude/{kind}"), step),
+            _ => self.presentation.ignored(&format!("Claude/{kind}")),
         }
     }
 
@@ -124,12 +122,15 @@ impl Protocol {
                 conduit::i18n::text("commands.compacted"),
                 step,
             ),
-            "warning" | "configWarning" | "deprecationNotice" => {
+            // Addressed to the client author (Conduit's own request shapes), not
+            // to the person chatting; they cannot act on it.
+            "deprecationNotice" => self.presentation.ignored("Codex/deprecationNotice"),
+            "warning" | "configWarning" | "guardianWarning" => {
                 let message = params["message"]
                     .as_str()
                     .or_else(|| params["summary"].as_str())
                     .unwrap_or(method);
-                self.presentation.notice(
+                self.presentation.session_notice(
                     &format!("codex:{method}:{}", bounded(message)),
                     bounded(message),
                     step,
@@ -150,12 +151,13 @@ impl Protocol {
             }
             "mcpServer/startupStatus/updated" => {
                 if params["status"] == "failed" {
-                    self.presentation.notice(
+                    let reason = match text(params, "failureReason") {
+                        "reauthenticationRequired" => "protocol.mcp_reauthentication_required",
+                        _ => "protocol.mcp_failed",
+                    };
+                    self.presentation.session_notice(
                         &format!("codex:mcp:{}", text(params, "name")),
-                        conduit::i18n::format(
-                            "protocol.mcp_failed",
-                            &[("name", bounded(text(params, "name")))],
-                        ),
+                        conduit::i18n::format(reason, &[("name", bounded(text(params, "name")))]),
                         step,
                     );
                 } else if params["status"] == "starting" {
@@ -178,9 +180,18 @@ impl Protocol {
                 let run = &params["run"];
                 let name = bounded(text(run, "eventName"));
                 if matches!(text(run, "status"), "failed" | "blocked") {
-                    self.presentation.notice(
-                        &format!("codex:hook:{}", bounded(text(run, "id"))),
-                        conduit::i18n::format("protocol.hook_failed", &[("name", name)]),
+                    // Keyed by event, not run: a broken hook fails on every
+                    // tool call and must not add a row each time.
+                    self.presentation.session_notice(
+                        &format!("codex:hook:{name}"),
+                        conduit::i18n::format(
+                            if run["status"] == "blocked" {
+                                "protocol.hook_blocked"
+                            } else {
+                                "protocol.hook_failed"
+                            },
+                            &[("name", name)],
+                        ),
                         step,
                     );
                 } else if run["status"] == "running" {
@@ -188,9 +199,7 @@ impl Protocol {
                         .activity("protocol.activity_tool", &[("name", name)], step);
                 }
             }
-            _ => self
-                .presentation
-                .unsupported(&format!("Codex/{method}"), step),
+            _ => self.presentation.ignored(&format!("Codex/{method}")),
         }
     }
 }
@@ -220,7 +229,7 @@ mod tests {
             json!({"type":"auth_status","isAuthenticating":false,"error":"SECRET_AUTH_CODE"}),
         );
         assert!(
-            matches!(&auth.events[..], [Event::ErrorBanner(message)] if !message.contains("SECRET_AUTH_CODE"))
+            matches!(&auth.events[..], [Event::Failure(message)] if !message.contains("SECRET_AUTH_CODE"))
         );
         assert!(p.accept(json!({"type":"keep_alive"})).events.is_empty());
         let compact = p.accept(json!({"type":"system","subtype":"compact_boundary","compact_metadata":{"pre_tokens":100}}));
@@ -258,30 +267,105 @@ mod tests {
         let warning =
             p.accept(json!({"method":"configWarning","params":{"summary":"unsupported config"}}));
         assert!(
-            matches!(&warning.events[..], [Event::Notice(message)] if message == "unsupported config")
+            matches!(&warning.events[..], [Event::SessionNotice { message, .. }] if message == "unsupported config")
         );
         let mcp = p.accept(json!({"method":"mcpServer/startupStatus/updated","params":{"name":"tools","status":"failed","error":"SECRET"}}));
         assert!(
-            matches!(&mcp.events[..], [Event::Notice(message)] if message.contains("tools") && !message.contains("SECRET")),
+            matches!(&mcp.events[..], [Event::SessionNotice { message, .. }] if message.contains("tools") && !message.contains("SECRET")),
             "MCP events: {:?}",
             mcp.events
         );
-        let hook = p.accept(json!({"method":"hook/completed","params":{"threadId":"root","turnId":"turn","run":{"id":"hook","eventName":"preToolUse","status":"failed","entries":[{"text":"SECRET"}]}}}));
+        let hook = json!({"method":"hook/completed","params":{"threadId":"root","turnId":"turn","run":{"id":"hook","eventName":"preToolUse","status":"failed","entries":[{"text":"SECRET"}]}}});
         assert!(
-            matches!(&hook.events[..], [Event::Notice(message)] if message.contains("preToolUse") && !message.contains("SECRET"))
+            matches!(&p.accept(hook.clone()).events[..], [Event::SessionNotice { message, .. }] if message.contains("preToolUse") && !message.contains("SECRET"))
         );
-        let unknown = json!({"method":"future/notification","params":{"data":"SECRET_BASE64"}});
-        assert!(
-            matches!(&p.accept(unknown.clone()).events[..], [Event::Notice(message)] if !message.contains("SECRET_BASE64"))
-        );
-        assert!(p.accept(unknown).events.is_empty());
-        let mut count = 0;
-        for i in 0..100 {
-            count += p
-                .accept(json!({"method":format!("future/{i}"),"params":{}}))
-                .events
-                .len();
+        // A hook that fails on every tool call is reported once, not per run.
+        let mut again = hook;
+        again["params"]["run"]["id"] = json!("hook-2");
+        assert!(p.accept(again).events.is_empty());
+        // Notifications need no reply: unknown or client-developer-facing ones
+        // never reach the transcript, and they cannot crowd out real notices.
+        for method in [
+            "future/notification",
+            "remoteControl/status/changed",
+            "thread/goal/cleared",
+            "thread/settings/updated",
+            "turn/moderationMetadata",
+            "account/rateLimits/updated",
+            "item/commandExecution/terminalInteraction",
+            "deprecationNotice",
+        ] {
+            let ignored = json!({"method":method,"params":{"threadId":"root","summary":"Full-history hydration is deprecated","data":"SECRET_BASE64"}});
+            assert!(p.accept(ignored).events.is_empty(), "{method}");
         }
-        assert!(count < 32);
+        for i in 0..100 {
+            assert!(
+                p.accept(json!({"method":format!("future/{i}"),"params":{}}))
+                    .events
+                    .is_empty()
+            );
+        }
+        let guardian = p.accept(
+            json!({"method":"guardianWarning","params":{"threadId":"root","message":"review required"}}),
+        );
+        assert!(
+            matches!(&guardian.events[..], [Event::SessionNotice { message, .. }] if message == "review required")
+        );
+        // A request, unlike a notification, leaves the CLI waiting: stay visible.
+        let request = p.accept(json!({"id":7,"method":"future/request","params":{}}));
+        assert_eq!(request.writes[0]["error"]["code"], -32601);
+        assert!(matches!(&request.events[..], [Event::Notice(_)]));
+    }
+
+    #[test]
+    fn claude_unknown_notifications_stay_out_of_the_transcript() {
+        let mut p = Protocol::new(Provider::Claude, "C:/work".into(), "hello".into(), None);
+        for notification in [
+            json!({"type":"system","subtype":"future_subtype","data":"SECRET"}),
+            json!({"type":"future_type","data":"SECRET"}),
+        ] {
+            let step = p.accept(notification);
+            assert!(step.events.is_empty() && !step.done && step.error.is_none());
+        }
+    }
+
+    #[test]
+    fn mcp_authentication_and_blocking_hooks_have_safe_localized_reasons() {
+        for (locale, reason, blocked) in [
+            ("en", "sign in again", "blocked"),
+            ("zh-CN", "需要重新登录", "阻止了操作"),
+        ] {
+            let _locale = crate::test_support::scoped(locale);
+            let mut protocol =
+                Protocol::new(Provider::Codex, "C:/work".into(), "hello".into(), None);
+            let step = protocol.accept(json!({"method":"mcpServer/startupStatus/updated","params":{
+                "name":"context7","status":"failed","failureReason":"reauthenticationRequired","error":"SECRET"}}));
+            assert!(
+                matches!(&step.events[..], [Event::SessionNotice { message, .. }]
+                if message.contains("context7") && message.contains(reason) && !message.contains("SECRET"))
+            );
+            let step = protocol.accept(json!({"method":"hook/completed","params":{"run":{
+                "eventName":"preToolUse","status":"blocked","statusMessage":"SECRET","entries":[{"text":"SECRET"}]}}}));
+            assert!(
+                matches!(&step.events[..], [Event::SessionNotice { message, .. }]
+                if message.contains("preToolUse") && message.contains(blocked) && !message.contains("SECRET"))
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_interaction_replies_follow_the_selected_language() {
+        for (locale, expected) in [("en", "does not support"), ("zh-CN", "尚不支持")] {
+            let _locale = crate::test_support::scoped(locale);
+            let mut protocol =
+                Protocol::new(Provider::Codex, "C:/work".into(), "hello".into(), None);
+            let step = protocol.accept(json!({"id":7,"method":"future/request","params":{}}));
+            assert!(
+                step.writes[0]["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains(expected)
+            );
+        }
     }
 }

@@ -1095,9 +1095,9 @@ impl ConduitApp {
                     Event::Delta { key, text } => {
                         update_commit_text(&mut generation.parts, key, text, false)
                     }
-                    Event::ErrorBanner(error) => {
+                    Event::Failure(error) => {
                         // A later successful reply may recover from this diagnostic.
-                        generation.last_diagnostic = Some(error);
+                        generation.last_diagnostic = Some(error.diagnostic);
                     }
                     Event::CleanupBlocked(error) => {
                         generation.cleanup_error = Some(error.clone());

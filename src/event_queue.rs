@@ -52,14 +52,15 @@ pub(crate) fn event_bytes(event: &Event) -> usize {
             detail,
             status,
         } => key.len() + title.len() + detail.len() + status.len(),
+        Event::SessionNotice { key, message } => key.len() + message.len(),
         Event::ToolInput { key, input } => key.len() + input.len(),
         Event::Approval(a) => a.id.len() + a.title.len() + a.detail.len(),
         Event::NativeId(s)
         | Event::ApprovalCancelled(s)
         | Event::Notice(s)
         | Event::Activity(s)
-        | Event::CleanupBlocked(s)
-        | Event::ErrorBanner(s) => s.len(),
+        | Event::CleanupBlocked(s) => s.len(),
+        Event::Failure(error) => error.diagnostic.len() + 256,
         Event::ApprovalResolved { id, .. } => id.len(),
         Event::Finished { error, .. } => error.as_ref().map_or(0, String::len),
         Event::Plan { steps } => steps.iter().map(|(a, b)| a.len() + b.len() + 64).sum(),
@@ -145,11 +146,12 @@ impl Sender {
         let control = matches!(
             event,
             Event::Finished { .. }
-                | Event::ErrorBanner(_)
+                | Event::Failure(_)
                 | Event::CleanupBlocked(_)
                 | Event::ApprovalResolved { .. }
                 | Event::ApprovalCancelled(_)
                 | Event::Notice(_)
+                | Event::SessionNotice { .. }
         );
         let limit = MAX_EVENTS
             + if control { CONTROL_RESERVE } else { 0 }

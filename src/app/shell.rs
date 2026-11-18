@@ -295,7 +295,7 @@ impl Render for ConduitApp {
         let settings_width = (viewport_width
             - measured_sidebar
             - 38.
-            - if viewport_width >= 1100. && self.plugins.right_visible(false) {
+            - if viewport_width >= 1100. && self.right_view_visible() {
                 detail_width
             } else {
                 0.

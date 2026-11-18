@@ -3,10 +3,36 @@
 use super::{Event, Step};
 use serde_json::Value;
 use std::collections::BTreeSet;
+use std::io::Write;
+
+const DIAGNOSTIC_LOG_LIMIT: u64 = 256 * 1024;
+
+fn log_ignored(path: &std::path::Path, kind: &str) -> std::io::Result<()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let line = format!("{now} ignored protocol notification {kind}\n");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let truncate = std::fs::metadata(path)
+        .is_ok_and(|meta| meta.len().saturating_add(line.len() as u64) > DIAGNOSTIC_LOG_LIMIT);
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(!truncate)
+        .truncate(truncate)
+        .open(path)?;
+    file.write_all(line.as_bytes())
+}
 
 #[derive(Default)]
 pub(crate) struct Presentation {
     reported: BTreeSet<String>,
+    ignored: BTreeSet<String>,
 }
 
 pub(crate) fn bounded(text: &str) -> String {
@@ -14,6 +40,29 @@ pub(crate) fn bounded(text: &str) -> String {
 }
 
 impl Presentation {
+    /// A notification expects no reply and CLIs add new ones in every release,
+    /// so an unrecognized one is a compatibility detail for developers and
+    /// never transcript content. Use `unsupported` only when the user loses
+    /// something: dropped reply content or a request Conduit had to refuse.
+    pub(crate) fn ignored(&mut self, kind: &str) {
+        let kind: String = kind
+            .chars()
+            .take(96)
+            .map(|ch| if ch.is_control() { '_' } else { ch })
+            .collect();
+        if self.ignored.len() < 64 && self.ignored.insert(kind.clone()) {
+            // Record only the protocol name, never the discarded payload. The
+            // bounded file also works in Windows release builds without stderr.
+            let _ = log_ignored(
+                &crate::store::Store::path().with_file_name("protocol.log"),
+                &kind,
+            );
+            if cfg!(debug_assertions) {
+                eprintln!("conduit: ignored protocol notification {kind}");
+            }
+        }
+    }
+
     pub(crate) fn unsupported(&mut self, kind: &str, step: &mut Step) {
         let kind: String = kind.chars().take(96).collect();
         self.notice(
@@ -26,6 +75,14 @@ impl Presentation {
     pub(crate) fn notice(&mut self, key: &str, message: String, step: &mut Step) {
         if self.reported.len() < 32 && self.reported.insert(bounded(key)) {
             step.events.push(Event::Notice(bounded(&message)));
+        }
+    }
+
+    pub(crate) fn session_notice(&mut self, key: &str, message: String, step: &mut Step) {
+        let key = bounded(key);
+        let message = bounded(&message);
+        if self.reported.len() < 32 && self.reported.insert(format!("{key}:{message}")) {
+            step.events.push(Event::SessionNotice { key, message });
         }
     }
 
@@ -84,6 +141,22 @@ impl Presentation {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn diagnostic_log_stays_bounded_and_has_no_transcript_events() {
+        let path = crate::store::Store::path().with_file_name("protocol-log-test.log");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, vec![b'x'; DIAGNOSTIC_LOG_LIMIT as usize]).unwrap();
+        log_ignored(&path, "Codex/futureNotice").unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("ignored protocol notification Codex/futureNotice"));
+        assert!(contents.len() < 256);
+        std::fs::remove_file(&path).unwrap();
+        let mut presentation = Presentation::default();
+        presentation.ignored("Codex/futureNotice");
+        presentation.ignored("Codex/futureNotice");
+        assert_eq!(presentation.ignored.len(), 1);
+    }
 
     #[test]
     fn readable_resources_survive_and_opaque_or_unsafe_payloads_never_leak() {

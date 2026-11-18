@@ -53,7 +53,10 @@ struct Explorer {
 }
 struct Document {
     key: FileKey,
+    is_image: bool,
     text: SharedString,
+    image: Option<Arc<RenderImage>>,
+    image_dimensions: Option<(u32, u32)>,
     highlights: Arc<Vec<(Range<usize>, &'static str)>>,
     stamp: Option<Stamp>,
     encoding: &'static str,
@@ -63,6 +66,17 @@ struct Document {
     sequence: u64,
     wrap: bool,
     preview: Entity<FilePreview>,
+}
+enum LoadedDocumentFile {
+    Text {
+        file: workspace_files::TextFile,
+        highlights: Vec<(Range<usize>, &'static str)>,
+    },
+    Image {
+        image: Arc<RenderImage>,
+        dimensions: (u32, u32),
+        stamp: Stamp,
+    },
 }
 struct DiffDocument {
     workspace: PathBuf,
@@ -668,7 +682,11 @@ impl ConduitApp {
                 self.files.diffs.remove(id);
             }
             if let DocumentTab::File(id) = tab {
-                self.files.documents.remove(id);
+                if let Some(document) = self.files.documents.remove(id)
+                    && let Some(image) = document.image
+                {
+                    cx.drop_image(image, None);
+                }
                 if self.files.preview == Some(*id) {
                     self.files.preview = None;
                 }
@@ -878,18 +896,26 @@ impl ConduitApp {
                 .iter()
                 .position(|t| *t == DocumentTab::File(old));
             self.open_tabs.retain(|t| *t != DocumentTab::File(old));
-            self.files.documents.remove(&old);
+            if let Some(document) = self.files.documents.remove(&old)
+                && let Some(image) = document.image
+            {
+                cx.drop_image(image, None);
+            }
         }
         self.files.next_id += 1;
         let id = self.files.next_id;
         let scroll = gpui_kit::ScrollHandle::new();
         let markdown = is_markdown(&key.relative);
+        let is_image = workspace_files::is_image(&key.relative);
         let preview = cx.new(|cx| FilePreview::new(markdown, scroll.clone(), window, cx));
         self.files.documents.insert(
             id,
             Document {
                 key,
+                is_image,
                 text: "".into(),
+                image: None,
+                image_dimensions: None,
                 highlights: Arc::new(Vec::new()),
                 stamp: None,
                 encoding: "",
@@ -919,7 +945,11 @@ impl ConduitApp {
                 break;
             };
             self.open_tabs.retain(|t| *t != DocumentTab::File(old));
-            self.files.documents.remove(&old);
+            if let Some(document) = self.files.documents.remove(&old)
+                && let Some(image) = document.image
+            {
+                cx.drop_image(image, None);
+            }
             if self.files.preview == Some(old) {
                 self.files.preview = None;
             }
@@ -935,19 +965,40 @@ impl ConduitApp {
         if document.loading {
             return;
         }
+        if let Some(image) = document.image.take() {
+            cx.drop_image(image, None);
+        }
+        document.image_dimensions = None;
         document.loading = true;
         document.sequence += 1;
         let sequence = document.sequence;
         let key = document.key.clone();
+        let is_image = document.is_image;
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    workspace_files::read(&key).map(|file| {
-                        let names =
-                            super::code_highlight::highlight_file(&key.relative, &file.text);
-                        (file, names)
-                    })
+                    if is_image {
+                        workspace_files::read_image(&key).map(|mut file| {
+                            for pixel in file.pixels.pixels_mut() {
+                                // GPUI's RenderImage consumes BGRA pixel data.
+                                pixel.0.swap(0, 2);
+                            }
+                            LoadedDocumentFile::Image {
+                                image: Arc::new(RenderImage::new(vec![image::Frame::new(
+                                    file.pixels,
+                                )])),
+                                dimensions: (file.width, file.height),
+                                stamp: file.stamp,
+                            }
+                        })
+                    } else {
+                        workspace_files::read(&key).map(|file| {
+                            let highlights =
+                                super::code_highlight::highlight_file(&key.relative, &file.text);
+                            LoadedDocumentFile::Text { file, highlights }
+                        })
+                    }
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
@@ -959,14 +1010,30 @@ impl ConduitApp {
                 }
                 document.loading = false;
                 match result {
-                    Ok((file, highlights)) => {
+                    Ok(LoadedDocumentFile::Text { file, highlights }) => {
                         if document.text.as_ref() != file.text {
                             document.revision += 1;
                         }
                         document.text = file.text.into();
+                        document.image = None;
+                        document.image_dimensions = None;
                         document.highlights = Arc::new(highlights);
                         document.stamp = Some(file.stamp);
                         document.encoding = file.encoding;
+                        document.error = None;
+                    }
+                    Ok(LoadedDocumentFile::Image {
+                        image,
+                        dimensions,
+                        stamp,
+                    }) => {
+                        document.revision += 1;
+                        document.text = "".into();
+                        document.image = Some(image);
+                        document.image_dimensions = Some(dimensions);
+                        document.highlights = Arc::default();
+                        document.stamp = Some(stamp);
+                        document.encoding = "Image";
                         document.error = None;
                     }
                     Err(error) => {
@@ -1490,6 +1557,7 @@ impl ConduitApp {
         };
         let path = document.key.workspace.join(&document.key.relative);
         let path_label = workspace_files::display_path(&path);
+        let path_to_copy = path_label.clone();
         let workspace_name = document
             .key
             .workspace
@@ -1504,14 +1572,34 @@ impl ConduitApp {
             .collect();
         let file_name = parts.pop().unwrap_or_default();
         let markdown = is_markdown(&document.key.relative);
+        let is_image = document.is_image;
         let parent_label = parts.join(" / ");
         let text = document.text.clone();
         let copy = text.clone();
         let wrap = document.wrap;
+        let image = document.image.clone();
         let status = if document.loading {
             conduit::i18n::text_static("files.reading").to_string()
         } else if document.error.is_some() {
             conduit::i18n::text_static("files.read_only_preview_unavailable").to_string()
+        } else if let Some((width, height)) = document.image_dimensions {
+            conduit::i18n::format(
+                "files.read_only_image",
+                &[
+                    ("arg0", width.to_string()),
+                    ("arg1", height.to_string()),
+                    (
+                        "arg2",
+                        format!(
+                            "{} KiB",
+                            document
+                                .stamp
+                                .as_ref()
+                                .map_or(0, |stamp| stamp.len.div_ceil(1024))
+                        ),
+                    ),
+                ],
+            )
         } else {
             conduit::i18n::format(
                 "files.read_only_lines",
@@ -1635,7 +1723,7 @@ impl ConduitApp {
                             })
                             .accessibility_label(conduit::i18n::text_static("files.word_wrap"))
                             .selected(wrap || markdown)
-                            .disabled(markdown)
+                            .disabled(markdown || is_image)
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(d) = this.files.documents.get_mut(&id) {
@@ -1657,6 +1745,22 @@ impl ConduitApp {
                             .on_click(cx.listener(move |this, _, _, cx| this.load_file(id, cx))),
                     )
                     .child(
+                        Button::new(("file-copy-path-toolbar", id))
+                            .debug_selector(|| "file-copy-path-toolbar".into())
+                            .ghost()
+                            .small()
+                            .compact()
+                            .icon(FullIconName::Link)
+                            .tooltip(conduit::i18n::text_static("files.copy_file_path"))
+                            .accessibility_label(conduit::i18n::text_static("files.copy_file_path"))
+                            .cursor_pointer()
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                    path_to_copy.clone(),
+                                ))
+                            }),
+                    )
+                    .child(
                         Button::new(("file-copy", id))
                             .debug_selector(|| "file-copy".into())
                             .ghost()
@@ -1667,7 +1771,8 @@ impl ConduitApp {
                             .accessibility_label(conduit::i18n::text_static(
                                 "files.copy_file_contents",
                             ))
-                            .disabled(document.error.is_some() || document.loading)
+                            .cursor_pointer()
+                            .disabled(document.error.is_some() || document.loading || is_image)
                             .on_click(move |_, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(copy.to_string()))
                             }),
@@ -1706,13 +1811,30 @@ impl ConduitApp {
                     .child(Spinner::new()),
             );
         } else if text.is_empty() {
-            page = page.child(
-                v_flex()
-                    .flex_1()
-                    .items_center()
-                    .justify_center()
-                    .child(conduit::i18n::text_static("files.empty_file")),
-            );
+            if let Some(image) = image {
+                page = page.child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .min_w_0()
+                        .w_full()
+                        .overflow_hidden()
+                        .bg(rgb(palette().canvas))
+                        .child(
+                            gpui_kit::img(image)
+                                .size_full()
+                                .object_fit(ObjectFit::Contain),
+                        ),
+                );
+            } else {
+                page = page.child(
+                    v_flex()
+                        .flex_1()
+                        .items_center()
+                        .justify_center()
+                        .child(conduit::i18n::text_static("files.empty_file")),
+                );
+            }
         } else {
             let mut typography = self.chat_typography();
             if typography.body_font.is_none() {

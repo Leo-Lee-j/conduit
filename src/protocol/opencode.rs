@@ -718,17 +718,14 @@ impl Protocol {
                 for (k, v) in update.as_object().into_iter().flatten() {
                     merged[k] = v.clone();
                 }
-                let status = match merged["status"].as_str() {
-                    Some("completed") => "已完成",
-                    Some("failed") => "已失败",
-                    Some("pending" | "in_progress") | None => "运行中",
-                    Some(other) => other,
-                };
+                let status = crate::message_status::ToolStatus::from_wire(
+                    merged["status"].as_str().unwrap_or("running"),
+                );
                 step.events.push(Event::Tool {
                     key: id.into(),
                     title: merged["title"].as_str().unwrap_or(conduit::i18n::text_static("protocol.opencode.opencode_tool")).into(),
                     detail: pretty(&json!({"acpKind":merged["kind"],"content":merged["content"],"output":merged["rawOutput"],"locations":merged["locations"]})),
-                    status: status.into(),
+                    status,
                 });
                 if let Some(input) = merged.get("rawInput") {
                     step.events.push(Event::ToolInput {
@@ -760,10 +757,8 @@ impl Protocol {
             Some("user_message_chunk" | "current_mode_update" | "available_commands_update") => {}
             Some(kind) => self
                 .presentation
-                .unsupported(&format!("OpenCode update/{kind}"), step),
-            None => self
-                .presentation
-                .unsupported("OpenCode update/malformed", step),
+                .ignored(&format!("OpenCode update/{kind}")),
+            None => self.presentation.ignored("OpenCode update/malformed"),
         }
     }
 

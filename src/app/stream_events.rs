@@ -634,7 +634,9 @@ impl ConduitApp {
                             } if !text.trim().is_empty() => {
                                 conduit::i18n::text_static("stream_events.thinking").to_string()
                             }
-                            Event::ErrorBanner(error) => crate::failure::retry_activity(error)
+                            Event::Failure(error) => error
+                                .retry_message()
+                                .map(|message| message.render())
                                 .unwrap_or_else(|| {
                                     conduit::i18n::text_static("stream_events.request_failed")
                                         .to_string()
@@ -643,19 +645,23 @@ impl ConduitApp {
                                 conduit::i18n::text_static("stream_events.preparing_tool_call")
                                     .to_string()
                             }
-                            Event::Tool { title, status, .. } => match status.as_str() {
-                                "运行中" if !title.is_empty() => conduit::i18n::format(
-                                    "stream_events.calling_tool",
-                                    &[("title", title.to_string())],
-                                ),
-                                "运行中" => {
+                            Event::Tool { title, status, .. } => match status {
+                                crate::message_status::ToolStatus::Running if !title.is_empty() => {
+                                    conduit::i18n::format(
+                                        "stream_events.calling_tool",
+                                        &[("title", title.to_string())],
+                                    )
+                                }
+                                crate::message_status::ToolStatus::Running => {
                                     conduit::i18n::text_static("stream_events.calling_tool_72ae8e")
                                         .to_string()
                                 }
-                                "输出中" => conduit::i18n::text_static(
-                                    "stream_events.receiving_tool_output",
-                                )
-                                .to_string(),
+                                crate::message_status::ToolStatus::Output => {
+                                    conduit::i18n::text_static(
+                                        "stream_events.receiving_tool_output",
+                                    )
+                                    .to_string()
+                                }
                                 _ => conduit::i18n::text_static("stream_events.continuing")
                                     .to_string(),
                             },
@@ -663,15 +669,13 @@ impl ConduitApp {
                         };
                         if !activity.is_empty() {
                             run.activity_message = match &other {
-                                Event::ErrorBanner(error) => {
-                                    crate::failure::retry_activity_message(error)
-                                        .map(|message| (activity.clone(), message))
-                                }
+                                Event::Failure(error) => error
+                                    .retry_message()
+                                    .map(|message| (activity.clone(), message)),
                                 Event::Tool { title, status, .. }
                                     if !title.is_empty()
-                                        && status
-                                            == crate::message_status::ToolStatus::Running
-                                                .as_str() =>
+                                        && *status
+                                            == crate::message_status::ToolStatus::Running =>
                                 {
                                     Some((
                                         activity.clone(),

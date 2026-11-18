@@ -145,6 +145,8 @@ pub(super) fn tool_failed(item: &ChatItem) -> bool {
         || status.eq_ignore_ascii_case("failed")
         || status.eq_ignore_ascii_case("error")
         || status.eq_ignore_ascii_case("aborted")
+        || status.eq_ignore_ascii_case("declined")
+        || status.eq_ignore_ascii_case("denied")
         || serde_json::from_str::<Exit>(&item.detail)
             .ok()
             .and_then(|value| value.code.or(value.exit_code))

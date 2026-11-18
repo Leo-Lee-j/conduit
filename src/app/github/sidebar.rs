@@ -13,6 +13,7 @@ pub(in crate::app) struct RequestSidebar {
     selected: Option<(Forge, u64)>,
     loading: bool,
     error: Option<String>,
+    sign_in: super::sign_in::SignInSlot,
     scroll: UniformListScrollHandle,
     cancel: Arc<AtomicBool>,
     _task: Task<()>,
@@ -36,6 +37,7 @@ impl RequestSidebar {
             selected: None,
             loading: false,
             error: None,
+            sign_in: Default::default(),
             scroll: Default::default(),
             cancel: Arc::new(AtomicBool::new(false)),
             _task: Task::ready(()),
@@ -64,6 +66,7 @@ impl RequestSidebar {
         self.cancel = Arc::new(AtomicBool::new(false));
         self.loading = true;
         self.error = None;
+        self.sign_in.set(None);
         if provider.is_some() {
             self.entries.clear();
             self.filters = Default::default();
@@ -99,7 +102,11 @@ impl RequestSidebar {
                 this.forge = forge;
                 match result {
                     Ok(entries) => this.entries = entries,
-                    Err(error) => this.error = Some(format!("{error:#}")),
+                    Err(error) => {
+                        let (error, required) = super::sign_in::describe(error);
+                        this.error = Some(error);
+                        this.sign_in.set(required);
+                    }
                 }
                 if let Some(host) = this.host.upgrade() {
                     host.update(cx, |_, cx| cx.notify());
@@ -467,6 +474,12 @@ impl Render for RequestSidebar {
                     .child(error.clone()),
             );
         }
+        if let Some(form) = self
+            .sign_in
+            .view(window, cx, |this: &mut Self, cx| this.reload(None, cx))
+        {
+            content = content.child(div().px_3().pb_2().child(form));
+        }
         if indices.is_empty() && self.error.is_none() {
             content = content.child(
                 v_flex()
@@ -603,6 +616,7 @@ mod tests {
                 selected: None,
                 loading: false,
                 error: None,
+                sign_in: Default::default(),
                 scroll: Default::default(),
                 cancel: Arc::new(AtomicBool::new(false)),
                 _task: Task::ready(()),

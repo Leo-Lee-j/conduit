@@ -1,7 +1,7 @@
 //! Bounded, read-only workspace browsing. No filesystem work belongs on the UI thread.
 use std::{
     fs,
-    io::Read,
+    io::{Cursor, Read},
     path::{Component, Path, PathBuf},
     time::SystemTime,
 };
@@ -23,6 +23,12 @@ pub fn display_path(path: &Path) -> String {
 }
 
 pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
+const MAX_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_IMAGE_DIMENSION: u32 = 12_000;
+const MAX_IMAGE_PIXELS: u64 = 32 * 1024 * 1024;
+const MAX_IMAGE_DECODE_BYTES: u64 = 192 * 1024 * 1024;
+const MAX_IMAGE_PREVIEW_WIDTH: u32 = 2560;
+const MAX_IMAGE_PREVIEW_HEIGHT: u32 = 1440;
 pub const MAX_FILE_LINES: usize = 10_000;
 const MAX_DIRECTORY_ENTRIES: usize = 20_000;
 
@@ -181,6 +187,107 @@ pub struct TextFile {
     pub text: String,
     pub stamp: Stamp,
     pub encoding: &'static str,
+}
+
+pub struct ImageFile {
+    pub pixels: image::RgbaImage,
+    pub width: u32,
+    pub height: u32,
+    pub stamp: Stamp,
+}
+
+pub fn is_image(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            ["bmp", "jpeg", "jpg", "png", "webp"]
+                .iter()
+                .any(|kind| extension.eq_ignore_ascii_case(kind))
+        })
+}
+
+pub fn read_image(key: &FileKey) -> Result<ImageFile, String> {
+    let path = checked_path(key)?;
+    if !path.is_file() {
+        return Err(
+            conduit::i18n::text_static("workspace_files.this_path_is_not_a_regular_file").into(),
+        );
+    }
+    let initial = stamp(&path)?;
+    if initial.len > MAX_IMAGE_BYTES {
+        return Err(conduit::i18n::text_static(
+            "workspace_files.image_exceeds_the_16_mib_preview_limit",
+        )
+        .into());
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(&path)
+        .map_err(|e| {
+            conduit::i18n::format(
+                "workspace_files.unable_to_open_file",
+                &[("e", format!("{}", e))],
+            )
+        })?
+        .take(MAX_IMAGE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| {
+            conduit::i18n::format(
+                "workspace_files.failed_to_read_file",
+                &[("e", format!("{}", e))],
+            )
+        })?;
+    if bytes.len() as u64 > MAX_IMAGE_BYTES {
+        return Err(conduit::i18n::text_static(
+            "workspace_files.image_exceeds_the_16_mib_preview_limit",
+        )
+        .into());
+    }
+    let mut reader = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|_| conduit::i18n::text_static("workspace_files.invalid_or_unsupported_image"))?;
+    if !matches!(
+        reader.format(),
+        Some(
+            image::ImageFormat::Bmp
+                | image::ImageFormat::Jpeg
+                | image::ImageFormat::Png
+                | image::ImageFormat::WebP
+        )
+    ) {
+        return Err(
+            conduit::i18n::text_static("workspace_files.invalid_or_unsupported_image").into(),
+        );
+    }
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_DIMENSION);
+    limits.max_image_height = Some(MAX_IMAGE_DIMENSION);
+    limits.max_alloc = Some(MAX_IMAGE_DECODE_BYTES);
+    reader.limits(limits);
+    let decoder = reader
+        .into_decoder()
+        .map_err(|_| conduit::i18n::text_static("workspace_files.invalid_or_unsupported_image"))?;
+    let (width, height) = image::ImageDecoder::dimensions(&decoder);
+    if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
+        return Err(conduit::i18n::text_static(
+            "workspace_files.image_dimensions_exceed_the_preview_limit",
+        )
+        .into());
+    }
+    let decoded = image::DynamicImage::from_decoder(decoder)
+        .map_err(|_| conduit::i18n::text_static("workspace_files.invalid_or_unsupported_image"))?;
+    let (width, height) = (decoded.width(), decoded.height());
+    let pixels = if width > MAX_IMAGE_PREVIEW_WIDTH || height > MAX_IMAGE_PREVIEW_HEIGHT {
+        decoded.thumbnail(MAX_IMAGE_PREVIEW_WIDTH, MAX_IMAGE_PREVIEW_HEIGHT)
+    } else {
+        decoded
+    }
+    .into_rgba8();
+    Ok(ImageFile {
+        pixels,
+        width,
+        height,
+        stamp: initial,
+    })
 }
 
 pub fn read(key: &FileKey) -> Result<TextFile, String> {
@@ -375,6 +482,36 @@ mod tests {
             read(&FileKey {
                 workspace: root.clone(),
                 relative: root.join("test.txt")
+            })
+            .is_err()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn raster_image_files_are_bounded_decoded_and_report_dimensions() {
+        let _locale = crate::test_support::chinese();
+        let root = root();
+        let key = FileKey {
+            workspace: root.clone(),
+            relative: "preview.PNG".into(),
+        };
+        fs::write(
+            root.join(&key.relative),
+            include_bytes!("../assets/app-icons/Square44x44Logo.png"),
+        )
+        .unwrap();
+
+        assert!(is_image(&key.relative));
+        let image = read_image(&key).unwrap();
+        assert_eq!((image.width, image.height), (44, 44));
+        assert_eq!(image.pixels.dimensions(), (44, 44));
+
+        fs::write(root.join("broken.png"), b"not an image").unwrap();
+        assert!(
+            read_image(&FileKey {
+                workspace: root.clone(),
+                relative: "broken.png".into(),
             })
             .is_err()
         );

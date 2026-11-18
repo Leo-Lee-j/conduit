@@ -16,6 +16,7 @@ impl Protocol {
         if value.get("id").is_some()
             && let Some(error) = value.get("error")
         {
+            self.codex_fork_id = None;
             step.done = true;
             step.error = Some(pretty(error));
             return step;
@@ -25,7 +26,7 @@ impl Protocol {
                 step.writes.push(json!({"method":"initialized"}));
                 let mut params = json!({
                     "threadId": request.thread_id, "lastTurnId": request.last_turn_id,
-                    "cwd": self.cwd, "ephemeral": false, "excludeTurns": false,
+                    "cwd": self.cwd, "ephemeral": false, "excludeTurns": true,
                     "deferGoalContinuation": true,
                     "approvalPolicy": self.permission.codex_approval_policy(),
                     "approvalsReviewer": "user", "sandbox": self.permission.codex_sandbox()
@@ -48,20 +49,33 @@ impl Protocol {
                 let parent_matches = thread["forkedFromId"]
                     .as_str()
                     .is_none_or(|parent| parent == request.thread_id);
-                let last = thread["turns"].as_array().and_then(|turns| turns.last());
-                // Checking the returned boundary also detects older CLIs which silently ignore
-                // lastTurnId. A mismatched fork stays unbound locally and cannot send a prompt.
-                if id.is_empty()
-                    || id == request.thread_id
-                    || !parent_matches
-                    || last.is_none_or(|turn| {
-                        turn["id"] != request.last_turn_id || turn["status"] != "completed"
+                if id.is_empty() || id == request.thread_id || !parent_matches {
+                    step.error = Some(conduit::i18n::text("branching.invalid_response"));
+                    step.done = true;
+                } else {
+                    self.codex_fork_id = Some(id.into());
+                    // A one-turn page verifies that older CLIs did not silently
+                    // ignore lastTurnId, without hydrating the whole transcript.
+                    step.writes
+                        .push(json!({"id":3,"method":"thread/turns/list","params":{
+                            "threadId":id,"limit":1,"sortDirection":"desc","itemsView":"notLoaded"
+                        }}));
+                }
+            }
+            Some(3) if value.get("result").is_some() => {
+                let last = value["result"]["data"]
+                    .as_array()
+                    .filter(|turns| turns.len() == 1)
+                    .and_then(|turns| turns.first());
+                if let Some(id) = self.codex_fork_id.take()
+                    && last.is_some_and(|turn| {
+                        turn["id"] == request.last_turn_id && turn["status"] == "completed"
                     })
                 {
-                    step.error = Some(conduit::i18n::text("branching.invalid_response"));
+                    self.thread_id = Some(id.clone());
+                    step.events.push(Event::NativeId(id));
                 } else {
-                    self.thread_id = Some(id.into());
-                    step.events.push(Event::NativeId(id.into()));
+                    step.error = Some(conduit::i18n::text("branching.invalid_response"));
                 }
                 step.done = true;
             }
@@ -139,10 +153,19 @@ mod tests {
         assert_eq!(step.writes[1]["method"], "thread/fork");
         assert_eq!(step.writes[1]["params"]["lastTurnId"], "chosen-turn");
         assert_eq!(step.writes[1]["params"]["deferGoalContinuation"], true);
+        assert_eq!(step.writes[1]["params"]["excludeTurns"], true);
         assert!(!step.writes[1].to_string().contains("must never"));
         let step = protocol.accept(json!({"id":2,"result":{"thread":{
-            "id":"fork", "forkedFromId":"source", "turns":[{"id":"chosen-turn","status":"completed"}]
+            "id":"fork", "forkedFromId":"source", "turns":[]
         }}}));
+        assert!(!step.done && step.events.is_empty());
+        assert_eq!(step.writes[0]["method"], "thread/turns/list");
+        assert_eq!(
+            step.writes[0]["params"],
+            json!({"threadId":"fork","limit":1,"sortDirection":"desc","itemsView":"notLoaded"})
+        );
+        let step = protocol
+            .accept(json!({"id":3,"result":{"data":[{"id":"chosen-turn","status":"completed"}]}}));
         assert!(step.done && step.error.is_none() && step.writes.is_empty());
         assert!(matches!(&step.events[..], [Event::NativeId(id)] if id == "fork"));
     }
@@ -150,11 +173,9 @@ mod tests {
     #[test]
     fn invalid_or_unsupported_forks_never_bind_a_session_or_fall_back_to_a_prompt() {
         for thread in [
-            json!({"id":"source","turns":[{"id":"chosen-turn","status":"completed"}]}),
-            json!({"id":"fork","turns":[{"id":"later-turn","status":"completed"}]}),
-            json!({"id":"fork","turns":[{"id":"chosen-turn","status":"inProgress"}]}),
+            json!({"id":"source"}),
             json!({"id":"fork","forkedFromId":"other","turns":[{"id":"chosen-turn","status":"completed"}]}),
-            json!({"id":"fork"}),
+            json!({}),
         ] {
             let step = protocol().accept(json!({"id":2,"result":{"thread":thread}}));
             assert!(
@@ -163,6 +184,25 @@ mod tests {
                     && step.events.is_empty()
                     && step.writes.is_empty()
             );
+        }
+        for data in [
+            json!([{ "id":"later-turn", "status":"completed" }]),
+            json!([{ "id":"chosen-turn", "status":"inProgress" }]),
+            json!([]),
+            json!([{ "id":"chosen-turn", "status":"completed" }, { "id":"later-turn", "status":"completed" }]),
+            Value::Null,
+        ] {
+            let mut protocol = protocol();
+            protocol
+                .accept(json!({"id":2,"result":{"thread":{"id":"fork","forkedFromId":"source"}}}));
+            let step = protocol.accept(json!({"id":3,"result":{"data":data}}));
+            assert!(
+                step.done
+                    && step.error.is_some()
+                    && step.events.is_empty()
+                    && step.writes.is_empty()
+            );
+            assert!(protocol.thread_id.is_none());
         }
         let step =
             protocol().accept(json!({"id":2,"error":{"code":-32601,"message":"unsupported"}}));

@@ -112,9 +112,11 @@ pub(super) fn parse(value: &Value, forge: forge::Forge) -> Result<Vec<Entry>> {
                 comments: if gitlab {
                     item["user_notes_count"].as_u64().unwrap_or(0)
                 } else {
-                    item["comments"]
-                        .as_array()
-                        .map_or(0, |comments| comments.len() as u64)
+                    item["comments"]["totalCount"].as_u64().unwrap_or_else(|| {
+                        item["comments"]
+                            .as_array()
+                            .map_or(0, |comments| comments.len() as u64)
+                    })
                 },
             })
         })
@@ -123,50 +125,20 @@ pub(super) fn parse(value: &Value, forge: forge::Forge) -> Result<Vec<Entry>> {
 
 pub fn load(workspace: &Path, cancel: &AtomicBool) -> Result<Vec<Entry>> {
     let target = forge::target(workspace, cancel)?;
-    let json = if target.forge == forge::Forge::Gitlab {
-        let endpoint = format!(
+    let mut client = api::Client::new(target.forge, &target.host, workspace, cancel);
+    let value = if target.forge == forge::Forge::Gitlab {
+        client.get(&format!(
             "projects/{}/merge_requests?scope=all&state=all&order_by=created_at&sort=desc&per_page=100",
             gitlab::encode(&target.project)
-        );
-        query(
-            &gitlab::executable()?,
-            &[
-                "api",
-                &endpoint,
-                "--hostname",
-                &target.host,
-                "--method",
-                "GET",
-            ],
-            workspace,
-            cancel,
-        )?
+        ))?
     } else {
-        let gh = executable().context(conduit::i18n::text("github.missing_cli"))?;
-        let repo = format!("{}/{}", target.host, target.project);
-        query(
-            &gh,
-            &[
-                "pr",
-                "list",
-                "--repo",
-                &repo,
-                "--state",
-                "all",
-                "--limit",
-                "100",
-                "--json",
-                "number,title,url,headRefName,state,author,createdAt,assignees,reviewRequests,reviews,labels,comments",
-            ],
-            workspace,
-            cancel,
-        )?
+        pulls::list(&mut client, &target)?
     };
     ensure!(
         forge::target(workspace, cancel)? == target,
         "Repository changed during request listing"
     );
-    parse(&serde_json::from_str(&json)?, target.forge)
+    parse(&value, target.forge)
 }
 
 #[cfg(test)]

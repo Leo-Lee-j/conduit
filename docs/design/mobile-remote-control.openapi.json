@@ -1,0 +1,3926 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Conduit Remote Control — proposed contract",
+    "version": "0.1.0",
+    "description": "DESIGN ONLY — NOT IMPLEMENTED. Baseline 2026-11-18. Business writes return 202; only operation receipts confirm application/save. All responses use Cache-Control: no-store. Cookie authentication is required except pairing. Writes additionally check exact Origin, Host and CSRF. read/control are workspace-scoped; configure grants host-wide configuration access. Every target, grant and version is rechecked on the GPUI owner thread. Payloads are sanitized; no endpoint returns saved API keys or protected key blobs."
+  },
+  "servers": [
+    {
+      "url": "/api/remote/v1"
+    }
+  ],
+  "security": [
+    {
+      "RemoteCookie": []
+    }
+  ],
+  "paths": {
+    "/auth/pair": {
+      "post": {
+        "operationId": "pairDevice",
+        "summary": "Exchange one-time QR secret for a device cookie.",
+        "description": "Production HTTPS only. Exact Origin and Host checks apply. Secret expires after 120 seconds. Required scope: none; possession of one-time pairing secret.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                }
+              }
+            },
+            "headers": {
+              "Set-Cookie": {
+                "description": "__Host-conduit_remote=<opaque>; HttpOnly; Secure; SameSite=Strict; Path=/",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/session": {
+      "get": {
+        "operationId": "getAuthSession",
+        "summary": "Read current device grant and in-memory CSRF token.",
+        "description": " Required scope: read.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "operationId": "logoutDevice",
+        "summary": "Revoke this device session and clear its cookie.",
+        "description": " Required scope: read.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Session revoked; cookie cleared."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Csrf"
+          }
+        ]
+      }
+    },
+    "/system": {
+      "get": {
+        "operationId": "getRemoteSystem",
+        "summary": "Read host epoch, limits and server time.",
+        "description": " Required scope: read.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/System"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/catalog": {
+      "get": {
+        "operationId": "getRemoteCatalog",
+        "summary": "Read capability-filtered engine and model options.",
+        "description": "read is limited to engines/routes needed by granted workspaces; configure can read the full catalog. Required scope: read.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Catalog"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/workspaces": {
+      "get": {
+        "operationId": "listWorkspaces",
+        "summary": "List authorized registered workspaces.",
+        "description": " Required scope: read.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspacePage"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ]
+      }
+    },
+    "/workspaces/{workspace_id}/sessions": {
+      "get": {
+        "operationId": "listSessions",
+        "summary": "List sessions in an authorized workspace.",
+        "description": " Required scope: read.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ]
+      }
+    },
+    "/sessions": {
+      "post": {
+        "operationId": "createSession",
+        "summary": "Create a session from explicit options, without desktop composer state.",
+        "description": " Required scope: control.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Queued only; poll the returned operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "Operation query path.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Csrf"
+          },
+          {
+            "$ref": "#/components/parameters/Epoch"
+          },
+          {
+            "$ref": "#/components/parameters/Key"
+          },
+          {
+            "$ref": "#/components/parameters/Expires"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSession"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{session_id}": {
+      "get": {
+        "operationId": "getSession",
+        "summary": "Read one session summary.",
+        "description": " Required scope: read.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Strong resource version; use unchanged in If-Match.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        ]
+      }
+    },
+    "/sessions/{session_id}/messages": {
+      "get": {
+        "operationId": "listSessionMessages",
+        "summary": "Read bounded message previews.",
+        "description": "Cold transcripts return an empty loading page and Retry-After; transcript.ready triggers a refresh. Required scope: read.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessagePage"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ]
+      }
+    },
+    "/sessions/{session_id}/messages/{message_id}": {
+      "get": {
+        "operationId": "getSessionMessage",
+        "summary": "Read a bounded single-message projection.",
+        "description": " Required scope: read.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Strong resource version; use unchanged in If-Match.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        ]
+      }
+    },
+    "/sessions/{session_id}/messages/{message_id}/content": {
+      "get": {
+        "operationId": "getMessageContent",
+        "summary": "Read full content in version-bound chunks.",
+        "description": "Cursor binds field, message, version and device grant. Changed content returns 409 content_changed. Max 128 KiB per chunk. Required scope: read.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentChunk"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "field",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "input",
+                "detail"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          }
+        ]
+      }
+    },
+    "/sessions/{session_id}/runs": {
+      "post": {
+        "operationId": "startSessionRun",
+        "summary": "Save a message, then release the existing runtime.",
+        "description": "If-Match is the session configuration ETag. succeeded means saved and released, not completion of the model task. Required scope: control.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Queued only; poll the returned operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "Operation query path.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Csrf"
+          },
+          {
+            "$ref": "#/components/parameters/Epoch"
+          },
+          {
+            "$ref": "#/components/parameters/Key"
+          },
+          {
+            "$ref": "#/components/parameters/Expires"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartRun"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{session_id}/runs/{run_id}": {
+      "get": {
+        "operationId": "getSessionRun",
+        "summary": "Read the exact active or retained run.",
+        "description": " Required scope: read.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        ]
+      }
+    },
+    "/sessions/{session_id}/runs/{run_id}/cancel": {
+      "post": {
+        "operationId": "cancelSessionRun",
+        "summary": "Request cancellation of the exact run.",
+        "description": "No body required. succeeded is a cancellation request; process cleanup completes asynchronously. Required scope: control.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Queued only; poll the returned operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "Operation query path.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Csrf"
+          },
+          {
+            "$ref": "#/components/parameters/Epoch"
+          },
+          {
+            "$ref": "#/components/parameters/Key"
+          },
+          {
+            "$ref": "#/components/parameters/Expires"
+          }
+        ]
+      }
+    },
+    "/sessions/{session_id}/runs/{run_id}/approvals/{approval_id}/decision": {
+      "post": {
+        "operationId": "decideApproval",
+        "summary": "Submit one decision for a run-bound approval.",
+        "description": " Required scope: control.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Queued only; poll the returned operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "Operation query path.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "approval_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Csrf"
+          },
+          {
+            "$ref": "#/components/parameters/Epoch"
+          },
+          {
+            "$ref": "#/components/parameters/Key"
+          },
+          {
+            "$ref": "#/components/parameters/Expires"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalDecision"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{session_id}/runs/{run_id}/questions/{question_id}/answer": {
+      "post": {
+        "operationId": "answerQuestion",
+        "summary": "Submit structured answers for a supported run-bound question.",
+        "description": "Unsupported native forms return 422 and remain pending for desktop handling. Required scope: control.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Queued only; poll the returned operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "Operation query path.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "question_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Csrf"
+          },
+          {
+            "$ref": "#/components/parameters/Epoch"
+          },
+          {
+            "$ref": "#/components/parameters/Key"
+          },
+          {
+            "$ref": "#/components/parameters/Expires"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuestionAnswer"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{session_id}/config": {
+      "get": {
+        "operationId": "getSessionConfig",
+        "summary": "Read next-turn settings and version.",
+        "description": " Required scope: read.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionConfig"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Strong resource version; use unchanged in If-Match.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patchSessionConfig",
+        "summary": "Change next-turn session settings.",
+        "description": "Only catalog-supported values. Never mutates the active run configuration snapshot. Required scope: control.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Queued only; poll the returned operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "Operation query path.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Csrf"
+          },
+          {
+            "$ref": "#/components/parameters/Epoch"
+          },
+          {
+            "$ref": "#/components/parameters/Key"
+          },
+          {
+            "$ref": "#/components/parameters/Expires"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionConfigPatch"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/settings/app": {
+      "get": {
+        "operationId": "getAppSettings",
+        "summary": "Read the remotely editable application settings.",
+        "description": " Required scope: configure.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppSettings"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Strong resource version; use unchanged in If-Match.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "patchAppSettings",
+        "summary": "Commit whitelisted application settings.",
+        "description": " Required scope: configure.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Queued only; poll the returned operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "Operation query path.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Csrf"
+          },
+          {
+            "$ref": "#/components/parameters/Epoch"
+          },
+          {
+            "$ref": "#/components/parameters/Key"
+          },
+          {
+            "$ref": "#/components/parameters/Expires"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppSettingsPatch"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/settings/defaults/{engine}": {
+      "get": {
+        "operationId": "getSessionDefaults",
+        "summary": "Read defaults for future sessions.",
+        "description": " Required scope: configure.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Defaults"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Strong resource version; use unchanged in If-Match.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patchSessionDefaults",
+        "summary": "Commit defaults for future sessions.",
+        "description": " Required scope: configure.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Queued only; poll the returned operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "Operation query path.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Csrf"
+          },
+          {
+            "$ref": "#/components/parameters/Epoch"
+          },
+          {
+            "$ref": "#/components/parameters/Key"
+          },
+          {
+            "$ref": "#/components/parameters/Expires"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DefaultsPatch"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/providers": {
+      "get": {
+        "operationId": "listProviders",
+        "summary": "Read model services without keys or DPAPI ciphertext.",
+        "description": " Required scope: configure.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createProvider",
+        "summary": "Create a local model service.",
+        "description": " Required scope: configure.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Queued only; poll the returned operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "Operation query path.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Csrf"
+          },
+          {
+            "$ref": "#/components/parameters/Epoch"
+          },
+          {
+            "$ref": "#/components/parameters/Key"
+          },
+          {
+            "$ref": "#/components/parameters/Expires"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProvider"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/providers/{provider_id}": {
+      "get": {
+        "operationId": "getProvider",
+        "summary": "Read a model service without secret values.",
+        "description": " Required scope: configure.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Provider"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Strong resource version; use unchanged in If-Match.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patchProvider",
+        "summary": "Commit local model service changes.",
+        "description": "CCS/native sources are read-only. Credential action is explicit; never echo submitted values. Required scope: configure.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Queued only; poll the returned operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "Operation query path.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Csrf"
+          },
+          {
+            "$ref": "#/components/parameters/Epoch"
+          },
+          {
+            "$ref": "#/components/parameters/Key"
+          },
+          {
+            "$ref": "#/components/parameters/Expires"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderPatch"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteProvider",
+        "summary": "Delete an unreferenced local model service.",
+        "description": " Required scope: configure.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Queued only; poll the returned operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "Operation query path.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Csrf"
+          },
+          {
+            "$ref": "#/components/parameters/Epoch"
+          },
+          {
+            "$ref": "#/components/parameters/Key"
+          },
+          {
+            "$ref": "#/components/parameters/Expires"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ]
+      }
+    },
+    "/operations/{operation_id}": {
+      "get": {
+        "operationId": "getOperation",
+        "summary": "Read a command receipt belonging to this device.",
+        "description": "Result is retained in the current host epoch only. No cross-restart exactly-once guarantee. Required scope: read.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "operation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        ]
+      }
+    },
+    "/snapshot": {
+      "get": {
+        "operationId": "getSnapshot",
+        "summary": "Read a sanitized projection and atomic subscription watermark.",
+        "description": "workspace_id and session_id must match subsequent event subscription filters. Continuation pages bind the same snapshot revision; expiry requires a fresh snapshot. Required scope: read.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Snapshot"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceFilter"
+          },
+          {
+            "$ref": "#/components/parameters/SessionFilter"
+          },
+          {
+            "name": "continuation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        ]
+      }
+    },
+    "/events": {
+      "get": {
+        "operationId": "subscribeEvents",
+        "summary": "Subscribe to ordered SSE replay and live state.",
+        "description": "Use after for first resume, then the last id. If both cursor inputs are present they must match. Cursor is signed and binds epoch, filters and grant revision. 15-second heartbeat. Replay gap before headers: 409 replay_gap. Later overflow: resync_required without id, then close. Filtered event sequences may have gaps. Every request is authenticated; cursor is not a credential. Required scope: read.",
+        "security": [
+          {
+            "RemoteCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "text/event-stream; UTF-8 SSE frames. Each data payload follows RemoteEvent. Each id is an opaque cursor, except resync_required. Heartbeats are SSE comments.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "X-Accel-Buffering": {
+                "schema": {
+                  "type": "string",
+                  "const": "no"
+                }
+              }
+            },
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": ": heartbeat\n\n"
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceFilter"
+          },
+          {
+            "$ref": "#/components/parameters/SessionFilter"
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "RemoteCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-conduit_remote",
+        "description": "Opaque HttpOnly, Secure, SameSite=Strict, Path=/ cookie."
+      }
+    },
+    "parameters": {
+      "Csrf": {
+        "name": "X-CSRF-Token",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "Epoch": {
+        "name": "X-Conduit-Epoch",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "Key": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 128
+        }
+      },
+      "Expires": {
+        "name": "X-Conduit-Request-Expires",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix seconds, measured against server_time."
+        },
+        "description": "Original Unix expiry; must be within the next 10 minutes on first receipt. Retries retain this exact value."
+      },
+      "IfMatch": {
+        "name": "If-Match",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "description": "Exact strong ETag from this resource, including double quotes."
+      },
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50
+        }
+      },
+      "WorkspaceFilter": {
+        "name": "workspace_id",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "SessionFilter": {
+        "name": "session_id",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "Structured error; code determines recovery. Resources outside the grant return 404.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 8192
+            }
+          },
+          "http_status": {
+            "type": "integer",
+            "minimum": 400,
+            "maximum": 599
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "retryable"
+        ]
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/Error"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "Grant": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "read",
+                "control",
+                "configure"
+              ]
+            },
+            "maxItems": 3
+          },
+          "workspace_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "maxItems": 1000
+          },
+          "revision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "scopes",
+          "workspace_ids",
+          "revision"
+        ]
+      },
+      "AuthSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "device_name": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "grant": {
+            "$ref": "#/components/schemas/Grant"
+          },
+          "csrf_token": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "server_time": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Unix seconds, measured against server_time."
+          },
+          "expires_at": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Unix seconds, measured against server_time."
+          }
+        },
+        "required": [
+          "device_id",
+          "device_name",
+          "grant",
+          "csrf_token",
+          "server_time",
+          "expires_at"
+        ]
+      },
+      "PairRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "secret": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 128,
+            "writeOnly": true
+          },
+          "device_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "secret",
+          "device_name"
+        ]
+      },
+      "Limits": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "command_queue_items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "command_queue_bytes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reserved_control_slots": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "per_device_inflight": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "request_retention_seconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "request_capacity": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "replay_frames": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "replay_bytes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "message_preview_bytes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "content_chunk_bytes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "snapshot_bytes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "page_items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "command_queue_items",
+          "command_queue_bytes",
+          "request_retention_seconds",
+          "request_capacity",
+          "replay_frames",
+          "replay_bytes",
+          "message_preview_bytes",
+          "content_chunk_bytes",
+          "snapshot_bytes",
+          "page_items"
+        ]
+      },
+      "System": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "api_version": {
+            "type": "string",
+            "enum": [
+              "v1"
+            ]
+          },
+          "host_epoch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "host_name": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "server_time": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Unix seconds, measured against server_time."
+          },
+          "writable": {
+            "type": "boolean"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "maxItems": 100
+          },
+          "limits": {
+            "$ref": "#/components/schemas/Limits"
+          }
+        },
+        "required": [
+          "api_version",
+          "host_epoch",
+          "host_name",
+          "server_time",
+          "writable",
+          "features",
+          "limits"
+        ]
+      },
+      "Versioned": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "version"
+        ]
+      },
+      "Workspace": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "session_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "version",
+          "session_count"
+        ]
+      },
+      "SessionConfig": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "engine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "permission": {
+            "$ref": "#/components/schemas/Permission"
+          },
+          "effort": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "effective_from": {
+            "type": "string",
+            "enum": [
+              "next_turn"
+            ]
+          }
+        },
+        "required": [
+          "version",
+          "engine",
+          "channel",
+          "model",
+          "permission",
+          "effort",
+          "effective_from"
+        ]
+      },
+      "Channel": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "cli"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "provider"
+                ]
+              },
+              "provider_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "required": [
+              "kind",
+              "provider_id"
+            ]
+          }
+        ]
+      },
+      "Permission": {
+        "type": "string",
+        "enum": [
+          "read_only",
+          "workspace_write",
+          "full_access"
+        ]
+      },
+      "SessionConfigPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "permission": {
+            "$ref": "#/components/schemas/Permission"
+          },
+          "effort": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "minProperties": 1
+      },
+      "Session": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "workspace_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "engine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "config_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "created_at": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Unix seconds, measured against server_time."
+          },
+          "last_activity_at": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Unix seconds, measured against server_time."
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "transcript_state": {
+            "type": "string",
+            "enum": [
+              "cold",
+              "loading",
+              "ready",
+              "failed"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "workspace_id",
+          "title",
+          "version",
+          "engine",
+          "config_version",
+          "created_at",
+          "last_activity_at",
+          "archived",
+          "run_id",
+          "transcript_state"
+        ]
+      },
+      "CreateSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "workspace_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "engine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "permission": {
+            "$ref": "#/components/schemas/Permission"
+          },
+          "effort": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "workspace_id",
+          "engine",
+          "channel",
+          "model",
+          "permission",
+          "effort"
+        ]
+      },
+      "StartRun": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 262144,
+            "description": "Also limited to 256 KiB of UTF-8 by the host."
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "Run": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "session_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending_save",
+              "starting",
+              "running",
+              "waiting_approval",
+              "waiting_input",
+              "cancelling",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "activity": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "effective_config": {
+            "$ref": "#/components/schemas/SessionConfig"
+          }
+        },
+        "required": [
+          "id",
+          "session_id",
+          "version",
+          "state",
+          "activity",
+          "effective_config"
+        ]
+      },
+      "Approval": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "session_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "preview": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "preview_truncated": {
+            "type": "boolean"
+          },
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "allow_once",
+                "deny"
+              ]
+            },
+            "maxItems": 2
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "submitted",
+              "resolved",
+              "expired"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "session_id",
+          "run_id",
+          "version",
+          "title",
+          "preview",
+          "preview_truncated",
+          "choices",
+          "state"
+        ]
+      },
+      "ApprovalDecision": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "allow_once",
+              "deny"
+            ]
+          }
+        },
+        "required": [
+          "decision"
+        ]
+      },
+      "QuestionField": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "text",
+              "single_select",
+              "multi_select"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "label": {
+                  "type": "string",
+                  "maxLength": 1024
+                }
+              },
+              "required": [
+                "id",
+                "label"
+              ]
+            },
+            "maxItems": 100
+          },
+          "max_text_length": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8192
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "required"
+        ]
+      },
+      "Question": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "session_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "supported": {
+            "type": "boolean"
+          },
+          "unsupported_reason": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuestionField"
+            },
+            "maxItems": 50
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "submitted",
+              "resolved",
+              "expired"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "session_id",
+          "run_id",
+          "version",
+          "title",
+          "supported",
+          "fields",
+          "state"
+        ]
+      },
+      "Answer": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "field_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "option_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "field_id"
+        ]
+      },
+      "QuestionAnswer": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "answers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Answer"
+            },
+            "maxItems": 50
+          }
+        },
+        "required": [
+          "answers"
+        ]
+      },
+      "Message": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "session_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant",
+              "tool",
+              "notice"
+            ]
+          },
+          "created_at": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Unix seconds, measured against server_time."
+          },
+          "text_preview": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "input_preview": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "detail_preview": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "content_truncated": {
+            "type": "boolean"
+          },
+          "content_available": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "id",
+          "session_id",
+          "version",
+          "kind",
+          "created_at",
+          "text_preview",
+          "input_preview",
+          "detail_preview",
+          "content_truncated",
+          "content_available",
+          "status"
+        ]
+      },
+      "ContentChunk": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "field": {
+            "type": "string",
+            "enum": [
+              "text",
+              "input",
+              "detail"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 131072
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "message_id",
+          "version",
+          "field",
+          "text",
+          "next_cursor"
+        ]
+      },
+      "AppSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "language": {
+            "type": "string",
+            "enum": [
+              "en",
+              "zh-CN"
+            ]
+          },
+          "auto_rename": {
+            "type": "boolean"
+          },
+          "default_session_permission": {
+            "$ref": "#/components/schemas/Permission"
+          }
+        },
+        "required": [
+          "version",
+          "language",
+          "auto_rename",
+          "default_session_permission"
+        ]
+      },
+      "AppSettingsPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "language": {
+            "type": "string",
+            "enum": [
+              "en",
+              "zh-CN"
+            ]
+          },
+          "auto_rename": {
+            "type": "boolean"
+          },
+          "default_session_permission": {
+            "$ref": "#/components/schemas/Permission"
+          }
+        },
+        "minProperties": 1
+      },
+      "Defaults": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "engine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "version",
+          "engine",
+          "channel",
+          "model"
+        ]
+      },
+      "DefaultsPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "channel",
+          "model"
+        ]
+      },
+      "CredentialState": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "none",
+              "stored",
+              "environment"
+            ]
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "environment_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "mode",
+          "configured",
+          "environment_name"
+        ]
+      },
+      "CredentialWrite": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "keep"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "set"
+                ]
+              },
+              "value": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16384,
+                "writeOnly": true
+              }
+            },
+            "required": [
+              "action",
+              "value"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "use_env"
+                ]
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "action",
+              "name"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "clear"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ]
+          }
+        ]
+      },
+      "Provider": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "engine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "local",
+              "ccs",
+              "native"
+            ]
+          },
+          "read_only": {
+            "type": "boolean"
+          },
+          "read_only_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8192
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "base_url": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "maxItems": 1000
+          },
+          "credential": {
+            "$ref": "#/components/schemas/CredentialState"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "engine",
+          "name",
+          "source",
+          "read_only",
+          "read_only_reason",
+          "base_url",
+          "models",
+          "credential"
+        ]
+      },
+      "CreateProvider": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "engine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "base_url": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 2048,
+            "description": "No userinfo or secret query parameters."
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "maxItems": 1000
+          },
+          "credential": {
+            "$ref": "#/components/schemas/CredentialWrite"
+          }
+        },
+        "required": [
+          "engine",
+          "name",
+          "base_url",
+          "models",
+          "credential"
+        ]
+      },
+      "ProviderPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "base_url": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 2048,
+            "description": "No userinfo or secret query parameters."
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "maxItems": 1000
+          },
+          "credential": {
+            "$ref": "#/components/schemas/CredentialWrite"
+          }
+        },
+        "minProperties": 1
+      },
+      "OperationResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "resource": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "resource_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "applied": {
+            "type": "boolean"
+          },
+          "saved": {
+            "type": "boolean"
+          },
+          "cancel_requested": {
+            "type": "boolean"
+          },
+          "approval_submitted": {
+            "type": "boolean"
+          },
+          "question_submitted": {
+            "type": "boolean"
+          }
+        },
+        "description": "Sanitized receipt only. Never echoes request bodies or credentials."
+      },
+      "Operation": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "host_epoch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "applying",
+              "saving",
+              "succeeded",
+              "failed"
+            ]
+          },
+          "created_at": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Unix seconds, measured against server_time."
+          },
+          "updated_at": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Unix seconds, measured against server_time."
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OperationResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Error"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "host_epoch",
+          "state",
+          "created_at",
+          "updated_at",
+          "result",
+          "error"
+        ]
+      },
+      "Accepted": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "host_epoch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "operation_id",
+          "host_epoch"
+        ]
+      },
+      "CatalogEngine": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "model_services": {
+            "type": "boolean"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            },
+            "maxItems": 3
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "label": {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                "efforts": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "maxItems": 32
+                }
+              },
+              "required": [
+                "id",
+                "label",
+                "efforts"
+              ]
+            },
+            "maxItems": 1000
+          },
+          "provider_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "maxItems": 1000
+          },
+          "question_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "enabled",
+          "model_services",
+          "permissions",
+          "models",
+          "provider_ids",
+          "question_kinds"
+        ]
+      },
+      "Catalog": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "engines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogEngine"
+            },
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "version",
+          "engines"
+        ]
+      },
+      "WorkspacePage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Workspace"
+            },
+            "maxItems": 100
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ]
+      },
+      "SessionPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Session"
+            },
+            "maxItems": 100
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ]
+      },
+      "ProviderPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Provider"
+            },
+            "maxItems": 100
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ]
+      },
+      "MessagePage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "maxItems": 100
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "transcript_state": {
+            "type": "string",
+            "enum": [
+              "cold",
+              "loading",
+              "ready",
+              "failed"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "transcript_state"
+        ]
+      },
+      "Snapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host_epoch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "grant_revision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "workspaces": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Workspace"
+            },
+            "maxItems": 100
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Session"
+            },
+            "maxItems": 100
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Run"
+            },
+            "maxItems": 100
+          },
+          "approvals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Approval"
+            },
+            "maxItems": 100
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Question"
+            },
+            "maxItems": 100
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "maxItems": 100
+          },
+          "continuation": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "host_epoch",
+          "cursor",
+          "grant_revision",
+          "workspaces",
+          "sessions",
+          "runs",
+          "approvals",
+          "questions",
+          "messages",
+          "continuation"
+        ]
+      },
+      "RemoteEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "session.upsert"
+                ]
+              },
+              "data": {
+                "$ref": "#/components/schemas/Session"
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "message.upsert"
+                ]
+              },
+              "data": {
+                "$ref": "#/components/schemas/Message"
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "run.changed"
+                ]
+              },
+              "data": {
+                "$ref": "#/components/schemas/Run"
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "approval.changed"
+                ]
+              },
+              "data": {
+                "$ref": "#/components/schemas/Approval"
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "question.changed"
+                ]
+              },
+              "data": {
+                "$ref": "#/components/schemas/Question"
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "operation.changed"
+                ]
+              },
+              "data": {
+                "$ref": "#/components/schemas/Operation"
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "session.removed"
+                ]
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "session_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "workspace_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "session_id",
+                  "workspace_id"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "settings.changed"
+                ]
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "resource": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "resource_id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "version": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "resource",
+                  "resource_id",
+                  "version"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "transcript.ready"
+                ]
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "session_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "version": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "session_id",
+                  "version"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "resource.invalidated"
+                ]
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "resource": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "resource_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "version": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "resource",
+                  "resource_id",
+                  "version"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "resync_required"
+                ]
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "enum": [
+                      "replay_gap",
+                      "queue_overflow",
+                      "projection_reset",
+                      "grant_changed"
+                    ]
+                  }
+                },
+                "required": [
+                  "reason"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          }
+        ],
+        "description": "JSON data in SSE frames. The id field is an opaque signed cursor; resync_required has no id. Heartbeat comments carry no business state."
+      }
+    }
+  }
+}

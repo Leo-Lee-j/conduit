@@ -18,19 +18,16 @@ fn label(key: &'static str) -> &'static str {
 }
 
 impl ConduitApp {
-    pub(super) fn record_turn_usage(
-        &mut self,
+    pub(super) fn turn_usage_observation(
+        &self,
         id: u64,
         run: &ActiveRun,
         incomplete: bool,
-        cx: &mut Context<Self>,
-    ) {
+    ) -> Option<Observation> {
         if matches!(run.intent, crate::commands::RequestIntent::Discover) {
-            return;
+            return None;
         }
-        let Some(session) = self.session(id) else {
-            return;
-        };
+        let session = self.session(id)?;
         let provider = session.provider;
         let workspace = self
             .store
@@ -60,7 +57,7 @@ impl ConduitApp {
                 }
             })
             .flatten();
-        self.store.usage_ledger.record(Observation {
+        Some(Observation {
             key: run.usage_key.clone(),
             session: id,
             workspace: workspace.clone(),
@@ -76,7 +73,21 @@ impl ConduitApp {
                 .flatten(),
             elapsed_ms: run.turn_started.elapsed().as_millis().min(u64::MAX as u128) as u64,
             incomplete,
-        });
+        })
+    }
+
+    pub(super) fn record_turn_usage(
+        &mut self,
+        id: u64,
+        run: &ActiveRun,
+        incomplete: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(observation) = self.turn_usage_observation(id, run, incomplete) else {
+            return;
+        };
+        let workspace = observation.workspace.clone();
+        self.store.usage_ledger.record(observation);
         self.check_usage_budget(&workspace, cx);
     }
 
@@ -325,7 +336,7 @@ impl Render for UsagePanel {
         let width = f32::from(window.viewport_size().width)
             - app.sidebar_width
             - 6.
-            - if window.viewport_size().width >= px(1100.) && app.plugins.right_visible(false) {
+            - if window.viewport_size().width >= px(1100.) && app.right_view_visible() {
                 app.plugins.dock.width
             } else {
                 0.

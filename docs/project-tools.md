@@ -19,8 +19,8 @@
 | Codex 原生分支 | 从已记录的完成轮次建立独立原生会话，保留截至该轮的上下文和本地历史 | 创建不发送模型提示词、不恢复文件；旧导入历史没有可靠轮次映射时使用上下文交接 |
 | 代码和终端上下文 | 按行号捕获代码及来源指纹；把终端选中内容附到草稿 | 不自动发送，终端片段不代表完整日志或验证结果 |
 | 审查反馈 | 行级意见、版本指纹、处理状态、已查看、历史收件箱、只读 AI 审查草稿及结构化发现导入 | AI 发现默认待复核；PR 讨论保留独立的远端位置；详见 [Git 工作流](git.md) |
-| GitHub PR/CI | 当前分支 PR、检查、会话评论、行级讨论及本地同步、失败检查转修复任务、打开链接、附到草稿；新增 PR 评论、讨论回复和解决操作 | 写回代码待编译与真实账号验收；使用已有 gh 认证；远端状态与本地处理状态独立；无 job 日志 |
-| 自建 GitLab MR/CI | 当前分支 MR、流水线和作业状态、评论、审查讨论及本地同步、修复任务；发表评论、回复与解决可解决讨论 | 使用已有 glab 认证；不创建或合并 MR、不运行流水线、不取作业日志；真实账号联调待完成 |
+| GitHub PR/CI | 当前分支 PR、检查、会话评论、行级讨论及本地同步、失败检查转修复任务、打开链接、附到草稿；新增 PR 评论、讨论回复和解决操作 | 直连 GitHub API，无需 gh；凭据见下文“登录凭据”；远端状态与本地处理状态独立；无 job 日志 |
+| 自建 GitLab MR/CI | 当前分支 MR、流水线和作业状态、评论、审查讨论及本地同步、修复任务；发表评论、回复与解决可解决讨论 | 直连 GitLab `/api/v4`，无需 glab；不创建或合并 MR、不运行流水线、不取作业日志；真实账号联调待完成 |
 | 用量和预算 | 按本地月份、日期、引擎、服务汇总已知 token 与速度，月度 token 提醒 | 未知、部分、历史覆盖单独标记；不估算金额、不硬停止 |
 | 自动任务 | 模板驱动的小时间隔或人工会话成功结束事件；暂停恢复、编辑删除、运行记录 | 应用须运行；强制只读；不补跑、不重叠、不连锁触发 |
 | 文件检查点 | 手动保存一个文本文件，预览后恢复，自动保留恢复前副本 | UTF-8、1 MiB、最多 200 条；不恢复整个项目或 Git 索引 |
@@ -65,19 +65,26 @@ PR 与 CI 使用工作区标签页，可与会话、代码和 Diff 来回切换�
 
 每次最多获取 8 页、每页 25 条讨论；每条保留首条评论和最新 20 条评论，省略内容会提示到 GitHub 查看。面板展示首条和最近两条评论及 Diff 的节选，附到草稿包含全部已捕获评论及原始 Diff。单条评论正文和 Diff 各限 64 KiB，分页响应合计限 8 MiB，单次附加内容限 128 KiB；超限拒绝该次操作。请求中的 PR URL 与 HEAD 每页都需匹配，接口错误或中途变化时不提供可同步的部分结果，PR 检查和会话评论仍可单独显示。本地最多保存 500 条讨论、16 MiB；超限整批不保存。异步保存错误在 PR 面板和收件箱展示。
 
-实现依据 GitHub 官方 GraphQL schema 的 `PullRequestReviewThread` 与 `PullRequestReviewComment` 字段，使用 `gh api graphql` 的查询操作。已核对 2026-11-10 下载的官方 schema（`https://docs.github.com/public/fpt/schema.docs.graphql`）；本机缺少 `gh.exe`，尚未完成真实账户联调。
+实现依据 GitHub 官方 GraphQL schema 的 `PullRequestReviewThread` 与 `PullRequestReviewComment` 字段，直接请求 GitHub GraphQL 接口（github.com 为 `https://api.github.com/graphql`，Enterprise 为 `https://<host>/api/graphql`）。已核对 2026-11-10 下载的官方 schema（`https://docs.github.com/public/fpt/schema.docs.graphql`）。2026-11-18 已用 Git Credential Manager 的 github.com 令牌完成 PR 列表、详情、CI 检查与审查讨论的只读联调；写回操作尚未实测。
+
+## 登录凭据
+
+PR / MR 功能直接调用 GitHub / GitLab HTTP API，不依赖 `gh.exe` 或 `glab.exe`。按以下顺序查找令牌，使用第一个可用的；服务器返回 401 时自动尝试下一个：
+
+1. Conduit 保存的个人访问令牌：认证失败时，PR 列表和详情页会显示登录表单，粘贴令牌后点“保存并重试”。令牌按当前 Windows 用户以 DPAPI 加密，保存在数据目录的 `forge-tokens.json`，按平台和主机区分。
+2. 环境变量：github.com 用 `GH_TOKEN` / `GITHUB_TOKEN`，GitHub Enterprise 用 `GH_ENTERPRISE_TOKEN` / `GITHUB_ENTERPRISE_TOKEN`，GitLab 用 `GITLAB_TOKEN` / `GITLAB_ACCESS_TOKEN`。
+3. Git Credential Manager：用 HTTPS 推送过代码的主机通常已经保存了 OAuth 令牌，Conduit 通过 `git credential fill` 只读获取，不会弹出登录窗口，也不会改写或删除 Git 的凭据。
+4. 已安装的 `gh` / `glab`：作为兜底，读取它们已登录的令牌。
+
+令牌权限：GitHub 需要 `repo`，GitLab 需要 `api`。HTTPS 证书使用 Windows 证书库校验，可识别企业内部 CA；代理读取 `HTTPS_PROXY` / `ALL_PROXY` 等环境变量与 Windows 系统代理设置。写回请求遇到 401 时服务器未执行操作，可安全换下一个令牌；其他失败一律不重发。
 
 ## 自建 GitLab
 
-在本机安装 GitLab CLI，确保 `glab.exe` 在 PATH 中，然后自行登录实例：
+无需安装 GitLab CLI。登录方式见上文“登录凭据”；令牌需要 `api` 权限。
 
-```powershell
-glab auth login --hostname gitlab.example.com
-```
+打开提交侧栏的 PR / MR Tab，在列表底部的平台菜单中选择 **GitLab**；请求详情顶部也保留平台菜单。选择保存到仓库的本地 Git 配置 `conduit.forge`，刷新和重启后仍然有效；可切回 GitHub 或自动识别。域名含独立 `gitlab` 段（例如 `gitlab.company.com`）时直接识别为 GitLab；其他非 github.com 域名会向该仓库主机发送一次不带凭据的 `GET /api/v4/version`，返回 GitLab 特征响应则识别为 GitLab，否则按 GitHub Enterprise 处理。探测结果在进程内缓存，网络失败不缓存。
 
-打开提交侧栏的 PR / MR Tab，在列表底部的平台菜单中选择 **GitLab**；请求详情顶部也保留平台菜单。选择保存到仓库的本地 Git 配置 `conduit.forge`，刷新和重启后仍然有效；可切回 GitHub 或自动识别。域名含独立 `gitlab` 段（例如 `gitlab.company.com`）时自动识别为 GitLab，其他域名保持 GitHub 默认行为，避免误判 GitHub Enterprise。
-
-按当前分支的 `pushRemote`、`remote.pushDefault`、分支 remote、`origin`、唯一 remote 的顺序确定项目。支持 HTTPS/HTTP、SCP 风格 SSH 与 `ssh://` 地址、多级群组、Web 端口。SSH 端口不会当成 API 端口；SSH 主机别名、API 主机或端口不同、HTTP API 等情况，请先在 `glab auth login` 中配置 `--api-host`、`--api-protocol` 等实例选项。项目内保存平台选择，不保存令牌。当前不支持 GitLab 安装在 URL 子路径的实例。
+按当前分支的 `pushRemote`、`remote.pushDefault`、分支 remote、`origin`、唯一 remote 的顺序确定项目。支持 HTTPS/HTTP、SCP 风格 SSH 与 `ssh://` 地址、多级群组、Web 端口。SSH 端口不会当成 API 端口，API 一律走 HTTPS 默认端口；SSH 主机别名或 API 主机、端口不同时，在仓库中执行 `git config conduit.forgeHost gitlab.example.com:8443` 指定。项目内保存平台选择，不保存令牌。不支持纯 HTTP 的 API。当前不支持 GitLab 安装在 URL 子路径的实例。
 
 按当前项目 ID 与本地分支查找 MR，优先显示唯一开放 MR，否则显示最近更新的匹配记录；多个开放 MR 不会任意选取。Fork 项目没有匹配记录时查询其上游项目。查询前后复核本地分支、HEAD、remote 与 MR 版本，讨论保留原提交和行号；旧提交的讨论标记过期，不推测本地位置。流水线标题包含其实际提交摘要，兼容合并结果流水线的临时提交。
 
@@ -97,7 +104,7 @@ WSL/SSH 连接页先列出已保存的连接，展示类型、目标与起始目
 
 WSL/SSH 入口使用系统 `wsl.exe` / `ssh.exe`。凭据和主机身份确认由客户端处理，不进入应用配置。关闭终端结束本地连接，不保证远端脱离终端的进程退出。此入口不改变文件树、Git 或聊天引擎的本地目标，完整远程工作区尚未完成。
 
-原生命令详见 [Chat 命令](chat-commands.md)：增加 Codex `/compact`、`/review` RPC；Claude/Qoder 原生命令尚未适配。GitHub 本机缺少 `gh.exe`，仅完成解析与边界测试，没有真实账户联调。当前 Windows 窗口控制通道不可用；模拟 UI 测试不等同于实机视觉验收。真实 WSL/SSH 连接和付费模型调用不在已通过的验证范围。
+原生命令详见 [Chat 命令](chat-commands.md)：增加 Codex `/compact`、`/review` RPC；Claude/Qoder 原生命令尚未适配。GitHub 已完成只读真实账户联调，写回操作尚未实测。当前 Windows 窗口控制通道不可用；模拟 UI 测试不等同于实机视觉验收。真实 WSL/SSH 连接和付费模型调用不在已通过的验证范围。
 
 已使用隔离 `CODEX_HOME` 与本地模拟 Responses 服务验证本机 Codex CLI 0.167.0：两轮源会话按第一轮分支后只返回第一轮，创建分支的模型请求数为零。保存失败、配置与 CLI 变化、取消、重试及完成事件隔离有离线回归测试。此验证未使用在线模型或用户已有原生会话。
 
