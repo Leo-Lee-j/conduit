@@ -580,7 +580,6 @@ impl ConduitApp {
         // workspace at all. Keeping the same shell in all three states keeps
         // the chat area from changing size when the session state changes.
         let composer_enabled = can_edit && has_workspace;
-        let usage_parts = self.usage_status_parts();
         let mut composer = v_flex()
             .id("composer")
             .debug_selector(|| "composer".into())
@@ -752,9 +751,6 @@ impl ConduitApp {
                     )
                     .when(selected.is_some(), |row| {
                         row.child(self.permission_picker(app_entity.clone()))
-                    })
-                    .when_some(usage_parts, |row, parts| {
-                        row.child(h_flex().gap_3().items_center().min_w_0().children(parts))
                     })
                     .child(
                         h_flex()

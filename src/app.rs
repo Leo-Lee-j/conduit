@@ -142,6 +142,7 @@ use typography::*;
 
 /// Keep document and right-sidebar tab strips aligned in both layouts.
 const TAB_BAR_HEIGHT: f32 = 36.;
+const STATUS_BAR_HEIGHT: f32 = 34.;
 
 actions!(
     conduit,

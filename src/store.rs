@@ -2,7 +2,7 @@ use crate::domain::Workspace;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -533,12 +533,23 @@ impl Store {
         }
         let legacy = state.version == 1;
         let mut paths = HashSet::new();
+        let mut usage_path_aliases = HashMap::new();
         let mut sessions = HashSet::new();
         for workspace in &mut state.workspaces {
             if !workspace.path.is_absolute() {
                 bail!(conduit::i18n::text("store.workspace_path_must_be_absolute"));
             }
             if let Ok(path) = workspace.path.canonicalize() {
+                if workspace.path != path {
+                    usage_path_aliases.insert(workspace.path.clone(), path.clone());
+                }
+                // Older manifests may already have a verbatim Windows workspace path
+                // while their usage ledger still contains the ordinary path.
+                #[cfg(windows)]
+                usage_path_aliases.insert(
+                    crate::workspace_files::display_path(&path).into(),
+                    path.clone(),
+                );
                 workspace.path = path;
             }
             if !paths.insert(workspace.path.clone()) {
@@ -589,6 +600,23 @@ impl Store {
                     ));
                 }
                 restore_session(session);
+            }
+        }
+        for workspace in state
+            .usage_ledger
+            .observations
+            .iter_mut()
+            .map(|turn| &mut turn.workspace)
+            .chain(
+                state
+                    .usage_ledger
+                    .budgets
+                    .iter_mut()
+                    .map(|budget| &mut budget.workspace),
+            )
+        {
+            if let Some(path) = usage_path_aliases.get(workspace.as_path()) {
+                workspace.clone_from(path);
             }
         }
         state.version = state.version.max(2);
@@ -980,7 +1008,26 @@ mod tests {
             reasoning_effort: Default::default(),
             opencode: Default::default(),
             permission: crate::domain::PermissionLevel::default(),
-            usage: crate::domain::Usage::default(),
+            usage: crate::domain::Usage {
+                context_window: 100_000,
+                context_tokens: Some(36_000),
+                ..Default::default()
+            },
+        });
+        store.usage_ledger.record(crate::usage_ledger::Observation {
+            key: "roundtrip".into(),
+            session: 1,
+            workspace: directory.clone(),
+            provider: Provider::Codex,
+            service: "cli".into(),
+            service_name: None,
+            model: None,
+            finished_at: 1,
+            input: Some(1_000),
+            cached: None,
+            output: Some(500),
+            elapsed_ms: 12_000,
+            incomplete: false,
         });
         store
             .cli
@@ -990,6 +1037,14 @@ mod tests {
         assert_eq!(restored.cli, store.cli);
         assert_eq!(restored.workspaces[0].sessions[0].exit_code, Some(7));
         assert!(restored.workspaces[0].sessions[0].pinned);
+        assert_eq!(
+            restored.workspaces[0].sessions[0].usage.context_tokens,
+            Some(36_000)
+        );
+        let turn = &restored.usage_ledger.observations[0];
+        assert_eq!(turn.workspace, restored.workspaces[0].path);
+        assert_eq!(turn.session, restored.workspaces[0].sessions[0].id);
+        assert_eq!(turn.output, Some(500));
         fs::write(&path, b"invalid json").unwrap();
         assert!(Store::load_from(&path).is_err());
         assert_eq!(fs::read(&path).unwrap(), b"invalid json");

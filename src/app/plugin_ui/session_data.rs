@@ -4,6 +4,7 @@ use super::right::{RightBody, RightView};
 use super::*;
 use crate::usage_ledger::Observation;
 use conduit::plugins::{context::ScopeKey, state::ViewInstanceKey};
+use gpui_kit::component::empty::{Empty, EmptyDescription, EmptyHeader, EmptyMedia};
 use std::{cell::RefCell, rc::Rc};
 
 #[derive(Default)]
@@ -465,27 +466,20 @@ impl ConduitApp {
                         .justify_between()
                         .gap_2()
                         .child(
-                            h_flex()
-                                .items_baseline()
-                                .gap_1()
+                            div()
+                                .text_size(ui_text_size(40.))
+                                .font_semibold()
                                 .text_color(rgb(color))
-                                .child(div().text_size(ui_text_size(40.)).font_semibold().child(
-                                    format!(
-                                        "{}{:.0}",
-                                        if usage.context_window_estimated {
-                                            "≈"
-                                        } else {
-                                            ""
-                                        },
-                                        ratio * 100.
-                                    ),
-                                ))
-                                .child(
-                                    div()
-                                        .text_size(ui_text_size(16.))
-                                        .font_semibold()
-                                        .child("%"),
-                                ),
+                                .whitespace_nowrap()
+                                .child(format!(
+                                    "{}{:.0}%",
+                                    if usage.context_window_estimated {
+                                        "≈"
+                                    } else {
+                                        ""
+                                    },
+                                    ratio * 100.
+                                )),
                         )
                         .child(
                             v_flex()
@@ -539,15 +533,27 @@ impl ConduitApp {
                         }),
                 );
         } else {
-            context = context
-                .child(
-                    div()
-                        .text_size(ui_text_size(32.))
-                        .font_semibold()
-                        .text_color(rgb(palette().muted))
-                        .child("—"),
-                )
-                .child(caption(text("session_data.context_unknown")));
+            context = context.child(
+                Empty::new().p_0().py_2().header(
+                    EmptyHeader::new()
+                        .flex_row()
+                        .gap_2()
+                        .media(
+                            EmptyMedia::new().mb_0().child(
+                                Icon::new(FullIconName::Info)
+                                    .size(px(16.))
+                                    .text_color(rgb(palette().muted)),
+                            ),
+                        )
+                        .description(
+                            EmptyDescription::new()
+                                .flex_1()
+                                .text_left()
+                                .text_size(ui_text_size(12.))
+                                .child(text("session_data.context_unknown")),
+                        ),
+                ),
+            );
         }
         content = content.child(context);
         let turn = latest.as_ref();
@@ -883,25 +889,10 @@ impl ConduitApp {
                 )
                 .child(
                     div()
-                        .w_full()
+                        .h(px(STATUS_BAR_HEIGHT))
                         .flex_shrink_0()
-                        .p_3()
                         .border_t_1()
-                        .border_color(rgb(palette().border))
-                        .child(
-                            Button::new("session-data-history")
-                                .outline()
-                                .rounded(px(8.))
-                                .focus_ring(true)
-                                .small()
-                                .w_full()
-                                .h(px(40.))
-                                .icon(FullIconName::ChartColumn)
-                                .label(text("session_data.view_history"))
-                                .on_click(
-                                    cx.listener(|app, _, window, cx| app.open_usage(window, cx)),
-                                ),
-                        ),
+                        .border_color(rgb(palette().border)),
                 )
                 .into_any_element(),
         )

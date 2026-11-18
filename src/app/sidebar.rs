@@ -378,7 +378,7 @@ impl ConduitApp {
             )
             .child(
                 StatusBar::new()
-                    .h(px(34.))
+                    .h(px(STATUS_BAR_HEIGHT))
                     .min_w_0()
                     .flex_shrink_0()
                     .py_0()

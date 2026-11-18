@@ -150,7 +150,7 @@ impl ConduitApp {
             .id("conversation-toolbar")
             .test_support()
             .debug_selector(|| "conversation-toolbar".into())
-            .h(px(34.))
+            .h(px(STATUS_BAR_HEIGHT))
             .min_w_0()
             .flex_shrink_0()
             .px_2()

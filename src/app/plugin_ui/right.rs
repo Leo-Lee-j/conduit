@@ -280,7 +280,7 @@ impl ConduitApp {
                 rail.child(
                     h_flex()
                         .w_full()
-                        .h(px(34.))
+                        .h(px(STATUS_BAR_HEIGHT))
                         .flex_shrink_0()
                         .items_center()
                         .justify_center()
