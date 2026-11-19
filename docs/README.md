@@ -22,7 +22,8 @@
 | --- | --- |
 | [参与贡献](../CONTRIBUTING.zh-CN.md) | 开发环境、提交前检查和文档维护规则 |
 | [架构](architecture.md) | 产品边界、模块职责与主要数据流 |
-| [手机远程控制设计](design/mobile-remote-control.md) | 待实现的手机发送、停止本轮、会话管理、外网接入与配置协议 |
+| [手机远程控制设计](design/mobile-remote-control.md) | Web 试用版能力、完整目标与尚待实现的配置和授权管理 |
+| [桌面宠物设计](design/desktop-pet.md) | 可启停的内置宠物、直连模型 API、悬浮交互与隐私边界 |
 | [Web 远控试用](design/mobile-remote-preview.md) | 桌面开启、浏览器配对与手机连接 |
 | [应用背景图](background-images.md) | Wallhaven 免 Key 接入、渲染分层、缓存预算与性能验收 |
 | [会话与存储](sessions.md) | 并发、发送确认、正文按需加载、历史导入及恢复 |

@@ -1,16 +1,57 @@
 //! Workspace navigation and session list.
 
 use super::*;
+use gpui_kit::component::badge::Badge;
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::status_bar::StatusBar;
 
 mod cache;
 mod keyboard;
+mod projects;
 mod sticky;
+#[cfg(all(test, feature = "ui-tests"))]
+mod tests;
 pub(super) use cache::SidebarState;
 
 // Keep the virtual-list estimates and rendered navigation rows in agreement.
 const ROW_HEIGHT: f32 = 36.;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TaskState {
+    Running,
+    Approval,
+    Answer,
+    Stopping,
+    Cleanup,
+}
+
+impl TaskState {
+    fn new(run: &ActiveRun) -> Self {
+        if run.cleanup_error.is_some() {
+            Self::Cleanup
+        } else if run.runtime.is_cancelled() {
+            Self::Stopping
+        } else if let Some(approval) = run.approvals.front() {
+            if approval.is_user_input() {
+                Self::Answer
+            } else {
+                Self::Approval
+            }
+        } else {
+            Self::Running
+        }
+    }
+
+    fn label(self) -> &'static str {
+        conduit::i18n::text_static(match self {
+            Self::Running => "session_data.running",
+            Self::Approval => "sidebar.awaiting_confirmation",
+            Self::Answer => "sidebar.awaiting_answer",
+            Self::Stopping => "session_data.stopping",
+            Self::Cleanup => "sidebar.cleanup_pending",
+        })
+    }
+}
 
 /// Shared frame, toolbar and horizontal gutter for the left navigation pages.
 /// Scrolling and bottom borders remain page-specific rather than being nested
@@ -347,7 +388,9 @@ impl ConduitApp {
             }))
             // No bottom padding: the bottom bar aligns with the conversation toolbar.
             .gap_0()
-            .child(self.sidebar_controls(cx));
+            .child(self.sidebar_controls(cx))
+            .child(self.sidebar_active_tasks(cx))
+            .child(self.sidebar_projects_header(cx));
         let rows = self.sidebar.rows.clone();
         let list = gpui_kit::component::v_virtual_list(
             cx.entity(),
@@ -355,7 +398,22 @@ impl ConduitApp {
             self.sidebar.sizes.clone(),
             move |app, range, _, cx| {
                 range
-                    .map(|ix| app.render_sidebar_row(&rows[ix], cx))
+                    .map(|ix| {
+                        let last_child = rows
+                            .get(ix + 1)
+                            .is_none_or(|next| next.is_header() || next.path() != rows[ix].path());
+                        let parent = rows[ix]
+                            .path()
+                            .and_then(|path| app.sidebar.projects.parent(path));
+                        let last_project_child = rows.get(ix + 1).is_none_or(|next| {
+                            matches!(next, cache::Row::Project { .. })
+                                || next
+                                    .path()
+                                    .and_then(|path| app.sidebar.projects.parent(path))
+                                    != parent
+                        });
+                        app.render_sidebar_row(&rows[ix], last_child, last_project_child, cx)
+                    })
                     .collect()
             },
         )
@@ -363,7 +421,7 @@ impl ConduitApp {
         .flex_1()
         .min_h_0()
         .px_2()
-        .gap(px(4.));
+        .gap_0();
         // Mirrors the conversation toolbar height so the two bottom bars read
         // as one strip.
         sidebar = sidebar
@@ -396,13 +454,29 @@ impl ConduitApp {
             .into_any_element()
     }
 
-    fn render_sidebar_row(&self, row: &cache::Row, cx: &mut Context<Self>) -> AnyElement {
+    fn render_sidebar_row(
+        &self,
+        row: &cache::Row,
+        last_child: bool,
+        last_project_child: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         #[cfg(test)]
         self.sidebar
             .rendered_rows
             .set(self.sidebar.rendered_rows.get() + 1);
         let app_entity = cx.entity();
+        let workspace_index = row
+            .path()
+            .and_then(|path| self.sidebar.workspace_index(path));
+        let nested = !matches!(row, cache::Row::Project { .. })
+            && row
+                .path()
+                .and_then(|path| self.sidebar.projects.parent(path))
+                .is_some();
+        let indent = if nested { 26. } else { 0. };
         let element = match row {
+            cache::Row::Project { .. } => self.sidebar_project(row, cx),
             cache::Row::Empty => v_flex()
                 .flex_shrink_0()
                 .px_2()
@@ -434,22 +508,28 @@ impl ConduitApp {
                 )
                 .into_any_element(),
             _ => {
-                let Some(index) = row
-                    .path()
-                    .and_then(|path| self.sidebar.workspace_index(path))
-                else {
+                let Some(index) = workspace_index else {
                     return div().h(px(row.height())).into_any_element();
                 };
                 match row {
                     cache::Row::Workspace { count, last, .. } => {
                         self.sidebar_workspace(index, *count, *last, cx)
                     }
+                    cache::Row::Group { group, .. } => h_flex()
+                        .h(px(row.height()))
+                        .pl(px(64. + indent))
+                        .items_center()
+                        .text_size(ui_text_size(11.))
+                        .font_semibold()
+                        .text_color(rgb(palette().faint))
+                        .child(group.label())
+                        .into_any_element(),
                     cache::Row::Loading(_) => {
                         let workspace = &self.store.workspaces[index];
                         h_flex()
                             .h(px(ROW_HEIGHT))
                             .flex_shrink_0()
-                            .pl(px(24.))
+                            .pl(px(64. + indent))
                             .pr(px(8.))
                             .gap_2()
                             .items_center()
@@ -497,9 +577,9 @@ impl ConduitApp {
                             .when(self.sidebar.keyboard_row.as_ref().is_some_and(|row| matches!(row, cache::Row::Session { id: focused, .. } if *focused == id)), |row| row.aria_active_descendant())
                             .debug_selector(move || format!("session-row-{id}"))
                             .relative()
-                            .h(px(ROW_HEIGHT))
+                            .h(px(row.height()))
                             .flex_shrink_0()
-                            .pl(px(24.))
+                            .pl(px(64. + indent))
                             .pr(px(8.))
                             .gap_2()
                             .items_center()
@@ -528,40 +608,59 @@ impl ConduitApp {
                                     session_menu(menu, menu_app.clone(), id, menu_app.read(cx))
                                 }
                             })
-                            .child(provider_icon(session.provider))
                             .child(
-                                div()
+                                h_flex()
                                     .flex_1()
                                     .min_w_0()
-                                    .truncate()
-                                    .line_height(px(16.))
-                                    .child(if session.title.is_empty() {
-                                        conduit::i18n::text_static("files.new_session").to_string()
-                                    } else {
-                                        single_line_title(&session.title)
+                                    .items_start()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .debug_selector(move || format!("session-title-{id}"))
+                                            .flex_1()
+                                            .min_w_0()
+                                            .line_clamp(2)
+                                            .line_height(px(16.))
+                                            .child(if session.title.is_empty() {
+                                                conduit::i18n::text_static("files.new_session").to_string()
+                                            } else {
+                                                single_line_title(&session.title)
+                                            }),
+                                    )
+                                    .when(self.session_control.namings.contains_key(&id), |row| {
+                                        row.child(Spinner::new().small().color(rgb(palette().muted).into()))
+                                    })
+                                    .when(pinned, |row| {
+                                        row.child(
+                                            Icon::new(FullIconName::Pin)
+                                                .size(px(12.))
+                                                .text_color(rgb(palette().faint)),
+                                        )
+                                    })
+                                    .when(archived, |row| {
+                                        row.child(
+                                            div()
+                                                .text_size(ui_text_size(12.))
+                                                .text_color(rgb(palette().faint))
+                                                .child(conduit::i18n::text_static("search.archived")),
+                                        )
+                                    })
+                                    .when(running || unread, |row| {
+                                        row.child(session_activity_dot("session-activity", id, running))
+                                    })
+                                    .when_some(session_age_label(session.last_activity_at()), |row, age| {
+                                        row.child(
+                                            div()
+                                                .debug_selector(move || format!("session-age-{id}"))
+                                                .flex_shrink_0()
+                                                .whitespace_nowrap()
+                                                .line_height(px(16.))
+                                                .text_size(ui_text_size(12.))
+                                                .text_color(rgb(palette().faint))
+                                                .child(age),
+                                        )
                                     }),
                             )
-                            .when(self.session_control.namings.contains_key(&id), |row| {
-                                row.child(Spinner::new().small().color(rgb(palette().muted).into()))
-                            })
-                            .when(pinned, |row| {
-                                row.child(
-                                    Icon::new(FullIconName::Pin)
-                                        .size(px(12.))
-                                        .text_color(rgb(palette().faint)),
-                                )
-                            })
-                            .when(archived, |row| {
-                                row.child(
-                                    div()
-                                        .text_size(ui_text_size(12.))
-                                        .text_color(rgb(palette().faint))
-                                        .child(conduit::i18n::text_static("search.archived")),
-                                )
-                            })
-                            .when(running || unread, |row| {
-                                row.child(session_activity_dot("session-activity", id, running))
-                            })
                             .when(self.delete_target == Some(id), |row| {
                                 row.child(
                                     div()
@@ -569,19 +668,6 @@ impl ConduitApp {
                                         .right_0()
                                         .top_0()
                                         .child(self.delete_session_popover(id, cx)),
-                                )
-                            })
-                            .when_some(session_age_label(session.last_activity_at()), |row, age| {
-                                row.child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .px(px(5.))
-                                        .py(px(1.))
-                                        .rounded(px(4.))
-                                        .bg(rgb(palette().surface_strong))
-                                        .text_size(ui_text_size(12.))
-                                        .text_color(rgb(palette().faint))
-                                        .child(age),
                                 )
                             })
                             .into_any_element()
@@ -612,8 +698,7 @@ impl ConduitApp {
 
                         h_flex()
                             .h(px(28.))
-                            // Center the glyph under the 14px session icons at a 24px inset.
-                            .pl(px(17.))
+                            .pl(px(56. + indent))
                             .items_center()
                             .child(
                                 Button::new(SharedString::from(format!(
@@ -624,7 +709,7 @@ impl ConduitApp {
                                 .icon(if expanded {
                                     FullIconName::ListChevronsDownUp
                                 } else {
-                                    FullIconName::Ellipsis
+                                    FullIconName::ChevronDown
                                 })
                                 .tooltip(tooltip.clone())
                                 .accessibility_label(tooltip)
@@ -658,10 +743,52 @@ impl ConduitApp {
         let wrapper = div()
             .relative()
             .w_full()
-            .h(px(row.height()))
+            .h(px(row.list_height()))
             .child(element)
+            .when(row.path().is_some() && !row.is_header(), |wrapper| {
+                let index = workspace_index.expect("child workspace rendered");
+                let guide_id = match row {
+                    cache::Row::Group { group, .. } => {
+                        format!("workspace-guide-{index}-{group:?}")
+                    }
+                    cache::Row::Session { id, .. } => format!("session-guide-{id}"),
+                    cache::Row::More { .. } => format!("workspace-guide-{index}-more"),
+                    cache::Row::Loading(_) => format!("workspace-guide-{index}-loading"),
+                    _ => unreachable!(),
+                };
+                wrapper.child(
+                    div()
+                        .debug_selector(move || guide_id.clone())
+                        .absolute()
+                        .left(px(38. + indent))
+                        .top_0()
+                        .bottom(px(if last_child { 4. } else { 0. }))
+                        .w(px(1.))
+                        .bg(rgb(palette().border)),
+                )
+            })
+            .when(nested, |wrapper| {
+                let index = workspace_index.expect("nested workspace");
+                let guide_id = match row {
+                    cache::Row::Session { id, .. } => format!("project-guide-session-{id}"),
+                    cache::Row::Workspace { .. } => format!("project-guide-workspace-{index}"),
+                    cache::Row::Group { group, .. } => format!("project-guide-{index}-{group:?}"),
+                    cache::Row::More { .. } => format!("project-guide-{index}-more"),
+                    _ => format!("project-guide-{index}-loading"),
+                };
+                wrapper.child(
+                    div()
+                        .debug_selector(move || guide_id.clone())
+                        .absolute()
+                        .left(px(38.))
+                        .top_0()
+                        .bottom(px(if last_project_child { 4. } else { 0. }))
+                        .w(px(1.))
+                        .bg(rgb(palette().border)),
+                )
+            })
             .when(
-                !matches!(row, cache::Row::Workspace { .. })
+                !row.is_header()
                     && self
                         .sidebar
                         .keyboard_row
@@ -669,11 +796,12 @@ impl ConduitApp {
                         .is_some_and(|focused| focused.same_identity(row)),
                 |row| row.child(self.sidebar_focus_indicator()),
             );
-        if let Some(offset) = row.path().and_then(|path| self.sidebar.motion_offset(path))
+        if let Some(offset) = row
+            .path()
+            .and_then(|path| self.sidebar.motion_start_offset(path))
             && let Some(started) = self.sidebar.motion_started
+            && started.elapsed() < cache::WORKSPACE_MOVE_DURATION
         {
-            let remaining = cache::WORKSPACE_MOVE_DURATION.saturating_sub(started.elapsed());
-            let frame_start = Instant::now();
             return wrapper
                 .relative()
                 .with_animation(
@@ -681,13 +809,8 @@ impl ConduitApp {
                         "workspace-move-{}-{row:?}",
                         self.sidebar.motion_generation
                     )),
-                    Animation::new(remaining),
-                    move |row, _| {
-                        let progress = (frame_start.elapsed().as_secs_f32()
-                            / remaining.as_secs_f32().max(0.001))
-                        .min(1.);
-                        row.top(px(offset * (1. - progress).powi(3)))
-                    },
+                    Animation::new(cache::WORKSPACE_MOVE_DURATION),
+                    move |row, progress| row.top(px(offset * (1. - progress).powi(3))),
                 )
                 .into_any_element();
         }
@@ -697,6 +820,15 @@ impl ConduitApp {
     fn switch_sidebar_session(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((workspace, _)) = self.session_control.locate(&self.store.workspaces, id) {
             self.switch(workspace, Some(id), window, cx);
+            if self.selected_session == Some(id) {
+                let path = self.store.workspaces[workspace].path.clone();
+                self.set_workspace_collapsed(&path, false);
+                self.refresh_sidebar();
+                if let Some(key) = self.sidebar.projects.parent(&path).cloned() {
+                    self.sidebar.expanded_projects.insert(key);
+                    self.refresh_sidebar();
+                }
+            }
         }
     }
 
@@ -706,20 +838,21 @@ impl ConduitApp {
             .id("workspace-controls")
             .debug_selector(|| "workspace-controls".into())
             .w_full()
-            .h(px(ROW_HEIGHT))
+            .h(px(44.))
             .flex_shrink_0()
             .px_2()
             .items_center()
             .justify_between()
             .child(
                 div()
-                    .text_size(ui_text_size(12.))
-                    .text_color(rgb(palette().faint))
+                    .text_size(ui_text_size(16.))
+                    .font_semibold()
+                    .text_color(rgb(palette().text))
                     .child(conduit::i18n::text_static("git_compare.workspace")),
             )
             .child(
                 h_flex()
-                    .gap_1()
+                    .gap_2()
                     .child(
                         Button::new("toggle-archived")
                             .cursor_pointer()
@@ -728,8 +861,8 @@ impl ConduitApp {
                             .small()
                             .ghost()
                             .compact()
-                            .w(px(28.))
-                            .h(px(28.))
+                            .w(px(32.))
+                            .h(px(32.))
                             .tooltip(conduit::i18n::text_static("search.archived"))
                             .accessibility_label(conduit::i18n::text_static("search.archived"))
                             .selected(self.show_archived)
@@ -746,8 +879,8 @@ impl ConduitApp {
                             .small()
                             .compact()
                             .ghost()
-                            .w(px(28.))
-                            .h(px(28.))
+                            .w(px(32.))
+                            .h(px(32.))
                             .tooltip(conduit::i18n::text_static("search.everything"))
                             .accessibility_label(conduit::i18n::text_static("search.everything"))
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -760,9 +893,11 @@ impl ConduitApp {
                             .debug_selector(|| "add-workspace".into())
                             .icon(IconName::Plus)
                             .small()
-                            .ghost()
-                            .w(px(28.))
-                            .h(px(28.))
+                            .primary()
+                            .w(px(32.))
+                            .h(px(32.))
+                            .p_0()
+                            .rounded(px(8.))
                             .tooltip(conduit::i18n::text_static("sessions.add_workspace"))
                             .accessibility_label(conduit::i18n::text_static(
                                 "sessions.add_workspace",
@@ -770,6 +905,242 @@ impl ConduitApp {
                             .disabled(!can_edit)
                             .on_click(cx.listener(Self::add_workspace)),
                     ),
+            )
+            .into_any_element()
+    }
+
+    fn sidebar_active_tasks(&self, cx: &mut Context<Self>) -> AnyElement {
+        let mut tasks: Vec<_> = self
+            .session_control
+            .runs
+            .iter()
+            .filter_map(|(id, run)| {
+                self.session(*id)?;
+                Some((*id, run.turn_started, TaskState::new(run)))
+            })
+            .collect();
+        tasks.sort_by(|(a_id, a_started, _), (b_id, b_started, _)| {
+            b_started.cmp(a_started).then_with(|| a_id.cmp(b_id))
+        });
+        if tasks.is_empty() {
+            return div().into_any_element();
+        }
+
+        let count = tasks.len();
+        let panel = v_flex()
+            .id("sidebar-active-tasks")
+            .debug_selector(|| "sidebar-active-tasks".into())
+            .mx_2()
+            .mb_2()
+            .flex_shrink_0()
+            .p_1()
+            .rounded(px(8.))
+            .bg(rgb(palette().canvas))
+            .border_1()
+            .border_color(rgb(palette().border))
+            .child(
+                h_flex()
+                    .h(px(28.))
+                    .px_2()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(ui_text_size(12.))
+                            .font_semibold()
+                            .text_color(rgb(palette().muted))
+                            .child(conduit::i18n::text_static("sidebar.active_tasks")),
+                    )
+                    .child(
+                        h_flex()
+                            .w(px(24.))
+                            .h(px(18.))
+                            .flex_shrink_0()
+                            .pr_2()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                Badge::new()
+                                    .count(count)
+                                    .color(rgb(palette().activity_running))
+                                    .child(div().size(px(8.))),
+                            ),
+                    ),
+            );
+
+        let mut list = v_flex()
+            .id("sidebar-active-task-list")
+            .max_h(px(208.))
+            .overflow_y_scroll();
+        for (index, (id, _, state)) in tasks.into_iter().enumerate() {
+            let Some(session) = self.session(id) else {
+                continue;
+            };
+            let Some((workspace_index, _)) =
+                self.session_control.locate(&self.store.workspaces, id)
+            else {
+                continue;
+            };
+            let workspace_name = self.store.workspaces[workspace_index].name();
+            let status = state.label();
+            let status_color = if matches!(
+                state,
+                TaskState::Approval | TaskState::Answer | TaskState::Cleanup
+            ) {
+                palette().highlight_text
+            } else {
+                palette().activity_running
+            };
+            let title = if session.title.is_empty() {
+                conduit::i18n::text_static("files.new_session").to_string()
+            } else {
+                single_line_title(&session.title)
+            };
+            let age = session_age_label(session.last_activity_at());
+            let active = self.selected_session == Some(id);
+            list = list.child(
+                Button::new(("workspace-active-task", id))
+                    .debug_selector(move || format!("workspace-active-task-{id}"))
+                    .w_full()
+                    .h(px(52.))
+                    .flex_shrink_0()
+                    .px_2()
+                    .py_1()
+                    .ghost()
+                    .cursor_pointer()
+                    .rounded(px(6.))
+                    .accessibility_label(format!("{title} · {workspace_name} · {status}"))
+                    .when(active, |row| {
+                        row.bg(rgb(palette().surface))
+                            .border_1()
+                            .border_color(rgb(palette().border))
+                            .shadow_sm()
+                    })
+                    .when(!active && index + 1 < count, |row| {
+                        row.border_b_1().border_color(rgb(palette().border))
+                    })
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .text_left()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .size(px(10.))
+                                    .flex_shrink_0()
+                                    .rounded_full()
+                                    .bg(rgb(status_color)),
+                            )
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap(px(2.))
+                                    .child(
+                                        h_flex()
+                                            .w_full()
+                                            .min_w_0()
+                                            .items_center()
+                                            .justify_between()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w_0()
+                                                    .truncate()
+                                                    .text_size(ui_text_size(13.))
+                                                    .text_color(rgb(palette().text))
+                                                    .child(title),
+                                            )
+                                            .when_some(age, |row, age| {
+                                                row.child(
+                                                    div()
+                                                        .flex_shrink_0()
+                                                        .whitespace_nowrap()
+                                                        .text_size(ui_text_size(11.))
+                                                        .text_color(rgb(palette().faint))
+                                                        .child(age),
+                                                )
+                                            }),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .min_w_0()
+                                            .gap_1()
+                                            .text_size(ui_text_size(11.))
+                                            .child(
+                                                div()
+                                                    .min_w_0()
+                                                    .truncate()
+                                                    .text_color(rgb(palette().muted))
+                                                    .child(workspace_name),
+                                            )
+                                            .child(
+                                                div().text_color(rgb(palette().muted)).child("·"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_shrink_0()
+                                                    .text_color(rgb(status_color))
+                                                    .child(status),
+                                            ),
+                                    ),
+                            ),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.switch_sidebar_session(id, window, cx)
+                    })),
+            );
+        }
+        panel.child(list).into_any_element()
+    }
+
+    fn sidebar_projects_header(&self, cx: &mut Context<Self>) -> AnyElement {
+        let sorted = self.store.ui.auto_sort_workspaces;
+        h_flex()
+            .id("sidebar-projects-header")
+            .debug_selector(|| "sidebar-projects-header".into())
+            .h(px(36.))
+            .flex_shrink_0()
+            .px_3()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .text_size(ui_text_size(12.))
+                    .font_semibold()
+                    .text_color(rgb(palette().muted))
+                    .child(conduit::i18n::text_static("sidebar.projects")),
+            )
+            .child(
+                Button::new("sort-projects-by-activity")
+                    .debug_selector(|| "sort-projects-by-activity".into())
+                    .icon(FullIconName::ListFilter)
+                    .small()
+                    .compact()
+                    .ghost()
+                    .w(px(28.))
+                    .h(px(28.))
+                    .cursor_pointer()
+                    .selected(sorted)
+                    .tooltip(conduit::i18n::text_static(
+                        "sidebar.sort_projects_by_activity",
+                    ))
+                    .accessibility_label(conduit::i18n::text_static(
+                        "sidebar.sort_projects_by_activity",
+                    ))
+                    .disabled(!self.writable || self.closing)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if !this.writable || this.closing {
+                            return;
+                        }
+                        this.store.ui.auto_sort_workspaces = !this.store.ui.auto_sort_workspaces;
+                        this.persist();
+                        this.refresh_sidebar();
+                        cx.notify();
+                    })),
             )
             .into_any_element()
     }
@@ -785,6 +1156,7 @@ impl ConduitApp {
         let app_entity = cx.entity();
         let can_edit = self.writable && !self.closing;
         let workspace_selected = self.selected_workspace == Some(index);
+        let nested = self.sidebar.projects.parent(&workspace.path).is_some();
         let collapsed = self.workspace_collapsed(&workspace.path);
         let importing = self.history_loading.contains(&workspace.path);
         let toggle_path = workspace.path.clone();
@@ -793,6 +1165,32 @@ impl ConduitApp {
         let drop_path = workspace.path.clone();
         let hover_path = workspace.path.clone();
         let drag_name = workspace.name();
+        // Attention sets are small; do not scan every session in a virtualized header.
+        let activity = self
+            .session_control
+            .runs
+            .keys()
+            .copied()
+            .filter(|id| {
+                self.session_control
+                    .locate(&self.store.workspaces, *id)
+                    .is_some_and(|(workspace, _)| workspace == index)
+            })
+            .min()
+            .map(|id| (id, true))
+            .or_else(|| {
+                self.session_control
+                    .unread_completed
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        self.session_control
+                            .locate(&self.store.workspaces, *id)
+                            .is_some_and(|(workspace, _)| workspace == index)
+                    })
+                    .min()
+                    .map(|id| (id, false))
+            });
         h_flex()
             .id(SharedString::from(format!(
                 "workspace-{}",
@@ -808,17 +1206,13 @@ impl ConduitApp {
             .relative()
             .h(px(ROW_HEIGHT))
             .flex_shrink_0()
-            .px_2()
+            .pl(px(if nested { 38. } else { 2. }))
+            .pr_2()
             .gap_2()
             .items_center()
             .rounded(px(8.))
             .text_size(ui_text_size(13.))
-            .text_color(rgb(if workspace_selected {
-                palette().text
-            } else {
-                palette().muted
-            }))
-            .when(workspace_selected, |row| row.bg(rgb(palette().surface)))
+            .text_color(rgb(palette().text))
             .cursor_pointer()
             .hover(|style| style.bg(rgb(palette().surface_hover)))
             .when(can_edit, |row| {
@@ -864,7 +1258,7 @@ impl ConduitApp {
                     .ghost()
                     .small()
                     .compact()
-                    .w(px(24.))
+                    .w(px(20.))
                     .h(px(24.))
                     .p_0()
                     .cursor_pointer()
@@ -883,12 +1277,18 @@ impl ConduitApp {
                         this.toggle_sidebar_workspace(&toggle_path, window, cx);
                     })),
             )
-            .child(
-                Icon::new(IconName::Folder)
-                    .small()
-                    .text_color(rgb(palette().faint)),
-            )
-            .child(div().flex_1().min_w_0().truncate().child(workspace.name()))
+            .when(!nested, |row| row.child(
+                div()
+                    .debug_selector(move || format!("workspace-folder-{index}"))
+                    .flex_shrink_0()
+                    .size(px(16.))
+                    .child(
+                        Icon::new(IconName::Folder)
+                            .small()
+                            .text_color(rgb(palette().faint)),
+                    ),
+            ))
+            .child(div().debug_selector(move || format!("workspace-name-{index}")).flex_1().min_w_0().truncate().child(workspace.name()))
             .child(
                 h_flex()
                     // Share one slot so the count and actions swap
@@ -917,11 +1317,15 @@ impl ConduitApp {
                                 h_flex()
                                     .min_w(px(22.))
                                     .h(px(18.))
-                                    .px(px(5.))
                                     .items_center()
                                     .justify_center()
-                                    .rounded(px(4.))
-                                    .bg(rgb(palette().surface_strong))
+                                    .gap_1()
+                                    .when_some(
+                                        activity,
+                                        |row, (id, running)| {
+                                            row.child(session_activity_dot("workspace-activity", id, running))
+                                        },
+                                    )
                                     .text_size(ui_text_size(12.))
                                     .text_color(rgb(palette().faint))
                                     .child(count.to_string())

@@ -755,6 +755,12 @@ impl ConduitApp {
             }
         ))
         .on_click(cx.listener(move |this, _, _, cx| {
+            let generation = this
+                .tool_group_motion_generation
+                .entry((session_id, toggle_key.clone()))
+                .or_insert((0, Instant::now()));
+            generation.0 = generation.0.wrapping_add(1);
+            generation.1 = Instant::now();
             this.tool_group_expansion
                 .insert((session_id, toggle_key.clone()), !expanded);
             this.sync_chat_rows();
@@ -808,23 +814,35 @@ impl ConduitApp {
         group_key: String,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        div()
-            .w_full()
-            .px_6()
-            .pb_3()
-            .child(
-                div()
-                    .id(SharedString::from(format!(
-                        "tool-group-row-{session_id}-{start}"
-                    )))
-                    .w_full()
-                    .min_w_0()
-                    .when(!self.store.ui.full_width_content, |row| {
-                        row.max_w(px(840.)).mx_auto()
-                    })
-                    .child(self.tool_group_header(session_id, start, end, group_key, false, cx)),
+        let motion_generation = self
+            .tool_group_motion_generation
+            .get(&(session_id, group_key.clone()))
+            .copied()
+            .filter(|(_, started)| started.elapsed() < Duration::from_millis(140));
+        let row = div().w_full().px_6().pb_3().child(
+            div()
+                .id(SharedString::from(format!(
+                    "tool-group-row-{session_id}-{start}"
+                )))
+                .w_full()
+                .min_w_0()
+                .when(!self.store.ui.full_width_content, |row| {
+                    row.max_w(px(840.)).mx_auto()
+                })
+                .child(self.tool_group_header(session_id, start, end, group_key, false, cx)),
+        );
+        if let Some((generation, _)) = motion_generation {
+            row.with_animation(
+                SharedString::from(format!(
+                    "tool-group-collapse-{session_id}-{start}-{generation}"
+                )),
+                Animation::new(Duration::from_millis(140)),
+                |row, progress| row.opacity(progress),
             )
             .into_any_element()
+        } else {
+            row.into_any_element()
+        }
     }
 
     fn reasoning_header(
@@ -1124,7 +1142,13 @@ impl ConduitApp {
                     let state = window.use_keyed_state(
                         SharedString::from(format!("chat-markdown-{}-{}", session.id, item.key)),
                         cx,
-                        |_, cx| gpui_kit::base::text::TextViewState::markdown(text.as_ref(), cx),
+                        |_, cx| {
+                            gpui_kit::base::text::TextViewState::markdown(text.as_ref(), cx).motion(
+                                gpui_kit::base::TextViewMotion::default()
+                                    .with_stream_fade(Duration::from_millis(180))
+                                    .with_stream_fade_stagger(Duration::from_millis(8)),
+                            )
+                        },
                     );
                     state.update(cx, |state, cx| state.set_text(text.as_ref(), cx));
                     state
@@ -2115,6 +2139,26 @@ impl ConduitApp {
                         }
                     }),
             );
+        if let Some(group) = group.filter(|group| group.expanded) {
+            let group_key = session.messages[group.start].key.clone();
+            if let Some((generation, _)) = self
+                .tool_group_motion_generation
+                .get(&(session_id, group_key))
+                .copied()
+                .filter(|(_, started)| started.elapsed() < Duration::from_millis(160))
+            {
+                return row
+                    .with_animation(
+                        SharedString::from(format!(
+                            "tool-group-expand-{session_id}-{}-{}-{generation}",
+                            group.start, item.key
+                        )),
+                        Animation::new(Duration::from_millis(160)),
+                        |row, progress| row.opacity(progress),
+                    )
+                    .into_any_element();
+            }
+        }
         row.into_any_element()
     }
 }

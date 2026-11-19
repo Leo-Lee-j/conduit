@@ -15,6 +15,39 @@ use gpui_kit::{
 };
 use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
 
+#[test]
+fn desktop_pet_renderer_and_icon_survive_registration_cycles() {
+    let _locale = crate::test_support::chinese();
+    for startup_enabled in [false, true] {
+        let mut ui = PluginUi::new_with_encourager(startup_enabled);
+        // Also exercise cleanup before first enabling the plugin.
+        ui.update_context(Default::default());
+        for _ in 0..3 {
+            assert!(ui.set_encourager_enabled(true));
+            ui.update_context(Default::default());
+            let choice = ui
+                .right_choices(false)
+                .into_iter()
+                .find(|choice| choice.id.as_str() == builtins::ENCOURAGER_VIEW)
+                .expect("enabled pet must have a sidebar entry");
+            assert_eq!(choice.icon, gpui_kit::assets::IconName::Cat);
+            let request = choice.request.expect("entry must remain actionable");
+            ui.state.open(&ui.registry, &request, &ui.snapshot).unwrap();
+            assert!(
+                ui.right_adapter().is_some(),
+                "native renderer must be restored"
+            );
+            assert!(ui.set_encourager_enabled(false));
+            ui.update_context(Default::default());
+            assert!(
+                ui.right_choices(false)
+                    .iter()
+                    .all(|choice| choice.id.as_str() != builtins::ENCOURAGER_VIEW)
+            );
+        }
+    }
+}
+
 pub(super) fn fixture(
     cx: &mut TestAppContext,
     store: Store,

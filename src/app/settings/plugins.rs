@@ -1,6 +1,41 @@
 //! Plugin management is separate from CLI Skills and MCP services.
 use super::*;
+use gpui_kit::component::switch::Switch;
 mod catalog;
+#[cfg(all(test, feature = "ui-tests"))]
+mod encourager_tests;
+
+fn pet_setting_row(
+    id: &'static str,
+    label: &'static str,
+    control: impl IntoElement,
+) -> gpui_kit::Stateful<Div> {
+    h_flex()
+        .id(id)
+        .debug_selector(move || id.into())
+        .w_full()
+        .flex_wrap()
+        .items_center()
+        .justify_between()
+        .gap(px(8.))
+        .py(px(10.))
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(160.))
+                .text_size(ui_text_size(13.))
+                .child(conduit::i18n::text_static(label)),
+        )
+        .child(control)
+}
+
+fn pet_picker_control(control: impl IntoElement) -> Div {
+    div().w(px(288.)).max_w_full().min_w_0().child(control)
+}
+
+fn pet_switch_control(control: impl IntoElement) -> Div {
+    h_flex().h(px(32.)).justify_end().child(control)
+}
 fn text(key: &str) -> String {
     conduit::i18n::text(&format!("settings.plugins.{key}"))
 }
@@ -95,6 +130,7 @@ impl ConduitApp {
                     )
                     .child(caption(text("core_description"))),
             )
+            .child(self.settings_encourager_content(view.clone()))
             .child(
                 v_flex()
                     .p_4()
@@ -309,5 +345,307 @@ impl ConduitApp {
             );
         }
         content.into_any_element()
+    }
+
+    fn settings_encourager_content(&self, view: Entity<Self>) -> AnyElement {
+        use crate::store::{EncouragerPersona, EncouragerVerbosity};
+        let settings = &self.store.ui.encourager;
+        let enabled = settings.enabled;
+        let pet_enabled = settings.pet_enabled;
+        let disabled = !self.writable || self.closing;
+        let toggle_view = view.clone();
+        let toggle = Switch::new("encourager-plugin-toggle")
+            .checked(enabled)
+            .accessibility_label(conduit::i18n::text_static("encourager.enable"))
+            .disabled(disabled)
+            .on_click(move |value, window, cx| {
+                toggle_view.update(cx, |app, cx| app.set_encourager_enabled(*value, window, cx));
+            });
+        let pet_view = view.clone();
+        let pet_toggle = Switch::new("encourager-pet-toggle")
+            .checked(pet_enabled)
+            .accessibility_label(conduit::i18n::text_static("encourager.pet.disabled"))
+            .disabled(disabled || !enabled)
+            .on_click(move |value, _, cx| {
+                pet_view.update(cx, |app, cx| {
+                    app.set_encourager_pet_enabled(*value, cx);
+                });
+            });
+
+        let providers: Vec<_> = self
+            .store
+            .providers
+            .iter()
+            .filter_map(|provider| {
+                let models = super::super::encourager::encourager_model_ids(provider);
+                (!models.is_empty()).then(|| (provider.id.clone(), provider.name.clone(), models))
+            })
+            .collect();
+        let selected_provider = settings.provider_id.clone();
+        let provider_label = selected_provider
+            .as_ref()
+            .and_then(|id| providers.iter().find(|provider| &provider.0 == id))
+            .map(|provider| provider.1.clone())
+            .unwrap_or_else(|| {
+                conduit::i18n::text(if providers.is_empty() {
+                    "encourager.setting.no_service"
+                } else {
+                    "encourager.no_service"
+                })
+            });
+        let provider_view = view.clone();
+        let menu_providers = providers.clone();
+        let provider_picker = Button::new("encourager-provider")
+            .debug_selector(|| "encourager-provider".into())
+            .outline()
+            .h(px(32.))
+            .w_full()
+            .dropdown_caret(true)
+            .accessibility_label(conduit::i18n::text_static("encourager.setting.service"))
+            .label(provider_label)
+            .disabled(disabled || providers.is_empty())
+            .dropdown_menu(move |mut menu, _, _| {
+                for (id, name, models) in &menu_providers {
+                    let id = id.clone();
+                    let name = name.clone();
+                    let model = models.first().cloned();
+                    let view = provider_view.clone();
+                    menu = menu.item(PopupMenuItem::new(name.clone()).on_click(move |_, _, cx| {
+                        view.update(cx, |app, cx| {
+                            if !app.writable || app.closing {
+                                return;
+                            }
+                            app.reset_encourager_output();
+                            app.store.ui.encourager.provider_id = Some(id.clone());
+                            app.store.ui.encourager.model = model.clone();
+                            app.persist();
+                            cx.notify();
+                        });
+                    }));
+                }
+                menu
+            });
+
+        let model_choices: Vec<_> = selected_provider
+            .as_ref()
+            .and_then(|id| providers.iter().find(|provider| &provider.0 == id))
+            .map(|provider| provider.2.clone())
+            .unwrap_or_default();
+        let model_label = settings
+            .model
+            .as_ref()
+            .filter(|model| model_choices.contains(model))
+            .cloned()
+            .unwrap_or_else(|| conduit::i18n::text("encourager.no_model"));
+        let model_view = view.clone();
+        let model_picker = Button::new("encourager-model")
+            .debug_selector(|| "encourager-model".into())
+            .outline()
+            .h(px(32.))
+            .w_full()
+            .dropdown_caret(true)
+            .accessibility_label(conduit::i18n::text_static("encourager.setting.model"))
+            .label(model_label)
+            .disabled(disabled || model_choices.is_empty())
+            .dropdown_menu(move |mut menu, _, _| {
+                for model in &model_choices {
+                    let model = model.clone();
+                    let view = model_view.clone();
+                    menu =
+                        menu.item(PopupMenuItem::new(model.clone()).on_click(move |_, _, cx| {
+                            view.update(cx, |app, cx| {
+                                if !app.writable || app.closing {
+                                    return;
+                                }
+                                app.reset_encourager_output();
+                                app.store.ui.encourager.model = Some(model.clone());
+                                app.persist();
+                                cx.notify();
+                            });
+                        }));
+                }
+                menu
+            });
+
+        let persona_label = conduit::i18n::text_static(settings.persona.label());
+        let persona_view = view.clone();
+        let persona_picker = Button::new("encourager-persona-setting")
+            .debug_selector(|| "encourager-persona-setting".into())
+            .outline()
+            .h(px(32.))
+            .w_full()
+            .dropdown_caret(true)
+            .accessibility_label(conduit::i18n::text_static("encourager.setting.persona"))
+            .label(persona_label)
+            .disabled(disabled)
+            .dropdown_menu(move |mut menu, _, _| {
+                for persona in EncouragerPersona::ALL {
+                    let view = persona_view.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(conduit::i18n::text_static(persona.label())).on_click(
+                            move |_, _, cx| {
+                                view.update(cx, |app, cx| {
+                                    if !app.writable || app.closing {
+                                        return;
+                                    }
+                                    app.reset_encourager_output();
+                                    app.store.ui.encourager.persona = persona;
+                                    app.persist();
+                                    cx.notify();
+                                });
+                            },
+                        ),
+                    );
+                }
+                menu
+            });
+
+        let verbosity_label = conduit::i18n::text_static(settings.verbosity.label());
+        let verbosity_view = view.clone();
+        let verbosity_picker = Button::new("encourager-verbosity")
+            .debug_selector(|| "encourager-verbosity".into())
+            .outline()
+            .h(px(32.))
+            .w_full()
+            .dropdown_caret(true)
+            .accessibility_label(conduit::i18n::text_static("encourager.setting.verbosity"))
+            .label(verbosity_label)
+            .disabled(disabled)
+            .dropdown_menu(move |mut menu, _, _| {
+                for verbosity in EncouragerVerbosity::ALL {
+                    let view = verbosity_view.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(conduit::i18n::text_static(verbosity.label())).on_click(
+                            move |_, _, cx| {
+                                view.update(cx, |app, cx| {
+                                    if !app.writable || app.closing {
+                                        return;
+                                    }
+                                    app.reset_encourager_output();
+                                    app.store.ui.encourager.verbosity = verbosity;
+                                    app.persist();
+                                    cx.notify();
+                                });
+                            },
+                        ),
+                    );
+                }
+                menu
+            });
+
+        let include_context = settings.include_context;
+        let context_view = view;
+        let context_button = Switch::new("encourager-include-context")
+            .checked(include_context)
+            .accessibility_label(conduit::i18n::text_static("encourager.setting.context"))
+            .disabled(disabled)
+            .on_click(move |value, _, cx| {
+                context_view.update(cx, |app, cx| {
+                    if !app.writable || app.closing {
+                        return;
+                    }
+                    app.reset_encourager_output();
+                    app.store.ui.encourager.include_context = *value;
+                    app.persist();
+                    cx.notify();
+                });
+            });
+
+        v_flex()
+            .id("programmer-encourager-settings")
+            .debug_selector(|| "programmer-encourager-settings".into())
+            .w_full()
+            .max_w(px(760.))
+            .p(px(20.))
+            .rounded_md()
+            .bg(rgb(if is_dark_mode() {
+                palette().surface_strong
+            } else {
+                palette().surface_hover
+            }))
+            .child(
+                h_flex()
+                    .w_full()
+                    .flex_wrap()
+                    .gap_2()
+                    .items_center()
+                    .pb(px(16.))
+                    .border_b_1()
+                    .border_color(rgb(palette().border))
+                    .child(Icon::new(FullIconName::Cat).small())
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(ui_text_size(14.))
+                            .font_medium()
+                            .child(conduit::i18n::text_static("encourager.title")),
+                    )
+                    .child(caption(conduit::i18n::text_static(if enabled {
+                        "encourager.enabled"
+                    } else {
+                        "encourager.disabled"
+                    })))
+                    .child(toggle),
+            )
+            .child(pet_setting_row(
+                "encourager-pet-row",
+                "encourager.pet.disabled",
+                pet_switch_control(pet_toggle),
+            ))
+            .child(
+                v_flex()
+                    .w_full()
+                    .border_t_1()
+                    .border_color(rgb(palette().border))
+                    .py(px(6.))
+                    .child(pet_setting_row(
+                        "encourager-service-row",
+                        "encourager.setting.service",
+                        pet_picker_control(provider_picker),
+                    ))
+                    .when(providers.is_empty(), |this| {
+                        this.child(
+                            caption(conduit::i18n::text_static(
+                                "encourager.no_compatible_services",
+                            ))
+                            .id("encourager-service-hint")
+                            .debug_selector(|| "encourager-service-hint".into())
+                            .pb(px(8.)),
+                        )
+                    })
+                    .child(pet_setting_row(
+                        "encourager-model-row",
+                        "encourager.setting.model",
+                        pet_picker_control(model_picker),
+                    ))
+                    .child(pet_setting_row(
+                        "encourager-persona-row",
+                        "encourager.setting.persona",
+                        pet_picker_control(persona_picker),
+                    ))
+                    .child(pet_setting_row(
+                        "encourager-verbosity-row",
+                        "encourager.setting.verbosity",
+                        pet_picker_control(verbosity_picker),
+                    )),
+            )
+            .child(
+                v_flex()
+                    .w_full()
+                    .border_t_1()
+                    .border_color(rgb(palette().border))
+                    .pt(px(6.))
+                    .child(pet_setting_row(
+                        "encourager-context-row",
+                        "encourager.setting.context",
+                        pet_switch_control(context_button),
+                    ))
+                    .child(caption(conduit::i18n::text_static(if include_context {
+                        "encourager.setting.privacy_context_on"
+                    } else {
+                        "encourager.setting.privacy_context_off"
+                    }))),
+            )
+            .into_any_element()
     }
 }

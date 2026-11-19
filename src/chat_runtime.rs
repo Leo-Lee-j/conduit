@@ -92,6 +92,9 @@ pub struct ChatRuntime {
     controls: Sender<Control>,
     cancelled: Arc<AtomicBool>,
 }
+#[cfg(all(test, feature = "ui-tests", feature = "remote"))]
+type TestInputAnswer = (String, std::collections::BTreeMap<String, Vec<String>>);
+
 impl ChatRuntime {
     fn next_identity() -> String {
         static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -138,6 +141,21 @@ impl ChatRuntime {
         (runtime, events, move || match receiver.try_recv() {
             Ok(Control::Decision { id, allow }) => Some((id, allow)),
             Ok(_) => panic!("expected an approval decision"),
+            Err(_) => None,
+        })
+    }
+    #[cfg(all(test, feature = "ui-tests", feature = "remote"))]
+    pub(crate) fn test_input_channel() -> (
+        Self,
+        crate::event_queue::Sender,
+        impl Fn() -> Option<TestInputAnswer>,
+    ) {
+        let (mut runtime, events) = Self::test_channel();
+        let (controls, receiver) = mpsc::channel();
+        runtime.controls = controls;
+        (runtime, events, move || match receiver.try_recv() {
+            Ok(Control::Answer { id, answers }) => Some((id, answers)),
+            Ok(_) => panic!("expected a question answer"),
             Err(_) => None,
         })
     }

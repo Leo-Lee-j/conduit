@@ -54,13 +54,24 @@ pub(in crate::app) struct RightAdapter {
     pub deactivate: fn(&mut ConduitApp, &mut Window, &mut Context<ConduitApp>),
 }
 
+pub(super) fn encourager_renderer() -> RightAdapter {
+    RightAdapter {
+        render: ConduitApp::render_encourager_view,
+        icon: FullIconName::Cat,
+        close_id: "close-programmer-encourager",
+        with_branches: true,
+        activate: |_, _, _| {},
+        deactivate: ConduitApp::deactivate_encourager,
+    }
+}
+
 pub(super) fn core_renderers() -> BTreeMap<String, RightAdapter> {
     [
         (
             builtins::SESSION_DATA.into(),
             RightAdapter {
                 render: ConduitApp::render_session_data,
-                icon: FullIconName::ChartColumn,
+                icon: FullIconName::FileChartColumn,
                 close_id: "close-session-data",
                 with_branches: false,
                 activate: |_, _, _| {},
@@ -111,6 +122,7 @@ pub(super) fn core_renderers() -> BTreeMap<String, RightAdapter> {
                 deactivate: |_, _, _| {},
             },
         ),
+        (builtins::ENCOURAGER_VIEW.into(), encourager_renderer()),
     ]
     .into_iter()
     .collect()

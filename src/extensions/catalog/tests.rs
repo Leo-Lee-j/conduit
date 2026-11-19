@@ -42,6 +42,76 @@ fn folder() -> std::path::PathBuf {
     ))
 }
 #[test]
+fn blank_github_query_lists_public_skills_without_network_and_supports_filtering() {
+    let client = Fake::new();
+    assert!(
+        fetch(&client, Source::Featured, "", None)
+            .unwrap()
+            .items
+            .len()
+            > 4
+    );
+    let page = fetch(&client, Source::Github, "", None).unwrap();
+    assert!(page.items.len() >= 10);
+    assert!(
+        page.items
+            .iter()
+            .all(|item| matches!(&item.payload, Payload::Skill(skill) if skill.path.is_some()))
+    );
+    let filtered = fetch(&client, Source::Github, "playwright", None).unwrap();
+    assert_eq!(filtered.items.len(), 1);
+    assert_eq!(filtered.items[0].name, "webapp-testing");
+    assert!(client.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn blank_skills_sh_query_loads_ranked_links_and_falls_back_when_unavailable() {
+    let mut client = Fake::new();
+    client.add(
+        "https://www.skills.sh/trending",
+        r#"
+        <link href="/not/a/skill">
+        <a href="/example/skills/first">First</a>
+        <a class="row" href='/example/skills/first/'>Duplicate</a>
+        <a href="https://example.net/other/repo/skill">External</a>
+        <a href="/other/repository/second">Second</a>
+        <a href="/not/a/skill/child">Not a skill</a>
+    "#,
+    );
+    let root = folder();
+    let ranked = search_with(&client, Source::SkillsSh, "  ", None, &root, false, true).unwrap();
+    assert_eq!(
+        ranked
+            .items
+            .iter()
+            .map(|i| i.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first", "second"]
+    );
+    assert!(ranked.warning.is_none());
+    let down = Fake::new();
+    let cached = search_with(&down, Source::SkillsSh, "", None, &root, true, false).unwrap();
+    assert!(cached.cached && cached.warning.is_some());
+    assert_eq!(cached.items[0].name, "first");
+    fs::remove_dir_all(&root).unwrap();
+    let fallback = search_with(&down, Source::SkillsSh, "", None, &root, false, true).unwrap();
+    assert!(!fallback.cached && fallback.warning.is_some());
+    assert!(fallback.items.len() >= 10);
+    assert!(!root.exists());
+    assert!(
+        search_with(
+            &down,
+            Source::SkillsSh,
+            "keyword",
+            None,
+            &root,
+            false,
+            false
+        )
+        .is_err()
+    );
+}
+#[test]
 fn source_failures_and_mcp_pagination_are_explicit_and_do_not_execute_packages() {
     let mut client = Fake::new();
     client.add("https://registry.modelcontextprotocol.io/v0.1/servers?limit=30&version=latest&search=git", serde_json::to_vec(&json!({
@@ -124,6 +194,15 @@ fn cancellation_prevents_network_and_stale_cache_has_bounded_fallback() {
 fn public_catalog_connectivity_and_temporary_skill_install() {
     let cancel = AtomicBool::new(false);
     let client = Client::new(&cancel);
+    let trending = fetch(&client, Source::SkillsSh, "", None).unwrap();
+    assert!(trending.items.len() >= 10);
+    let github = fetch(&client, Source::Github, "obra/superpowers", None).unwrap();
+    assert!(
+        github
+            .items
+            .iter()
+            .any(|item| item.name == "systematic-debugging")
+    );
     let skills = fetch(&client, Source::SkillsSh, "react", None).unwrap();
     assert!(!skills.items.is_empty());
     let servers = fetch(&client, Source::McpRegistry, "github", None).unwrap();
@@ -157,7 +236,9 @@ fn public_catalog_connectivity_and_temporary_skill_install() {
     result.unwrap();
     assert!(verified);
     eprintln!(
-        "public sources: {} Skills, {} MCP servers; installed {} files at {}",
+        "public sources: {} trending, {} GitHub, {} search results, {} MCP servers; installed {} files at {}",
+        trending.items.len(),
+        github.items.len(),
         skills.items.len(),
         servers.items.len(),
         prepared.files.len(),

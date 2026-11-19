@@ -17,6 +17,8 @@ pub const SHOW_TOOL_DETAILS: &str = "conduit.core.show-tool-details";
 pub const TOGGLE_TERMINAL: &str = "conduit.core.toggle-terminal";
 pub const NEW_TERMINAL: &str = "conduit.core.new-terminal";
 pub const WORKSPACE_STATUS: &str = "conduit.core.workspace-status";
+pub const ENCOURAGER: &str = "conduit.programmer-encourager";
+pub const ENCOURAGER_VIEW: &str = "conduit.programmer-encourager.panel";
 pub const EXAMPLE: &str = "example.workspace-overview";
 pub const EXAMPLE_INDEX: &str = "example.workspace-overview.index";
 pub const EXAMPLE_SUMMARY: &str = "example.workspace-overview.summary";
@@ -174,6 +176,17 @@ pub fn core() -> Result<ContributionSet> {
     });
     Ok(set)
 }
+
+pub fn programmer_encourager() -> Result<ContributionSet> {
+    let mut set = ContributionSet::empty(Owner::host(PluginId::new(ENCOURAGER)?));
+    set.views.push(view(
+        ENCOURAGER_VIEW,
+        conduit::i18n::text_static("encourager.title"),
+        Location::Right,
+        Scope::Global,
+    )?);
+    Ok(set)
+}
 pub fn workspace_overview() -> Result<ContributionSet> {
     let mut set = ContributionSet::empty(Owner::host(PluginId::new(EXAMPLE)?));
     set.commands.push(CommandDescriptor {
@@ -247,6 +260,14 @@ pub fn register(include_example: bool) -> Result<Builtins> {
             )?;
         }
     }
+    catalog.allow_renderer(
+        ENCOURAGER_VIEW,
+        RendererSpec {
+            owner: PluginId::new(ENCOURAGER)?,
+            location: Location::Right,
+            scope: Scope::Global,
+        },
+    )?;
     let mut registry = Registry::new(catalog);
     let core = registry.register(core, BTreeSet::from([Capability::SessionSummary]))?;
     let example = example

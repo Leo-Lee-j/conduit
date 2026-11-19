@@ -218,7 +218,7 @@ impl ConduitApp {
                 if let Some(result) = result {
                     let level = if result.is_ok() { NoticeLevel::Success } else { NoticeLevel::Error };
                     let message = match result {
-                        Ok(path) => conduit::i18n::format("settings.extensions.imported_loaded_when_the_next_session_starts", &[("arg0", format!("{}", path.display()))]),
+                        Ok(path) => conduit::i18n::format("settings.extensions.imported_loaded_when_the_next_session_starts", &[("arg0", display_path(&path))]),
                         Err(error) => error.to_string(),
                     };
                     app.notify_user(Notice::new(NoticeSource::Settings, level, conduit::i18n::text_static("settings.extensions.skill_import_result"), message.clone())
@@ -464,8 +464,11 @@ impl ConduitApp {
             .extensions_ui
             .workspace
             .as_ref()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().into_owned())
+            .map(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| display_path(path))
+            })
             .unwrap_or_else(|| conduit::i18n::text_static("settings.extensions.global").into());
         let scope_view = view.clone();
         controls = controls.child(
@@ -473,6 +476,9 @@ impl ConduitApp {
                 .debug_selector(|| "extensions-scope".into())
                 .small()
                 .ghost()
+                .when_some(self.extensions_ui.workspace.as_ref(), |button, path| {
+                    button.tooltip(display_path(path))
+                })
                 .accessibility_label(conduit::i18n::format(
                     "settings.extensions.scope",
                     &[("current", current.to_string())],
@@ -866,7 +872,7 @@ fn render_extension_row(
             let expanded = expanded.contains(&id);
             let toggle_view = view.clone();
             let toggle_id = id.clone();
-            let copy_path = entry.path.display().to_string();
+            let copy_path = display_path(&entry.path);
             let edit_path = entry.path.clone();
             let reveal_path = entry.path.clone();
             let kind = entry.kind;
@@ -1073,7 +1079,7 @@ fn render_extension_row(
                                         }
                                     })
                                     .text_color(rgb(palette().muted))
-                                    .child(conduit::i18n::format("settings.extensions.source", &[("arg0", format!("{}", entry.path.display()))])),
+                                    .child(conduit::i18n::format("settings.extensions.source", &[("arg0", display_path(&entry.path))])),
                             )
                             .when(mcp, |details| details.child(conduit::i18n::text_static("settings.extensions.testing_starts_the_command_or_connects_to")))
                             .when(mcp, |details| details.child(h_flex().gap_2()
@@ -1147,7 +1153,7 @@ fn render_extension_row(
             .child(message.clone())
             .into_any_element(),
         ExtensionRow::Source(path) => {
-            let text = path.display().to_string();
+            let text = display_path(path);
             let tooltip = text.clone();
             h_flex()
                 .px_3()

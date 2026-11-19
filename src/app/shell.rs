@@ -13,6 +13,13 @@ pub(super) const NAVIGATION_MIN_WIDTH: f32 = 200.;
 pub(super) const NAVIGATION_MAX_WIDTH: f32 = 420.;
 pub(super) const NAVIGATION_DEFAULT_WIDTH: f32 = NAVIGATION_MAX_WIDTH;
 
+#[derive(Default)]
+struct ContentMotionState {
+    route: Option<String>,
+    generation: u64,
+    animate: bool,
+}
+
 /// Keep wheel-driven invalidation inside the transcript. The list notifies its
 /// owning view on every wheel event, even when no surrounding controls change.
 pub(super) struct ChatTimeline {
@@ -221,6 +228,42 @@ impl Render for ConduitApp {
             .and_then(|id| self.session(id))
             .map(SessionSummary::from);
         let message_count = selected.as_ref().map_or(0, |session| session.message_count);
+        let content_route = if self.settings_ui.open {
+            format!("settings:{}", self.settings_ui.page)
+        } else if let Some(id) = self.github_ui.active {
+            format!("github:{id}")
+        } else if let Some(id) = self.usage_ui.active {
+            format!("usage:{id}")
+        } else if let Some(id) = self.active_diff {
+            format!("diff:{id}")
+        } else if let Some(id) = self.active_file {
+            format!("file:{id}")
+        } else if let Some(session) = &selected {
+            format!("chat:{}:{}", session.id, session.message_count == 0)
+        } else {
+            format!("workspace:{:?}", self.selected_workspace)
+        };
+        let content_motion = window.use_keyed_state("main-content-motion", cx, |_, _| {
+            ContentMotionState::default()
+        });
+        let content_motion_generation = content_motion.update(cx, |state, _| {
+            let route_without_transition = |route: &str| {
+                route.starts_with("file:")
+                    || route.starts_with("diff:")
+                    || route.starts_with("chat:")
+                    || route.starts_with("settings:")
+            };
+            if state.route.as_deref() != Some(content_route.as_str()) {
+                state.animate = state.route.as_ref().is_some_and(|previous| {
+                    !route_without_transition(previous) && !route_without_transition(&content_route)
+                });
+                if state.animate {
+                    state.generation = state.generation.wrapping_add(1);
+                }
+                state.route = Some(content_route);
+            }
+            state.animate.then_some(state.generation)
+        });
         let outline_session = self.selected_session.and_then(|id| {
             self.store
                 .workspaces
@@ -593,7 +636,7 @@ impl Render for ConduitApp {
                 let detail_copy = approval.detail.clone();
                 let origin = self
                     .selected_workspace_path()
-                    .map(|path| path.display().to_string())
+                    .map(|path| display_path(&path))
                     .unwrap_or_default();
                 let allow_id = approval.id.clone();
                 let deny_id = approval.id;
@@ -867,6 +910,12 @@ impl Render for ConduitApp {
                         .child("Conduit"),
                 ),
             );
+        let dark_mode = gpui_kit::component::Theme::global(cx).is_dark();
+        let theme_toggle_label = conduit::i18n::text_static(if dark_mode {
+            "shell.switch_to_light_theme"
+        } else {
+            "shell.switch_to_dark_theme"
+        });
         let title_bar = title_bar.child(div().flex_1()).child(
             h_flex()
                 .id("title-bar-actions")
@@ -876,6 +925,40 @@ impl Render for ConduitApp {
                 .mr_1()
                 .flex_shrink_0()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    Button::new("title-theme-toggle")
+                        .debug_selector(|| "title-theme-toggle".into())
+                        .accessibility_label(theme_toggle_label)
+                        .ghost()
+                        .small()
+                        .compact()
+                        .w(px(36.))
+                        .h(px(28.))
+                        .flex_shrink_0()
+                        .icon(if dark_mode {
+                            FullIconName::Sun
+                        } else {
+                            FullIconName::Moon
+                        })
+                        .tooltip(theme_toggle_label)
+                        .disabled(!self.writable || self.closing)
+                        .when(self.writable && !self.closing, |button| {
+                            button.cursor_pointer()
+                        })
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if !this.writable || this.closing {
+                                return;
+                            }
+                            this.store.ui.appearance =
+                                if gpui_kit::component::Theme::global(cx).is_dark() {
+                                    AppearanceMode::Light
+                                } else {
+                                    AppearanceMode::Dark
+                                };
+                            this.persist();
+                            this.apply_appearance(window, cx);
+                        })),
+                )
                 .child(
                     Button::new("title-settings")
                         .debug_selector(|| "title-settings".into())
@@ -957,17 +1040,26 @@ impl Render for ConduitApp {
         } else {
             conversation
         };
-        let conversation = v_flex()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .child(div().flex_1().min_h_0().child(conversation))
-            .when(
-                !self.settings_ui.open
-                    && self.usage_ui.active.is_none()
-                    && self.github_ui.active.is_none(),
-                |layout| layout.child(toolbar),
-            );
+        let content = div().flex_1().min_h_0().child(conversation);
+        let content = if let Some(content_motion_generation) = content_motion_generation {
+            content
+                .with_animation(
+                    SharedString::from(format!(
+                        "main-content-transition-{content_motion_generation}"
+                    )),
+                    Animation::new(Duration::from_millis(180)),
+                    |element, progress| element.opacity(0.78 + progress * 0.22),
+                )
+                .into_any_element()
+        } else {
+            content.into_any_element()
+        };
+        let conversation = v_flex().flex_1().min_w_0().h_full().child(content).when(
+            !self.settings_ui.open
+                && self.usage_ui.active.is_none()
+                && self.github_ui.active.is_none(),
+            |layout| layout.child(toolbar),
+        );
         // Both sidebars use the same resizable panels and overlay handles.
         // A nested group keeps the right sidebar independent of left navigation.
         let (detail_panel, overlay) = self.render_detail_dock(window, cx);

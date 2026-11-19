@@ -7,14 +7,60 @@ use std::rc::Rc;
 const INACTIVE_WORKSPACE_AGE: u64 = 3 * 24 * 60 * 60;
 pub(super) const WORKSPACE_MOVE_DURATION: Duration = Duration::from_millis(240);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SessionGroup {
+    Pinned,
+    Running,
+    Day,
+    Week,
+    Older,
+}
+
+impl SessionGroup {
+    fn new(pinned: bool, running: bool, activity: u64, now: u64) -> Self {
+        if pinned {
+            Self::Pinned
+        } else if running {
+            Self::Running
+        } else if activity > 0 && now.saturating_sub(activity) < 24 * 60 * 60 {
+            Self::Day
+        } else if activity > 0 && now.saturating_sub(activity) < 7 * 24 * 60 * 60 {
+            Self::Week
+        } else {
+            Self::Older
+        }
+    }
+
+    pub(super) fn label(self) -> &'static str {
+        conduit::i18n::text_static(match self {
+            Self::Pinned => "sidebar.group_pinned",
+            Self::Running => "session_data.running",
+            Self::Day => "sidebar.group_day",
+            Self::Week => "sidebar.group_week",
+            Self::Older => "sidebar.group_older",
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Row {
+    Project {
+        key: PathBuf,
+        name: String,
+        copies: usize,
+        count: usize,
+        activity: Option<(u64, bool)>,
+    },
     Workspace {
         path: PathBuf,
         count: usize,
         last: Option<u64>,
     },
     Loading(PathBuf),
+    Group {
+        path: PathBuf,
+        group: SessionGroup,
+    },
     Session {
         path: PathBuf,
         id: u64,
@@ -29,7 +75,9 @@ pub(super) enum Row {
 impl Row {
     pub(super) fn path(&self) -> Option<&Path> {
         match self {
-            Self::Workspace { path, .. }
+            Self::Project { key: path, .. }
+            | Self::Workspace { path, .. }
+            | Self::Group { path, .. }
             | Self::Session { path, .. }
             | Self::More { path, .. }
             | Self::Loading(path) => Some(path),
@@ -38,6 +86,8 @@ impl Row {
     }
     pub(super) fn height(&self) -> f32 {
         match self {
+            Self::Group { .. } => 28.,
+            Self::Session { .. } => 44.,
             Self::More { .. } => 28.,
             Self::Empty => 76.,
             _ => ROW_HEIGHT,
@@ -45,12 +95,23 @@ impl Row {
     }
     pub(super) fn same_identity(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::Group { path: a, group: ga }, Self::Group { path: b, group: gb }) => {
+                a == b && ga == gb
+            }
             (Self::Session { id: a, .. }, Self::Session { id: b, .. }) => a == b,
             _ => {
                 std::mem::discriminant(self) == std::mem::discriminant(other)
                     && self.path() == other.path()
             }
         }
+    }
+    /// Own the inter-row space so tree guides stay inside virtualized bounds.
+    pub(super) fn list_height(&self) -> f32 {
+        self.height() + 4.
+    }
+
+    pub(super) fn is_header(&self) -> bool {
+        matches!(self, Self::Project { .. } | Self::Workspace { .. })
     }
 }
 
@@ -108,11 +169,13 @@ pub(super) struct Inputs {
     workspaces: Vec<(PathBuf, usize)>,
     expanded: HashSet<usize>,
     collapsed: HashSet<PathBuf>,
+    expanded_projects: HashSet<PathBuf>,
     auto_expanded: HashSet<PathBuf>,
     auto_collapse_inactive: bool,
     auto_sort_workspaces: bool,
     loading: HashSet<PathBuf>,
     runs: HashSet<u64>,
+    task_states: HashMap<u64, TaskState>,
     unread: HashSet<u64>,
     namings: HashSet<u64>,
     progress: HashMap<PathBuf, (usize, usize)>,
@@ -133,6 +196,13 @@ pub(super) struct Inputs {
     age_tick: u64,
 }
 impl Inputs {
+    #[cfg(all(test, feature = "ui-tests"))]
+    pub(super) fn at_time(mut self, time: u64) -> Self {
+        self.age_interval = 1;
+        self.age_tick = time;
+        self
+    }
+
     pub(super) fn new(app: &ConduitApp) -> Self {
         let now = unix_now();
         let age_interval = if app.sidebar.has_recent_activity(now) {
@@ -150,11 +220,18 @@ impl Inputs {
                 .collect(),
             expanded: app.expanded_workspaces.clone(),
             collapsed: app.collapsed_workspaces.clone(),
+            expanded_projects: app.sidebar.expanded_projects.clone(),
             auto_expanded: app.sidebar.auto_expanded.clone(),
             auto_collapse_inactive: app.store.ui.auto_collapse_inactive_workspaces,
             auto_sort_workspaces: app.store.ui.auto_sort_workspaces,
             loading: app.history_loading.clone(),
             runs: app.session_control.runs.keys().copied().collect(),
+            task_states: app
+                .session_control
+                .runs
+                .iter()
+                .map(|(id, run)| (*id, TaskState::new(run)))
+                .collect(),
             unread: app.session_control.unread_completed.clone(),
             namings: app.session_control.namings.keys().copied().collect(),
             progress: app.session_control.scan_progress.clone(),
@@ -178,6 +255,8 @@ impl Inputs {
         self.workspaces == other.workspaces
             && self.expanded == other.expanded
             && self.collapsed == other.collapsed
+            && self.expanded_projects == other.expanded_projects
+            && self.unread == other.unread
             && self.auto_expanded == other.auto_expanded
             && self.auto_collapse_inactive == other.auto_collapse_inactive
             && self.auto_sort_workspaces == other.auto_sort_workspaces
@@ -186,6 +265,8 @@ impl Inputs {
             && self.results == other.results
             && self.show_archived == other.show_archived
             && self.limit == other.limit
+            // Group labels must cross their age boundaries even without new messages.
+            && self.age_tick * self.age_interval / 60 == other.age_tick * other.age_interval / 60
     }
 }
 
@@ -203,6 +284,8 @@ pub(in crate::app) struct SidebarState {
     groups: HashMap<PathBuf, WorkspaceRows>,
     pub(super) auto_expanded: HashSet<PathBuf>,
     pub(super) auto_collapsed: HashSet<PathBuf>,
+    pub(super) projects: projects::Groups,
+    pub(super) expanded_projects: HashSet<PathBuf>,
     indices: HashMap<PathBuf, usize>,
     inputs: Option<Inputs>,
     latest_activity: u64,
@@ -233,6 +316,8 @@ impl Default for SidebarState {
             groups: HashMap::new(),
             auto_expanded: HashSet::new(),
             auto_collapsed: HashSet::new(),
+            projects: projects::Groups::default(),
+            expanded_projects: HashSet::new(),
             indices: HashMap::new(),
             inputs: None,
             latest_activity: 0,
@@ -262,11 +347,13 @@ impl SidebarState {
         let index = self.workspace_headers[position];
         let row = &self.rows[index];
         // Empty/collapsed groups have no children to keep in context.
-        if self
-            .rows
-            .get(index + 1)
-            .is_none_or(|next| matches!(next, Row::Workspace { .. }) || next.path() != row.path())
-        {
+        if self.rows.get(index + 1).is_none_or(|next| match row {
+            Row::Project { key, .. } => {
+                next.path().and_then(|path| self.projects.parent(path)) != Some(key)
+                    || matches!(next, Row::Project { .. })
+            }
+            _ => next.is_header() || next.path() != row.path(),
+        }) {
             return None;
         }
         let offset = self
@@ -277,13 +364,23 @@ impl SidebarState {
     }
 
     pub(super) fn reveal_workspace(&mut self, path: &Path) {
-        if let Some(&index) = self
-            .workspace_headers
-            .iter()
-            .find(|&&index| self.rows[index].path() == Some(path))
-        {
+        if let Some(&index) = self.workspace_headers.iter().find(
+            |&&index| matches!(&self.rows[index], Row::Workspace { path: p, .. } if p == path),
+        ) {
             self.keyboard_row = Some(self.rows[index].clone());
             // Direct offset also works before the virtual list has laid out its new rows.
+            self.scroll
+                .set_offset(point(px(0.), px(-self.origins[index])));
+        }
+    }
+
+    pub(super) fn reveal_project(&mut self, key: &Path) {
+        if let Some(index) = self
+            .rows
+            .iter()
+            .position(|row| matches!(row, Row::Project { key: k, .. } if k == key))
+        {
+            self.keyboard_row = Some(self.rows[index].clone());
             self.scroll
                 .set_offset(point(px(0.), px(-self.origins[index])));
         }
@@ -304,9 +401,14 @@ impl SidebarState {
         let elapsed =
             self.motion_started?.elapsed().as_secs_f32() / WORKSPACE_MOVE_DURATION.as_secs_f32();
         (elapsed < 1.)
-            .then(|| {
-                self.workspace_motion.get(path).copied().unwrap_or(0.) * (1. - elapsed).powi(3)
-            })
+            .then(|| self.motion_start_offset(path).unwrap_or(0.) * (1. - elapsed).powi(3))
+            .filter(|offset| offset.abs() > 0.1)
+    }
+
+    pub(super) fn motion_start_offset(&self, path: &Path) -> Option<f32> {
+        self.workspace_motion
+            .get(path)
+            .copied()
             .filter(|offset| offset.abs() > 0.1)
     }
 
@@ -336,8 +438,15 @@ impl SidebarState {
         store: &Store,
         control: &session_controller::SessionController,
         search: &search_worker::SearchUi,
-        inputs: Inputs,
+        mut inputs: Inputs,
     ) -> bool {
+        let selected_path = inputs
+            .selected_workspace
+            .and_then(|index| store.workspaces.get(index))
+            .map(|workspace| &workspace.path);
+        let previous_selected_project = selected_path
+            .and_then(|path| self.projects.parent(path))
+            .cloned();
         let mut changed = self.inputs.as_ref() != Some(&inputs);
         let mut rebuild = self
             .inputs
@@ -352,6 +461,15 @@ impl SidebarState {
             .as_ref()
             .is_none_or(|old| old.workspaces != inputs.workspaces)
         {
+            self.projects = projects::Groups::new(
+                store
+                    .workspaces
+                    .iter()
+                    .map(|workspace| workspace.path.clone()),
+            );
+            self.expanded_projects
+                .retain(|key| self.projects.contains(key));
+            inputs.expanded_projects = self.expanded_projects.clone();
             self.indices = store
                 .workspaces
                 .iter()
@@ -362,6 +480,23 @@ impl SidebarState {
                 .retain(|path, _| self.indices.contains_key(path));
             self.auto_expanded
                 .retain(|path| self.indices.contains_key(path));
+        }
+        // Opening a session through a task card, tab or search reveals its group.
+        // A subsequent manual group collapse is respected while selection is unchanged.
+        if (self.inputs.as_ref().is_none_or(|old| {
+            old.selected_workspace != inputs.selected_workspace
+                || old.selected_session != inputs.selected_session
+        }) || selected_path.and_then(|path| self.projects.parent(path))
+            != previous_selected_project.as_ref())
+            && let Some(workspace) = inputs
+                .selected_workspace
+                .and_then(|index| store.workspaces.get(index))
+            && let Some(key) = self.projects.parent(&workspace.path)
+        {
+            self.expanded_projects.insert(key.clone());
+            inputs.expanded_projects = self.expanded_projects.clone();
+            rebuild = true;
+            changed = true;
         }
         for workspace in &store.workspaces {
             if self.dirty_workspaces.contains(&workspace.path)
@@ -491,11 +626,26 @@ impl SidebarState {
                     .take_while(|id| group.summaries[id].pinned)
                     .count();
                 let ordinary = total - pinned;
+                let mut previous_group = None;
                 for id in filtered.into_iter().take(if expanded {
                     total
                 } else {
                     pinned + inputs.limit
                 }) {
+                    let summary = &group.summaries[&id];
+                    let session_group = SessionGroup::new(
+                        summary.pinned,
+                        summary.running,
+                        summary.activity,
+                        inputs.age_tick * inputs.age_interval,
+                    );
+                    if previous_group != Some(session_group) {
+                        rows.push(Row::Group {
+                            path: path.clone(),
+                            group: session_group,
+                        });
+                        previous_group = Some(session_group);
+                    }
                     rows.push(Row::Session {
                         path: path.clone(),
                         id,
@@ -512,6 +662,28 @@ impl SidebarState {
             if store.workspaces.is_empty() {
                 rows.push(Row::Empty);
             }
+            let mut attention = HashMap::new();
+            for (&id, running) in inputs
+                .unread
+                .iter()
+                .map(|id| (id, false))
+                .chain(inputs.runs.iter().map(|id| (id, true)))
+            {
+                if let Some((index, _)) = control.locate(&store.workspaces, id) {
+                    let entry = attention
+                        .entry(store.workspaces[index].path.clone())
+                        .or_insert((id, running));
+                    if (!running, id) < (!entry.1, entry.0) {
+                        *entry = (id, running);
+                    }
+                }
+            }
+            let rows = self.projects.project(
+                rows,
+                &inputs.expanded_projects,
+                &attention,
+                !inputs.query.is_empty(),
+            );
             if self.rows.as_ref() != &rows {
                 let reset = self
                     .inputs
@@ -572,6 +744,7 @@ impl SidebarState {
             .collect();
         // Animate reorders, not initial population, filtering or expanding groups.
         let reordered = !reset
+            && self.projects.is_empty()
             && old_order.len() == new_order.len()
             && old_order != new_order
             && new_order
@@ -588,7 +761,7 @@ impl SidebarState {
             .iter()
             .map(|row| {
                 let current = origin;
-                origin += row.height() + 4.;
+                origin += row.list_height();
                 current
             })
             .collect();
@@ -606,6 +779,12 @@ impl SidebarState {
                         .position(|row| {
                             matches!(row, Row::Workspace { .. }) && row.path() == anchor.path()
                         })
+                        .map(|index| (index, 0.))
+                })
+                .or_else(|| {
+                    let parent = anchor.path().and_then(|path| self.projects.parent(path))?;
+                    rows.iter()
+                        .position(|row| matches!(row, Row::Project { key, .. } if key == parent))
                         .map(|index| (index, 0.))
                 });
             if let Some((index, offset)) = next {
@@ -643,7 +822,7 @@ impl SidebarState {
         // Reuse the allocation when only identities change; layout sizes remain valid.
         let sizes: Vec<_> = rows
             .iter()
-            .map(|row| size(px(0.), px(row.height())))
+            .map(|row| size(px(0.), px(row.list_height())))
             .collect();
         if self.sizes.as_ref() != &sizes {
             self.sizes = Rc::new(sizes);
@@ -652,8 +831,21 @@ impl SidebarState {
         self.workspace_headers = rows
             .iter()
             .enumerate()
-            .filter_map(|(index, row)| matches!(row, Row::Workspace { .. }).then_some(index))
+            .filter_map(|(index, row)| row.is_header().then_some(index))
             .collect();
+        if let Some(focused) = &self.keyboard_row
+            && !rows.iter().any(|row| row.same_identity(focused))
+        {
+            self.keyboard_row = rows
+                .iter()
+                .find(|row| matches!(row, Row::Workspace { .. }) && row.path() == focused.path())
+                .or_else(|| {
+                    let parent = focused.path().and_then(|path| self.projects.parent(path))?;
+                    rows.iter()
+                        .find(|row| matches!(row, Row::Project { key, .. } if key == parent))
+                })
+                .cloned();
+        }
         self.rows = Rc::new(rows);
     }
 }

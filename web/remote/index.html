@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#141918">
+  <meta name="theme-color" content="#0e0e10" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f7f7f8" media="(prefers-color-scheme: light)">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="apple-touch-icon" href="/icon.png">
   <link rel="stylesheet" href="/app.css">
@@ -12,7 +13,7 @@
 </head>
 <body>
   <header class="masthead">
-    <a class="brand" href="/" aria-label="Conduit 首页"><img src="/icon.png" width="30" height="30" alt="">Conduit</a>
+    <a class="brand" href="/" aria-label="Conduit 首页"><img src="/icon.png" width="28" height="28" alt="">Conduit</a>
     <span class="connection" id="connection" role="status">正在连接</span>
   </header>
   <main>
@@ -30,8 +31,9 @@
     <section id="home" hidden>
       <div class="heading">
         <div><p class="eyebrow" id="workspace"></p><h1>会话</h1></div>
-        <button class="primary" id="new-session">新建</button>
+        <button class="primary new-session-button" id="new-session"><span aria-hidden="true">+</span>新建会话</button>
       </div>
+      <div class="list-heading"><h2>工作区会话</h2></div>
       <nav class="tabs" aria-label="会话分类">
         <button id="active-tab" aria-pressed="true">未归档</button>
         <button id="archived-tab" aria-pressed="false">已归档</button>
@@ -42,7 +44,7 @@
     </section>
     <section id="chat" hidden>
       <div class="chat-header">
-        <button id="back" class="quiet">← 会话</button>
+        <button id="back" class="quiet back-button"><span aria-hidden="true">‹</span>会话</button>
         <div class="chat-title"><h1 id="title"></h1><span id="state" class="muted"></span></div>
         <button id="manage" class="quiet">管理</button>
       </div>
@@ -50,6 +52,7 @@
         <button id="older" class="load" hidden>更早消息</button>
         <div id="messages"></div>
       </div>
+      <section id="approval" class="approval" aria-live="polite" hidden></section>
       <form id="composer">
         <label for="draft" class="sr-only">消息</label>
         <textarea id="draft" rows="2" placeholder="发送消息到电脑…"></textarea>

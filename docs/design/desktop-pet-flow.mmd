@@ -1,0 +1,22 @@
+sequenceDiagram
+    actor User as 用户
+    participant Settings as 设置插件页
+    participant Registry as 宿主原生插件注册表
+    participant View as 桌面宠物
+    participant Host as 宿主模型 API 服务
+    participant Model as 已配置模型服务
+
+    User->>Settings: 启用宠物插件与悬浮窗
+    Settings->>Registry: 注册内置插件贡献
+    Registry-->>View: 显示宠物互动入口
+    User->>View: 选择场景与宠物语气
+    View->>Host: 提交有界生成请求
+    Host->>Host: 校验插件状态与服务路由
+    Host->>Host: 读取受保护凭据并组装协议请求
+    Host->>Model: 调用 Anthropic Messages 或 OpenAI Responses API
+    Model-->>Host: 返回文本
+    Host-->>View: 只返回生成内容
+    View-->>User: 在宠物气泡显示回复
+    User->>Settings: 关闭宠物插件
+    Settings->>Registry: 撤销注册并取消在途任务
+    Registry-->>View: 移除入口并清理面板状态

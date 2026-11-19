@@ -25,7 +25,8 @@ impl ConduitApp {
             .filter(|row| {
                 matches!(
                     row,
-                    cache::Row::Workspace { .. }
+                    cache::Row::Project { .. }
+                        | cache::Row::Workspace { .. }
                         | cache::Row::Session { .. }
                         | cache::Row::More { .. }
                 )
@@ -52,6 +53,20 @@ impl ConduitApp {
         let row = rows[next].clone();
         self.sidebar.keyboard_row = Some(row.clone());
         match &row {
+            cache::Row::Project { key: path, .. } => {
+                let expanded = self.sidebar.expanded_projects.contains(path);
+                if key == "enter" || (key == "left" && expanded) || (key == "right" && !expanded) {
+                    self.set_sidebar_project_expanded(path, !expanded, window, cx);
+                } else if key == "right" && expanded {
+                    self.sidebar.keyboard_row = rows
+                        .get(current + 1)
+                        .filter(|row| {
+                            matches!(row, cache::Row::Workspace { path: child, .. }
+                            if self.sidebar.projects.parent(child) == Some(path))
+                        })
+                        .cloned();
+                }
+            }
             cache::Row::Session { id, path } => {
                 if key == "enter" {
                     self.switch_sidebar_session(*id, window, cx);
@@ -91,7 +106,15 @@ impl ConduitApp {
             }
             cache::Row::Workspace { path, last, .. } => {
                 if key == "left" {
-                    self.set_workspace_collapsed(path, true);
+                    if self.workspace_collapsed(path) {
+                        if let Some(parent) = self.sidebar.projects.parent(path) {
+                            self.sidebar.keyboard_row = self.sidebar.rows.iter().find(|row| {
+                                matches!(row, cache::Row::Project { key, .. } if key == parent)
+                            }).cloned();
+                        }
+                    } else {
+                        self.set_workspace_collapsed(path, true);
+                    }
                 }
                 if key == "right" {
                     self.set_workspace_collapsed(path, false);

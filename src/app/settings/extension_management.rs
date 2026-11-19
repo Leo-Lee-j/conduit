@@ -43,7 +43,7 @@ impl ConduitApp {
                         .w((window.viewport_size().width - px(60.)).clamp(px(0.), px(620.)))
                         .content(move |body, _, _| {
                             let confirm = view.clone(); let path = path.clone(); let original = original.clone();
-                            body.child(v_flex().gap_3().child(conduit::i18n::format("settings.extensions.source", &[("arg0", format!("{}", path.display()))]))
+                            body.child(v_flex().gap_3().child(conduit::i18n::format("settings.extensions.source", &[("arg0", display_path(&path))]))
                                 .child(conduit::i18n::text_static("settings.extension_management.disable_or_restore_by_renaming_skill_md"))
                                 .child(h_flex().gap_2().justify_end()
                                     .child(Button::new("skill-toggle-cancel").ghost().label(conduit::i18n::text_static("git_branches.cancel")).on_click(|_, window, cx| window.close_dialog(cx)))
@@ -84,7 +84,7 @@ impl ConduitApp {
                 let message = match result {
                     Ok(path) => conduit::i18n::format(
                         "settings.extension_management.skill_status_updated_applies_when_the_next",
-                        &[("arg0", format!("{}", path.display()))],
+                        &[("arg0", display_path(&path))],
                     ),
                     Err(error) => conduit::i18n::format(
                         "settings.extension_management.update_failed",

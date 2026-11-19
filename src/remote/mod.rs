@@ -4,6 +4,7 @@ mod server;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
+    collections::BTreeMap,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -99,6 +100,7 @@ pub(crate) enum Read {
     },
     Session(u64),
     Metadata(u64),
+    Approvals(u64),
     Messages {
         session: u64,
         before: Option<usize>,
@@ -131,6 +133,21 @@ pub(crate) enum Write {
         session: u64,
         version: String,
         patch: MetadataPatch,
+    },
+    Approval {
+        session: u64,
+        run: String,
+        ticket: String,
+        action: ApprovalAction,
+    },
+}
+
+pub(crate) enum ApprovalAction {
+    Decide {
+        allow: bool,
+    },
+    Answer {
+        answers: BTreeMap<String, Vec<String>>,
     },
 }
 

@@ -3,6 +3,8 @@ mod github;
 mod http;
 pub mod mcp;
 pub mod receipts;
+mod skills_sh;
+mod starters;
 #[cfg(test)]
 mod tests;
 
@@ -20,6 +22,10 @@ use std::{
 
 pub fn text(key: &str) -> String {
     conduit::i18n::text(&format!("catalog.{key}"))
+}
+pub fn is_github_reference(query: &str) -> bool {
+    // Plain keywords belong to the selected search catalog, not GitHub.
+    query.contains('/') && github::source(query).is_ok()
 }
 fn fail(key: &str) -> anyhow::Error {
     anyhow::anyhow!(text(key))
@@ -103,12 +109,30 @@ pub fn search(
     cancel: &AtomicBool,
 ) -> Result<Page> {
     let client = Client::new(cancel);
+    search_with(&client, source, query, cursor, root, refresh, writable)
+}
+
+fn search_with(
+    client: &impl http::Transport,
+    source: Source,
+    query: &str,
+    cursor: Option<&str>,
+    root: &Path,
+    refresh: bool,
+    writable: bool,
+) -> Result<Page> {
     client.check()?;
+    let query = query.trim();
     ensure!(
         query.len() <= 200 && cursor.is_none_or(|c| c.len() <= 1024),
         text("query_limit")
     );
-    let key = digest(format!("v1:{source:?}:{query}:{cursor:?}").as_bytes());
+    let version = if source == Source::Featured {
+        "v2"
+    } else {
+        "v1"
+    };
+    let key = digest(format!("{version}:{source:?}:{query}:{cursor:?}").as_bytes());
     let path = root.join("extension-catalog").join(format!("{key}.json"));
     let cached = fs::File::open(&path)
         .ok()
@@ -129,7 +153,7 @@ pub fn search(
         page.cached = true;
         return Ok(page);
     }
-    let result = fetch(&client, source, query, cursor);
+    let result = fetch(client, source, query, cursor);
     client.check()?;
     match result {
         Ok(mut page) => {
@@ -144,6 +168,12 @@ pub fn search(
                 page.cached = true;
                 page.warning = Some(error.to_string());
                 Ok(page)
+            }
+            None if source == Source::SkillsSh && query.is_empty() && cursor.is_none() => {
+                Ok(Page {
+                    warning: Some(text("trending_fallback")),
+                    ..starters::github("")
+                })
             }
             None => Err(error),
         },
@@ -202,6 +232,30 @@ fn fetch(
                     Some("skills/skill-creator"),
                     "Agent Skills",
                 ),
+                skill_item(
+                    "anthropics/skills",
+                    "docx",
+                    Some("skills/docx"),
+                    "Microsoft Word / DOCX",
+                ),
+                skill_item(
+                    "anthropics/skills",
+                    "xlsx",
+                    Some("skills/xlsx"),
+                    "Excel / spreadsheets",
+                ),
+                skill_item(
+                    "anthropics/skills",
+                    "pptx",
+                    Some("skills/pptx"),
+                    "PowerPoint / presentations",
+                ),
+                skill_item(
+                    "obra/superpowers",
+                    "systematic-debugging",
+                    Some("skills/systematic-debugging"),
+                    "Debugging workflow",
+                ),
             ];
             let query = query.to_lowercase();
             items.retain(|i| {
@@ -214,35 +268,12 @@ fn fetch(
                 ..Default::default()
             })
         }
-        Source::SkillsSh => {
-            ensure!(!query.trim().is_empty(), text("enter_search"));
-            let mut url = url::Url::parse("https://skills.sh/api/search")?;
-            url.query_pairs_mut()
-                .append_pair("q", query)
-                .append_pair("limit", "30");
-            let data = client.json(url.as_str(), 1024 * 1024)?;
-            let entries = data["skills"]
-                .as_array()
-                .ok_or_else(|| fail("invalid_response"))?;
-            ensure!(entries.len() <= 100, text("response_limit"));
-            let mut items = Vec::new();
-            for entry in entries {
-                let repo = entry["source"].as_str().unwrap_or("");
-                if github::repository_name(repo).is_err() {
-                    continue;
-                }
-                let name = entry["skillId"].as_str().unwrap_or("");
-                if name.is_empty() || name.len() > 160 {
-                    continue;
-                }
-                items.push(skill_item(repo, name, None, "skills.sh"));
-            }
-            Ok(Page {
-                items,
-                ..Default::default()
-            })
+        Source::SkillsSh if query.is_empty() => skills_sh::trending(client),
+        Source::SkillsSh => skills_sh::search(client, query),
+        Source::Github if cursor.is_none() && !query.contains(['/', '@', '#', ':']) => {
+            Ok(starters::github(query))
         }
-        Source::Github => github::discover(client, query),
+        Source::Github => github::discover(client, query, cursor),
         Source::McpRegistry => mcp::search(client, query, cursor),
     }
 }

@@ -137,7 +137,7 @@ impl ConduitApp {
                 if matches!(event, InputEvent::PressEnter { .. })
                     && !app.extensions_ui.discovery[index].preparing
                 {
-                    app.query_extension_catalog(index, false, false, cx);
+                    app.submit_extension_catalog(index, cx);
                 }
             })
             .detach();
@@ -199,6 +199,20 @@ impl ConduitApp {
             });
         })
         .detach();
+    }
+    fn submit_extension_catalog(&mut self, index: usize, cx: &mut Context<Self>) {
+        let state = &mut self.extensions_ui.discovery[index];
+        if index == 0
+            && state.source != Source::Github
+            && state
+                .input
+                .as_ref()
+                .is_some_and(|input| catalog::is_github_reference(input.read(cx).value().trim()))
+        {
+            state.source = Source::Github;
+            state.query.clear();
+        }
+        self.query_extension_catalog(index, false, false, cx);
     }
     fn query_extension_catalog(
         &mut self,
@@ -295,8 +309,11 @@ impl ConduitApp {
                                 state.entries.push(item);
                             }
                         }
-                        state.entries.truncate(300);
-                        state.next = if state.entries.len() >= 300 {
+                        if source == Source::McpRegistry {
+                            state.entries.truncate(300);
+                        }
+                        state.next = if source == Source::McpRegistry && state.entries.len() >= 300
+                        {
                             None
                         } else {
                             page.next
@@ -332,7 +349,7 @@ impl ConduitApp {
             .extensions_ui
             .workspace
             .as_ref()
-            .map(|p| p.display().to_string())
+            .map(|p| display_path(p))
             .unwrap_or_else(|| text("global"));
         let choices: Vec<_> = std::iter::once((None, text("global")))
             .chain(
@@ -378,15 +395,28 @@ impl ConduitApp {
                                             let view = source_view.clone();
                                             menu = menu.item(
                                                 PopupMenuItem::new(source.label()).on_click(
-                                                    move |_, _, cx| {
+                                                    move |_, window, cx| {
                                                         view.update(cx, |app, cx| {
                                                             let state = &mut app
                                                                 .extensions_ui
                                                                 .discovery[index];
+                                                            if state.source == source {
+                                                                return;
+                                                            }
                                                             state.cancel();
                                                             state.source = source;
+                                                            if let Some(input) =
+                                                                state.input.as_ref()
+                                                            {
+                                                                input.update(cx, |input, cx| {
+                                                                    input.set_value("", window, cx)
+                                                                });
+                                                            }
+                                                            state.query.clear();
                                                             state.entries.clear();
+                                                            state.installed.clear();
                                                             state.next = None;
+                                                            state.fetched_at = 0;
                                                             state.feedback = None;
                                                             app.query_extension_catalog(
                                                                 index, false, false, cx,
@@ -401,10 +431,13 @@ impl ConduitApp {
                             )
                             .child(
                                 Button::new("catalog-scope")
+                                    .debug_selector(|| "catalog-scope".into())
                                     .small()
                                     .outline()
                                     .max_w(px(280.))
-                                    .child(div().truncate().child(scope))
+                                    .accessibility_label(scope.clone())
+                                    .tooltip(scope.clone())
+                                    .child(div().min_w_0().truncate().child(scope))
                                     .icon(FullIconName::ChevronDown)
                                     .dropdown_menu(move |mut menu, _, _| {
                                         for (path, name) in &choices {
@@ -448,7 +481,7 @@ impl ConduitApp {
                                     .disabled(state.loading || state.preparing)
                                     .on_click(move |_, _, cx| {
                                         search_view.update(cx, |app, cx| {
-                                            app.query_extension_catalog(index, false, false, cx)
+                                            app.submit_extension_catalog(index, cx)
                                         });
                                     }),
                             )
@@ -471,6 +504,45 @@ impl ConduitApp {
                         Source::McpRegistry => "registry_hint",
                         Source::Featured => "featured_hint",
                     })))
+                    .when(
+                        index == 0 && state.source == Source::Github && state.query.is_empty(),
+                        |body| {
+                            let mut repos = h_flex().gap_2().flex_wrap();
+                            for (position, repo) in [
+                                "anthropics/skills",
+                                "vercel-labs/agent-skills",
+                                "obra/superpowers",
+                                "remotion-dev/skills",
+                            ]
+                            .into_iter()
+                            .enumerate()
+                            {
+                                let view = view.clone();
+                                repos = repos.child(
+                                    Button::new(("catalog-browse-repo", position))
+                                        .label(repo)
+                                        .small()
+                                        .outline()
+                                        .disabled(state.preparing || self.closing)
+                                        .on_click(move |_, window, cx| {
+                                            view.update(cx, |app, cx| {
+                                                if let Some(input) = app.extensions_ui.discovery
+                                                    [index]
+                                                    .input
+                                                    .as_ref()
+                                                {
+                                                    input.update(cx, |input, cx| {
+                                                        input.set_value(repo, window, cx)
+                                                    });
+                                                }
+                                                app.submit_extension_catalog(index, cx);
+                                            });
+                                        }),
+                                );
+                            }
+                            body.child(repos)
+                        },
+                    )
                     .when(state.fetched_at > 0, |body| {
                         body.child(note(format!(
                             "{} · {}",
@@ -518,7 +590,7 @@ impl ConduitApp {
             .px_3()
             .py_3()
             .gap_2();
-        if state.entries.is_empty() && !state.loading {
+        if state.entries.is_empty() && !state.loading && state.feedback.is_none() {
             entries = entries.child(note(text("empty")));
         }
         for (position, item) in state.entries.iter().enumerate() {

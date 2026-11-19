@@ -1,6 +1,68 @@
 use super::{ChatItem, file_ref};
 use crate::app::{NoticeLevel, NoticeSource};
-use gpui_kit::{TestAppContext, point, px};
+use gpui_kit::{AppContext as _, TestAppContext, point, px};
+
+fn pet_store(pet_enabled: bool) -> crate::store::Store {
+    let mut store = crate::store::Store::default();
+    store.ui.encourager.enabled = true;
+    store.ui.encourager.pet_enabled = pet_enabled;
+    store
+}
+
+#[gpui_kit::test]
+fn enabling_desktop_pet_during_host_update_does_not_reenter_host(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    cx.update(gpui_kit::init);
+    let app_slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = app_slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut app =
+                crate::app::ConduitApp::with_store(window, cx, Ok(pet_store(false)), false, false);
+            app.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        app.update(cx, |app, cx| app.set_encourager_pet_enabled(true, cx));
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = app_slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            assert!(app.encourager_pet_window.is_some());
+            app.set_encourager_pet_enabled(false, cx);
+            app.persistence.flush();
+        });
+    });
+}
+
+#[gpui_kit::test]
+fn restoring_desktop_pet_during_host_update_does_not_reenter_host(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    cx.update(gpui_kit::init);
+    let app_slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = app_slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut app =
+                crate::app::ConduitApp::with_store(window, cx, Ok(pet_store(true)), false, false);
+            app.writable = false;
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        app.update(cx, |app, cx| app.restore_encourager_pet(cx));
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+    let app = app_slot.borrow().as_ref().unwrap().clone();
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            assert!(app.encourager_pet_window.is_some());
+            app.close_encourager_pet_window(cx);
+        });
+    });
+}
 
 #[gpui_kit::test]
 fn thinking_disclosure_preserves_manual_choices_across_streaming_and_sessions(

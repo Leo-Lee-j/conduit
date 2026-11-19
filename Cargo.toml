@@ -31,7 +31,10 @@ semver = "1"
 roxmltree = "=0.20.0"
 sha2 = "0.10"
 url = "2"
+percent-encoding = "2"
+regex = "1"
 winreg = "0.55"
+zip = { version = "9.7.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"], optional = true }
 async-channel = { version = "2", optional = true }

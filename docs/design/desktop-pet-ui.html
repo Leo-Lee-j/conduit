@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Conduit · 字符桌面宠物</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f3f1ec;color:#302f2b;font:15px/1.6 system-ui,"Microsoft YaHei",sans-serif}main{max-width:1100px;margin:48px auto;padding:0 28px}header{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid #d8d4cb;padding-bottom:20px}h1{font-size:27px;margin:0}header span,.note{color:#74716a;font-size:13px}.intro{max-width:740px;margin:24px 0}section{position:relative;height:420px;border-radius:12px;background:#343e39;overflow:hidden;color:#dce1d9;padding:26px}section>p{margin:0;color:#9fae9f;font-size:13px}.desktop-copy{font:14px/2 Consolas,monospace;opacity:.65;margin-top:24px}.pet{position:absolute;right:42px;bottom:24px}.character{border:0;padding:0;background:none;cursor:pointer;touch-action:none;user-select:none;display:block;width:148px;height:112px;color:#ffe3ae;text-shadow:-1px 0 #292521,1px 0 #292521,0 -1px #292521,0 1px #292521;text-align:left}.character pre{font:bold 22px/24px Consolas,monospace;margin:0;padding:4px 0 0 8px}.character:focus-visible{outline:1px dashed #b8c7b0;outline-offset:3px}.bubble{position:absolute;right:0;bottom:112px;width:304px;background:#fffdf8;color:#302f2b;padding:12px;border-radius:14px;font-size:13px}.bubble p{margin:0 0 10px}.bubble button{border:0;background:#eceee6;color:#3f5144;border-radius:5px;padding:5px 9px;margin-right:6px;cursor:pointer}.states{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin:24px 0}.states>div{border-top:1px solid #d8d4cb;padding-top:12px}.states b{font-size:14px}.states p{margin:5px 0;font-size:13px;color:#74716a}footer{font-size:13px;color:#74716a}.toolbar{display:flex;align-items:center;gap:10px;margin:18px 0}select,button{font:inherit}.toolbar select{border:1px solid #d8d4cb;border-radius:5px;padding:6px;background:transparent}@media(max-width:650px){main{margin:24px auto;padding:0 18px}header{display:block}.states{grid-template-columns:1fr}.pet{right:20px}section{height:400px}}
+</style>
+<main><header><h1>字符小猫，住在桌面上</h1><span>Conduit / 桌面宠物 · 原生透明窗口修订</span></header>
+<p class="intro">待机只显示字符形象。直接点一下，小猫先想一想，再用气泡回应。模型和语气留在设置里，桌面留给小猫。</p>
+<div class="toolbar"><label for="scenario">演示反馈</label><select id="scenario"><option value="success">正常回复</option><option value="missing">未配置模型</option><option value="error">请求失败</option></select><span class="note">本页为本地交互演示，不调用 API。</span></div>
+<section aria-label="模拟桌面"><p>你的桌面 / 按住小猫可拖动</p><div class="desktop-copy">$ cargo test<br>test result: ok.<br><br>一个小问题，一点点解决。</div>
+<div class="pet" id="pet"><aside class="bubble" id="bubble" hidden aria-live="polite"><p id="reply"></p><button id="again">再聊一句</button><button id="dismiss">收起气泡</button></aside><button class="character" id="character" aria-label="和字符小猫聊聊"><pre id="art"></pre></button></div></section>
+<div class="states"><div><b>01 / 只留形象</b><p>系统窗口也不绘制标题栏、边框或阴影，等宽字符用细描边适配桌面底色。</p></div><div><b>02 / 点击就回应</b><p>表情与省略号换帧表示思考。处理中重复点击不再发起请求。</p></div><div><b>03 / 反馈后回到陪伴</b><p>气泡向左上方出现，角色大小保持不变。气泡可收起，拖动不会误触聊天。</p></div></div>
+<footer>实际应用：设置 → 插件 → 桌面宠物。右键显示操作菜单；Esc 收起气泡；回复约 25 秒后自动收起，悬停阅读时暂停。</footer></main>
+<script>
+const frames = [
+  ['  .      ', ' /\\_/\\  ', '( -.- )  ', ' / ? \\  '],
+  ['  ..     ', ' /\\_/\\  ', '( o.- )  ', ' / ? \\  '],
+  ['  ...    ', ' /\\_/\\  ', '( -.o )  ', ' / ? \\  ']
+];
+const idle=['         ',' /\\_/\\  ','( o.o )  ',' / > <\\ '];
+const art=document.querySelector('#art'), button=document.querySelector('#character'), bubble=document.querySelector('#bubble'), pet=document.querySelector('#pet');
+let thinking=false, timer, expiry, press;
+function draw(lines){art.textContent=lines.join('\n')}
+function dismiss(){bubble.hidden=true;if(!thinking)draw(idle);clearTimeout(expiry)}
+function chat(){if(thinking)return;dismiss();thinking=true;button.setAttribute('aria-label','小猫正在思考');let frame=0;draw(frames[0]);timer=setInterval(()=>draw(frames[++frame%3]),360);setTimeout(()=>{clearInterval(timer);thinking=false;const state=document.querySelector('#scenario').value;draw(['         ',' /\\_/\\  ',state==='success'?'( ^.^ )  ':'( o.o )? ',' / > <\\ ']);document.querySelector('#reply').textContent=state==='success'?'喵，我在。先把眼前最小的一步走完，剩下的我们慢慢来。':state==='missing'?'先在设置 → 插件 → 桌面宠物里选择模型服务和模型，再来找我聊天吧。':'这次没连上模型服务。检查连接后，点我再试一次。';bubble.hidden=false;button.setAttribute('aria-label','和字符小猫聊聊');expiry=setTimeout(dismiss,25200)},1800)}
+button.addEventListener('pointerdown',e=>{if(e.button!==0)return;press={x:e.clientX,y:e.clientY,left:pet.offsetLeft,top:pet.offsetTop,drag:false};button.setPointerCapture(e.pointerId)});
+button.addEventListener('pointermove',e=>{if(!press)return;const dx=e.clientX-press.x,dy=e.clientY-press.y;if(Math.max(Math.abs(dx),Math.abs(dy))>=6)press.drag=true;if(press.drag){pet.style.right='auto';pet.style.bottom='auto';pet.style.left=Math.max(0,Math.min(pet.parentElement.clientWidth-148,press.left+dx))+'px';pet.style.top=Math.max(200,Math.min(pet.parentElement.clientHeight-112,press.top+dy))+'px'}});
+button.addEventListener('pointerup',()=>{const dragged=press?.drag;press=null;if(!dragged)chat()});button.addEventListener('pointercancel',()=>press=null);
+button.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();chat()}});document.addEventListener('keydown',e=>{if(e.key==='Escape')dismiss()});document.querySelector('#again').onclick=chat;document.querySelector('#dismiss').onclick=dismiss;
+bubble.addEventListener('mouseenter',()=>clearTimeout(expiry));bubble.addEventListener('mouseleave',()=>expiry=setTimeout(dismiss,25200));draw(idle);
+</script></html>

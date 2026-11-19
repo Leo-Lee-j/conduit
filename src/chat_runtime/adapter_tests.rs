@@ -184,6 +184,77 @@ fn independent_adapter_streams_and_routes_approval_responses_through_generic_run
 }
 
 #[test]
+fn claude_background_task_runtime_keeps_notifications_after_the_main_result() {
+    use crate::message_status::ToolStatus;
+    let _locale = crate::test_support::chinese();
+    let script = r#"
+        [Console]::ReadLine() | Out-Null
+        [Console]::WriteLine('{"type":"control_response","response":{"request_id":"conduit-init","subtype":"success"}}')
+        [Console]::ReadLine() | Out-Null
+        [Console]::WriteLine('{"type":"assistant","message":{"id":"main","content":[{"type":"tool_use","id":"bash","name":"Bash","input":{"command":"fixture test"}}]}}')
+        [Console]::WriteLine('{"type":"system","subtype":"task_started","task_id":"shell","task_type":"local_bash","tool_use_id":"bash","run_id":"run-1"}')
+        [Console]::WriteLine('{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"bash","content":"background started"}]}}')
+        [Console]::WriteLine('{"type":"result","subtype":"success"}')
+        Start-Sleep -Milliseconds 300
+        [Console]::WriteLine('{"type":"system","subtype":"task_notification","task_id":"shell","run_id":"run-1","status":"failed","summary":"background failed"}')
+        [Console]::In.ReadToEnd() | Out-Null
+    "#;
+    let cwd = std::env::temp_dir();
+    let protocol = Protocol::new(
+        Provider::Claude,
+        cwd.to_string_lossy().into_owned(),
+        "fixture".into(),
+        None,
+    );
+    let executable = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+        .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+    let runtime = ChatRuntime::start_command(
+        protocol,
+        executable,
+        ["-NoProfile", "-NonInteractive", "-Command", script]
+            .map(String::from)
+            .into(),
+        cwd,
+    );
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut statuses = vec![];
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "background fixture did not finish"
+        );
+        match runtime.events.recv_timeout(Duration::from_secs(2)) {
+            Ok(Event::Tool {
+                key,
+                status,
+                detail,
+                ..
+            }) if key == "bash" => {
+                assert_ne!(
+                    status,
+                    ToolStatus::Completed,
+                    "launch result is not task success"
+                );
+                if status == ToolStatus::Failed {
+                    assert_eq!(detail, "background failed");
+                }
+                statuses.push(status);
+            }
+            Ok(Event::Subagent(_)) => panic!("shell task must stay out of the agent panel"),
+            Ok(Event::Finished { error, cancelled }) => {
+                assert_eq!(error, None);
+                assert!(!cancelled);
+                break;
+            }
+            Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(error) => panic!("background fixture disconnected: {error}"),
+        }
+    }
+    assert!(statuses.contains(&ToolStatus::Running));
+    assert_eq!(statuses.last(), Some(&ToolStatus::Failed));
+}
+
+#[test]
 fn adapter_stays_unlaunched_until_save_and_handles_cancel_or_failed_save() {
     let _locale = crate::test_support::chinese();
     for cancel in [false, true] {

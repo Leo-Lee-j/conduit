@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 #[derive(Default)]
 pub(super) struct Agents {
     pub records: BTreeMap<String, Agent>,
+    pub(super) claude_tasks: HashMap<String, super::claude_tasks::Task>,
     published: BTreeMap<String, Agent>,
     pending_reads: HashMap<String, (String, String, Instant)>,
     prior_turns: HashMap<String, String>,
@@ -23,14 +24,28 @@ impl Agents {
             if self.published.get(id) != Some(record) {
                 record.updated_at = crate::subagents::now();
                 self.published.insert(id.clone(), record.clone());
-                step.events.push(Event::Subagent(record.clone()));
+                if let Some(task) = self.claude_tasks.get(id) {
+                    if task.agent && !task.ambient {
+                        step.events.push(Event::Subagent(record.clone()));
+                    }
+                    if task.inline && !task.ambient && (!task.agent || task.has_tool()) {
+                        step.events.push(task.tool_event(record));
+                    }
+                } else {
+                    step.events.push(Event::Subagent(record.clone()));
+                }
             }
         }
     }
     pub fn active(&self) -> bool {
-        self.records.values().any(|a| a.status.active())
+        self.records.iter().any(|(id, a)| {
+            a.status.active() && self.claude_tasks.get(id).is_none_or(|task| !task.ambient)
+        })
     }
-    fn register(&mut self, id: &str, parent: &str) -> Option<&mut Agent> {
+    pub(super) fn invalidate(&mut self, id: &str) {
+        self.published.remove(id);
+    }
+    pub(super) fn register(&mut self, id: &str, parent: &str) -> Option<&mut Agent> {
         if id.is_empty() || (self.records.len() >= 256 && !self.records.contains_key(id)) {
             return None;
         }
@@ -41,7 +56,7 @@ impl Agents {
         )
     }
 }
-fn native_status(value: &str) -> Status {
+pub(super) fn native_status(value: &str) -> Status {
     match value {
         "pendingInit" | "pending" => Status::Starting,
         "running" | "busy" | "retry" | "inProgress" => Status::Running,
@@ -106,6 +121,14 @@ impl Protocol {
                     }
                 }
             }
+            return true;
+        }
+        // Timed-out observer replies still belong to us, including late RPC errors.
+        if v["id"].as_str().is_some_and(|id| {
+            id.strip_prefix("conduit-agent-read-")
+                .and_then(|sequence| sequence.parse::<u64>().ok())
+                .is_some_and(|sequence| sequence > 0 && sequence <= self.agents.read_sequence)
+        }) {
             return true;
         }
         let method = text(v, "method");
@@ -270,11 +293,14 @@ impl Protocol {
             .pending_reads
             .iter()
             .filter(|(_, (_, _, at))| now.duration_since(*at) > Duration::from_secs(10))
-            .map(|(key, (id, _, _))| (key.clone(), id.clone()))
+            .map(|(key, (id, generation, _))| (key.clone(), id.clone(), generation.clone()))
             .collect();
-        for (key, id) in timed_out {
+        for (key, id, generation) in timed_out {
             self.agents.pending_reads.remove(&key);
-            if let Some(agent) = self.agents.records.get_mut(&id) {
+            if let Some(agent) = self.agents.records.get_mut(&id)
+                && agent.task_id == generation
+                && agent.status.active()
+            {
                 agent.set_status(Status::Unknown);
             }
         }
@@ -314,55 +340,7 @@ impl Protocol {
                 subtype,
                 "task_started" | "task_updated" | "task_progress" | "task_notification"
             ) {
-                let id = text(v, "task_id");
-                // Task notifications also describe shell/MCP/workflow tasks. Only agents belong here.
-                let agent_task =
-                    v["task_type"] == "local_agent" || v["subagent_type"].as_str().is_some();
-                if !self.agents.records.contains_key(id) && !agent_task {
-                    return true;
-                }
-                let parent = self.thread_id.as_deref().unwrap_or("");
-                if let Some(agent) = self.agents.register(id, parent) {
-                    if let Some(name) = v["subagent_type"].as_str() {
-                        agent.name = name.into();
-                    }
-                    if let Some(task) = v["description"].as_str() {
-                        agent.task = task.into();
-                    }
-                    match subtype {
-                        "task_started" if agent.task_id.is_empty() => agent.restart(id),
-                        "task_updated" => {
-                            if let Some(status) = v["patch"]["status"].as_str() {
-                                let status = native_status(status);
-                                if !agent.status.terminal() || status.terminal() {
-                                    agent.set_status(status);
-                                }
-                            }
-                        }
-                        "task_progress" => {
-                            if !agent.status.terminal() {
-                                agent.status = Status::Running;
-                            }
-                            if let Some(activity) = v["summary"]
-                                .as_str()
-                                .or_else(|| v["last_tool_name"].as_str())
-                            {
-                                agent.activity = activity.into();
-                            }
-                        }
-                        "task_notification" => {
-                            agent.set_status(native_status(text(v, "status")));
-                            agent.result = text(v, "summary").into();
-                        }
-                        _ => {}
-                    }
-                    if agent.task_id.is_empty() {
-                        agent.task_id = id.into();
-                    }
-                    if let Some(ms) = v["usage"]["duration_ms"].as_u64() {
-                        agent.elapsed_ms = Some(ms);
-                    }
-                }
+                self.claude_task_event(v);
                 return true;
             }
         }
@@ -392,12 +370,18 @@ fn update_turn(agent: &mut Agent, turn: &Value, prior_turn: Option<&str>) {
         return;
     }
     let turn_status = native_status(text(turn, "status"));
-    if turn_status.active() {
+    let waiting = matches!(agent.status, Status::WaitingApproval | Status::WaitingInput);
+    if turn_status.active() && !waiting {
         agent.restart(id);
     }
     if turn_status.terminal() || (agent.task_id == id && !agent.status.terminal()) {
         agent.task_id = id.into();
-        agent.set_status(turn_status);
+        // A saved turn only knows inProgress, not the live thread's blocking flags.
+        if !waiting || turn_status != Status::Running {
+            agent.set_status(turn_status);
+        }
+    } else if waiting && turn_status == Status::Running && agent.task_id.starts_with("call:") {
+        agent.task_id = id.into();
     }
     if !turn["error"].is_null() {
         agent.result = pretty(&turn["error"]);
@@ -543,11 +527,79 @@ mod tests {
         p.accept(json!({"id":writes[0]["id"],"result":{"data":[{"id":"current","status":"inProgress"}]}}));
         assert_eq!(p.agents.records["a"].status, Status::Completed);
     }
+    fn expire_reads(p: &mut Protocol) {
+        for (_, _, at) in p.agents.pending_reads.values_mut() {
+            *at = Instant::now() - Duration::from_secs(11);
+        }
+        p.agents.last_poll = None;
+    }
+    #[test]
+    fn subagent_poll_timeout_preserves_terminal_states_and_new_generations() {
+        for status in ["completed", "failed", "interrupted"] {
+            let mut p = codex();
+            p.accept(spawn("a"));
+            let writes = p.poll_subagents();
+            p.accept(json!({"method":"turn/completed","params":{"threadId":"a","turn":{"id":"child-turn","status":status}}}));
+            expire_reads(&mut p);
+            assert!(p.poll_subagents().is_empty());
+            assert_eq!(p.agents.records["a"].status, native_status(status));
+            let late =
+                p.accept(json!({"id":writes[0]["id"],"error":{"message":"late observer failure"}}));
+            assert!(!late.done);
+            assert!(late.error.is_none());
+        }
+        let mut p = codex();
+        p.accept(spawn("a"));
+        p.poll_subagents();
+        p.accept(
+            json!({"method":"turn/started","params":{"threadId":"a","turn":{"id":"new-turn"}}}),
+        );
+        p.accept(json!({"method":"turn/completed","params":{"threadId":"root","turn":{"id":"main-turn","status":"completed"}}}));
+        expire_reads(&mut p);
+        let writes = p.poll_subagents();
+        assert_eq!(writes.len(), 1);
+        assert_eq!(p.agents.records["a"].status, Status::Running);
+        assert!(!p.accept(json!({"method":"conduit/agentPoll"})).done);
+        expire_reads(&mut p);
+        p.poll_subagents();
+        assert_eq!(
+            p.agents.records["a"].status,
+            Status::Unknown,
+            "a current, unresponsive observer still becomes unknown"
+        );
+    }
+    #[test]
+    fn subagent_poll_preserves_live_waiting_flags_until_resume_or_completion() {
+        for (flag, status) in [
+            ("waitingOnApproval", Status::WaitingApproval),
+            ("waitingOnUserInput", Status::WaitingInput),
+        ] {
+            let mut p = codex();
+            p.accept(spawn("a"));
+            let writes = p.poll_subagents();
+            p.accept(json!({"method":"thread/status/changed","params":{"threadId":"a","status":{"type":"active","activeFlags":[flag]}}}));
+            p.accept(json!({"id":writes[0]["id"],"result":{"data":[{"id":"child-turn","status":"inProgress"}]}}));
+            assert_eq!(p.agents.records["a"].status, status);
+            assert_eq!(p.agents.records["a"].task_id, "child-turn");
+            p.agents.last_poll = None;
+            let writes = p.poll_subagents();
+            p.accept(json!({"id":writes[0]["id"],"result":{"data":[{"id":"child-turn","status":"inProgress"}]}}));
+            assert_eq!(p.agents.records["a"].status, status);
+            p.accept(json!({"method":"thread/status/changed","params":{"threadId":"a","status":{"type":"active","activeFlags":[]}}}));
+            assert_eq!(p.agents.records["a"].status, Status::Running);
+            p.accept(json!({"method":"thread/status/changed","params":{"threadId":"a","status":{"type":"active","activeFlags":[flag]}}}));
+            p.agents.last_poll = None;
+            let writes = p.poll_subagents();
+            p.accept(json!({"id":writes[0]["id"],"result":{"data":[{"id":"child-turn","status":"completed"}]}}));
+            assert_eq!(p.agents.records["a"].status, Status::Completed);
+        }
+    }
     #[test]
     fn subagent_claude_progress_end_and_out_of_order_start() {
         let mut p = Protocol::new(Provider::Claude, "C:/work".into(), "inspect".into(), None);
         p.accept(json!({"type":"system","session_id":"root","subtype":"task_started","task_id":"shell","task_type":"local_bash"}));
-        assert!(p.agents.records.is_empty());
+        assert!(!p.agents.claude_tasks["shell"].agent);
+        p.accept(json!({"type":"system","session_id":"root","subtype":"task_notification","task_id":"shell","status":"completed"}));
         p.accept(json!({"type":"system","session_id":"root","subtype":"task_started","task_id":"a","task_type":"local_agent","description":"review"}));
         p.accept(json!({"type":"system","session_id":"root","subtype":"task_progress","task_id":"a","last_tool_name":"Read","usage":{"duration_ms":42}}));
         assert_eq!(p.agents.records["a"].activity, "Read");

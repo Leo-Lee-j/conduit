@@ -2,6 +2,7 @@
 use crate::domain::{PermissionLevel, Provider, Usage};
 use serde_json::{Value, json};
 mod claude_blocks;
+mod claude_tasks;
 mod codex_async_input;
 mod codex_commands;
 mod codex_fork;
@@ -1167,12 +1168,12 @@ impl Protocol {
                         if text(&event["content_block"], "type") == "tool_use" =>
                     {
                         let block = &event["content_block"];
-                        step.events.push(Event::Tool {
+                        step.events.push(self.claude_task_tool_event(Event::Tool {
                             key: text(block, "id").into(),
                             title: text(block, "name").into(),
                             detail: String::new(),
                             status: "运行中".into(),
-                        });
+                        }));
                     }
                     _ => {}
                 }
@@ -1226,12 +1227,14 @@ impl Protocol {
                                 });
                                 text_ordinal += 1;
                             }
-                            "tool_use" => step.events.push(Event::Tool {
-                                key: text(block, "id").into(),
-                                title: text(block, "name").into(),
-                                detail: String::new(),
-                                status: "运行中".into(),
-                            }),
+                            "tool_use" => {
+                                step.events.push(self.claude_task_tool_event(Event::Tool {
+                                    key: text(block, "id").into(),
+                                    title: text(block, "name").into(),
+                                    detail: String::new(),
+                                    status: "运行中".into(),
+                                }))
+                            }
                             _ => {}
                         }
                         if text(block, "type") == "tool_use" {
@@ -1253,7 +1256,16 @@ impl Protocol {
             "user" => {
                 if let Some(blocks) = v.pointer("/message/content").and_then(Value::as_array) {
                     for block in blocks.iter().filter(|b| text(b, "type") == "tool_result") {
-                        step.events.push(Event::Tool {
+                        self.claude_task_result(
+                            text(block, "tool_use_id"),
+                            if blocks.len() == 1 {
+                                &v["tool_use_result"]
+                            } else {
+                                &Value::Null
+                            },
+                            block["is_error"] == true,
+                        );
+                        step.events.push(self.claude_task_tool_event(Event::Tool {
                             key: text(block, "tool_use_id").into(),
                             title: String::new(),
                             detail: if let Some(t) = block["content"].as_str() {
@@ -1262,12 +1274,11 @@ impl Protocol {
                                 pretty(&block["content"])
                             },
                             status: if block["is_error"].as_bool().unwrap_or(false) {
-                                conduit::i18n::text_static("tools.failed")
+                                crate::message_status::ToolStatus::Failed
                             } else {
-                                conduit::i18n::text_static("protocol.done")
-                            }
-                            .into(),
-                        });
+                                crate::message_status::ToolStatus::Completed
+                            },
+                        }));
                     }
                 }
             }
@@ -1322,6 +1333,7 @@ impl Protocol {
                 .events
                 .push(Event::ApprovalCancelled(text(&v, "request_id").into())),
             "result" => {
+                self.finish_claude_background_tasks();
                 // result.usage is the main agent's final turn total. modelUsage
                 // can include resumed history/subagents and must not be added.
                 if v["usage"].is_object() {

@@ -2,6 +2,7 @@
 //! current context always remains a separate provider snapshot.
 use super::right::{RightBody, RightView};
 use super::*;
+use crate::app::state::{PlanStatus, plan_from_messages};
 use crate::usage_ledger::Observation;
 use conduit::plugins::{context::ScopeKey, state::ViewInstanceKey};
 use gpui_kit::component::empty::{Empty, EmptyDescription, EmptyHeader, EmptyMedia};
@@ -299,17 +300,37 @@ impl ConduitApp {
                 workspace: workspace.clone(),
                 id: *id,
             })
-            .or_insert_with(|| cx.new(|_| Sections::default()))
+            .or_insert_with(|| {
+                cx.new(|_| Sections {
+                    tokens: true,
+                    tools: true,
+                    timing: true,
+                    ..Sections::default()
+                })
+            })
             .clone();
         let Some(session) = self.session(*id) else {
             return RightBody::Loading.into();
         };
+        let run = self.session_control.runs.get(id);
+        let plan = self
+            .session_control
+            .plans
+            .get(id)
+            .filter(|steps| !steps.is_empty())
+            .cloned()
+            .unwrap_or_else(|| {
+                if run.is_none() && session.transcript.loaded {
+                    plan_from_messages(session)
+                } else {
+                    Vec::new()
+                }
+            });
         let expanded = state.read(cx);
         let scroll = expanded.scroll.clone();
         let show_tokens = expanded.tokens;
         let show_tools = expanded.tools;
         let show_timing = expanded.timing;
-        let run = self.session_control.runs.get(id);
         let usage = run.map_or(session.usage, |run| run.usage);
         let current = run.and_then(|run| self.turn_usage_observation(*id, run, false));
         let (total, latest) = consumption(
@@ -830,7 +851,77 @@ impl ConduitApp {
                 ),
             ],
         );
-        let mut timing = tools.child(divider()).child(section(
+        let mut timing = tools.child(divider());
+        if !plan.is_empty() {
+            let completed = plan
+                .iter()
+                .filter(|step| step.status == PlanStatus::Completed)
+                .count();
+            let mut plan_list = v_flex()
+                .id("session-data-plan-list")
+                .test_support()
+                .debug_selector(|| "session-data-plan-list".into())
+                .w_full()
+                .px_3()
+                .py_2()
+                .gap_2()
+                .child(
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_size(ui_text_size(13.))
+                                .font_semibold()
+                                .child(text("session_data.plan_tasks")),
+                        )
+                        .child(caption(format!("{completed}/{}", plan.len()))),
+                );
+            for step in &plan {
+                let (icon, color, status) = match step.status {
+                    PlanStatus::Completed => (
+                        FullIconName::CircleCheck,
+                        palette().diff_add_text,
+                        text("session_data.plan_completed"),
+                    ),
+                    PlanStatus::InProgress => (
+                        FullIconName::CircleDot,
+                        palette().warning_text,
+                        text("session_data.plan_in_progress"),
+                    ),
+                    PlanStatus::Pending => (
+                        FullIconName::CircleDashed,
+                        palette().faint,
+                        text("session_data.plan_pending"),
+                    ),
+                };
+                plan_list = plan_list.child(
+                    h_flex()
+                        .w_full()
+                        .min_w_0()
+                        .items_start()
+                        .gap_2()
+                        .child(Icon::new(icon).size(px(14.)).text_color(rgb(color)))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_size(ui_text_size(12.))
+                                .truncate()
+                                .text_color(rgb(if step.status == PlanStatus::Completed {
+                                    palette().muted
+                                } else {
+                                    palette().text
+                                }))
+                                .child(step.text.clone()),
+                        )
+                        .child(caption(status).flex_shrink_0()),
+                );
+            }
+            timing = timing.child(plan_list).child(divider());
+        }
+        timing = timing.child(section(
             "session-data-timing-toggle",
             "session_data.timing",
             timing_summary,
@@ -862,7 +953,11 @@ impl ConduitApp {
                     .child(caption(text("session_data.speed_note"))),
             );
         }
-        if total.turns > 0 || stats.is_some_and(|stats| stats.count > 0) || active_agents > 0 {
+        if !plan.is_empty()
+            || total.turns > 0
+            || stats.is_some_and(|stats| stats.count > 0)
+            || active_agents > 0
+        {
             content = content.child(timing);
         }
         RightBody::Content(

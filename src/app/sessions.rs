@@ -416,6 +416,8 @@ impl ConduitApp {
         self.expanded_tools.retain(|(session, _)| *session != id);
         self.tool_group_expansion
             .retain(|(session, _), _| *session != id);
+        self.tool_group_motion_generation
+            .retain(|(session, _), _| *session != id);
         self.reasoning_expansion
             .retain(|(session, _), _| *session != id);
         self.question_expansion

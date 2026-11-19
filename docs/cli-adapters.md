@@ -72,11 +72,13 @@ Codex 普通聊天使用分项 `approvalPolicy.granular`，单独开启 `mcp_eli
 
 | 引擎 | 状态来源 |
 | --- | --- |
-| Codex | `collabAgentToolCall.agentsStates`、所属子线程通知，以及有界轮询 `thread/read` 的回合状态；只接收已确认父子关系的线程 |
-| Claude Code | `task_started` / `task_updated` / `task_progress` / `task_notification`；过滤后台命令等非代理任务，子代理文本不混入主回复 |
+| Codex | `collabAgentToolCall.agentsStates`、所属子线程通知，以及有界轮询 `thread/turns/list` 的回合状态；只接收已确认父子关系的线程，旧轮询和超时不覆盖新任务或终态，普通运行快照不覆盖实时等待状态 |
+| Claude Code | `task_started` / `task_updated` / `task_progress` / `task_notification`；子代理进入独立面板，并通过 `tool_use_id` 更新派发卡片；后台命令等非代理任务仅更新对应工具卡片，子代理文本不混入主回复 |
 | OpenCode | 复用认证的本地服务，后台查询 `/session/{id}/children`、`/session/status`、最近消息和待审批状态；问答沿用现有认证旁路 |
 
 任务派发工具完成不等于子代理完成。空闲、运行中、等待审批、等待输入、完成、失败、停止和状态未知分别保存；OpenCode 空闲必须再结合明确的最终消息才能显示完成。主回复结束后，有明确运行状态的子代理继续保留监听；用户停止仍执行统一进程树清理。应用重启或异常断连后，未确认结束的任务显示状态未知，不自动变成完成。
+
+Claude 后台任务的启动占位结果不标记工具成功；原生进度和最终通知更新同一张工具卡片，主回复结束后继续等待非 `ambient` 任务。`run_id` 区分同一任务的多次运行，迟到的旧运行事件和重复开始事件不能覆盖当前状态；旧 CLI 缺少运行 ID 时仍保留终态。`ambient` / `skip_transcript` 任务不占用活动指示或延长等待；原生结果明确声明 `backgroundEndsWithFinalResponse` 时，随主回复结束标为停止，避免等待不会到达的通知。
 
 OpenCode 普通聊天提供一个具有相同权限配置的托管 worker，并只允许向该 worker 派发任务，避免通过任意自定义 agent 绕过当前权限等级。工作区修改模式的派发需要审批；只读 worker 保持只读工具规则。纯文本辅助任务仍禁止派发。
 

@@ -2400,7 +2400,7 @@ impl ConduitApp {
                     .child(div().flex_1().min_w_0().truncate().child(name))
                     .child(Icon::new(IconName::ChevronDown).small().flex_shrink_0()),
             )
-            .tooltip(root.display().to_string())
+            .tooltip(display_path(&root))
             .cursor_pointer()
             .dropdown_menu(move |mut menu, _, _| {
                 for (path, name) in &choices {

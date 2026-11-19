@@ -56,7 +56,10 @@ impl Transport for Client<'_> {
                     url.host_str(),
                     Some(
                         "skills.sh"
+                            | "www.skills.sh"
                             | "api.github.com"
+                            | "github.com"
+                            | "codeload.github.com"
                             | "raw.githubusercontent.com"
                             | "registry.modelcontextprotocol.io"
                     )
@@ -67,7 +70,15 @@ impl Transport for Client<'_> {
             .agent
             .get(address)
             .header("User-Agent", concat!("Conduit/", env!("CARGO_PKG_VERSION")))
-            .header("Accept", "application/json")
+            .header(
+                "Accept",
+                match url.host_str() {
+                    Some("github.com") => "application/x-git-upload-pack-advertisement",
+                    Some("www.skills.sh") => "text/html",
+                    Some("codeload.github.com" | "raw.githubusercontent.com") => "*/*",
+                    _ => "application/json",
+                },
+            )
             .call()
             .map_err(|error| match error {
                 ureq::Error::StatusCode(401) => fail("authentication"),

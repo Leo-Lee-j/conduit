@@ -18,14 +18,21 @@ impl ConduitApp {
                     move |bounds, window, cx| {
                         let (mut header, offset) = app.update(cx, |app, cx| {
                             let (row, offset) = app.sidebar.sticky_workspace()?;
-                            let cache::Row::Workspace { path, count, last } = row else {
-                                return None;
+                            let nested = matches!(&row, cache::Row::Workspace { path, .. }
+                                if app.sidebar.projects.parent(path).is_some());
+                            let element = match &row {
+                                cache::Row::Project { .. } => app.sidebar_project(&row, cx),
+                                cache::Row::Workspace { path, count, last } => {
+                                    let index = app.sidebar.workspace_index(path)?;
+                                    app.sidebar_workspace(index, *count, *last, cx)
+                                }
+                                _ => return None,
                             };
-                            let index = app.sidebar.workspace_index(&path)?;
                             Some((
                                 div()
                                     .id("sticky-workspace-row")
                                     .debug_selector(|| "sticky-workspace-row".into())
+                                    .relative()
                                     .w_full()
                                     .h(px(ROW_HEIGHT))
                                     .px_2()
@@ -43,7 +50,18 @@ impl ConduitApp {
                                             cx.stop_propagation();
                                         },
                                     ))
-                                    .child(app.sidebar_workspace(index, count, last, cx))
+                                    .child(element)
+                                    .when(nested, |row| {
+                                        row.child(
+                                            div()
+                                                .absolute()
+                                                .left(px(46.))
+                                                .top_0()
+                                                .bottom_0()
+                                                .w(px(1.))
+                                                .bg(rgb(palette().border)),
+                                        )
+                                    })
                                     .into_any_element(),
                                 offset,
                             ))

@@ -46,6 +46,7 @@ pub(super) struct PluginUi {
     renderer_registrations: BTreeMap<String, conduit::plugins::registry::Registration>,
     commands: BTreeMap<conduit::plugins::ids::CommandId, commands::NativeCommand>,
     status_providers: BTreeMap<conduit::plugins::ids::ItemId, status::StatusProvider>,
+    encourager_registration: Option<conduit::plugins::registry::Registration>,
     status_width: f32,
     instances: conduit::plugins::instances::InstanceCache<example::OverviewInstance, Task<()>>,
     pub(super) dock: right::DockLayout,
@@ -144,6 +145,7 @@ impl PluginUi {
             renderer_registrations,
             commands: BTreeMap::new(),
             status_providers: BTreeMap::new(),
+            encourager_registration: None,
             status_width: 0.,
             instances: Default::default(),
             dock: right::DockLayout::default(),
@@ -162,6 +164,43 @@ impl PluginUi {
                 .expect("valid core declarations")
                 .registry,
         )
+    }
+    pub(super) fn new_with_encourager(enabled: bool) -> Self {
+        let mut ui = Self::new();
+        if enabled {
+            let _ = ui.set_encourager_enabled(true);
+        }
+        ui
+    }
+    pub(super) fn set_encourager_enabled(&mut self, enabled: bool) -> bool {
+        if enabled == self.encourager_registration.is_some() {
+            return true;
+        }
+        if enabled {
+            let Ok(set) = builtins::programmer_encourager() else {
+                return false;
+            };
+            let Ok(handle) = self.registry.register(set, Default::default()) else {
+                return false;
+            };
+            self.renderer_registrations
+                .insert(builtins::ENCOURAGER_VIEW.into(), handle.clone());
+            // Reconciliation drops adapters while the plugin is unregistered.
+            // Restore the native renderer on every enable, including startup.
+            self.right_renderers.insert(
+                builtins::ENCOURAGER_VIEW.into(),
+                right::encourager_renderer(),
+            );
+            self.encourager_registration = Some(handle);
+            true
+        } else if let Some(handle) = self.encourager_registration.take() {
+            let _ = self.registry.unregister(&handle);
+            self.renderer_registrations
+                .remove(builtins::ENCOURAGER_VIEW);
+            true
+        } else {
+            true
+        }
     }
     pub(super) fn selected(&self) -> &ViewId {
         self.state.navigation()

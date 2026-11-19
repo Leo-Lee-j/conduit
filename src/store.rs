@@ -31,6 +31,9 @@ pub struct UiSettings {
     /// Installed data plugins stay enabled unless explicitly disabled.
     #[serde(default)]
     pub plugins: conduit::plugin_packages::Preferences,
+    /// Optional, host-managed programmer encouragement panel and API preferences.
+    #[serde(default)]
+    pub encourager: EncouragerSettings,
     /// Missing fields in existing installations retain their original language.
     #[serde(default = "conduit::i18n::Locale::legacy")]
     pub language: conduit::i18n::Locale,
@@ -235,6 +238,7 @@ impl Default for UiSettings {
     fn default() -> Self {
         Self {
             plugins: Default::default(),
+            encourager: Default::default(),
             language: Default::default(),
             terminal_profile: Default::default(),
             terminal_height: default_terminal_height(),
@@ -271,6 +275,93 @@ impl Default for UiSettings {
             code_copy_button: default_code_copy_button(),
             code_syntax_highlight: default_code_syntax_highlight(),
             code_line_numbers: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EncouragerSettings {
+    pub enabled: bool,
+    /// Show the optional floating pet while the encourager plugin is enabled.
+    pub pet_enabled: bool,
+    /// Last saved floating-pet position in screen coordinates.
+    pub pet_position: Option<EncouragerPetPosition>,
+    pub provider_id: Option<String>,
+    pub model: Option<String>,
+    pub persona: EncouragerPersona,
+    pub verbosity: EncouragerVerbosity,
+    pub include_context: bool,
+}
+impl Default for EncouragerSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            pet_enabled: false,
+            pet_position: None,
+            provider_id: None,
+            model: None,
+            persona: EncouragerPersona::GentleMentor,
+            verbosity: EncouragerVerbosity::Normal,
+            include_context: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EncouragerPetPosition {
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EncouragerPersona {
+    #[default]
+    GentleMentor,
+    HypeCoach,
+    DryCoworker,
+    Cat,
+}
+impl EncouragerPersona {
+    pub const ALL: [Self; 4] = [
+        Self::GentleMentor,
+        Self::HypeCoach,
+        Self::DryCoworker,
+        Self::Cat,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::GentleMentor => "encourager.persona.gentle_mentor",
+            Self::HypeCoach => "encourager.persona.hype_coach",
+            Self::DryCoworker => "encourager.persona.dry_coworker",
+            Self::Cat => "encourager.persona.cat",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EncouragerVerbosity {
+    Short,
+    #[default]
+    Normal,
+    Chatty,
+}
+impl EncouragerVerbosity {
+    pub const ALL: [Self; 3] = [Self::Short, Self::Normal, Self::Chatty];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Short => "encourager.verbosity.short",
+            Self::Normal => "encourager.verbosity.normal",
+            Self::Chatty => "encourager.verbosity.chatty",
+        }
+    }
+    pub fn max_chars(self) -> usize {
+        match self {
+            Self::Short => 40,
+            Self::Normal => 100,
+            Self::Chatty => 180,
         }
     }
 }
@@ -1162,6 +1253,10 @@ mod tests {
         ));
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let mut store = Store::load_from(&path).unwrap();
+        assert!(!store.ui.encourager.enabled);
+        assert!(!store.ui.encourager.pet_enabled);
+        assert_eq!(store.ui.encourager.pet_position, None);
+        assert!(!store.ui.encourager.include_context);
         assert_eq!(store.ui.sessions_per_workspace, 5);
         assert_eq!(store.ui.last_provider, None);
         assert!(store.ui.performance_monitor);
@@ -1209,6 +1304,14 @@ mod tests {
         assert!(!store.ui.code_line_numbers);
         assert_eq!(store.git.commit_message_prompt, DEFAULT_COMMIT_PROMPT);
         store.ui.sessions_per_workspace = 8;
+        store.ui.encourager.enabled = true;
+        store.ui.encourager.pet_enabled = true;
+        store.ui.encourager.pet_position = Some(EncouragerPetPosition { x: 1280, y: 720 });
+        store.ui.encourager.provider_id = Some("encourager-test".into());
+        store.ui.encourager.model = Some("encourager-model".into());
+        store.ui.encourager.persona = EncouragerPersona::Cat;
+        store.ui.encourager.verbosity = EncouragerVerbosity::Chatty;
+        store.ui.encourager.include_context = true;
         store.ui.last_provider = Some(crate::domain::Provider::Codex);
         store.ui.performance_monitor = false;
         store.ui.appearance = AppearanceMode::System;
@@ -1237,6 +1340,26 @@ mod tests {
             "Write an English subject followed by a body.\nKeep it under 72 columns.".into();
         store.save_to(&path).unwrap();
         let reloaded = Store::load_from(&path).unwrap();
+        assert!(reloaded.ui.encourager.enabled);
+        assert!(reloaded.ui.encourager.pet_enabled);
+        assert_eq!(
+            reloaded.ui.encourager.pet_position,
+            Some(EncouragerPetPosition { x: 1280, y: 720 })
+        );
+        assert_eq!(
+            reloaded.ui.encourager.provider_id.as_deref(),
+            Some("encourager-test")
+        );
+        assert_eq!(
+            reloaded.ui.encourager.model.as_deref(),
+            Some("encourager-model")
+        );
+        assert_eq!(reloaded.ui.encourager.persona, EncouragerPersona::Cat);
+        assert_eq!(
+            reloaded.ui.encourager.verbosity,
+            EncouragerVerbosity::Chatty
+        );
+        assert!(reloaded.ui.encourager.include_context);
         assert_eq!(reloaded.ui.sessions_per_workspace, 8);
         assert_eq!(
             reloaded.git.commit_message_prompt,

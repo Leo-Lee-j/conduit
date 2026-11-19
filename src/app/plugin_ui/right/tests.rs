@@ -152,6 +152,35 @@ fn session_data_opens_on_session_entry_and_respects_manual_changes(cx: &mut Test
 }
 
 #[gpui_kit::test]
+fn session_data_plan_stays_visible_without_usage_or_timing_details(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx) = fixture(cx, tool_store(), PluginUi::new());
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.session_control.plans.insert(
+                1,
+                vec![
+                    crate::app::state::PlanStep {
+                        text: "读取 CLI 配置".into(),
+                        status: crate::app::state::PlanStatus::Completed,
+                    },
+                    crate::app::state::PlanStep {
+                        text: "更新会话数据面板".into(),
+                        status: crate::app::state::PlanStatus::InProgress,
+                    },
+                ],
+            );
+            cx.notify();
+        })
+    });
+    draw(cx);
+
+    assert!(cx.element_bounds("session-data-plan-list").is_some());
+    assert!(cx.element_bounds("session-data-empty-state").is_some());
+    assert!(cx.element_bounds("session-data-timing-toggle").is_none());
+}
+
+#[gpui_kit::test]
 fn tool_state_isolated_across_sessions_workspaces_and_stale_clicks(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, tool_store(), PluginUi::new());

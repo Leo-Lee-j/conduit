@@ -16,7 +16,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    net::{Ipv4Addr, TcpListener},
+    net::{Ipv4Addr, TcpListener, UdpSocket},
     sync::{Mutex, MutexGuard},
     time::Duration,
 };
@@ -77,6 +77,23 @@ impl Host {
         Self::bind(origin, PORT)
     }
 
+    pub(crate) fn start_lan() -> std::io::Result<(Self, async_channel::Receiver<Request>)> {
+        let address = lan_ipv4()?;
+        Self::bind_lan(address, PORT)
+    }
+
+    fn bind_lan(
+        address: Ipv4Addr,
+        port: u16,
+    ) -> std::io::Result<(Self, async_channel::Receiver<Request>)> {
+        if !address.is_private() {
+            return Err(std::io::Error::other("Choose a private IPv4 address."));
+        }
+        let listener = TcpListener::bind((address, port))?;
+        let origin = format!("http://{address}:{}", listener.local_addr()?.port());
+        Self::launch(listener, &origin, false)
+    }
+
     fn bind(origin: &str, port: u16) -> std::io::Result<(Self, async_channel::Receiver<Request>)> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))?;
         let local_origin = format!("http://127.0.0.1:{}", listener.local_addr()?.port());
@@ -97,6 +114,14 @@ impl Host {
                 "Use the exact Tailscale Serve HTTPS address or leave it empty for local preview.",
             ));
         }
+        Self::launch(listener, &normalized, secure)
+    }
+
+    fn launch(
+        listener: TcpListener,
+        origin: &str,
+        secure: bool,
+    ) -> std::io::Result<(Self, async_channel::Receiver<Request>)> {
         listener.set_nonblocking(true)?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -105,8 +130,8 @@ impl Host {
         let (revision, _) = watch::channel(0);
         let (shutdown, _) = watch::channel(false);
         let host = Self(Arc::new(Shared {
-            authority: normalized.split_once("://").unwrap().1.into(),
-            origin: normalized,
+            authority: origin.split_once("://").unwrap().1.into(),
+            origin: origin.to_owned(),
             cookie: if secure {
                 "__Host-conduit_remote"
             } else {
@@ -234,6 +259,24 @@ impl Host {
     }
 }
 
+fn lan_ipv4() -> std::io::Result<Ipv4Addr> {
+    let route = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+    // UDP connect selects the system route without sending a packet.
+    route
+        .connect((Ipv4Addr::new(192, 0, 2, 1), 9))
+        .map_err(|_| {
+            std::io::Error::other(
+                "Connect this computer to a private Wi-Fi or Ethernet network, then try again.",
+            )
+        })?;
+    match route.local_addr()?.ip() {
+        std::net::IpAddr::V4(address) if address.is_private() => Ok(address),
+        _ => Err(std::io::Error::other(
+            "Connect this computer to a private Wi-Fi or Ethernet network, then try again.",
+        )),
+    }
+}
+
 impl IntoResponse for Fault {
     fn into_response(self) -> Response {
         (StatusCode::from_u16(self.http_status).unwrap(), Json(self)).into_response()
@@ -280,8 +323,13 @@ fn router(host: Host) -> Router {
             get(metadata).patch(patch_metadata),
         )
         .route("/sessions/{session}/messages", get(messages))
+        .route("/sessions/{session}/approvals", get(approvals))
         .route("/sessions/{session}/runs", post(send))
         .route("/sessions/{session}/runs/{run}/cancel", post(cancel))
+        .route(
+            "/sessions/{session}/runs/{run}/approvals/{ticket}",
+            post(approval),
+        )
         .route("/operations/{id}", get(operation))
         .route("/events", get(events))
         .layer(DefaultBodyLimit::max(MAX_TEXT * 6 + 1024))
@@ -621,6 +669,13 @@ async fn messages(
     )
     .await
 }
+async fn approvals(
+    State(host): State<Host>,
+    headers: HeaderMap,
+    Path(session): Path<u64>,
+) -> Result<Response, Fault> {
+    read(host, headers, Read::Approvals(session)).await
+}
 
 fn submit(
     host: Host,
@@ -754,6 +809,16 @@ struct Create {
 struct Send {
     text: String,
 }
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum ApprovalBody {
+    Decision {
+        allow: bool,
+    },
+    Answer {
+        answers: std::collections::BTreeMap<String, Vec<String>>,
+    },
+}
 
 async fn create(
     State(host): State<Host>,
@@ -806,6 +871,29 @@ async fn cancel(
         &format!("cancel/{session}/{run}"),
         &[],
         Write::Cancel { session, run },
+    )
+}
+async fn approval(
+    State(host): State<Host>,
+    headers: HeaderMap,
+    Path((session, run, ticket)): Path<(u64, String, String)>,
+    body: Bytes,
+) -> Result<impl IntoResponse, Fault> {
+    let action = match decode::<ApprovalBody>(&headers, &body)? {
+        ApprovalBody::Decision { allow } => ApprovalAction::Decide { allow },
+        ApprovalBody::Answer { answers } => ApprovalAction::Answer { answers },
+    };
+    submit(
+        host,
+        headers,
+        &format!("approval/{session}/{run}/{ticket}"),
+        &body,
+        Write::Approval {
+            session,
+            run,
+            ticket,
+            action,
+        },
     )
 }
 async fn patch_metadata(

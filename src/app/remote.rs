@@ -3,7 +3,7 @@
 use super::*;
 use crate::{
     persistence::SaveReceipt,
-    remote::{self, Fault, Host, Read, Reply, Request, Write},
+    remote::{self, ApprovalAction, Fault, Host, Read, Reply, Request, Write},
 };
 use gpui_kit::component::setting::{SettingField, SettingGroup, SettingItem};
 use serde_json::{Value, json};
@@ -145,6 +145,23 @@ impl ConduitApp {
         origin: &str,
         cx: &mut Context<Self>,
     ) -> std::io::Result<()> {
+        self.remote_start_with(workspace, || Host::start(origin), cx)
+    }
+
+    pub(super) fn remote_start_lan(
+        &mut self,
+        workspace: PathBuf,
+        cx: &mut Context<Self>,
+    ) -> std::io::Result<()> {
+        self.remote_start_with(workspace, Host::start_lan, cx)
+    }
+
+    fn remote_start_with(
+        &mut self,
+        workspace: PathBuf,
+        start: impl FnOnce() -> std::io::Result<(Host, async_channel::Receiver<Request>)>,
+        cx: &mut Context<Self>,
+    ) -> std::io::Result<()> {
         if !self.remote_writable()
             || !self
                 .store
@@ -166,7 +183,7 @@ impl ConduitApp {
                 "Stop the current Web control session first.",
             ));
         }
-        let (host, requests) = Host::start(origin)?;
+        let (host, requests) = start()?;
         self.remote.server = Some(Serving {
             host: host.clone(),
             workspace,
@@ -293,6 +310,48 @@ impl ConduitApp {
                     json!({"session_id": id.to_string(), "version": version, "title": shortened(&session.title, 512).0,
                     "pinned": session.pinned, "archived": session.archived}),
                 )
+            }
+            Read::Approvals(id) => {
+                self.remote_target(index, id)?;
+                let approvals = self
+                    .session_control
+                    .runs
+                    .get(&id)
+                    .filter(|run| !run.runtime.is_cancelled())
+                    .map(|run| {
+                        run.approvals
+                            .front()
+                            .map(|approval| {
+                                let questions = approval.questions();
+                                let supported = remote_question_supported(approval);
+                                let ticket = approval.id.clone();
+                                json!({
+                                    "id": ticket,
+                                    "title": shortened(&approval.title, 512).0,
+                                    "detail": shortened(&approval.detail, 8192).0,
+                                    "kind": if approval.is_user_input() { "question" } else { "decision" },
+                                    "allow_once": approval.allow_once,
+                                    "submitted": run.approvals.is_submitted(&approval.id),
+                                    "supported": supported,
+                                    "questions": questions.iter().take(50).map(|question| json!({
+                                        "id": shortened(&question.id, 128).0,
+                                        "header": shortened(&question.header, 256).0,
+                                        "question": shortened(&question.question, 2048).0,
+                                        "options": question.options.iter().take(100).map(|(label, description)| json!({
+                                            "label": shortened(label, 512).0,
+                                            "description": shortened(description, 1024).0
+                                        })).collect::<Vec<_>>(),
+                                        "multiple": question.multiple,
+                                        "custom": question.custom,
+                                        "secret": question.secret
+                                    })).collect::<Vec<_>>()
+                                })
+                            })
+                            .into_iter()
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                Ok(json!({"session_id": id.to_string(), "items": approvals}))
             }
             Read::Messages {
                 session: id,
@@ -494,6 +553,79 @@ impl ConduitApp {
                     json!({"session_id": id.to_string(), "run_id": run, "cancel_requested": true}),
                 ));
             }
+            Write::Approval {
+                session: id,
+                run: run_id,
+                ticket,
+                action,
+            } => {
+                self.remote_target(index, id)?;
+                let Some(run) = self
+                    .session_control
+                    .runs
+                    .get(&id)
+                    .filter(|run| run.usage_key == run_id && !run.runtime.is_cancelled())
+                else {
+                    return Err(Fault::conflict(
+                        "That turn has ended. Refresh before answering another request.",
+                    ));
+                };
+                let Some(request) = run.approvals.get(&ticket) else {
+                    return Err(Fault::conflict(
+                        "That request is no longer waiting. Refresh the conversation.",
+                    ));
+                };
+                if run.approvals.front().is_none_or(|front| front.id != ticket)
+                    || run.approvals.is_submitted(&ticket)
+                {
+                    return Err(Fault::conflict(
+                        "Handle the first pending request on this turn.",
+                    ));
+                }
+                match action {
+                    ApprovalAction::Decide { allow } => {
+                        if allow && (request.is_user_input() || !request.allow_once) {
+                            return Err(Fault::new(
+                                422,
+                                "invalid_approval_action",
+                                "This request requires a complete answer.",
+                            ));
+                        }
+                        if !self.submit_approval(id, &ticket, allow, cx) {
+                            return Err(Fault::conflict(
+                                "The request could not be submitted. Refresh its status.",
+                            ));
+                        }
+                        return Ok(Some(
+                            json!({"session_id": id.to_string(), "run_id": run_id, "ticket": ticket, "submitted": true}),
+                        ));
+                    }
+                    ApprovalAction::Answer { answers } => {
+                        if !remote_question_supported(request)
+                            || !valid_remote_answers(request, &answers)
+                        {
+                            return Err(Fault::new(
+                                422,
+                                "invalid_answers",
+                                "Provide a valid answer for every question.",
+                            ));
+                        }
+                        let run = self.session_control.runs.get_mut(&id).unwrap();
+                        if !run.approvals.begin(&ticket) {
+                            return Err(Fault::conflict(
+                                "The request was already submitted. Refresh its status.",
+                            ));
+                        }
+                        run.runtime.answer(ticket.clone(), answers);
+                        run.status =
+                            conduit::i18n::text_static("user_input.submitting_answer").into();
+                        cx.notify();
+                        return Ok(Some(
+                            json!({"session_id": id.to_string(), "run_id": run_id, "ticket": ticket, "submitted": true}),
+                        ));
+                    }
+                }
+            }
             Write::Metadata {
                 session: id,
                 version: expected,
@@ -678,7 +810,7 @@ impl ConduitApp {
                 self.remote_settings_text("off")
             }
         });
-        let setup = self.remote_settings_text("setup");
+        let setup = self.remote_settings_text("tailscale_setup");
         let stop = self.remote_settings_text("stop");
         let copy = self.remote_settings_text("copy_pair");
         let ready = self.selected_workspace.is_some() && !disabled && self.remote_writable();
@@ -761,37 +893,218 @@ impl ConduitApp {
         let view = cx.entity();
         let title = self.remote_settings_text("title");
         let setup = self.remote_settings_text("setup");
+        let lan_setup = self.remote_settings_text("lan_setup");
+        let lan_hint = self.remote_settings_text("lan_hint");
         let hint = self.remote_settings_text("hint");
         window.open_dialog(cx, move |dialog, _, _| {
             let view = view.clone();
             let input = input.clone();
             let workspace = workspace.clone();
+            let lan_view = view.clone();
+            let lan_workspace = workspace.clone();
             dialog.w(px(440.)).title(title.clone()).child(
                 v_flex()
                     .gap_3()
                     .child(hint.clone())
                     .child(Input::new(&input))
+                    .child(lan_hint.clone())
                     .child(
-                        Button::new("remote-enable")
-                            .primary()
-                            .label(setup.clone())
-                            .on_click(move |_, window, cx| {
-                                let origin = input.read(cx).value().trim().to_owned();
-                                view.update(cx, |app, cx| {
-                                    match app.remote_start(workspace.clone(), &origin, cx) {
-                                        Ok(()) => app.copy_remote_pair(cx),
-                                        Err(error) => {
-                                            app.remote.error = Some(error.to_string());
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new("remote-enable-lan")
+                                    .primary()
+                                    .label(lan_setup.clone())
+                                    .on_click(move |_, window, cx| {
+                                        lan_view.update(cx, |app, cx| {
+                                            match app.remote_start_lan(lan_workspace.clone(), cx) {
+                                                Ok(()) => app.copy_remote_pair(cx),
+                                                Err(error) => {
+                                                    app.remote.error = Some(error.to_string());
+                                                    cx.notify();
+                                                }
+                                            }
+                                        });
+                                        window.close_dialog(cx);
+                                    }),
+                            )
+                            .child(Button::new("remote-enable").label(setup.clone()).on_click(
+                                move |_, window, cx| {
+                                    let origin = input.read(cx).value().trim().to_owned();
+                                    if origin.is_empty() {
+                                        view.update(cx, |app, cx| {
+                                            app.remote.error = Some(
+                                                app.remote_settings_text("tailscale_required"),
+                                            );
                                             cx.notify();
-                                        }
+                                        });
+                                        return;
                                     }
-                                });
-                                window.close_dialog(cx);
-                            }),
+                                    view.update(cx, |app, cx| {
+                                        match app.remote_start(workspace.clone(), &origin, cx) {
+                                            Ok(()) => app.copy_remote_pair(cx),
+                                            Err(error) => {
+                                                app.remote.error = Some(error.to_string());
+                                                cx.notify();
+                                            }
+                                        }
+                                    });
+                                    window.close_dialog(cx);
+                                },
+                            )),
                     ),
             )
         });
     }
+}
+
+fn remote_question_supported(approval: &crate::protocol::Approval) -> bool {
+    let questions = approval.questions();
+    if questions.is_empty()
+        || questions.len() > 50
+        || questions.iter().any(|question| {
+            question.options.len() > 100
+                || (!question.custom && question.options.is_empty())
+                || question.id.len() > 128
+                || question.options.iter().any(|(label, _)| label.len() > 512)
+        })
+    {
+        return false;
+    }
+    if approval.kind == crate::protocol::ApprovalKind::QoderUserInput {
+        let Some(properties) = approval.input["schema"]["properties"].as_object() else {
+            return false;
+        };
+        if questions.len() != properties.len()
+            || questions
+                .iter()
+                .any(|question| !properties.contains_key(&question.id))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn valid_remote_answers(
+    approval: &crate::protocol::Approval,
+    answers: &std::collections::BTreeMap<String, Vec<String>>,
+) -> bool {
+    let questions = approval.questions();
+    !questions.is_empty()
+        && questions.len() <= 50
+        && questions.len() == answers.len()
+        && answers.values().flatten().map(String::len).sum::<usize>() <= remote::MAX_TEXT
+        && questions.iter().all(|question| {
+            answers.get(&question.id).is_some_and(|values| {
+                !values.is_empty()
+                    && values.len() <= 100
+                    && (question.multiple || values.len() == 1)
+                    && values.iter().map(String::len).sum::<usize>() <= 8192
+                    && values
+                        .iter()
+                        .collect::<std::collections::HashSet<_>>()
+                        .len()
+                        == values.len()
+                    && values.iter().all(|value| {
+                        !value.trim().is_empty()
+                            && (question.custom
+                                || question.options.iter().any(|(label, _)| label == value))
+                    })
+                    && (approval.kind != crate::protocol::ApprovalKind::QoderUserInput
+                        || valid_qoder_answer(approval, question, values))
+            })
+        })
+}
+
+fn valid_qoder_answer(
+    approval: &crate::protocol::Approval,
+    question: &crate::protocol::UserQuestion,
+    values: &[String],
+) -> bool {
+    let Some(property) = approval.input["schema"]["properties"].get(&question.id) else {
+        return false;
+    };
+    let field = if property["type"] == "array" {
+        &property["items"]
+    } else {
+        property
+    };
+    let choices = values
+        .iter()
+        .map(|answer| {
+            if question.custom {
+                let value = match field["type"].as_str().unwrap_or("string") {
+                    "integer" => serde_json::json!(answer.parse::<i64>().ok()?),
+                    "number" => serde_json::Value::Number(serde_json::Number::from_f64(
+                        answer.parse::<f64>().ok()?,
+                    )?),
+                    "string" => serde_json::json!(answer),
+                    _ => return None,
+                };
+                Some(value)
+            } else {
+                qoder_choice_value(field, answer)
+            }
+        })
+        .collect::<Option<Vec<_>>>();
+    let Some(choices) = choices else {
+        return false;
+    };
+    if choices.iter().any(|value| {
+        if let Some(number) = value.as_f64() {
+            field["minimum"].as_f64().is_some_and(|min| number < min)
+                || field["maximum"].as_f64().is_some_and(|max| number > max)
+        } else if let Some(text) = value.as_str() {
+            let length = text.chars().count() as u64;
+            field["minLength"].as_u64().is_some_and(|min| length < min)
+                || field["maxLength"].as_u64().is_some_and(|max| length > max)
+        } else {
+            false
+        }
+    }) {
+        return false;
+    }
+    if property["type"] == "array" {
+        let count = values.len() as u64;
+        if property["minItems"].as_u64().is_some_and(|min| count < min)
+            || property["maxItems"].as_u64().is_some_and(|max| count > max)
+            || choices
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                != choices.len()
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn qoder_choice_value(field: &serde_json::Value, label: &str) -> Option<serde_json::Value> {
+    if field["type"] == "boolean" {
+        return match label {
+            "true" => Some(serde_json::json!(true)),
+            "false" => Some(serde_json::json!(false)),
+            _ => None,
+        };
+    }
+    if let Some(values) = field["enum"].as_array() {
+        return values.iter().enumerate().find_map(|(index, value)| {
+            let raw = value.as_str()?;
+            let name = field["enumNames"][index].as_str().unwrap_or(raw);
+            (name == label).then(|| value.clone())
+        });
+    }
+    field["oneOf"]
+        .as_array()
+        .or_else(|| field["anyOf"].as_array())?
+        .iter()
+        .find_map(|choice| {
+            let raw = choice["const"].as_str()?;
+            (choice["title"].as_str().unwrap_or(raw) == label).then(|| serde_json::json!(raw))
+        })
 }
 
 fn stale() -> Fault {
@@ -803,10 +1116,235 @@ fn stale() -> Fault {
 }
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests {
-    use super::{Host, Read, Write, metadata_version};
+    use super::{
+        Host, Read, Write, metadata_version, remote_question_supported, valid_remote_answers,
+    };
     use crate::app::queue::tests::{fixture, running};
+    use crate::app::{ActiveRun, ChatRuntime};
+    use crate::protocol::{Approval, ApprovalKind};
     use crate::remote;
     use gpui_kit::TestAppContext;
+
+    #[test]
+    fn remote_answers_require_complete_supported_values() {
+        let approval = Approval {
+            id: "question-1".into(),
+            title: "Choose".into(),
+            detail: String::new(),
+            wire_id: serde_json::json!("wire-1"),
+            input: serde_json::json!({
+                "questions":[{"id":"choice","header":"Choice","question":"Pick one",
+                    "options":[{"label":"A","description":""},{"label":"B","description":""}],
+                    "multiple":false,"custom":false,"isSecret":false}],
+                "schema":{"properties":{"choice":{"type":"string","enum":["A","B"]}}}
+            }),
+            allow_once: true,
+            kind: ApprovalKind::QoderUserInput,
+        };
+        assert!(remote_question_supported(&approval));
+        assert!(valid_remote_answers(
+            &approval,
+            &std::collections::BTreeMap::from([("choice".into(), vec!["A".into()])]),
+        ));
+        assert!(!valid_remote_answers(
+            &approval,
+            &std::collections::BTreeMap::from([("choice".into(), vec!["Other".into()])]),
+        ));
+        assert!(!valid_remote_answers(
+            &approval,
+            &std::collections::BTreeMap::from([("choice".into(), vec!["A".into(), "B".into()])]),
+        ));
+        assert!(!valid_remote_answers(&approval, &Default::default()));
+
+        let mut numeric = approval.clone();
+        numeric.input = serde_json::json!({
+            "questions":[{"id":"count","header":"Count","question":"How many?",
+                "options":[],"multiple":false,"custom":true,"isSecret":false}],
+            "schema":{"properties":{"count":{"type":"integer","minimum":2,"maximum":8}}}
+        });
+        assert!(remote_question_supported(&numeric));
+        assert!(valid_remote_answers(
+            &numeric,
+            &std::collections::BTreeMap::from([("count".into(), vec!["5".into()])]),
+        ));
+        assert!(!valid_remote_answers(
+            &numeric,
+            &std::collections::BTreeMap::from([("count".into(), vec!["9".into()])]),
+        ));
+        assert!(!valid_remote_answers(
+            &numeric,
+            &std::collections::BTreeMap::from([("count".into(), vec!["five".into()])]),
+        ));
+    }
+
+    #[gpui_kit::test]
+    fn web_control_answers_only_the_current_run_first_question(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
+        let (app, cx, _) = fixture(cx, "web-control-approval");
+        let (host, _requests) = Host::start("").unwrap();
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
+                let (runtime, _events, take_answer) = ChatRuntime::test_input_channel();
+                let worktree = app.store.workspaces[0].path.clone();
+                app.session_control.runs.insert(
+                    1,
+                    ActiveRun::new(runtime, worktree, "turn-0".into(), Default::default(), None, Default::default()),
+                );
+                let run_id = app.session_control.runs[&1].usage_key.clone();
+                app.session_control.runs.get_mut(&1).unwrap().approvals.push(Approval {
+                    id: "question-1".into(),
+                    title: "Choose a plan".into(),
+                    detail: "Choose one".into(),
+                    wire_id: serde_json::json!("wire-1"),
+                    input: serde_json::json!({"questions":[{"id":"plan","header":"Plan",
+                        "question":"Choose one","options":[{"label":"A","description":""},
+                        {"label":"B","description":""}],"multiple":false,"custom":false,"isSecret":false}],
+                        "schema":{"properties":{"plan":{"type":"string","enum":["A","B"]}}}}),
+                    allow_once: true,
+                    kind: ApprovalKind::QoderUserInput,
+                });
+                let visible = app.remote_read(&host, 0, Read::Approvals(1), cx).unwrap();
+                assert_eq!(visible["items"][0]["id"], "question-1");
+                assert_eq!(visible["items"][0]["questions"][0]["options"].as_array().unwrap().len(), 2);
+                let invalid = app.remote_write(
+                    &host,
+                    0,
+                    "invalid-answer",
+                    Write::Approval {
+                        session: 1,
+                        run: run_id.clone(),
+                        ticket: "question-1".into(),
+                        action: remote::ApprovalAction::Answer {
+                            answers: std::collections::BTreeMap::from([("plan".into(), vec!["C".into()])]),
+                        },
+                    },
+                    cx,
+                ).unwrap_err();
+                assert_eq!(invalid.http_status, 422);
+                assert!(!app.session_control.runs[&1].approvals.is_submitted("question-1"));
+                app.remote_write(
+                    &host,
+                    0,
+                    "valid-answer",
+                    Write::Approval {
+                        session: 1,
+                        run: run_id,
+                        ticket: "question-1".into(),
+                        action: remote::ApprovalAction::Answer {
+                            answers: std::collections::BTreeMap::from([("plan".into(), vec!["A".into()])]),
+                        },
+                    },
+                    cx,
+                ).unwrap();
+                assert!(app.session_control.runs[&1].approvals.is_submitted("question-1"));
+                assert!(!app.session_control.runs[&1].runtime.is_cancelled());
+                let (answered_ticket, answers) = take_answer().unwrap();
+                assert_eq!(answered_ticket, "question-1");
+                assert_eq!(answers["plan"], vec!["A"]);
+                let stale = app.remote_write(
+                    &host,
+                    0,
+                    "stale-answer",
+                    Write::Approval {
+                        session: 1,
+                        run: "old-run".into(),
+                        ticket: "question-1".into(),
+                        action: remote::ApprovalAction::Answer { answers: Default::default() },
+                    },
+                    cx,
+                ).unwrap_err();
+                assert_eq!(stale.http_status, 409);
+                let _ = window;
+            });
+        });
+        host.stop();
+    }
+
+    #[gpui_kit::test]
+    fn web_control_decisions_are_single_use_and_bound_to_the_active_run(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
+        let (app, cx, _) = fixture(cx, "web-control-decision");
+        let (host, _requests) = Host::start("").unwrap();
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let (runtime, _events, take_decision) = ChatRuntime::test_approval_channel();
+                let worktree = app.store.workspaces[0].path.clone();
+                app.session_control.runs.insert(
+                    1,
+                    ActiveRun::new(
+                        runtime,
+                        worktree,
+                        "turn-0".into(),
+                        Default::default(),
+                        None,
+                        Default::default(),
+                    ),
+                );
+                let run_id = app.session_control.runs[&1].usage_key.clone();
+                app.session_control
+                    .runs
+                    .get_mut(&1)
+                    .unwrap()
+                    .approvals
+                    .push(Approval {
+                        id: "approval-1".into(),
+                        title: "Run command".into(),
+                        detail: String::new(),
+                        wire_id: serde_json::json!("wire-approval"),
+                        input: serde_json::json!({"command":"example"}),
+                        allow_once: true,
+                        kind: ApprovalKind::Command,
+                    });
+                app.remote_write(
+                    &host,
+                    0,
+                    "approve-current-run",
+                    Write::Approval {
+                        session: 1,
+                        run: run_id.clone(),
+                        ticket: "approval-1".into(),
+                        action: remote::ApprovalAction::Decide { allow: true },
+                    },
+                    cx,
+                )
+                .unwrap();
+                assert_eq!(take_decision(), Some(("approval-1".into(), true)));
+                let duplicate = app
+                    .remote_write(
+                        &host,
+                        0,
+                        "approve-twice",
+                        Write::Approval {
+                            session: 1,
+                            run: run_id.clone(),
+                            ticket: "approval-1".into(),
+                            action: remote::ApprovalAction::Decide { allow: true },
+                        },
+                        cx,
+                    )
+                    .unwrap_err();
+                assert_eq!(duplicate.http_status, 409);
+                let stale = app
+                    .remote_write(
+                        &host,
+                        0,
+                        "approve-old-run",
+                        Write::Approval {
+                            session: 1,
+                            run: "previous-run".into(),
+                            ticket: "approval-1".into(),
+                            action: remote::ApprovalAction::Decide { allow: true },
+                        },
+                        cx,
+                    )
+                    .unwrap_err();
+                assert_eq!(stale.http_status, 409);
+                let _ = window;
+            });
+        });
+        host.stop();
+    }
 
     #[gpui_kit::test]
     fn web_control_preserves_desktop_draft_and_rejects_old_run(cx: &mut TestAppContext) {

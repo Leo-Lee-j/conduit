@@ -187,6 +187,7 @@ fn main() {
                     let _ = window.update(cx, |_, window, cx| {
                         app.update(cx, |app, cx| {
                             app.start_initial_history_imports(window, cx);
+                            app.restore_encourager_pet(cx);
                         });
                         window.activate_window();
                     });

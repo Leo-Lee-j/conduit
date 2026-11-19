@@ -145,19 +145,26 @@ pub(super) fn message_timestamp(timestamp: u64) -> String {
         .unwrap_or_default()
 }
 
-/// Elapsed time since the last activity, shown on each sidebar row as S/M/H/D.
+/// Localized relative time shared by sidebar conversations and active tasks.
 pub(super) fn session_age_label(activity_at: u64) -> Option<String> {
+    session_age_label_at(activity_at, unix_now())
+}
+
+fn session_age_label_at(activity_at: u64, now: u64) -> Option<String> {
     if activity_at == 0 {
         return None;
     }
     DateTime::from_timestamp(activity_at as i64, 0)?;
-    let seconds = unix_now().saturating_sub(activity_at);
-    Some(match seconds {
-        seconds if seconds < 60 => format!("{seconds} S"),
-        seconds if seconds < 60 * 60 => format!("{} M", seconds / 60),
-        seconds if seconds < 24 * 60 * 60 => format!("{} H", seconds / (60 * 60)),
-        seconds => format!("{} D", seconds / (24 * 60 * 60)),
-    })
+    let seconds = now.saturating_sub(activity_at);
+    if seconds < 60 {
+        return Some(conduit::i18n::text_static("sidebar.age_just_now").into());
+    }
+    let (key, count) = match seconds {
+        seconds if seconds < 60 * 60 => ("sidebar.age_minutes", seconds / 60),
+        seconds if seconds < 24 * 60 * 60 => ("sidebar.age_hours", seconds / (60 * 60)),
+        seconds => ("sidebar.age_days", seconds / (24 * 60 * 60)),
+    };
+    Some(conduit::i18n::format(key, &[("count", count.to_string())]))
 }
 
 #[cfg(test)]
@@ -404,6 +411,48 @@ pub(super) fn apply_event_indexed(
             Some(session.messages.len() - 1)
         } else {
             None
+        }
+    }
+}
+
+#[cfg(test)]
+mod relative_time_tests {
+    use super::session_age_label_at;
+
+    #[test]
+    fn sidebar_age_labels_use_localized_units_and_handle_boundaries() {
+        let now = 10_000_000;
+        let cases = [
+            (0, "刚刚", "Just now"),
+            (59, "刚刚", "Just now"),
+            (60, "1 分钟前", "1 min ago"),
+            (5 * 60, "5 分钟前", "5 min ago"),
+            (3599, "59 分钟前", "59 min ago"),
+            (3600, "1 小时前", "1 hr ago"),
+            (22 * 3600, "22 小时前", "22 hr ago"),
+            (24 * 3600 - 1, "23 小时前", "23 hr ago"),
+            (24 * 3600, "1 天前", "1 d ago"),
+            (3 * 24 * 3600, "3 天前", "3 d ago"),
+        ];
+        for language in ["zh-CN", "en"] {
+            let _locale = crate::test_support::scoped(language);
+            for (elapsed, chinese, english) in cases {
+                let expected = if language == "zh-CN" {
+                    chinese
+                } else {
+                    english
+                };
+                assert_eq!(
+                    session_age_label_at(now - elapsed, now).as_deref(),
+                    Some(expected)
+                );
+            }
+            assert!(session_age_label_at(0, now).is_none());
+            assert!(session_age_label_at(i64::MAX as u64, now).is_none());
+            assert_eq!(
+                session_age_label_at(now + 10, now),
+                session_age_label_at(now, now)
+            );
         }
     }
 }

@@ -128,7 +128,6 @@ pub(super) struct FileStat {
 
 /// Most recent plan emitted inside the latest user turn. Live Codex turns keep
 /// it in `ConduitApp::plans`; imported history falls back to the tool input.
-#[cfg(test)]
 pub(super) fn plan_from_messages(session: &SessionRecord) -> Vec<PlanStep> {
     let start = session
         .messages

@@ -68,6 +68,7 @@ mod commands;
 mod components;
 mod composer;
 mod dock;
+mod encourager;
 mod environments;
 mod events;
 mod file_links;
@@ -298,6 +299,7 @@ pub struct ConduitApp {
     expanded_tools: HashSet<(u64, String)>,
     /// Groups manually pinned open after the assistant starts replying.
     tool_group_expansion: HashMap<(u64, String), bool>,
+    tool_group_motion_generation: HashMap<(u64, String), (u64, Instant)>,
     /// Explicit choices survive streaming and changes to the default visibility.
     reasoning_expansion: HashMap<(u64, String), bool>,
     /// Explicit question record visibility, independent of the automatic default.
@@ -309,6 +311,8 @@ pub struct ConduitApp {
     /// Parsed diff viewers for expanded edit cards, keyed like `tool_scrolls`.
     tool_diffs: DiffCache,
     tool_analysis: tool_analysis::Cache,
+    encourager: encourager::State,
+    encourager_pet_window: Option<AnyWindowHandle>,
     message_focus: Option<(u64, String, Instant)>,
     pending_message_jump: Option<usize>,
     performance: Entity<PerformanceMonitor>,
@@ -734,6 +738,7 @@ impl ConduitApp {
         let timeline = cx.new(|_| shell::ChatTimeline::new(app.clone(), scroll.clone()));
         let sidebar_view = cx.new(|cx| sidebar::SidebarView::new(app.clone(), window, cx));
         let file_view = cx.new(|cx| files::FileDocumentView::new(app, cx));
+        let encourager_enabled = store.ui.encourager.enabled;
         let mut app = Self {
             background: background::BackgroundState::new(cx),
             automation: Default::default(),
@@ -780,7 +785,7 @@ impl ConduitApp {
             usage_ui: usage::UsageUi::default(),
             github_ui: github::GithubUi::default(),
             files: files::FileBrowser::default(),
-            plugins: plugin_ui::PluginUi::new(),
+            plugins: plugin_ui::PluginUi::new_with_encourager(encourager_enabled),
             tab_menu_target: None,
             input,
             drafts: HashMap::new(),
@@ -861,6 +866,7 @@ impl ConduitApp {
             restore_reading_position: false,
             expanded_tools: HashSet::new(),
             tool_group_expansion: HashMap::new(),
+            tool_group_motion_generation: HashMap::new(),
             reasoning_expansion: HashMap::new(),
             question_expansion: HashMap::new(),
             expanded_errors: HashSet::new(),
@@ -868,6 +874,8 @@ impl ConduitApp {
             tool_scrolls: HashMap::new(),
             tool_diffs: DiffCache::default(),
             tool_analysis: Default::default(),
+            encourager: Default::default(),
+            encourager_pet_window: None,
             message_focus: None,
             pending_message_jump: None,
             performance: cx.new(|_| PerformanceMonitor::new()),
@@ -933,12 +941,14 @@ impl ConduitApp {
             return false;
         }
         self.closing = true;
+        self.encourager.cancel_request();
+        let pet_position_changed = self.close_encourager_pet_window(cx);
         #[cfg(feature = "remote")]
         self.remote.stop();
         self.terminals.stop_all();
         self.session_control.cancel_imports();
         self.history_loading.clear();
-        if self.dirty {
+        if self.dirty || pet_position_changed {
             self.persist();
         }
         self.git.probe = None;

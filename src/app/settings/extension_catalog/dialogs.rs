@@ -255,7 +255,7 @@ impl InstallDialog {
                                 "mcp_added"
                             }),
                             dialog.engine.label(),
-                            dialog.destination.display()
+                            display_path(&dialog.destination)
                         );
                         dialog.app.update(cx, |app, cx| {
                             app.extensions_ui.feedback = Some(message.clone());
@@ -315,7 +315,7 @@ impl Render for InstallDialog {
             .child(note(format!(
                 "{} · {}",
                 self.engine.label(),
-                self.destination.display()
+                display_path(&self.destination)
             )))
             .when(!writable, |body| body.child(note(text("read_only"))));
         match &self.prepared {

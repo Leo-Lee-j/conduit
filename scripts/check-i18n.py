@@ -20,16 +20,28 @@ def read(path):
 def parameters(text):
     return set(re.findall(r"%\{([^}]+)\}", text))
 
+
+def flatten(catalog, prefix=""):
+    assert isinstance(catalog, dict) and catalog, f"Empty translation group: {prefix}"
+    result = {}
+    for key, value in catalog.items():
+        name = f"{prefix}.{key}" if prefix else key
+        entries = flatten(value, name) if isinstance(value, dict) else {name: value}
+        for leaf, text in entries.items():
+            assert leaf not in result, f"Duplicate translation key: {leaf}"
+            result[leaf] = text
+    return result
+
 def main():
     languages = read(ROOT / "assets/languages.json")
     ids = [language["id"] for language in languages]
     assert len(ids) == len(set(ids)), "Duplicate language ID"
     assert "en" in ids, "English fallback is required"
-    baseline = read(ROOT / "locales/en.json")
+    baseline = flatten(read(ROOT / "locales/en.json"))
     for language in languages:
         assert re.fullmatch(r"[A-Za-z0-9-]+", language["id"]), "Invalid locale ID"
         assert language["name"].strip(), "Language name is empty"
-        translated = read(ROOT / "locales" / (language["id"] + ".json"))
+        translated = flatten(read(ROOT / "locales" / (language["id"] + ".json")))
         assert baseline.keys() == translated.keys(), f"Key mismatch: {language['id']}"
         for key, text in baseline.items():
             if key == "_version":

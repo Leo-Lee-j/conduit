@@ -4,11 +4,16 @@ const $ = (id) => document.getElementById(id);
 const apiPath = "/api/remote/v1";
 const stateLabels = {
   idle: "空闲", busy: "原生会话正在其他标签运行", pending_save: "正在保存消息",
-  running: "运行中", waiting_input: "请在电脑回答", waiting_approval: "请在电脑审批",
+  running: "运行中", waiting_input: "等待回答", waiting_approval: "等待审批",
   cancelling: "正在停止", cleanup_blocked: "电脑正在重新清理进程",
 };
+const sessionStateLabels = {
+  idle: "空闲", busy: "其他标签运行", pending_save: "保存中",
+  running: "运行中", waiting_input: "待回答", waiting_approval: "待审批",
+  cancelling: "停止中", cleanup_blocked: "需清理",
+};
 const model = {
-  auth: null, ready: false, system: null, workspace: null, session: null, archived: false,
+  auth: null, ready: false, system: null, workspace: null, session: null, approval: null, archived: false,
   sessions: [], history: [], latest: [], earlierCursor: null, nextSession: null,
   eventSource: null, timer: null, updating: false, again: false, online: false,
   pending: null, checking: false, metadata: null, generation: 0,
@@ -73,6 +78,13 @@ function controls() {
   $("stop").hidden = !session?.run_id || ["cancelling", "cleanup_blocked"].includes(session.state);
   $("stop").disabled = blocked;
   $("hint").textContent = model.pending?.kind === "send" ? "正在确认保存结果…" : session?.archived ? "取消归档后可发送" : session?.queued ? "电脑上有待发消息" : "";
+  syncApprovalControls();
+}
+
+function syncApprovalControls() {
+  const disabled = !!model.pending || !!model.approval?.submitted
+    || !model.online || !model.ready || !model.system?.writable || !model.session?.run_id;
+  for (const control of $("approval").querySelectorAll("button, input")) control.disabled = disabled;
 }
 
 function show() {
@@ -113,15 +125,20 @@ async function refresh() {
     }
     if (model.session) {
       const id = model.session.id;
-      const [session, messages] = await Promise.all([api(`/sessions/${id}`), api(`/sessions/${id}/messages`)]);
+      const [session, messages, approvals] = await Promise.all([
+        api(`/sessions/${id}`), api(`/sessions/${id}/messages`), api(`/sessions/${id}/approvals`),
+      ]);
       if (generation !== model.generation) return;
       model.session = session;
+      model.approval = approvals.items[0] || null;
       model.chatReady = messages.transcript_state === "ready";
       model.latest = messages.items;
       if (!model.history.length) model.earlierCursor = messages.next_cursor;
       $("title").textContent = session.title;
       $("state").textContent = session.engine + " · " + stateLabels[session.state];
+      $("state").dataset.state = session.state;
       renderMessages(messages.transcript_state);
+      renderApproval();
     } else if (model.workspace) {
       const page = await api(sessionPath());
       if (generation !== model.generation) return;
@@ -161,24 +178,43 @@ function renderSessions() {
     button.type = "button";
     button.className = "session";
     const info = document.createElement("span");
+    info.className = "session-info";
     const title = document.createElement("strong");
     title.textContent = session.title;
-    const summary = document.createElement("span");
-    summary.className = "summary";
-    summary.textContent = [session.engine, session.pinned && "置顶", stateLabels[session.state]].filter(Boolean).join(" · ");
+    const meta = document.createElement("span");
+    meta.className = "session-meta";
+    const engine = document.createElement("span");
+    engine.textContent = session.engine;
+    meta.append(engine);
+    if (session.pinned) {
+      const pinned = document.createElement("span");
+      pinned.className = "session-pin";
+      pinned.textContent = "已置顶";
+      meta.append(pinned);
+    }
+    const state = document.createElement("span");
+    state.className = "session-state";
+    state.dataset.state = session.state;
+    state.textContent = sessionStateLabels[session.state] || "未知状态";
     const arrow = document.createElement("span");
     arrow.className = "arrow";
     arrow.setAttribute("aria-hidden", "true");
-    arrow.textContent = "›";
-    info.append(title, summary);
-    button.append(info, arrow);
+    info.append(title, meta);
+    button.append(info, state, arrow);
     button.addEventListener("click", () => openChat(session));
     return button;
   });
   if (!items.length) {
-    const empty = document.createElement("p");
-    empty.className = "muted";
-    empty.textContent = model.archived ? "暂无已归档会话。" : "工作区暂无会话。";
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    const mark = document.createElement("span");
+    mark.className = "empty-mark";
+    mark.setAttribute("aria-hidden", "true");
+    const title = document.createElement("strong");
+    title.textContent = model.archived ? "没有已归档会话" : "从一段新会话开始";
+    const description = document.createElement("p");
+    description.textContent = model.archived ? "归档的会话会显示在这里" : "创建会话后，就能在手机上查看和继续桌面上的工作";
+    empty.append(mark, title, description);
     items.push(empty);
   }
   $("sessions").replaceChildren(...items);
@@ -201,14 +237,174 @@ function renderMessages(transcript, forceBottom = false) {
     return article;
   });
   if (!items.length) {
-    const empty = document.createElement("p");
-    empty.className = "muted";
-    empty.textContent = transcript === "failed" ? "电脑未能载入历史。" : transcript === "ready" ? "暂无消息。" : "正在载入历史…";
+    const empty = document.createElement("div");
+    empty.className = "empty-state empty-conversation";
+    const mark = document.createElement("span");
+    mark.className = "empty-mark";
+    mark.setAttribute("aria-hidden", "true");
+    const title = document.createElement("strong");
+    const description = document.createElement("p");
+    if (transcript === "failed") {
+      title.textContent = "无法载入会话记录";
+      description.textContent = "请确认电脑仍在运行，然后重试";
+    } else if (transcript === "ready") {
+      title.textContent = "这段会话还没有消息";
+      description.textContent = "发送一条消息，继续桌面上的工作";
+    } else {
+      title.textContent = "正在载入会话";
+      description.textContent = "正在同步桌面上的消息记录";
+    }
+    empty.append(mark, title, description);
     items.push(empty);
   }
   $("messages").replaceChildren(...items);
   $("older").hidden = !model.earlierCursor;
   if (bottom) scroll.scrollTop = scroll.scrollHeight;
+}
+
+function renderApproval() {
+  const panel = $("approval");
+  const approval = model.approval;
+  const key = approval ? `${model.session?.run_id || ""}/${approval.id}/${approval.submitted}/${approval.supported}` : "";
+  if (panel.dataset.key === key) {
+    panel.hidden = !approval;
+    syncApprovalControls();
+    return;
+  }
+  panel.dataset.key = key;
+  panel.replaceChildren();
+  if (!approval) { panel.hidden = true; return; }
+  panel.hidden = false;
+
+  const title = document.createElement("h2");
+  title.textContent = approval.kind === "question" ? "需要你回答" : "需要你审批";
+  const summary = document.createElement("strong");
+  summary.textContent = approval.title;
+  panel.append(title, summary);
+  if (approval.detail) {
+    const detail = document.createElement("pre");
+    detail.textContent = approval.detail;
+    panel.append(detail);
+  }
+  if (approval.submitted) {
+    const waiting = document.createElement("p");
+    waiting.className = "muted";
+    waiting.textContent = "已提交，正在等待电脑处理。";
+    panel.append(waiting);
+  } else if (!approval.supported) {
+    const unsupported = document.createElement("p");
+    unsupported.className = "muted";
+    unsupported.textContent = "此问题格式暂不支持，请在电脑上完成。";
+    panel.append(unsupported);
+  } else if (approval.kind === "decision") {
+    const actions = document.createElement("div");
+    actions.className = "approval-actions";
+    const deny = document.createElement("button");
+    deny.type = "button";
+    deny.textContent = "拒绝";
+    deny.addEventListener("click", () => sendApproval({kind: "decision", allow: false}));
+    actions.append(deny);
+    if (approval.allow_once) {
+      const allow = document.createElement("button");
+      allow.type = "button";
+      allow.className = "primary";
+      allow.textContent = "允许一次";
+      allow.addEventListener("click", () => sendApproval({kind: "decision", allow: true}));
+      actions.append(allow);
+    }
+    panel.append(actions);
+  } else {
+    const form = document.createElement("form");
+    form.className = "approval-form";
+    for (const [index, question] of approval.questions.entries()) {
+      const field = document.createElement("fieldset");
+      const legend = document.createElement("legend");
+      legend.textContent = question.header || question.question;
+      field.append(legend);
+      if (question.header && question.question !== question.header) {
+        const prompt = document.createElement("p");
+        prompt.textContent = question.question;
+        field.append(prompt);
+      }
+      for (const option of question.options) {
+        const label = document.createElement("label");
+        label.className = "answer-option";
+        const input = document.createElement("input");
+        input.type = question.multiple ? "checkbox" : "radio";
+        input.name = `answer-${index}`;
+        input.value = option.label;
+        input.dataset.questionId = question.id;
+        label.append(input, document.createTextNode(option.label));
+        if (option.description) {
+          const description = document.createElement("small");
+          description.textContent = option.description;
+          label.append(description);
+        }
+        field.append(label);
+      }
+      if (question.custom) {
+        const custom = document.createElement("input");
+        custom.type = question.secret ? "password" : "text";
+        custom.autocomplete = "off";
+        custom.dataset.questionId = question.id;
+        custom.dataset.customAnswer = "true";
+        custom.placeholder = question.options.length ? "自定义答案（可选）" : "输入答案";
+        custom.required = question.options.length === 0;
+        if (!question.multiple && question.options.length) {
+          for (const choice of field.querySelectorAll('input[type="radio"]')) {
+            choice.addEventListener("change", () => { custom.value = ""; });
+          }
+          custom.addEventListener("input", () => {
+            if (custom.value.trim()) for (const choice of field.querySelectorAll('input[type="radio"]')) choice.checked = false;
+          });
+        }
+        field.append(custom);
+      }
+      form.append(field);
+    }
+    const actions = document.createElement("div");
+    actions.className = "approval-actions";
+    const skip = document.createElement("button");
+    skip.type = "button";
+    skip.textContent = "跳过";
+    skip.addEventListener("click", () => sendApproval({kind: "decision", allow: false}));
+    const answer = document.createElement("button");
+    answer.type = "submit";
+    answer.className = "primary";
+    answer.textContent = "提交回答";
+    actions.append(skip, answer);
+    form.append(actions);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const answers = Object.create(null);
+      let valid = true;
+      for (const question of approval.questions) {
+        const values = [...form.querySelectorAll("input[data-question-id]")]
+          .filter((input) => input.dataset.questionId === question.id)
+          .filter((input) => input.dataset.customAnswer ? !!input.value.trim() : input.checked)
+          .map((input) => input.dataset.customAnswer ? input.value.trim() : input.value);
+        if (!values.length || (!question.multiple && values.length !== 1)
+          || new Set(values).size !== values.length) valid = false;
+        answers[question.id] = values;
+      }
+      if (!valid) { notice("请为每个问题提供有效答案。"); return; }
+      void sendApproval({kind: "answer", answers}, true);
+    });
+    panel.append(form);
+  }
+  syncApprovalControls();
+}
+
+function sendApproval(body, sensitive = false) {
+  const {id, run_id} = model.session || {};
+  const approval = model.approval;
+  if (!id || !run_id || !approval || model.pending) return;
+  const path = `/sessions/${encodeURIComponent(id)}/runs/${encodeURIComponent(run_id)}/approvals/${encodeURIComponent(approval.id)}`;
+  const request = requestInfo(path, body.kind === "answer" ? "answer" : "approval", body);
+  request.approval = approval.id;
+  request.run = run_id;
+  if (sensitive) request.sensitive = true;
+  void startRequest(request);
 }
 
 function draftKey(id) { return `conduit-draft-${id}`; }
@@ -222,7 +418,8 @@ function openChat(session) {
   model.earlierCursor = null;
   $("draft").value = stored(draftKey(session.id)) || "";
   $("title").textContent = session.title;
-  $("state").textContent = stateLabels[session.state] || "";
+  $("state").textContent = session.engine + " · " + (stateLabels[session.state] || "空闲");
+  $("state").dataset.state = session.state;
   show();
   renderMessages("loading", true);
   refreshSoon();
@@ -231,6 +428,7 @@ function openChat(session) {
 function exitChat() {
   model.generation++;
   model.session = null;
+  model.approval = null;
   model.sessions = [];
   model.nextSession = null;
   $("sessions").replaceChildren();
@@ -239,18 +437,30 @@ function exitChat() {
 }
 
 function remember(pending) {
+  if (!pending && model.pending?.sensitive) model.pending.body = undefined;
   model.pending = pending;
-  stored("conduit-pending", pending ? JSON.stringify(pending) : null);
+  const persisted = pending?.sensitive ? {...pending, body: undefined, canRetry: false} : pending;
+  stored("conduit-pending", persisted ? JSON.stringify(persisted) : null);
   controls();
 }
 
 function requestInfo(path, kind, body, version, method = "POST") {
   return {
-    id: crypto.randomUUID(), epoch: model.system.host_epoch, device: model.auth.device_id,
+    id: requestId(), epoch: model.system.host_epoch, device: model.auth.device_id,
     expires: Math.floor(Date.now() / 1000) + model.system.server_time - model.system.local_time + 540,
     path, kind, body: body === undefined ? undefined : JSON.stringify(body), version, method,
     session: model.session?.id,
   };
+}
+
+function requestId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  try {
+    globalThis.crypto?.getRandomValues(bytes);
+    if (bytes.some(Boolean)) return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  } catch { /* Request keys are identifiers, not authentication secrets. */ }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
 }
 
 function submit(request) {
@@ -280,12 +490,17 @@ async function checkPending(first = false) {
       notice("连接身份已更新。请检查历史确认上一条请求的结果，草稿已保留。");
       return;
     }
-    if (first) await submit(request);
+    if (first && request.canRetry !== false) await submit(request);
     let operation;
     try {
       operation = await api(`/operations/${request.id}`);
     } catch (error) {
       if (error.status !== 404) throw error;
+      if (request.canRetry === false) {
+        remember(null);
+        notice("回答结果尚未确认。请刷新请求状态后再决定是否重新回答。");
+        return;
+      }
       await submit(request);
       operation = await api(`/operations/${request.id}`);
     }
@@ -301,7 +516,22 @@ async function checkPending(first = false) {
       } else if (request.kind === "create" && !model.session) {
         openChat(await api(`/sessions/${operation.result.session_id}`));
         notice("已新建会话");
-      } else notice("已保存");
+      } else if (request.kind === "answer") {
+        if (model.session?.id === request.session && model.session?.run_id === request.run
+          && model.approval?.id === request.approval) {
+          model.approval.submitted = true;
+          renderApproval();
+        }
+        notice("已提交回答");
+      } else if (request.kind === "approval") {
+        if (model.session?.id === request.session && model.session?.run_id === request.run
+          && model.approval?.id === request.approval) {
+          model.approval.submitted = true;
+          renderApproval();
+        }
+        notice("已提交审批");
+      }
+      else notice("已保存");
       remember(null);
     }
   } catch (error) {
@@ -312,7 +542,10 @@ async function checkPending(first = false) {
       if (error.status !== 429 && error.status !== 503) connectivity(error);
       notice("正在核对请求结果。连接恢复后会继续查询，草稿已保留。");
     }
-  } finally { model.checking = false; }
+  } finally {
+    model.checking = false;
+    if (!model.pending) refreshSoon();
+  }
 }
 
 $("pair-form").addEventListener("submit", async (event) => {

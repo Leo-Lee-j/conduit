@@ -8,6 +8,55 @@ use crate::{
 };
 
 #[test]
+fn claude_background_task_cards_follow_native_lifecycle_and_survive_restore() {
+    use crate::{message_status::ToolStatus, protocol::Protocol};
+    use serde_json::json;
+    for locale in ["en", "zh-CN"] {
+        let _locale = crate::test_support::scoped(locale);
+        for (native, status) in [
+            ("completed", ToolStatus::Completed),
+            ("failed", ToolStatus::Failed),
+            ("stopped", ToolStatus::Cancelled),
+        ] {
+            let mut p = Protocol::new(Provider::Claude, "C:/work".into(), "test".into(), None);
+            let mut s = session();
+            for value in [
+                json!({"type":"assistant","message":{"id":"main","content":[{"type":"tool_use","id":"bash","name":"Bash","input":{"command":"cargo test"}}]}}),
+                json!({"type":"system","subtype":"task_started","task_id":"background","task_type":"local_bash","tool_use_id":"bash"}),
+                json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"bash","content":"command launched in background"}]}}),
+                json!({"type":"system","subtype":"task_progress","task_id":"background","summary":"tests running"}),
+            ] {
+                for event in p.accept(value).events {
+                    apply_event(&mut s, "turn", event);
+                }
+                assert_eq!(s.messages.len(), 1);
+                assert!(super::tools::tool_running(&s.messages[0]));
+                assert!(!super::tools::tool_succeeded(&s.messages[0]));
+            }
+            assert!(!p.accept(json!({"type":"result","subtype":"success"})).done);
+            let done = p.accept(json!({"type":"system","subtype":"task_notification","task_id":"background","status":native,"summary":"test result"}));
+            assert!(done.done);
+            for event in done.events {
+                apply_event(&mut s, "turn", event);
+            }
+            finish_tool_cards(&mut s, "turn", ToolStatus::MissingResult.as_str());
+            assert_eq!(s.messages.len(), 1);
+            assert_eq!(s.messages[0].status, status);
+            assert_eq!(s.messages[0].text, "Bash");
+            assert!(s.messages[0].input.contains("cargo test"));
+            assert_eq!(s.messages[0].detail, "test result");
+            let restored: SessionRecord =
+                serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+            assert_eq!(restored.messages[0].status, status);
+            assert_eq!(
+                super::tools::tool_succeeded(&restored.messages[0]),
+                native == "completed"
+            );
+        }
+    }
+}
+
+#[test]
 fn recurring_notices_are_session_scoped_and_survive_restore() {
     let mut record = session();
     let warning = || Event::SessionNotice {
