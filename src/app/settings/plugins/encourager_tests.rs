@@ -78,7 +78,7 @@ fn draw(cx: &mut VisualTestContext) {
     });
 }
 
-fn click(cx: &mut VisualTestContext, role: Role, label: &'static str) {
+fn click(cx: &mut VisualTestContext, role: Role, label: &str) {
     let center = cx.update(|window, _| {
         gpui_kit::base::test_support::snapshots(window)
             .into_iter()
@@ -166,6 +166,105 @@ fn desktop_pet_settings_fit_and_switches_preserve_configuration(cx: &mut TestApp
         assert!(choice.request.is_some());
     });
     cx.update(|_, cx| app.update(cx, |app, _| app.persistence.flush()));
+}
+
+// Selecting an existing service must populate models and persist subsequent choices.
+#[gpui_kit::test]
+fn desktop_pet_selects_existing_provider_and_model(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = create_app(window, cx, true);
+        app.update(cx, |app, _| {
+            let mut imported = app.store.providers[0].clone();
+            imported.id = "ccs:codex:pet-imported".into();
+            imported.name = "Imported API".into();
+            imported.models = vec!["imported-model".into()];
+            imported.source = ProviderSource::Ccs {
+                id: "pet-imported".into(),
+            };
+            app.store.providers.push(imported);
+            app.store.ui.encourager.provider_id = None;
+            app.store.ui.encourager.model = None;
+        });
+        *output.borrow_mut() = Some(app.clone());
+        let content = cx.new(|cx| PetSettings::new(app, cx));
+        gpui_kit::component::Root::new(content, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.simulate_resize(size(px(1100.), px(900.)));
+    draw(cx);
+    click(
+        cx,
+        Role::Button,
+        conduit::i18n::text_static("encourager.setting.service"),
+    );
+    click(cx, Role::MenuItem, "Development API");
+    cx.update(|_, cx| {
+        let settings = &app.read(cx).store.ui.encourager;
+        assert_eq!(settings.provider_id.as_deref(), Some("pet-test"));
+        assert_eq!(settings.model.as_deref(), Some("sample-chat-model"));
+    });
+    click(
+        cx,
+        Role::Button,
+        conduit::i18n::text_static("encourager.setting.model"),
+    );
+    click(cx, Role::MenuItem, "sample-chat-model-2");
+    cx.update(|_, cx| {
+        assert_eq!(
+            app.read(cx).store.ui.encourager.model.as_deref(),
+            Some("sample-chat-model-2")
+        );
+    });
+    // Reopening the same service must preserve the explicitly selected model.
+    click(
+        cx,
+        Role::Button,
+        conduit::i18n::text_static("encourager.setting.service"),
+    );
+    click(cx, Role::MenuItem, "Development API");
+    cx.update(|_, cx| {
+        assert_eq!(
+            app.read(cx).store.ui.encourager.model.as_deref(),
+            Some("sample-chat-model-2")
+        )
+    });
+    click(
+        cx,
+        Role::Button,
+        conduit::i18n::text_static("encourager.setting.service"),
+    );
+    click(cx, Role::MenuItem, "Imported API");
+    cx.update(|_, cx| {
+        let settings = &app.read(cx).store.ui.encourager;
+        assert_eq!(
+            settings.provider_id.as_deref(),
+            Some("ccs:codex:pet-imported")
+        );
+        assert_eq!(settings.model.as_deref(), Some("imported-model"));
+    });
+    click(
+        cx,
+        Role::Button,
+        conduit::i18n::text_static("encourager.setting.model"),
+    );
+    click(cx, Role::MenuItem, "imported-model");
+    click(
+        cx,
+        Role::Button,
+        conduit::i18n::text_static("encourager.setting.service"),
+    );
+    click(cx, Role::MenuItem, "Development API");
+    cx.update(|_, cx| {
+        assert_eq!(
+            app.read(cx).store.ui.encourager.model.as_deref(),
+            Some("sample-chat-model")
+        );
+        app.update(cx, |app, _| app.persistence.flush());
+    });
 }
 
 /// Manually run on Windows to inspect the actual shared form with the GPU:

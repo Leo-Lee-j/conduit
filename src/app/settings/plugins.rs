@@ -395,6 +395,8 @@ impl ConduitApp {
             });
         let provider_view = view.clone();
         let menu_providers = providers.clone();
+        let current_provider = selected_provider.clone();
+        let current_model = settings.model.clone();
         let provider_picker = Button::new("encourager-provider")
             .debug_selector(|| "encourager-provider".into())
             .outline()
@@ -408,20 +410,27 @@ impl ConduitApp {
                 for (id, name, models) in &menu_providers {
                     let id = id.clone();
                     let name = name.clone();
-                    let model = models.first().cloned();
+                    let selected = current_provider.as_ref() == Some(&id);
+                    let model = current_model
+                        .as_ref()
+                        .filter(|model| selected && models.contains(model))
+                        .cloned()
+                        .or_else(|| models.first().cloned());
                     let view = provider_view.clone();
-                    menu = menu.item(PopupMenuItem::new(name.clone()).on_click(move |_, _, cx| {
-                        view.update(cx, |app, cx| {
-                            if !app.writable || app.closing {
-                                return;
-                            }
-                            app.reset_encourager_output();
-                            app.store.ui.encourager.provider_id = Some(id.clone());
-                            app.store.ui.encourager.model = model.clone();
-                            app.persist();
-                            cx.notify();
-                        });
-                    }));
+                    menu = menu.item(PopupMenuItem::new(name.clone()).checked(selected).on_click(
+                        move |_, _, cx| {
+                            view.update(cx, |app, cx| {
+                                if !app.writable || app.closing {
+                                    return;
+                                }
+                                app.reset_encourager_output();
+                                app.store.ui.encourager.provider_id = Some(id.clone());
+                                app.store.ui.encourager.model = model.clone();
+                                app.persist();
+                                cx.notify();
+                            });
+                        },
+                    ));
                 }
                 menu
             });
@@ -438,6 +447,7 @@ impl ConduitApp {
             .cloned()
             .unwrap_or_else(|| conduit::i18n::text("encourager.no_model"));
         let model_view = view.clone();
+        let current_model = settings.model.clone();
         let model_picker = Button::new("encourager-model")
             .debug_selector(|| "encourager-model".into())
             .outline()
@@ -451,18 +461,21 @@ impl ConduitApp {
                 for model in &model_choices {
                     let model = model.clone();
                     let view = model_view.clone();
-                    menu =
-                        menu.item(PopupMenuItem::new(model.clone()).on_click(move |_, _, cx| {
-                            view.update(cx, |app, cx| {
-                                if !app.writable || app.closing {
-                                    return;
-                                }
-                                app.reset_encourager_output();
-                                app.store.ui.encourager.model = Some(model.clone());
-                                app.persist();
-                                cx.notify();
-                            });
-                        }));
+                    menu = menu.item(
+                        PopupMenuItem::new(model.clone())
+                            .checked(current_model.as_ref() == Some(&model))
+                            .on_click(move |_, _, cx| {
+                                view.update(cx, |app, cx| {
+                                    if !app.writable || app.closing {
+                                        return;
+                                    }
+                                    app.reset_encourager_output();
+                                    app.store.ui.encourager.model = Some(model.clone());
+                                    app.persist();
+                                    cx.notify();
+                                });
+                            }),
+                    );
                 }
                 menu
             });

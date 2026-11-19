@@ -400,9 +400,7 @@ impl ConduitApp {
         let settings = self.store.ui.encourager.clone();
         let Some(provider) = settings.provider_id.as_ref().and_then(|id| {
             self.store.providers.iter().find(|provider| {
-                provider.id == *id
-                    && matches!(&provider.source, ProviderSource::Local)
-                    && matches!(provider.engine, Provider::Claude | Provider::Codex)
+                provider.id == *id && matches!(provider.engine, Provider::Claude | Provider::Codex)
             })
         }) else {
             self.encourager.error = Some(conduit::i18n::text("encourager.error.choose_service"));
@@ -450,13 +448,22 @@ impl ConduitApp {
         self.encourager.session = session_id;
         let scene = self.encourager.scene;
         let provider = provider.clone();
+        let database = self.ccs.database_path.clone();
         let model = model.clone();
         let this_cancel = cancel.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    generate_text(&provider, &model, settings, scene, context, &this_cancel)
+                    generate_text(
+                        &provider,
+                        &database,
+                        &model,
+                        settings,
+                        scene,
+                        context,
+                        &this_cancel,
+                    )
                 })
                 .await;
             let _ = this.update(cx, |app, cx| {
@@ -505,9 +512,7 @@ fn limit_chars(value: &str, limit: usize) -> String {
 }
 
 pub(super) fn encourager_model_ids(provider: &ModelProvider) -> Vec<String> {
-    if !matches!(&provider.source, ProviderSource::Local)
-        || !matches!(provider.engine, Provider::Claude | Provider::Codex)
-    {
+    if !matches!(provider.engine, Provider::Claude | Provider::Codex) {
         return Vec::new();
     }
 
@@ -540,6 +545,7 @@ pub(super) fn encourager_model_ids(provider: &ModelProvider) -> Vec<String> {
 
 fn generate_text(
     provider: &ModelProvider,
+    database: &Path,
     model: &str,
     settings: crate::store::EncouragerSettings,
     scene: Scene,
@@ -547,10 +553,7 @@ fn generate_text(
     cancel: &AtomicBool,
 ) -> Result<String, String> {
     check_cancel(cancel)?;
-    let key = provider
-        .api_key()
-        .map_err(|_| conduit::i18n::text("encourager.error.credentials"))?;
-    let endpoint = request_url(provider)?;
+    let service = api_service(provider, database)?;
     let instruction = format!(
         "{}\n{}\n{}",
         conduit::i18n::text("encourager.prompt.base"),
@@ -589,13 +592,12 @@ fn generate_text(
         .timeout_global(Some(REQUEST_TIMEOUT))
         .build()
         .into();
-    let mut request = agent.post(endpoint.as_str());
+    let mut request = agent.post(service.endpoint.as_str());
+    for (name, value) in &service.headers {
+        request = request.header(name, value);
+    }
     let payload = match provider.engine {
         Provider::Claude => {
-            request = request.header("anthropic-version", "2023-06-01");
-            if let Some(key) = key.as_deref().filter(|key| !key.is_empty()) {
-                request = request.header("x-api-key", key);
-            }
             serde_json::json!({
                 "model": model,
                 "max_tokens": max_tokens,
@@ -604,9 +606,6 @@ fn generate_text(
             })
         }
         Provider::Codex => {
-            if let Some(key) = key.as_deref().filter(|key| !key.is_empty()) {
-                request = request.header("Authorization", format!("Bearer {key}"));
-            }
             serde_json::json!({
                 "model": model,
                 "instructions": instruction,
@@ -682,6 +681,87 @@ fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
     }
 }
 
+// Resolve credentials at request time, including imported cc-switch services.
+// The imported catalog intentionally contains no credentials.
+struct ApiService {
+    endpoint: url::Url,
+    headers: std::collections::BTreeMap<String, String>,
+}
+
+fn api_service(provider: &ModelProvider, database: &Path) -> Result<ApiService, String> {
+    let route = provider
+        .runtime_route(database)
+        .map_err(|_| conduit::i18n::text("encourager.error.credentials"))?;
+    let mut resolved = provider.clone();
+    let mut headers = std::collections::BTreeMap::new();
+    let config = route
+        .config
+        .get("model_providers")
+        .and_then(|providers| providers.get("conduit"))
+        .unwrap_or(&serde_json::Value::Null);
+    match provider.engine {
+        Provider::Claude => {
+            resolved.base_url = route
+                .env
+                .get("ANTHROPIC_BASE_URL")
+                .cloned()
+                .unwrap_or_default();
+            headers.insert("anthropic-version".into(), "2023-06-01".into());
+            if let Some(key) = route
+                .env
+                .get("ANTHROPIC_AUTH_TOKEN")
+                .filter(|key| !key.is_empty())
+                .or_else(|| {
+                    route
+                        .env
+                        .get("ANTHROPIC_API_KEY")
+                        .filter(|key| !key.is_empty())
+                })
+            {
+                headers.insert("x-api-key".into(), key.clone());
+            }
+        }
+        Provider::Codex => {
+            if config["wire_api"]
+                .as_str()
+                .is_some_and(|api| api != "responses")
+            {
+                return Err(conduit::i18n::text("encourager.error.unsupported_service"));
+            }
+            resolved.base_url = config["base_url"].as_str().unwrap_or_default().into();
+            if let Some(key) = config["env_key"]
+                .as_str()
+                .and_then(|name| route.env.get(name))
+                .filter(|key| !key.is_empty())
+            {
+                headers.insert("authorization".into(), format!("Bearer {key}"));
+            }
+            for (name, value) in config["http_headers"].as_object().into_iter().flatten() {
+                if let Some(value) = value.as_str() {
+                    headers.insert(name.to_ascii_lowercase(), value.into());
+                }
+            }
+            for (name, variable) in config["env_http_headers"].as_object().into_iter().flatten() {
+                if let Some(variable) = variable.as_str() {
+                    let value = std::env::var(variable)
+                        .map_err(|_| conduit::i18n::text("encourager.error.credentials"))?;
+                    headers.insert(name.to_ascii_lowercase(), value);
+                }
+            }
+        }
+        _ => return Err(conduit::i18n::text("encourager.error.unsupported_service")),
+    }
+    let mut endpoint = request_url(&resolved)?;
+    if provider.engine == Provider::Codex {
+        for (name, value) in config["query_params"].as_object().into_iter().flatten() {
+            if let Some(value) = value.as_str() {
+                endpoint.query_pairs_mut().append_pair(name, value);
+            }
+        }
+    }
+    Ok(ApiService { endpoint, headers })
+}
+
 fn request_url(provider: &ModelProvider) -> Result<url::Url, String> {
     crate::providers::discovery::endpoint(&provider.base_url)
         .map_err(|_| conduit::i18n::text("encourager.error.invalid_service"))?;
@@ -713,7 +793,7 @@ fn request_url(provider: &ModelProvider) -> Result<url::Url, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{encourager_model_ids, limit_chars, request_url};
+    use super::{api_service, encourager_model_ids, limit_chars, request_url};
     use crate::store::EncouragerVerbosity;
     use crate::{
         domain::Provider,
@@ -773,6 +853,101 @@ mod tests {
             "https://api.example/v1/responses"
         );
         assert!(request_url(&provider(Provider::Codex, "file:///tmp")).is_err());
+    }
+
+    // Imported catalog entries have no keys. Requests must use the selected
+    // database record, including credentials changed after the catalog loaded.
+    #[test]
+    fn imported_pet_services_resolve_current_endpoints_and_credentials() {
+        let path = std::env::temp_dir().join(format!(
+            "conduit-pet-services-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let database = rusqlite::Connection::open(&path).unwrap();
+        database
+            .execute_batch("CREATE TABLE providers (id TEXT, app_type TEXT, settings_config TEXT);")
+            .unwrap();
+        for (engine, app, settings, expected_url, header, expected_key) in [
+            (
+                Provider::Claude,
+                "claude",
+                serde_json::json!({"env": {
+                    "ANTHROPIC_BASE_URL": "https://claude.example/v1",
+                    "ANTHROPIC_AUTH_TOKEN": "test-claude-key"
+                }}),
+                "https://claude.example/v1/messages",
+                "x-api-key",
+                "test-claude-key",
+            ),
+            (
+                Provider::Codex,
+                "codex",
+                serde_json::json!({
+                    "auth": {"OPENAI_API_KEY": "test-codex-key"},
+                    "config": "model_provider = \"proxy\"\n[model_providers.proxy]\nbase_url = \"https://codex.example/v1\"\nwire_api = \"responses\"\n[model_providers.proxy.http_headers]\nx-test = \"pet\"\n[model_providers.proxy.query_params]\nversion = \"test\"\n"
+                }),
+                "https://codex.example/v1/responses?version=test",
+                "authorization",
+                "Bearer test-codex-key",
+            ),
+        ] {
+            database
+                .execute(
+                    "INSERT INTO providers VALUES (?1, ?2, ?3)",
+                    rusqlite::params!["pet", app, settings.to_string()],
+                )
+                .unwrap();
+            let provider = ModelProvider {
+                id: ModelProvider::ccs_id(engine, "pet"),
+                name: "Imported API".into(),
+                engine,
+                base_url: "https://stale.example/v1".into(),
+                api_key_env: String::new(),
+                protected_api_key: None,
+                models: vec!["existing-model".into()],
+                source: ProviderSource::Ccs { id: "pet".into() },
+                model_metadata: vec![],
+                claude_models: None,
+            };
+            assert_eq!(encourager_model_ids(&provider), ["existing-model"]);
+            let service = api_service(&provider, &path).unwrap();
+            assert_eq!(service.endpoint.as_str(), expected_url);
+            assert_eq!(service.headers[header], expected_key);
+            if engine == Provider::Codex {
+                assert_eq!(service.headers["x-test"], "pet");
+                let mut changed = settings.clone();
+                changed["auth"]["OPENAI_API_KEY"] = "updated-test-key".into();
+                database
+                    .execute(
+                        "UPDATE providers SET settings_config = ?1 WHERE app_type = 'codex'",
+                        [changed.to_string()],
+                    )
+                    .unwrap();
+                assert_eq!(
+                    api_service(&provider, &path).unwrap().headers["authorization"],
+                    "Bearer updated-test-key"
+                );
+                changed["config"] = changed["config"]
+                    .as_str()
+                    .unwrap()
+                    .replace("responses", "chat")
+                    .into();
+                database
+                    .execute(
+                        "UPDATE providers SET settings_config = ?1 WHERE app_type = 'codex'",
+                        [changed.to_string()],
+                    )
+                    .unwrap();
+                assert!(api_service(&provider, &path).is_err());
+            }
+            assert!(provider.protected_api_key.is_none());
+        }
+        drop(database);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

@@ -69,7 +69,7 @@ Windows 配置依据 [Microsoft DWM 属性文档](https://learn.microsoft.com/en
 
 ## 模型与隐私
 
-宠物使用独立模型设置，不跟随会话 CLI 路由，也不要求重复录入 API Key。当前支持已配置的 Claude Messages API 和 Codex Responses API 服务；只支持 OpenAI Chat Completions 的服务暂不可选。模型凭据只由宿主读取。
+宠物使用独立模型设置，不跟随会话 CLI 路由，也不要求重复录入 API Key。当前支持已配置的 Claude Messages API 和 Codex Responses API 服务，包括本地创建和从 cc-switch 导入的 provider；导入服务在每次请求时读取对应记录的地址、凭据及请求头，不把密钥复制到宠物设置。切换服务会更新模型列表，重新选择当前服务会保留已选模型；只支持 OpenAI Chat Completions 的服务暂不可选。模型凭据只由宿主读取。
 
 默认发送固定指令、场景、语气与长度要求，不发送代码、项目文件、终端输出或聊天历史。开启“参考当前会话最近一轮”后，每次手动触发才会附上最近一条用户消息和助手回复，并限制长度。上下文不缓存、不写入宠物设置；回复不会发送给编程助手，也不会写入 transcript。
 
