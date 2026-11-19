@@ -250,7 +250,7 @@ mod tests {
                             if *path == app.store.workspaces[0].path));
                 });
                 let footer = cx.debug_bounds("workspace-more-0").unwrap();
-                assert_eq!(footer.size.height, px(28.));
+                assert_eq!(footer.size.height, px(24.));
                 assert!(
                     footer.size.width > px(28.),
                     "compact action includes its label"

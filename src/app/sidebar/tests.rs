@@ -35,7 +35,8 @@ fn project_groups_keep_nested_guides_and_keyboard_navigation_connected(cx: &mut 
             ));
             app.sidebar.scroll.set_offset(gpui_kit::point(px(0.), px(-4.)));
             assert!(matches!(app.sidebar.sticky_workspace(), Some((cache::Row::Project { .. }, _))));
-            app.sidebar.scroll.set_offset(gpui_kit::point(px(0.), px(-44.)));
+            let workspace_offset = app.sidebar.rows[0].list_height() + 4.;
+            app.sidebar.scroll.set_offset(gpui_kit::point(px(0.), px(-workspace_offset)));
             assert!(matches!(app.sidebar.sticky_workspace(), Some((cache::Row::Workspace { path, .. }, _)) if path == base));
             app.sidebar.scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
             cx.notify();
@@ -65,9 +66,13 @@ fn project_groups_keep_nested_guides_and_keyboard_navigation_connected(cx: &mut 
         cx.debug_bounds("workspace-guide-0-Day").unwrap().bottom(),
         inner.top()
     );
-    assert!(
-        cx.debug_bounds("session-title-1").unwrap().left()
-            > cx.debug_bounds("workspace-name-0").unwrap().left()
+    assert_eq!(
+        cx.debug_bounds("session-title-1").unwrap().left(),
+        cx.debug_bounds("workspace-name-0").unwrap().left()
+    );
+    assert_eq!(
+        cx.debug_bounds("session-cli-1").unwrap().center().x,
+        inner.left()
     );
     assert!(cx.debug_bounds("workspace-folder-0").is_none());
 
@@ -245,6 +250,10 @@ fn conversation_times_align_to_first_line_and_guides_join_through_expanded_conte
             age.top(),
             "time aligns with the first title line"
         );
+        assert!(
+            title.top() >= row.top() + px(2.) && title.bottom() <= row.bottom() - px(2.),
+            "two-line titles keep vertical padding inside compact rows"
+        );
         assert_eq!(age.size.height, px(16.), "relative time stays on one line");
         assert_eq!(age.right(), row.right() - px(8.));
         let short_title = cx.debug_bounds("session-title-3").unwrap();
@@ -253,7 +262,23 @@ fn conversation_times_align_to_first_line_and_guides_join_through_expanded_conte
         assert_eq!(age.right(), short_age.right());
 
         let folder = cx.debug_bounds("workspace-folder-0").unwrap();
+        let mark = cx.debug_bounds("session-cli-1").unwrap();
+        assert_eq!(
+            mark.center().x,
+            folder.center().x,
+            "CLI mark sits on the folder axis"
+        );
+        assert_eq!(
+            mark.top(),
+            title.top(),
+            "CLI mark aligns with the first title line"
+        );
+        assert_eq!(
+            title.left(),
+            cx.debug_bounds("workspace-name-0").unwrap().left()
+        );
         let guides = [
+            "workspace-guide-0-header",
             "workspace-guide-0-Day",
             "session-guide-1",
             "session-guide-3",
@@ -262,6 +287,7 @@ fn conversation_times_align_to_first_line_and_guides_join_through_expanded_conte
             "workspace-guide-0-more",
         ]
         .map(|selector| cx.debug_bounds(selector).unwrap());
+        assert_eq!(guides[0].top(), folder.bottom());
         for guide in guides {
             assert_eq!(
                 guide.left(),
@@ -277,8 +303,17 @@ fn conversation_times_align_to_first_line_and_guides_join_through_expanded_conte
                 "guide crosses row and group gaps"
             );
         }
-        let more = cx.debug_bounds("workspace-more-0").unwrap();
-        assert_eq!(guides.last().unwrap().bottom(), more.bottom());
+        let more = cx.debug_bounds("workspace-more-node-0").unwrap();
+        assert_eq!(more.center().x, folder.center().x);
+        assert_eq!(
+            guides.last().unwrap().bottom(),
+            more.top(),
+            "guide ends at the hollow node rim"
+        );
+        assert_eq!(
+            cx.debug_bounds("workspace-more-label-0").unwrap().left(),
+            title.left()
+        );
         assert!(
             guides.last().unwrap().bottom() < cx.debug_bounds("workspace-item-1").unwrap().top()
         );
@@ -352,10 +387,8 @@ fn activity_cards_refresh_status_switch_sessions_and_leave_room_for_projects(
     cx.simulate_resize(size(px(850.), px(500.)));
     draw(cx);
     let panel = cx.debug_bounds("sidebar-active-tasks").unwrap();
-    let projects = cx.debug_bounds("sidebar-projects-header").unwrap();
     assert!(panel.size.height <= px(250.));
-    assert!(projects.top() >= panel.bottom());
-    assert!(projects.bottom() < cx.debug_bounds("sidebar").unwrap().bottom() - px(100.));
+    assert!(panel.bottom() < cx.debug_bounds("sidebar").unwrap().bottom() - px(100.));
 
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
@@ -404,7 +437,7 @@ fn activity_cards_refresh_status_switch_sessions_and_leave_room_for_projects(
     });
     draw(cx);
     assert!(cx.debug_bounds("sidebar-active-tasks").is_none());
-    assert!(cx.debug_bounds("sidebar-projects-header").is_some());
+    assert!(cx.debug_bounds("sort-projects-by-activity").is_some());
     drop(senders);
 }
 

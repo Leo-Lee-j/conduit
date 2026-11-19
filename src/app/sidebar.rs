@@ -1,7 +1,6 @@
 //! Workspace navigation and session list.
 
 use super::*;
-use gpui_kit::component::badge::Badge;
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::status_bar::StatusBar;
 
@@ -14,7 +13,23 @@ mod tests;
 pub(super) use cache::SidebarState;
 
 // Keep the virtual-list estimates and rendered navigation rows in agreement.
-const ROW_HEIGHT: f32 = 36.;
+const ROW_HEIGHT: f32 = 30.;
+// Folder/CLI centers share an axis; the 16px marks leave an 8px title gap.
+const TREE_AXIS: f32 = 38.;
+const TREE_INDENT: f32 = 26.;
+const TREE_MARK_SIZE: f32 = 16.;
+const TREE_TITLE_LEFT: f32 = TREE_AXIS + TREE_MARK_SIZE / 2. + 8.;
+
+fn tree_guide(id: String, axis: f32, height: f32) -> Div {
+    div()
+        .debug_selector(move || id.clone())
+        .absolute()
+        .left(px(axis))
+        .top_0()
+        .h(px(height))
+        .w(px(1.))
+        .bg(rgb(palette().border))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TaskState {
@@ -65,7 +80,7 @@ pub(super) fn navigation_pane() -> Div {
 
 pub(super) fn navigation_header() -> Div {
     h_flex()
-        .h(px(ROW_HEIGHT))
+        .h(px(36.))
         .flex_shrink_0()
         .min_w_0()
         .px_2()
@@ -389,8 +404,7 @@ impl ConduitApp {
             // No bottom padding: the bottom bar aligns with the conversation toolbar.
             .gap_0()
             .child(self.sidebar_controls(cx))
-            .child(self.sidebar_active_tasks(cx))
-            .child(self.sidebar_projects_header(cx));
+            .child(self.sidebar_active_tasks(cx));
         let rows = self.sidebar.rows.clone();
         let list = gpui_kit::component::v_virtual_list(
             cx.entity(),
@@ -474,7 +488,7 @@ impl ConduitApp {
                 .path()
                 .and_then(|path| self.sidebar.projects.parent(path))
                 .is_some();
-        let indent = if nested { 26. } else { 0. };
+        let indent = if nested { TREE_INDENT } else { 0. };
         let element = match row {
             cache::Row::Project { .. } => self.sidebar_project(row, cx),
             cache::Row::Empty => v_flex()
@@ -517,7 +531,7 @@ impl ConduitApp {
                     }
                     cache::Row::Group { group, .. } => h_flex()
                         .h(px(row.height()))
-                        .pl(px(64. + indent))
+                        .pl(px(TREE_TITLE_LEFT + indent))
                         .items_center()
                         .text_size(ui_text_size(11.))
                         .font_semibold()
@@ -529,7 +543,7 @@ impl ConduitApp {
                         h_flex()
                             .h(px(ROW_HEIGHT))
                             .flex_shrink_0()
-                            .pl(px(64. + indent))
+                            .pl(px(TREE_TITLE_LEFT + indent))
                             .pr(px(8.))
                             .gap_2()
                             .items_center()
@@ -576,10 +590,11 @@ impl ConduitApp {
                             .aria_label(format!("{} · {}{}{}", single_line_title(&session.title), session.provider.label(), if running { conduit::i18n::text_static("sidebar.running") } else { "" }, if archived { conduit::i18n::text_static("plugin_ui.example.archived") } else { "" }))
                             .when(self.sidebar.keyboard_row.as_ref().is_some_and(|row| matches!(row, cache::Row::Session { id: focused, .. } if *focused == id)), |row| row.aria_active_descendant())
                             .debug_selector(move || format!("session-row-{id}"))
+                            .group("session-row")
                             .relative()
                             .h(px(row.height()))
                             .flex_shrink_0()
-                            .pl(px(64. + indent))
+                            .pl(px(TREE_AXIS + indent - TREE_MARK_SIZE / 2.))
                             .pr(px(8.))
                             .gap_2()
                             .items_center()
@@ -608,12 +623,27 @@ impl ConduitApp {
                                     session_menu(menu, menu_app.clone(), id, menu_app.read(cx))
                                 }
                             })
+                            .child(tree_guide(
+                                format!("session-guide-{id}"),
+                                TREE_AXIS + indent,
+                                if last_child { row.height() / 2. } else { row.list_height() },
+                            ))
                             .child(
                                 h_flex()
                                     .flex_1()
                                     .min_w_0()
                                     .items_start()
                                     .gap_2()
+                                    .child(
+                                        div()
+                                            .debug_selector(move || format!("session-cli-{id}"))
+                                            .size(px(TREE_MARK_SIZE))
+                                            .flex_shrink_0()
+                                            .rounded_full()
+                                            .bg(rgb(if active { palette().surface_hover } else { palette().sidebar_bg }))
+                                            .group_hover("session-row", |style| style.bg(rgb(palette().surface_hover)))
+                                            .child(provider_icon(session.provider).size_full()),
+                                    )
                                     .child(
                                         div()
                                             .debug_selector(move || format!("session-title-{id}"))
@@ -697,8 +727,8 @@ impl ConduitApp {
                         };
 
                         h_flex()
-                            .h(px(28.))
-                            .pl(px(56. + indent))
+                            .h(px(row.height()))
+                            .w_full()
                             .items_center()
                             .child(
                                 Button::new(SharedString::from(format!(
@@ -706,20 +736,53 @@ impl ConduitApp {
                                     self.store.workspaces[index].path.display()
                                 )))
                                 .debug_selector(move || format!("workspace-more-{index}"))
-                                .icon(if expanded {
-                                    FullIconName::ListChevronsDownUp
-                                } else {
-                                    FullIconName::ChevronDown
-                                })
                                 .tooltip(tooltip.clone())
                                 .accessibility_label(tooltip)
-                                .label(more_label)
                                 .small()
                                 .compact()
                                 .ghost()
-                                .h(px(28.))
-                                .max_w_full()
+                                .h(px(row.height()))
+                                .w_full()
+                                .pl(px(TREE_AXIS + indent - TREE_MARK_SIZE / 2.))
+                                .pr_2()
                                 .text_color(rgb(palette().muted))
+                                .child(
+                                    h_flex()
+                                        .w_full()
+                                        .min_w_0()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            h_flex()
+                                                .debug_selector(move || {
+                                                    format!("workspace-more-node-{index}")
+                                                })
+                                                .size(px(TREE_MARK_SIZE))
+                                                .flex_shrink_0()
+                                                .items_center()
+                                                .justify_center()
+                                                .rounded_full()
+                                                .border_1()
+                                                .border_color(rgb(palette().faint))
+                                                .child(
+                                                    Icon::new(if expanded {
+                                                        FullIconName::ChevronUp
+                                                    } else {
+                                                        FullIconName::ChevronDown
+                                                    })
+                                                    .size(px(12.)),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .debug_selector(move || {
+                                                    format!("workspace-more-label-{index}")
+                                                })
+                                                .min_w_0()
+                                                .truncate()
+                                                .child(more_label),
+                                        ),
+                                )
                                 .on_click(
                                     move |_, window, cx| {
                                         cx.stop_propagation();
@@ -745,28 +808,51 @@ impl ConduitApp {
             .w_full()
             .h(px(row.list_height()))
             .child(element)
-            .when(row.path().is_some() && !row.is_header(), |wrapper| {
-                let index = workspace_index.expect("child workspace rendered");
-                let guide_id = match row {
-                    cache::Row::Group { group, .. } => {
-                        format!("workspace-guide-{index}-{group:?}")
-                    }
-                    cache::Row::Session { id, .. } => format!("session-guide-{id}"),
-                    cache::Row::More { .. } => format!("workspace-guide-{index}-more"),
-                    cache::Row::Loading(_) => format!("workspace-guide-{index}-loading"),
-                    _ => unreachable!(),
-                };
-                wrapper.child(
-                    div()
-                        .debug_selector(move || guide_id.clone())
-                        .absolute()
-                        .left(px(38. + indent))
-                        .top_0()
-                        .bottom(px(if last_child { 4. } else { 0. }))
-                        .w(px(1.))
-                        .bg(rgb(palette().border)),
-                )
-            })
+            .when(
+                matches!(row, cache::Row::Workspace { .. }) && !last_child
+                    || matches!(row, cache::Row::Project { key, .. }
+                        if self.sidebar.expanded_projects.contains(key) || !self.search_query.trim().is_empty()),
+                |wrapper| {
+                    let index = workspace_index.expect("tree header workspace");
+                    let prefix = if matches!(row, cache::Row::Project { .. }) { "project" } else { "workspace" };
+                    wrapper.child(
+                        tree_guide(
+                            format!("{prefix}-guide-{index}-header"),
+                            TREE_AXIS + indent,
+                            row.list_height() - (ROW_HEIGHT + TREE_MARK_SIZE) / 2.,
+                        )
+                        .top(px((ROW_HEIGHT + TREE_MARK_SIZE) / 2.)),
+                    )
+                },
+            )
+            .when(
+                row.path().is_some()
+                    && !row.is_header()
+                    && !matches!(row, cache::Row::Session { .. }),
+                |wrapper| {
+                    let index = workspace_index.expect("child workspace rendered");
+                    let guide_id = match row {
+                        cache::Row::Group { group, .. } => {
+                            format!("workspace-guide-{index}-{group:?}")
+                        }
+                        cache::Row::More { .. } => format!("workspace-guide-{index}-more"),
+                        cache::Row::Loading(_) => format!("workspace-guide-{index}-loading"),
+                        _ => unreachable!(),
+                    };
+                    wrapper.child(tree_guide(
+                        guide_id,
+                        TREE_AXIS + indent,
+                        if matches!(row, cache::Row::More { .. }) {
+                            // Stop at the hollow node's rim, leaving its center empty.
+                            (row.height() - TREE_MARK_SIZE) / 2.
+                        } else if last_child {
+                            row.height()
+                        } else {
+                            row.list_height()
+                        },
+                    ))
+                },
+            )
             .when(nested, |wrapper| {
                 let index = workspace_index.expect("nested workspace");
                 let guide_id = match row {
@@ -782,7 +868,7 @@ impl ConduitApp {
                         .absolute()
                         .left(px(38.))
                         .top_0()
-                        .bottom(px(if last_project_child { 4. } else { 0. }))
+                        .bottom(px(if last_project_child { row.list_height() - row.height() } else { 0. }))
                         .w(px(1.))
                         .bg(rgb(palette().border)),
                 )
@@ -853,6 +939,35 @@ impl ConduitApp {
             .child(
                 h_flex()
                     .gap_2()
+                    .child(
+                        Button::new("sort-projects-by-activity")
+                            .debug_selector(|| "sort-projects-by-activity".into())
+                            .icon(FullIconName::ListFilter)
+                            .small()
+                            .compact()
+                            .ghost()
+                            .w(px(32.))
+                            .h(px(32.))
+                            .cursor_pointer()
+                            .selected(self.store.ui.auto_sort_workspaces)
+                            .tooltip(conduit::i18n::text_static(
+                                "sidebar.sort_projects_by_activity",
+                            ))
+                            .accessibility_label(conduit::i18n::text_static(
+                                "sidebar.sort_projects_by_activity",
+                            ))
+                            .disabled(!self.writable || self.closing)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if !this.writable || this.closing {
+                                    return;
+                                }
+                                this.store.ui.auto_sort_workspaces =
+                                    !this.store.ui.auto_sort_workspaces;
+                                this.persist();
+                                this.refresh_sidebar();
+                                cx.notify();
+                            })),
+                    )
                     .child(
                         Button::new("toggle-archived")
                             .cursor_pointer()
@@ -953,18 +1068,24 @@ impl ConduitApp {
                     )
                     .child(
                         h_flex()
-                            .w(px(24.))
+                            .id("sidebar-active-task-count")
+                            .debug_selector(|| "sidebar-active-task-count".into())
+                            .min_w(px(18.))
                             .h(px(18.))
+                            .px(px(5.))
                             .flex_shrink_0()
-                            .pr_2()
                             .items_center()
                             .justify_center()
-                            .child(
-                                Badge::new()
-                                    .count(count)
-                                    .color(rgb(palette().activity_running))
-                                    .child(div().size(px(8.))),
-                            ),
+                            .rounded_full()
+                            .bg(rgb(palette().activity_running))
+                            .text_color(rgb(0xffffff))
+                            .text_size(ui_text_size(10.))
+                            .line_height(relative(1.))
+                            .child(if count > 99 {
+                                "99+".into()
+                            } else {
+                                count.to_string()
+                            }),
                     ),
             );
 
@@ -1097,54 +1218,6 @@ impl ConduitApp {
         panel.child(list).into_any_element()
     }
 
-    fn sidebar_projects_header(&self, cx: &mut Context<Self>) -> AnyElement {
-        let sorted = self.store.ui.auto_sort_workspaces;
-        h_flex()
-            .id("sidebar-projects-header")
-            .debug_selector(|| "sidebar-projects-header".into())
-            .h(px(36.))
-            .flex_shrink_0()
-            .px_3()
-            .items_center()
-            .justify_between()
-            .child(
-                div()
-                    .text_size(ui_text_size(12.))
-                    .font_semibold()
-                    .text_color(rgb(palette().muted))
-                    .child(conduit::i18n::text_static("sidebar.projects")),
-            )
-            .child(
-                Button::new("sort-projects-by-activity")
-                    .debug_selector(|| "sort-projects-by-activity".into())
-                    .icon(FullIconName::ListFilter)
-                    .small()
-                    .compact()
-                    .ghost()
-                    .w(px(28.))
-                    .h(px(28.))
-                    .cursor_pointer()
-                    .selected(sorted)
-                    .tooltip(conduit::i18n::text_static(
-                        "sidebar.sort_projects_by_activity",
-                    ))
-                    .accessibility_label(conduit::i18n::text_static(
-                        "sidebar.sort_projects_by_activity",
-                    ))
-                    .disabled(!self.writable || self.closing)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if !this.writable || this.closing {
-                            return;
-                        }
-                        this.store.ui.auto_sort_workspaces = !this.store.ui.auto_sort_workspaces;
-                        this.persist();
-                        this.refresh_sidebar();
-                        cx.notify();
-                    })),
-            )
-            .into_any_element()
-    }
-
     fn sidebar_workspace(
         &self,
         index: usize,
@@ -1206,9 +1279,9 @@ impl ConduitApp {
             .relative()
             .h(px(ROW_HEIGHT))
             .flex_shrink_0()
-            .pl(px(if nested { 38. } else { 2. }))
+            .pl(px(if nested { TREE_AXIS + TREE_INDENT - 10. } else { 2. }))
             .pr_2()
-            .gap_2()
+            .gap(px(if nested { 6. } else { 8. }))
             .items_center()
             .rounded(px(8.))
             .text_size(ui_text_size(13.))

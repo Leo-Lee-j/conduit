@@ -86,9 +86,10 @@ impl Row {
     }
     pub(super) fn height(&self) -> f32 {
         match self {
-            Self::Group { .. } => 28.,
-            Self::Session { .. } => 44.,
-            Self::More { .. } => 28.,
+            Self::Group { .. } => 22.,
+            // Two 16px title lines with 2px of padding above and below.
+            Self::Session { .. } => 36.,
+            Self::More { .. } => 24.,
             Self::Empty => 76.,
             _ => ROW_HEIGHT,
         }
@@ -107,7 +108,7 @@ impl Row {
     }
     /// Own the inter-row space so tree guides stay inside virtualized bounds.
     pub(super) fn list_height(&self) -> f32 {
-        self.height() + 4.
+        self.height() + 2.
     }
 
     pub(super) fn is_header(&self) -> bool {
