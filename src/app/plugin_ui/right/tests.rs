@@ -94,10 +94,10 @@ fn session_data_opens_on_session_entry_and_respects_manual_changes(cx: &mut Test
     let (app, cx) = fixture(cx, store, PluginUi::new());
     assert!(cx.element_bounds("session-data-panel").is_some());
     assert!(cx.element_bounds("session-data-usage-summary").is_some());
-    assert!(cx.element_bounds("session-data-token-details").is_none());
+    assert!(cx.element_bounds("session-data-token-details").is_some());
     click_labeled(cx, Role::Button, "Token 明细");
     draw(cx);
-    assert!(cx.element_bounds("session-data-token-details").is_some());
+    assert!(cx.element_bounds("session-data-token-details").is_none());
     cx.update(|window, cx| app.update(cx, |app, cx| app.open_usage(window, cx)));
     draw(cx);
     assert!(cx.element_bounds("session-data-panel").is_none());
@@ -148,7 +148,7 @@ fn session_data_opens_on_session_entry_and_respects_manual_changes(cx: &mut Test
     cx.update(|window, cx| app.update(cx, |app, cx| app.switch(0, Some(1), window, cx)));
     draw(cx);
     assert!(cx.element_bounds("session-data-panel").is_some());
-    assert!(cx.element_bounds("session-data-token-details").is_some());
+    assert!(cx.element_bounds("session-data-token-details").is_none());
 }
 
 #[gpui_kit::test]

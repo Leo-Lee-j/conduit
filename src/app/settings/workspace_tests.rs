@@ -1,6 +1,7 @@
 use super::{ConduitApp, Store};
 use gpui_kit::{
-    AppContext as _, Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, px, size,
+    AppContext as _, Entity, Modifiers, MouseButton, ScrollDelta, ScrollWheelEvent, TestAppContext,
+    VisualTestContext, point, px, size,
 };
 
 fn fixture(cx: &mut TestAppContext) -> (Entity<ConduitApp>, &mut VisualTestContext) {
@@ -343,10 +344,21 @@ fn settings_plugins_manage_icon_theme_lifecycle_and_readonly_state(cx: &mut Test
         })
     });
     draw(cx);
+    let viewport = cx.debug_bounds("settings-plugins-list").unwrap();
+    cx.simulate_event(ScrollWheelEvent {
+        position: viewport.center(),
+        delta: ScrollDelta::Pixels(point(px(0.), px(-1200.))),
+        ..Default::default()
+    });
+    draw(cx);
     let select = cx
         .debug_bounds("plugin-use-example.outline-icons")
         .unwrap()
         .center();
+    assert!(
+        viewport.contains(&select),
+        "scroll the installed plugin into view"
+    );
     cx.simulate_mouse_down(select, MouseButton::Left, Modifiers::default());
     cx.simulate_mouse_up(select, MouseButton::Left, Modifiers::default());
     draw(cx);
