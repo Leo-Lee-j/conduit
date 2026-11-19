@@ -132,3 +132,34 @@ fn terminal_keys_stay_out_of_chat_and_return_focus(cx: &mut TestAppContext) {
     runtime.stop();
     wait(&runtime, false);
 }
+
+#[gpui_kit::test]
+fn closing_last_terminal_hides_panel_immediately(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx, _) = crate::app::queue::tests::fixture(cx, "terminal-close-last");
+    let runtime = cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.new_terminal(ShellProfile::Cmd, window, cx);
+            app.terminals.sessions[0].runtime.clone()
+        })
+    });
+    wait(&runtime, true);
+    draw(cx);
+    assert!(cx.debug_bounds("terminal-grid").is_some());
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let id = app.terminals.sessions[0].id;
+            app.close_terminal(id, window, cx);
+            assert!(
+                app.terminals.open,
+                "first click should only confirm termination"
+            );
+            app.close_terminal(id, window, cx);
+            assert!(!app.terminals.open);
+        })
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("terminal-grid").is_none());
+    wait(&runtime, false);
+}

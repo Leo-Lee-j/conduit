@@ -339,6 +339,11 @@ impl ConduitApp {
         let Some(key) = self.terminal_key() else {
             return;
         };
+        let last_pending_terminal = !self
+            .terminals
+            .sessions
+            .iter()
+            .any(|s| s.id != id && s.workspace == key && !s.close_requested);
         let Some(s) = self
             .terminals
             .sessions
@@ -354,7 +359,11 @@ impl ConduitApp {
         }
         s.close_requested = true;
         s.runtime.stop();
-        self.terminals.confirm_close = None;
+        if last_pending_terminal {
+            self.hide_terminal(window, cx);
+        } else {
+            self.terminals.confirm_close = None;
+        }
         self.poll_terminals(window, cx);
         cx.notify();
     }
