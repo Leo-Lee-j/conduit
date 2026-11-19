@@ -5,7 +5,7 @@ use gpui_kit::{TestAppContext, VisualTestContext};
 use std::{
     path::PathBuf,
     sync::atomic::AtomicBool,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 struct Repo(PathBuf);
@@ -93,7 +93,8 @@ fn assert_commit_visible(cx: &mut VisualTestContext) {
     );
 }
 fn wait(cx: &mut VisualTestContext, app: &Entity<ConduitApp>) {
-    for _ in 0..100 {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
         draw(cx);
         let done = cx.update(|_, cx| {
             app.update(cx, |app, cx| app.poll_branches(cx));

@@ -141,7 +141,7 @@ fn session_data_opens_on_session_entry_and_respects_manual_changes(cx: &mut Test
     cx.update(|window, cx| app.update(cx, |app, cx| app.switch(1, Some(2), window, cx)));
     draw(cx);
     assert!(cx.element_bounds("session-data-panel").is_some());
-    assert!(cx.element_bounds("session-data-token-details").is_none());
+    assert!(cx.element_bounds("session-data-token-details").is_some());
     cx.update(|_, cx| assert!(app.read(cx).plugins.right_is(builtins::SESSION_DATA)));
     assert!(cx.element_bounds("session-data-empty-state").is_some());
     assert!(cx.element_bounds("session-data-usage-summary").is_none());
