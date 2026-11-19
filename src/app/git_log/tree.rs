@@ -1,5 +1,35 @@
 use super::*;
 
+/// Presentation-only folders; leaf rows keep the original branch and repository index.
+struct BranchFolder<'a> {
+    path: String,
+    depth: usize,
+    folders: std::collections::BTreeMap<&'a str, BranchFolder<'a>>,
+    branches: Vec<(usize, &'a git::BranchInfo)>,
+}
+
+impl<'a> BranchFolder<'a> {
+    fn new(path: String, depth: usize) -> Self {
+        Self {
+            path,
+            depth,
+            folders: Default::default(),
+            branches: Vec::new(),
+        }
+    }
+
+    fn insert(&mut self, name: &'a str, index: usize, branch: &'a git::BranchInfo) {
+        if let Some((prefix, rest)) = name.split_once('/') {
+            self.folders
+                .entry(prefix)
+                .or_insert_with(|| Self::new(format!("{}/{prefix}", self.path), self.depth + 1))
+                .insert(rest, index, branch);
+        } else {
+            self.branches.push((index, branch));
+        }
+    }
+}
+
 pub(crate) struct BranchTree {
     view: WeakEntity<GitLogView>,
     _subscription: Subscription,
@@ -60,6 +90,7 @@ impl GitLogView {
         id: String,
         label: String,
         expanded: bool,
+        depth: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let click_id = id.clone();
@@ -71,7 +102,9 @@ impl GitLogView {
             .flex_shrink_0()
             .items_center()
             .gap_1()
-            .px_2()
+            .min_w_0()
+            .pl(px(8. + depth as f32 * 16.))
+            .pr_2()
             .cursor_pointer()
             .text_size(ui_text_size(11.))
             .text_color(rgb(palette().muted))
@@ -84,7 +117,17 @@ impl GitLogView {
                 })
                 .size(px(12.)),
             )
-            .child(label)
+            .when(depth > 0, |row| {
+                row.child(
+                    Icon::new(if expanded {
+                        IconName::FolderOpen
+                    } else {
+                        IconName::Folder
+                    })
+                    .size(px(13.)),
+                )
+            })
+            .child(div().flex_1().min_w_0().truncate().child(label))
             .on_click(cx.listener(move |this, _, _, cx| {
                 match click_id.as_str() {
                     "git-branches-local-section" => this.interaction.update(cx, |s, cx| {
@@ -106,10 +149,33 @@ impl GitLogView {
             .into_any_element()
     }
 
+    fn branch_folder(
+        &self,
+        folder: &BranchFolder<'_>,
+        favorites: &HashSet<String>,
+        searching: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut rows = v_flex().w_full().min_w_0().flex_shrink_0();
+        for (name, child) in &folder.folders {
+            let id = format!("git-branch-folder-{}", child.path);
+            let expanded = searching || !self.collapsed.contains(&id);
+            rows = rows.child(self.group_header(id, (*name).into(), expanded, child.depth, cx));
+            if expanded {
+                rows = rows.child(self.branch_folder(child, favorites, searching, cx));
+            }
+        }
+        for (index, branch) in &folder.branches {
+            rows = rows.child(self.branch_row(*index, branch, folder.depth, favorites, cx));
+        }
+        rows.into_any_element()
+    }
+
     fn branch_row(
         &self,
         index: usize,
         branch: &git::BranchInfo,
+        depth: usize,
         favorites: &HashSet<String>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -134,20 +200,7 @@ impl GitLogView {
         let button_app = app.clone();
         let menu_info = branch.clone();
         let name = branch.name.clone();
-        let caption = if branch.remote {
-            self.repository
-                .as_ref()
-                .and_then(|repo| {
-                    repo.remotes
-                        .iter()
-                        .filter_map(|r| name.strip_prefix(&format!("{r}/")))
-                        .min_by_key(|s| s.len())
-                })
-                .unwrap_or(&name)
-                .to_string()
-        } else {
-            name.clone()
-        };
+        let caption = name.rsplit('/').next().unwrap_or(&name).to_string();
         let hint = format!(
             "{}{}{}",
             name,
@@ -173,7 +226,7 @@ impl GitLogView {
             .flex_shrink_0()
             .w_full()
             .min_w_0()
-            .pl(px(if branch.remote { 28. } else { 16. }))
+            .pl(px(40. + depth as f32 * 16.))
             .pr_1()
             .gap_1()
             .items_center()
@@ -383,21 +436,25 @@ impl GitLogView {
                 "git-branches-local-section".into(),
                 conduit::i18n::text_static("git_log.tree.local_branches").into(),
                 local_expanded,
+                0,
                 cx,
             ));
             if local_expanded {
+                let mut folder = BranchFolder::new("refs/heads".into(), 0);
                 for (index, branch) in branches.iter().filter(|(_, b)| !b.remote) {
-                    list = list.child(self.branch_row(*index, branch, &favorites, cx));
+                    folder.insert(&branch.name, *index, branch);
                 }
+                list = list.child(self.branch_folder(&folder, &favorites, searching, cx));
             }
             list = list.child(self.group_header(
                 "git-branches-remote-section".into(),
                 conduit::i18n::text_static("git_log.tree.remote_branches").into(),
                 remote_expanded,
+                0,
                 cx,
             ));
             if remote_expanded {
-                let mut remotes: std::collections::BTreeMap<String, Vec<(usize, git::BranchInfo)>> =
+                let mut remotes: std::collections::BTreeMap<String, BranchFolder<'_>> =
                     Default::default();
                 for (index, branch) in branches.iter().filter(|(_, b)| b.remote) {
                     let remote = repository
@@ -409,19 +466,21 @@ impl GitLogView {
                         .unwrap_or_else(|| {
                             branch.name.split('/').next().unwrap_or("remote").into()
                         });
+                    let name = branch
+                        .name
+                        .strip_prefix(&format!("{remote}/"))
+                        .unwrap_or(&branch.name);
                     remotes
-                        .entry(remote)
-                        .or_default()
-                        .push((*index, branch.clone()));
+                        .entry(remote.clone())
+                        .or_insert_with(|| BranchFolder::new(format!("refs/remotes/{remote}"), 1))
+                        .insert(name, *index, branch);
                 }
-                for (remote, branches) in remotes {
+                for (remote, folder) in remotes {
                     let id = format!("git-remote-{remote}");
                     let expanded = !self.collapsed.contains(&id) || searching;
-                    list = list.child(self.group_header(id, format!("  {remote}"), expanded, cx));
+                    list = list.child(self.group_header(id, remote, expanded, 1, cx));
                     if expanded {
-                        for (index, branch) in branches {
-                            list = list.child(self.branch_row(index, &branch, &favorites, cx));
-                        }
+                        list = list.child(self.branch_folder(&folder, &favorites, searching, cx));
                     }
                 }
             }
@@ -448,6 +507,7 @@ impl GitLogView {
             "git-tags-section".into(),
             conduit::i18n::text_static("git_log.tree.tags").into(),
             expanded,
+            0,
             cx,
         ));
         if expanded && let Some(history) = &self.history {

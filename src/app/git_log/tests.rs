@@ -1,6 +1,6 @@
 use super::{ConduitApp, Store, Workspace, git};
 use gpui_kit::component::Root;
-use gpui_kit::{AppContext, Entity, Modifiers, MouseButton, px, size};
+use gpui_kit::{AppContext, Entity, Modifiers, MouseButton, point, px, size};
 use gpui_kit::{TestAppContext, VisualTestContext};
 use std::{
     path::PathBuf,
@@ -119,7 +119,17 @@ fn branch_manager_navigation_filters_favorites_commit_diff_and_workspace_isolati
     cx.update(gpui_kit::init);
     let repo = Repo::new("first workspace");
     let other = Repo::new("second workspace");
-    repo.git(&["branch", "feature"]);
+    repo.git(&["branch", "feat/a"]);
+    repo.git(&["branch", "feat/b"]);
+    repo.git(&["branch", "feat/ui/panel"]);
+    for remote in ["origin", "origin/team"] {
+        repo.git(&["remote", "add", remote, other.0.to_str().unwrap()]);
+        repo.git(&[
+            "update-ref",
+            &format!("refs/remotes/{remote}/feat/a"),
+            "feat/a",
+        ]);
+    }
     std::fs::write(repo.0.join("history.txt"), "updated\n").unwrap();
     repo.git(&["commit", "-qam", "main update"]);
     repo.git(&["tag", "v1"]);
@@ -158,6 +168,8 @@ fn branch_manager_navigation_filters_favorites_commit_diff_and_workspace_isolati
         Root::new(app, window, cx)
     });
     let app = output.borrow().as_ref().unwrap().clone();
+    // Keep all folder targets in view; narrow-window coverage follows below.
+    cx.simulate_resize(size(px(1400.), px(1000.)));
     draw(cx);
     let trigger = cx.debug_bounds("git-branch-trigger").unwrap();
     let toolbar = cx.debug_bounds("conversation-toolbar").unwrap();
@@ -201,8 +213,110 @@ fn branch_manager_navigation_filters_favorites_commit_diff_and_workspace_isolati
     });
     cx.simulate_keystrokes("ctrl-a backspace");
     wait(cx, &app);
+    // Enlarge the dock so the remote folder clicks land inside its scroll viewport.
+    let panel = cx.debug_bounds("branch-bottom-panel").unwrap();
+    let start = point(panel.center().x, panel.top() - px(2.));
+    let end = point(start.x, px(200.));
+    cx.simulate_mouse_move(start, None, Modifiers::default());
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(
+        point(start.x, panel.top() + px(10.)),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+    draw(cx);
+
+    // Folding a virtual folder only hides descendants; full refs stay intact.
+    assert!(
+        cx.debug_bounds("git-branch-folder-refs/heads/feat")
+            .is_some()
+    );
+    assert!(
+        cx.debug_bounds("git-branch-folder-refs/heads/feat/ui")
+            .is_some()
+    );
+    assert!(cx.debug_bounds("git-branch-row-1").is_some());
+    assert!(cx.debug_bounds("git-branch-row-2").is_some());
+    assert!(cx.debug_bounds("git-branch-row-3").is_some());
+    click(cx, "git-branch-folder-refs/heads/feat/ui");
+    assert!(cx.debug_bounds("git-branch-row-3").is_none());
+    click(cx, "git-branch-folder-refs/heads/feat");
+    assert!(cx.debug_bounds("git-branch-row-1").is_none());
+    assert!(cx.debug_bounds("git-branch-row-2").is_none());
+    manager.update(cx, |view, _| assert!(view.query.reference.is_none()));
+
+    // The same prefix in different remotes has independent expansion state.
+    // A remote name can contain slashes: resolve its longest matching prefix.
+    click(cx, "git-branches-remote-section");
+    assert!(
+        cx.debug_bounds("git-branch-folder-refs/remotes/origin/feat")
+            .is_some()
+    );
+    assert!(
+        cx.debug_bounds("git-branch-folder-refs/remotes/origin/team/feat")
+            .is_some()
+    );
+    assert!(
+        cx.debug_bounds("git-branch-folder-refs/remotes/origin/team")
+            .is_none()
+    );
+    click(cx, "git-branch-folder-refs/remotes/origin/feat");
+    manager.update(cx, |view, _| {
+        assert!(
+            view.collapsed
+                .contains("git-branch-folder-refs/remotes/origin/feat"),
+            "remote folder click must collapse it: {:?}",
+            view.collapsed
+        );
+        assert_eq!(
+            view.repository.as_ref().unwrap().branch_info[4].full_ref,
+            "refs/remotes/origin/feat/a"
+        );
+    });
+    assert!(cx.debug_bounds("git-branch-row-4").is_none());
+    assert!(cx.debug_bounds("git-branch-row-5").is_some());
+    assert!(cx.debug_bounds("git-branch-row-1").is_none());
+    click(cx, "git-branch-row-5");
+    wait(cx, &app);
+    manager.update(cx, |view, _| {
+        assert_eq!(
+            view.query.reference.as_deref(),
+            Some("refs/remotes/origin/team/feat/a")
+        );
+    });
+    click(cx, "git-log-all-branches");
+    wait(cx, &app);
+
+    // Full-path search temporarily reveals collapsed ancestors without losing them.
     click(cx, "git-branch-search");
-    cx.simulate_input("feature");
+    cx.simulate_input("FEAT/UI");
+    draw(cx);
+    assert!(
+        cx.debug_bounds("git-branch-folder-refs/heads/feat/ui")
+            .is_some()
+    );
+    assert!(cx.debug_bounds("git-branch-row-3").is_some());
+    assert!(cx.debug_bounds("git-branch-row-1").is_none());
+    assert!(
+        cx.debug_bounds("git-branch-folder-refs/remotes/origin/feat")
+            .is_none()
+    );
+    cx.simulate_keystrokes("ctrl-a backspace");
+    draw(cx);
+    assert!(cx.debug_bounds("git-branch-row-1").is_none());
+    assert!(cx.debug_bounds("git-branch-row-3").is_none());
+    assert!(cx.debug_bounds("git-branch-row-4").is_none());
+    assert!(cx.debug_bounds("git-branch-row-5").is_some());
+    click(cx, "git-branches-remote-section");
+    click(cx, "git-branch-folder-refs/heads/feat");
+    assert!(cx.debug_bounds("git-branch-row-1").is_some());
+    assert!(cx.debug_bounds("git-branch-row-2").is_some());
+    assert!(cx.debug_bounds("git-branch-row-3").is_none());
+
+    click(cx, "git-branch-search");
+    cx.simulate_input("feat/a");
     draw(cx);
     assert!(cx.debug_bounds("git-branch-row-0").is_none());
     assert!(cx.debug_bounds("git-branch-row-1").is_some());
@@ -210,14 +324,14 @@ fn branch_manager_navigation_filters_favorites_commit_diff_and_workspace_isolati
     cx.update(|_, cx| {
         assert_eq!(
             app.read(cx).store.git.favorite_branches[&git::repository_scope(&repo.0)],
-            vec!["refs/heads/feature"]
+            vec!["refs/heads/feat/a"]
         )
     });
     click(cx, "git-branch-row-1");
     wait(cx, &app);
     assert_commit_visible(cx);
     manager.update(cx, |view, _| {
-        assert_eq!(view.query.reference.as_deref(), Some("refs/heads/feature"));
+        assert_eq!(view.query.reference.as_deref(), Some("refs/heads/feat/a"));
         assert_eq!(view.history.as_ref().unwrap().commits.len(), 1);
     });
     assert_eq!(
@@ -267,6 +381,9 @@ fn branch_manager_navigation_filters_favorites_commit_diff_and_workspace_isolati
             "{details:?} exceeds {panel:?}"
         );
     }
+    // Return to a wide viewport before clicking controls beside the detail dock.
+    cx.simulate_resize(size(px(1400.), px(1000.)));
+    draw(cx);
     // A pending query for the old repository must not replace the new repository's history.
     manager.update(cx, |view, cx| {
         view.collapsed.clear();
