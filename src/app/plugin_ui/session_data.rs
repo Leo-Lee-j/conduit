@@ -3,9 +3,14 @@
 use super::right::{RightBody, RightView};
 use super::*;
 use crate::app::state::{PlanStatus, plan_from_messages};
+use crate::subagents::{Agent, Status as AgentStatus};
 use crate::usage_ledger::Observation;
 use conduit::plugins::{context::ScopeKey, state::ViewInstanceKey};
-use gpui_kit::component::empty::{Empty, EmptyDescription, EmptyHeader, EmptyMedia};
+use gpui_kit::component::{
+    empty::{Empty, EmptyDescription, EmptyHeader, EmptyMedia},
+    shimmer::ShimmerText,
+    tooltip::Tooltip,
+};
 use std::{cell::RefCell, rc::Rc};
 
 #[derive(Default)]
@@ -277,6 +282,123 @@ fn card() -> Div {
 
 fn divider() -> Div {
     div().w_full().h(px(1.)).bg(rgb(palette().border))
+}
+
+fn agent_row(agent: &Agent) -> impl IntoElement {
+    let colors = palette();
+    let (icon, color) = match agent.status {
+        AgentStatus::Starting => (FullIconName::LoaderCircle, colors.activity_running),
+        AgentStatus::Running => (FullIconName::CirclePlay, colors.activity_running),
+        AgentStatus::WaitingApproval => (FullIconName::ShieldAlert, colors.warning_text),
+        AgentStatus::WaitingInput => (FullIconName::MessageCircle, colors.warning_text),
+        AgentStatus::Completed => (FullIconName::CircleCheck, colors.activity_completed),
+        AgentStatus::Failed => (FullIconName::CircleX, colors.error_text),
+        AgentStatus::Stopped => (FullIconName::CircleStop, colors.muted),
+        AgentStatus::Idle => (FullIconName::CirclePause, colors.muted),
+        AgentStatus::Unknown => (FullIconName::Info, colors.muted),
+    };
+    let name = if !agent.name.trim().is_empty() {
+        agent.name.trim().to_owned()
+    } else if agent.id.chars().count() > 16 {
+        let start: String = agent.id.chars().take(8).collect();
+        let end: String = agent
+            .id
+            .chars()
+            .rev()
+            .take(4)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        format!("{start}…{end}")
+    } else {
+        agent.id.clone()
+    };
+    let identity = SharedString::from(format!("session-data-agent-{}-{}", agent.run, agent.id));
+    let status = if matches!(agent.status, AgentStatus::Starting | AgentStatus::Running) {
+        ShimmerText::new(agent.status.label())
+            .id(identity.clone())
+            .duration(Duration::from_secs(3))
+            .into_any_element()
+    } else {
+        div().child(agent.status.label()).into_any_element()
+    };
+    let summary = if agent.activity.trim().is_empty() {
+        &agent.task
+    } else {
+        &agent.activity
+    };
+    let summary = summary.lines().find(|line| !line.trim().is_empty());
+    let tooltip = SharedString::from(
+        [
+            agent.name.as_str(),
+            agent.id.as_str(),
+            agent.status.label(),
+            agent.task.as_str(),
+            agent.activity.as_str(),
+        ]
+        .into_iter()
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n"),
+    );
+    let content = v_flex()
+        .flex_1()
+        .min_w_0()
+        .gap_1()
+        .child(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(ui_text_size(12.))
+                        .font_medium()
+                        .child(name),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .whitespace_nowrap()
+                        .text_size(ui_text_size(11.))
+                        .text_color(rgb(color))
+                        .child(status),
+                ),
+        )
+        .when_some(summary, |row, summary| {
+            row.child(caption(summary.trim().to_owned()).truncate())
+        });
+    h_flex()
+        .id(identity)
+        .role(Role::Group)
+        .aria_label(tooltip.clone())
+        .w_full()
+        .min_w_0()
+        .min_h(px(40.))
+        .p_2()
+        .gap_2()
+        .items_start()
+        .rounded(px(8.))
+        .bg(rgb(colors.surface_strong))
+        .hover(|row| row.bg(rgb(colors.surface_hover)))
+        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+        .child(
+            div()
+                .size(px(24.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.))
+                .bg(rgb(color).opacity(0.1))
+                .child(Icon::new(icon).size(px(14.)).text_color(rgb(color))),
+        )
+        .child(content)
 }
 
 fn disclosure_details() -> Div {
@@ -822,18 +944,7 @@ impl ConduitApp {
                 })
                 .take(5)
             {
-                agents = agents.child(
-                    caption(format!(
-                        "{} · {}",
-                        if agent.name.is_empty() {
-                            &agent.id
-                        } else {
-                            &agent.name
-                        },
-                        agent.status.label()
-                    ))
-                    .truncate(),
-                );
+                agents = agents.child(agent_row(agent));
             }
             tools = tools.child(tool_details);
             if active_agents > 0 {
@@ -979,8 +1090,7 @@ impl ConduitApp {
                         .w_full()
                         .overflow_y_scroll()
                         .track_scroll(&scroll)
-                        .child(content)
-                        .vertical_scrollbar(&scroll),
+                        .child(content),
                 )
                 .child(
                     div()
