@@ -112,7 +112,9 @@ impl Rows {
             }
             let shape = Shape {
                 empty: is_empty_chat_placeholder(item)
-                    || is_hidden_reasoning(item, session.provider),
+                    || is_hidden_reasoning(item, session.provider)
+                    || (item.kind == ItemKind::Notice
+                        && item.key.starts_with("session-notice:codex:mcp:")),
                 activity: is_groupable_activity(item),
                 running: tool_running(item),
                 failed: matches!(item.kind, ItemKind::Tool | ItemKind::Reasoning)
@@ -319,9 +321,35 @@ impl ConduitApp {
     }
 }
 
-#[cfg(all(test, feature = "ui-tests"))]
+#[cfg(test)]
 mod tests {
+    #[cfg(feature = "ui-tests")]
     use super::ChatItem;
+
+    #[test]
+    fn restored_mcp_notices_have_no_rows_and_preserve_message_indices() {
+        let mut session = crate::app::tests::session();
+        session.messages = serde_json::from_value(serde_json::json!([
+            {"key":"user", "kind":"User", "text":"hello"},
+            {"key":"session-notice:codex:mcp:vibedesign", "kind":"Notice", "text":"MCP server failed: vibedesign"},
+            {"key":"session-notice:codex:mcp:context7", "kind":"Notice", "text":"context7 requires sign-in"},
+            {"key":"session-notice:codex:configWarning:test", "kind":"Notice", "text":"Check configuration"},
+            {"key":"reply", "kind":"Assistant", "text":"MCP server failed: quoted in an answer"},
+            {"key":"error", "kind":"Error", "text":"Request failed"}
+        ])).unwrap();
+        let mut rows = super::Rows::default();
+        for restored in [false, true] {
+            if restored {
+                session = serde_json::from_str(&serde_json::to_string(&session).unwrap()).unwrap();
+            }
+            rows.refresh(Some(&session), &Default::default());
+            assert_eq!(
+                rows.rows.iter().map(|row| row.message).collect::<Vec<_>>(),
+                vec![0, 3, 4, 5]
+            );
+            assert_eq!(session.messages.len(), 6);
+        }
+    }
 
     #[test]
     fn summaries_have_no_rows_and_body_updates_rebuild_visibility() {
@@ -365,6 +393,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "ui-tests")]
     fn message(index: usize, kind: &str, text: &str) -> ChatItem {
         serde_json::from_value(serde_json::json!({
             "key":format!("m-{index}"),"kind":kind,"text":text,"status":"已完成",
@@ -373,6 +402,7 @@ mod tests {
         .unwrap()
     }
 
+    #[cfg(feature = "ui-tests")]
     #[gpui_kit::test]
     fn session_switch_restores_stable_reading_anchor_and_bottom_preference(
         cx: &mut gpui_kit::TestAppContext,

@@ -151,15 +151,8 @@ impl Protocol {
             }
             "mcpServer/startupStatus/updated" => {
                 if params["status"] == "failed" {
-                    let reason = match text(params, "failureReason") {
-                        "reauthenticationRequired" => "protocol.mcp_reauthentication_required",
-                        _ => "protocol.mcp_failed",
-                    };
-                    self.presentation.session_notice(
-                        &format!("codex:mcp:{}", text(params, "name")),
-                        conduit::i18n::format(reason, &[("name", bounded(text(params, "name")))]),
-                        step,
-                    );
+                    self.presentation
+                        .ignored("Codex/mcpServer/startupStatus/updated/failed");
                 } else if params["status"] == "starting" {
                     self.presentation.activity(
                         "protocol.activity_tool",
@@ -270,11 +263,7 @@ mod tests {
             matches!(&warning.events[..], [Event::SessionNotice { message, .. }] if message == "unsupported config")
         );
         let mcp = p.accept(json!({"method":"mcpServer/startupStatus/updated","params":{"name":"tools","status":"failed","error":"SECRET"}}));
-        assert!(
-            matches!(&mcp.events[..], [Event::SessionNotice { message, .. }] if message.contains("tools") && !message.contains("SECRET")),
-            "MCP events: {:?}",
-            mcp.events
-        );
+        assert!(mcp.events.is_empty() && !mcp.done && mcp.error.is_none());
         let hook = json!({"method":"hook/completed","params":{"threadId":"root","turnId":"turn","run":{"id":"hook","eventName":"preToolUse","status":"failed","entries":[{"text":"SECRET"}]}}});
         assert!(
             matches!(&p.accept(hook.clone()).events[..], [Event::SessionNotice { message, .. }] if message.contains("preToolUse") && !message.contains("SECRET"))
@@ -330,20 +319,33 @@ mod tests {
     }
 
     #[test]
-    fn mcp_authentication_and_blocking_hooks_have_safe_localized_reasons() {
-        for (locale, reason, blocked) in [
-            ("en", "sign in again", "blocked"),
-            ("zh-CN", "需要重新登录", "阻止了操作"),
-        ] {
+    fn mcp_startup_failures_stay_out_of_the_transcript() {
+        for locale in ["en", "zh-CN"] {
             let _locale = crate::test_support::scoped(locale);
             let mut protocol =
                 Protocol::new(Provider::Codex, "C:/work".into(), "hello".into(), None);
-            let step = protocol.accept(json!({"method":"mcpServer/startupStatus/updated","params":{
-                "name":"context7","status":"failed","failureReason":"reauthenticationRequired","error":"SECRET"}}));
-            assert!(
-                matches!(&step.events[..], [Event::SessionNotice { message, .. }]
-                if message.contains("context7") && message.contains(reason) && !message.contains("SECRET"))
-            );
+            for reason in ["", "reauthenticationRequired", "futureReason"] {
+                let notification = json!({"method":"mcpServer/startupStatus/updated","params":{
+                    "name":"context7","status":"failed","failureReason":reason,"error":"SECRET"}});
+                for _ in 0..2 {
+                    let step = protocol.accept(notification.clone());
+                    assert!(step.events.is_empty() && step.writes.is_empty());
+                    assert!(!step.done && step.error.is_none());
+                }
+            }
+            let starting = protocol
+                .accept(json!({"method":"mcpServer/startupStatus/updated","params":{
+                "name":"context7","status":"starting"}}));
+            assert!(matches!(&starting.events[..], [Event::Activity(_)]));
+        }
+    }
+
+    #[test]
+    fn blocking_hooks_have_safe_localized_reasons() {
+        for (locale, blocked) in [("en", "blocked"), ("zh-CN", "阻止了操作")] {
+            let _locale = crate::test_support::scoped(locale);
+            let mut protocol =
+                Protocol::new(Provider::Codex, "C:/work".into(), "hello".into(), None);
             let step = protocol.accept(json!({"method":"hook/completed","params":{"run":{
                 "eventName":"preToolUse","status":"blocked","statusMessage":"SECRET","entries":[{"text":"SECRET"}]}}}));
             assert!(
