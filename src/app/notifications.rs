@@ -5,6 +5,7 @@ use crate::notifications::{
     Center, Level, Lifecycle, Notice, Presentation, Record, Source, Target, history::History,
 };
 use conduit::plugins::{builtins, ids::ViewId, state::ViewInstanceKey};
+use gpui::Anchor;
 
 mod approvals;
 use approvals::ApprovalBinding;
@@ -307,7 +308,7 @@ impl ConduitApp {
             .flex_1()
             .min_h_0()
             .p_3()
-            .gap_2()
+            .gap_1()
             .overflow_y_scroll()
             .track_scroll(&self.notifications.scroll)
             .on_mouse_move(cx.listener(|app, event: &MouseMoveEvent, _, cx| {
@@ -471,8 +472,8 @@ impl ConduitApp {
             .w_full()
             .min_w_0()
             .flex_shrink_0()
-            .p_3()
-            .gap_2()
+            .p_2()
+            .gap_1()
             .rounded_lg()
             .border_1()
             .border_color(rgb(palette().border))
@@ -932,6 +933,7 @@ impl ConduitApp {
             }
             .id1::<AppToast>(id)
             .title(record.display_title())
+            .placement(Anchor::BottomRight)
             .delivery(NotificationDelivery::InApp)
             .on_click(move |_, window, cx| {
                 // The toast invokes this while its Notification entity is updating.
@@ -979,6 +981,7 @@ impl ConduitApp {
                     &[("count", format!("{}", count))],
                 ))
                 .id::<OverflowToast>()
+                .placement(Anchor::BottomRight)
                 .delivery(NotificationDelivery::InApp)
                 .on_click(move |_, window, cx| {
                     let _ = view.update(cx, |app, cx| {
