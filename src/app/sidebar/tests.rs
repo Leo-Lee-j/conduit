@@ -9,6 +9,108 @@ fn draw(cx: &mut VisualTestContext) {
 }
 
 #[gpui_kit::test]
+fn workspace_title_opens_and_expands_then_collapses_without_switching_chat(
+    cx: &mut TestAppContext,
+) {
+    let _locale = crate::test_support::chinese();
+    for (nested, automatic) in [(false, false), (false, true), (true, false), (true, true)] {
+        let (app, cx, root) = crate::app::queue::tests::fixture(
+            cx,
+            &format!("sidebar-workspace-activation-{nested}-{automatic}"),
+        );
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.startup = None;
+                app.writable = false;
+                app.store.ui.auto_sort_workspaces = false;
+                app.store.ui.auto_collapse_inactive_workspaces = automatic;
+                app.store.ui.sessions_per_workspace = 1;
+                if nested {
+                    app.store.workspaces[0].path = root.join("project");
+                    app.store.workspaces[1].path = root.join("project-2");
+                }
+                let workspace = &mut app.store.workspaces[1];
+                workspace.sessions[0].created_at = 1;
+                workspace.sessions[0].pinned = true;
+                for id in [3, 4] {
+                    let mut session = crate::app::tests::session();
+                    session.id = id;
+                    session.created_at = 10 - id;
+                    workspace.sessions.push(session);
+                }
+                let path = workspace.path.clone();
+                if !automatic {
+                    app.set_workspace_collapsed(&path, true);
+                }
+                app.input
+                    .update(cx, |input, cx| input.set_value("first draft", window, cx));
+                app.refresh_sidebar();
+                assert!(app.workspace_collapsed(&path));
+                cx.notify();
+            });
+        });
+        cx.simulate_resize(size(px(1000.), px(800.)));
+        draw(cx);
+        let click = |cx: &mut VisualTestContext, selector: &'static str| {
+            let point = cx.debug_bounds(selector).unwrap().center();
+            cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+            cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+            draw(cx);
+        };
+        click(cx, "workspace-name-1");
+        assert!(cx.debug_bounds("session-row-2").is_some());
+        assert!(cx.debug_bounds("session-row-3").is_some());
+        assert!(cx.debug_bounds("session-row-4").is_none());
+        cx.update(|_, cx| {
+            let app = app.read(cx);
+            assert_eq!(app.selected_workspace, Some(1));
+            assert_eq!(app.selected_session, Some(2));
+            assert!(!app.workspace_collapsed(&app.store.workspaces[1].path));
+            assert!(
+                !app.expanded_workspaces.contains(&1),
+                "keep the normal session limit"
+            );
+            assert_eq!(app.drafts.get(&1).map(String::as_str), Some("first draft"));
+        });
+        click(cx, "session-title-3");
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.input
+                    .update(cx, |input, cx| input.set_value("current draft", window, cx));
+            });
+        });
+        click(cx, "workspace-name-1");
+        assert!(cx.debug_bounds("session-row-3").is_none());
+        cx.update(|_, cx| {
+            let app = app.read(cx);
+            assert!(app.workspace_collapsed(&app.store.workspaces[1].path));
+            assert_eq!(
+                app.selected_session,
+                Some(3),
+                "collapse must not reopen the default session"
+            );
+            assert_eq!(app.input.read(cx).value(), "current draft");
+        });
+        cx.simulate_keystrokes("enter");
+        draw(cx);
+        assert!(cx.debug_bounds("session-row-2").is_some());
+        cx.update(|_, cx| {
+            let app = app.read(cx);
+            assert_eq!(app.selected_session, Some(2));
+            assert!(!app.workspace_collapsed(&app.store.workspaces[1].path));
+            assert_eq!(
+                app.drafts.get(&3).map(String::as_str),
+                Some("current draft")
+            );
+        });
+        cx.simulate_keystrokes("enter");
+        draw(cx);
+        assert!(cx.debug_bounds("session-row-2").is_none());
+        cx.update(|_, cx| assert_eq!(app.read(cx).selected_session, Some(2)));
+    }
+}
+
+#[gpui_kit::test]
 fn project_workspace_toggle_preserves_session_limits_and_selection(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     let (app, cx, root) = crate::app::queue::tests::fixture(cx, "sidebar-project-toggle");
@@ -143,7 +245,7 @@ fn project_groups_keep_nested_guides_and_keyboard_navigation_connected(cx: &mut 
             ));
             app.sidebar.scroll.set_offset(gpui_kit::point(px(0.), px(-4.)));
             assert!(matches!(app.sidebar.sticky_workspace(), Some((cache::Row::Project { .. }, _))));
-            let workspace_offset = app.sidebar.rows[0].list_height() + 4.;
+            let workspace_offset = app.sidebar.rows[0].list_height(app.sidebar.rows.get(1)) + 4.;
             app.sidebar.scroll.set_offset(gpui_kit::point(px(0.), px(-workspace_offset)));
             assert!(matches!(app.sidebar.sticky_workspace(), Some((cache::Row::Workspace { path, .. }, _)) if path == base));
             app.sidebar.scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
@@ -182,9 +284,33 @@ fn project_groups_keep_nested_guides_and_keyboard_navigation_connected(cx: &mut 
         cx.debug_bounds("session-cli-1").unwrap().center().x,
         inner.left()
     );
-    assert!(cx.debug_bounds("workspace-folder-0").is_none());
+    let workspace_folder = cx.debug_bounds("workspace-folder-0").unwrap();
+    assert_eq!(workspace_folder.center().x, inner.left());
+    assert_eq!(
+        cx.debug_bounds("workspace-item-1").unwrap().top()
+            - cx.debug_bounds("session-row-1").unwrap().bottom(),
+        px(6.),
+        "expanded workspace blocks get 4px of extra separation"
+    );
+    let point = workspace_folder.center();
+    cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    assert!(cx.debug_bounds("session-row-1").is_none());
+    assert!(cx.debug_bounds("session-row-2").is_some());
+    assert_eq!(
+        cx.debug_bounds("workspace-item-1").unwrap().top()
+            - cx.debug_bounds("workspace-item-0").unwrap().bottom(),
+        px(2.),
+        "collapsed workspaces retain compact spacing"
+    );
+    cx.update(|_, cx| assert_eq!(app.read(cx).selected_session, Some(1)));
+    cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    assert!(cx.debug_bounds("session-row-1").is_some());
 
-    let header = cx.debug_bounds("workspace-project-0").unwrap().center();
+    let header = cx.debug_bounds("project-folder-0").unwrap().center();
     cx.simulate_mouse_down(header, MouseButton::Left, Modifiers::default());
     cx.simulate_mouse_up(header, MouseButton::Left, Modifiers::default());
     draw(cx);
@@ -307,7 +433,7 @@ fn collapsed_projects_refresh_activity_and_reveal_task_selection(cx: &mut TestAp
 }
 
 #[gpui_kit::test]
-fn conversation_times_align_to_first_line_and_guides_join_through_expanded_content(
+fn conversation_titles_stay_on_one_line_and_guides_join_through_expanded_content(
     cx: &mut TestAppContext,
 ) {
     let _locale = crate::test_support::chinese();
@@ -326,7 +452,7 @@ fn conversation_times_align_to_first_line_and_guides_join_through_expanded_conte
                     let mut session = crate::app::tests::session();
                     session.id = id;
                     session.title = if id == 1 {
-                        "提交所有变更并推送，检查工作空间会话在两行标题下的时间对齐与长文本截断"
+                        "提交所有变更并推送，检查工作空间会话在单行标题下的时间对齐与长文本截断"
                             .repeat(3)
                     } else {
                         format!("会话 {id}")
@@ -349,18 +475,20 @@ fn conversation_times_align_to_first_line_and_guides_join_through_expanded_conte
         let title = cx.debug_bounds("session-title-1").unwrap();
         let age = cx.debug_bounds("session-age-1").unwrap();
         let row = cx.debug_bounds("session-row-1").unwrap();
-        assert!(
-            title.size.height > age.size.height,
-            "fixture must wrap the title"
+        assert_eq!(title.size.height, px(16.), "long titles stay on one line");
+        assert_eq!(
+            row.size.height,
+            px(super::ROW_HEIGHT),
+            "session rows stay compact"
         );
         assert_eq!(
             title.top(),
             age.top(),
-            "time aligns with the first title line"
+            "time aligns with the single title line"
         );
         assert!(
             title.top() >= row.top() + px(2.) && title.bottom() <= row.bottom() - px(2.),
-            "two-line titles keep vertical padding inside compact rows"
+            "single-line titles keep vertical padding inside compact rows"
         );
         assert_eq!(age.size.height, px(16.), "relative time stays on one line");
         assert_eq!(age.right(), row.right() - px(8.));
@@ -379,7 +507,7 @@ fn conversation_times_align_to_first_line_and_guides_join_through_expanded_conte
         assert_eq!(
             mark.top(),
             title.top(),
-            "CLI mark aligns with the first title line"
+            "CLI mark aligns with the single title line"
         );
         assert_eq!(
             title.left(),
@@ -425,6 +553,12 @@ fn conversation_times_align_to_first_line_and_guides_join_through_expanded_conte
         assert!(
             guides.last().unwrap().bottom() < cx.debug_bounds("workspace-item-1").unwrap().top()
         );
+        assert_eq!(
+            cx.debug_bounds("workspace-item-1").unwrap().top()
+                - cx.debug_bounds("workspace-more-0").unwrap().bottom(),
+            px(6.),
+            "show-more footers also separate expanded workspace blocks"
+        );
     }
 
     cx.update(|window, cx| {
@@ -438,7 +572,8 @@ fn conversation_times_align_to_first_line_and_guides_join_through_expanded_conte
                 .unwrap();
             let y: f32 = app.sidebar.rows[..index]
                 .iter()
-                .map(cache::Row::list_height)
+                .enumerate()
+                .map(|(index, row)| row.list_height(app.sidebar.rows.get(index + 1)))
                 .sum();
             app.sidebar
                 .scroll
@@ -455,14 +590,18 @@ fn conversation_times_align_to_first_line_and_guides_join_through_expanded_conte
         "guide remains joined after virtual scrolling"
     );
 
-    cx.update(|window, cx| {
-        app.update(cx, |app, cx| {
-            app.toggle_sidebar_workspace(&root, window, cx)
-        });
-    });
+    let folder = cx.debug_bounds("workspace-folder-0").unwrap().center();
+    cx.simulate_mouse_down(folder, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(folder, MouseButton::Left, Modifiers::default());
     draw(cx);
     assert!(cx.debug_bounds("session-guide-9").is_none());
     assert!(cx.debug_bounds("workspace-guide-0-Day").is_none());
+    assert_eq!(
+        cx.debug_bounds("workspace-item-1").unwrap().top()
+            - cx.debug_bounds("workspace-item-0").unwrap().bottom(),
+        px(2.)
+    );
+    cx.update(|_, cx| assert_eq!(app.read(cx).selected_session, Some(1)));
 }
 
 #[gpui_kit::test]

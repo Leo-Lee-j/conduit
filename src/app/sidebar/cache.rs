@@ -83,8 +83,6 @@ impl Row {
     pub(super) fn height(&self) -> f32 {
         match self {
             Self::Group { .. } => 22.,
-            // Two 16px title lines with 2px of padding above and below.
-            Self::Session { .. } => 36.,
             Self::More { .. } => 24.,
             Self::Empty => 76.,
             _ => ROW_HEIGHT,
@@ -103,8 +101,14 @@ impl Row {
         }
     }
     /// Own the inter-row space so tree guides stay inside virtualized bounds.
-    pub(super) fn list_height(&self) -> f32 {
-        self.height() + 2.
+    pub(super) fn list_height(&self, next: Option<&Self>) -> f32 {
+        let workspace_gap =
+            matches!(self, Self::Session { .. } | Self::More { .. }) && self.is_last_child(next);
+        self.height() + 2. + if workspace_gap { 4. } else { 0. }
+    }
+
+    pub(super) fn is_last_child(&self, next: Option<&Self>) -> bool {
+        next.is_none_or(|next| next.is_header() || next.path() != self.path())
     }
 
     pub(super) fn is_header(&self) -> bool {
@@ -771,9 +775,10 @@ impl SidebarState {
         let mut origin = 0.;
         let origins: Vec<_> = rows
             .iter()
-            .map(|row| {
+            .enumerate()
+            .map(|(index, row)| {
                 let current = origin;
-                origin += row.list_height();
+                origin += row.list_height(rows.get(index + 1));
                 current
             })
             .collect();
@@ -834,7 +839,8 @@ impl SidebarState {
         // Reuse the allocation when only identities change; layout sizes remain valid.
         let sizes: Vec<_> = rows
             .iter()
-            .map(|row| size(px(0.), px(row.list_height())))
+            .enumerate()
+            .map(|(index, row)| size(px(0.), px(row.list_height(rows.get(index + 1)))))
             .collect();
         if self.sizes.as_ref() != &sizes {
             self.sizes = Rc::new(sizes);

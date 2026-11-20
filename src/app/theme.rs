@@ -155,6 +155,13 @@ pub(super) fn palette() -> Palette {
     *ACTIVE_PALETTE.read().unwrap()
 }
 
+pub(super) fn sidebar_session_text_color() -> u32 {
+    let palette = palette();
+    // Lift titles above metadata even in themes that share muted/faint colors.
+    // Keep metadata readable instead of lowering its contrast against the sidebar.
+    blend(palette.text, palette.muted, 0.25)
+}
+
 pub(super) fn is_dark_mode() -> bool {
     DARK_MODE.load(std::sync::atomic::Ordering::Relaxed)
 }

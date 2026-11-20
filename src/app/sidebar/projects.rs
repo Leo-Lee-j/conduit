@@ -237,9 +237,9 @@ impl ConduitApp {
             .aria_expanded(expanded)
             .relative()
             .h(px(ROW_HEIGHT))
-            .pl(px(2.))
+            .pl(px(TREE_AXIS - TREE_TOGGLE_SIZE / 2.))
             .pr_2()
-            .gap_2()
+            .gap(px(4.))
             .items_center()
             .rounded(px(8.))
             .text_size(ui_text_size(13.))
@@ -261,30 +261,23 @@ impl ConduitApp {
             }))
             .child(
                 h_flex()
-                    .w(px(20.))
-                    .h(px(24.))
+                    .size(px(TREE_TOGGLE_SIZE))
                     .flex_shrink_0()
                     .items_center()
                     .justify_center()
                     .child(
-                        Icon::new(if expanded {
-                            IconName::ChevronDown
-                        } else {
-                            IconName::ChevronRight
-                        })
-                        .small()
-                        .text_color(rgb(palette().faint)),
-                    ),
-            )
-            .child(
-                div()
-                    .debug_selector(move || format!("project-folder-{selector}"))
-                    .size(px(16.))
-                    .flex_shrink_0()
-                    .child(
-                        Icon::new(IconName::Folder)
-                            .small()
-                            .text_color(rgb(palette().faint)),
+                        div()
+                            .debug_selector(move || format!("project-folder-{selector}"))
+                            .size(px(TREE_MARK_SIZE))
+                            .child(
+                                Icon::new(if expanded {
+                                    IconName::FolderOpen
+                                } else {
+                                    IconName::Folder
+                                })
+                                .size(px(TREE_MARK_SIZE))
+                                .text_color(rgb(palette().muted)),
+                            ),
                     ),
             )
             .child(
@@ -292,6 +285,7 @@ impl ConduitApp {
                     .debug_selector(move || format!("project-name-{selector}"))
                     .flex_1()
                     .min_w_0()
+                    .font_semibold()
                     .truncate()
                     .child(name.clone()),
             )

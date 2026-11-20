@@ -15,9 +15,10 @@ pub(super) use cache::SidebarState;
 // Keep the virtual-list estimates and rendered navigation rows in agreement.
 const ROW_HEIGHT: f32 = 30.;
 // Folder/CLI centers share an axis; the 16px marks leave an 8px title gap.
-const TREE_AXIS: f32 = 38.;
+const TREE_AXIS: f32 = 14.;
 const TREE_INDENT: f32 = 26.;
 const TREE_MARK_SIZE: f32 = 16.;
+const TREE_TOGGLE_SIZE: f32 = 24.;
 const TREE_TITLE_LEFT: f32 = TREE_AXIS + TREE_MARK_SIZE / 2. + 8.;
 
 fn tree_guide(id: String, axis: f32, height: f32) -> Div {
@@ -274,6 +275,30 @@ impl ConduitApp {
         self.focus_sidebar(window, cx);
     }
 
+    fn activate_sidebar_workspace(
+        &mut self,
+        index: usize,
+        session: Option<u64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(workspace) = self.store.workspaces.get(index) else {
+            return;
+        };
+        let path = workspace.path.clone();
+        if !self.workspace_collapsed(&path) {
+            self.toggle_sidebar_workspace(&path, window, cx);
+            return;
+        }
+        self.switch(index, session, window, cx);
+        if self.selected_workspace == Some(index) && self.selected_session == session {
+            self.set_workspace_collapsed(&path, false);
+            self.refresh_sidebar();
+            self.sidebar_view.update(cx, |_, cx| cx.notify());
+            cx.notify();
+        }
+    }
+
     fn focus_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(focus) = &self.sidebar.focus {
             focus.focus(window, cx);
@@ -413,9 +438,6 @@ impl ConduitApp {
             move |app, range, _, cx| {
                 range
                     .map(|ix| {
-                        let last_child = rows
-                            .get(ix + 1)
-                            .is_none_or(|next| next.is_header() || next.path() != rows[ix].path());
                         let parent = rows[ix]
                             .path()
                             .and_then(|path| app.sidebar.projects.parent(path));
@@ -426,7 +448,7 @@ impl ConduitApp {
                                     .and_then(|path| app.sidebar.projects.parent(path))
                                     != parent
                         });
-                        app.render_sidebar_row(&rows[ix], last_child, last_project_child, cx)
+                        app.render_sidebar_row(&rows[ix], rows.get(ix + 1), last_project_child, cx)
                     })
                     .collect()
             },
@@ -471,7 +493,7 @@ impl ConduitApp {
     fn render_sidebar_row(
         &self,
         row: &cache::Row,
-        last_child: bool,
+        next: Option<&cache::Row>,
         last_project_child: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -479,6 +501,8 @@ impl ConduitApp {
         self.sidebar
             .rendered_rows
             .set(self.sidebar.rendered_rows.get() + 1);
+        let last_child = row.is_last_child(next);
+        let list_height = row.list_height(next);
         let app_entity = cx.entity();
         let workspace_index = row
             .path()
@@ -605,7 +629,7 @@ impl ConduitApp {
                             } else if active {
                                 palette().text
                             } else {
-                                palette().muted
+                                theme::sidebar_session_text_color()
                             }))
                             .when(active, |row| row.bg(rgb(palette().surface_hover)))
                             .cursor_pointer()
@@ -626,13 +650,13 @@ impl ConduitApp {
                             .child(tree_guide(
                                 format!("session-guide-{id}"),
                                 TREE_AXIS + indent,
-                                if last_child { row.height() / 2. } else { row.list_height() },
+                                if last_child { row.height() / 2. } else { list_height },
                             ))
                             .child(
                                 h_flex()
                                     .flex_1()
                                     .min_w_0()
-                                    .items_start()
+                                    .items_center()
                                     .gap_2()
                                     .child(
                                         div()
@@ -649,7 +673,7 @@ impl ConduitApp {
                                             .debug_selector(move || format!("session-title-{id}"))
                                             .flex_1()
                                             .min_w_0()
-                                            .line_clamp(2)
+                                            .truncate()
                                             .line_height(px(16.))
                                             .child(if session.title.is_empty() {
                                                 conduit::i18n::text_static("files.new_session").to_string()
@@ -806,7 +830,7 @@ impl ConduitApp {
         let wrapper = div()
             .relative()
             .w_full()
-            .h(px(row.list_height()))
+            .h(px(list_height))
             .child(element)
             .when(
                 matches!(row, cache::Row::Workspace { .. }) && !last_child
@@ -819,7 +843,7 @@ impl ConduitApp {
                         tree_guide(
                             format!("{prefix}-guide-{index}-header"),
                             TREE_AXIS + indent,
-                            row.list_height() - (ROW_HEIGHT + TREE_MARK_SIZE) / 2.,
+                            list_height - (ROW_HEIGHT + TREE_MARK_SIZE) / 2.,
                         )
                         .top(px((ROW_HEIGHT + TREE_MARK_SIZE) / 2.)),
                     )
@@ -848,7 +872,7 @@ impl ConduitApp {
                         } else if last_child {
                             row.height()
                         } else {
-                            row.list_height()
+                            list_height
                         },
                     ))
                 },
@@ -866,9 +890,9 @@ impl ConduitApp {
                     div()
                         .debug_selector(move || guide_id.clone())
                         .absolute()
-                        .left(px(38.))
+                        .left(px(TREE_AXIS))
                         .top_0()
-                        .bottom(px(if last_project_child { row.list_height() - row.height() } else { 0. }))
+                        .bottom(px(if last_project_child { list_height - row.height() } else { 0. }))
                         .w(px(1.))
                         .bg(rgb(palette().border)),
                 )
@@ -1279,9 +1303,9 @@ impl ConduitApp {
             .relative()
             .h(px(ROW_HEIGHT))
             .flex_shrink_0()
-            .pl(px(if nested { TREE_AXIS + TREE_INDENT - 10. } else { 2. }))
+            .pl(px(TREE_AXIS + if nested { TREE_INDENT } else { 0. } - TREE_TOGGLE_SIZE / 2.))
             .pr_2()
-            .gap(px(if nested { 6. } else { 8. }))
+            .gap(px(4.))
             .items_center()
             .rounded(px(8.))
             .text_size(ui_text_size(13.))
@@ -1324,23 +1348,34 @@ impl ConduitApp {
                     },
                 ))
             })
-            .on_click(cx.listener(move |this, _, window, cx| this.switch(index, last, window, cx)))
+            .on_click(cx.listener(move |this, _, window, cx| this.activate_sidebar_workspace(index, last, window, cx)))
             .child(
                 Button::new(("workspace-collapse", index))
                     .debug_selector(move || format!("workspace-collapse-{index}"))
                     .ghost()
                     .small()
                     .compact()
-                    .w(px(20.))
-                    .h(px(24.))
+                    .w(px(TREE_TOGGLE_SIZE))
+                    .h(px(TREE_TOGGLE_SIZE))
                     .p_0()
+                    .flex_shrink_0()
                     .cursor_pointer()
-                    .icon(if collapsed {
-                        IconName::ChevronRight
-                    } else {
-                        IconName::ChevronDown
-                    })
+                    .child(
+                        div()
+                            .debug_selector(move || format!("workspace-folder-{index}"))
+                            .size(px(TREE_MARK_SIZE))
+                            .child(
+                                Icon::new(if collapsed { IconName::Folder } else { IconName::FolderOpen })
+                                    .size(px(TREE_MARK_SIZE))
+                                    .text_color(rgb(palette().muted)),
+                            ),
+                    )
                     .tooltip(if collapsed {
+                        conduit::i18n::text_static("sidebar.expand_workspace")
+                    } else {
+                        conduit::i18n::text_static("sidebar.collapse_workspace")
+                    })
+                    .accessibility_label(if collapsed {
                         conduit::i18n::text_static("sidebar.expand_workspace")
                     } else {
                         conduit::i18n::text_static("sidebar.collapse_workspace")
@@ -1350,18 +1385,7 @@ impl ConduitApp {
                         this.toggle_sidebar_workspace(&toggle_path, window, cx);
                     })),
             )
-            .when(!nested, |row| row.child(
-                div()
-                    .debug_selector(move || format!("workspace-folder-{index}"))
-                    .flex_shrink_0()
-                    .size(px(16.))
-                    .child(
-                        Icon::new(IconName::Folder)
-                            .small()
-                            .text_color(rgb(palette().faint)),
-                    ),
-            ))
-            .child(div().debug_selector(move || format!("workspace-name-{index}")).flex_1().min_w_0().truncate().child(workspace.name()))
+            .child(div().debug_selector(move || format!("workspace-name-{index}")).flex_1().min_w_0().font_semibold().truncate().child(workspace.name()))
             .child(
                 h_flex()
                     // Share one slot so the count and actions swap

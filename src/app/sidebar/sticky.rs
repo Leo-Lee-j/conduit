@@ -55,7 +55,7 @@ impl ConduitApp {
                                         row.child(
                                             div()
                                                 .absolute()
-                                                .left(px(46.))
+                                                .left(px(TREE_AXIS + 8.))
                                                 .top_0()
                                                 .bottom_0()
                                                 .w(px(1.))

@@ -122,7 +122,7 @@ impl ConduitApp {
                 if key == "enter"
                     && let Some(index) = self.sidebar.workspace_index(path)
                 {
-                    self.switch(index, *last, window, cx);
+                    self.activate_sidebar_workspace(index, *last, window, cx);
                 }
             }
             cache::Row::More { path, expanded, .. } if key == "enter" || key == "right" => {
