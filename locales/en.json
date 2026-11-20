@@ -1399,6 +1399,8 @@
   "sidebar.cleanup_pending": "Cleanup pending",
   "sidebar.projects": "Projects",
   "sidebar.project_summary": "%{name}, %{copies} workspaces, %{count} conversations",
+  "sidebar.expand_project_workspaces": "Expand conversation lists in all workspaces",
+  "sidebar.collapse_project_workspaces": "Collapse conversation lists in all workspaces",
   "sidebar.group_pinned": "Pinned",
   "sidebar.group_day": "Last 24 hours",
   "sidebar.group_week": "Past 7 days",

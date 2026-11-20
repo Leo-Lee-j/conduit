@@ -10,18 +10,15 @@ pub(super) const WORKSPACE_MOVE_DURATION: Duration = Duration::from_millis(240);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SessionGroup {
     Pinned,
-    Running,
     Day,
     Week,
     Older,
 }
 
 impl SessionGroup {
-    fn new(pinned: bool, running: bool, activity: u64, now: u64) -> Self {
+    fn new(pinned: bool, activity: u64, now: u64) -> Self {
         if pinned {
             Self::Pinned
-        } else if running {
-            Self::Running
         } else if activity > 0 && now.saturating_sub(activity) < 24 * 60 * 60 {
             Self::Day
         } else if activity > 0 && now.saturating_sub(activity) < 7 * 24 * 60 * 60 {
@@ -34,7 +31,6 @@ impl SessionGroup {
     pub(super) fn label(self) -> &'static str {
         conduit::i18n::text_static(match self {
             Self::Pinned => "sidebar.group_pinned",
-            Self::Running => "session_data.running",
             Self::Day => "sidebar.group_day",
             Self::Week => "sidebar.group_week",
             Self::Older => "sidebar.group_older",
@@ -140,8 +136,8 @@ impl Summary {
             has_user: session.has_user_messages(),
         }
     }
-    fn sort_key(&self, id: u64) -> std::cmp::Reverse<(bool, bool, u64, u64)> {
-        std::cmp::Reverse((self.pinned, self.running, self.activity, id))
+    fn sort_key(&self, id: u64) -> std::cmp::Reverse<(bool, u64, u64)> {
+        std::cmp::Reverse((self.pinned, self.activity, id))
     }
 }
 #[derive(Default)]
@@ -529,8 +525,10 @@ impl SidebarState {
             if previous != Some(&next) {
                 let order_changed =
                     previous.is_none_or(|old| old.sort_key(id) != next.sort_key(id));
-                rebuild |=
-                    order_changed || previous.is_none_or(|old| old.archived != next.archived);
+                rebuild |= order_changed
+                    || previous.is_none_or(|old| {
+                        old.archived != next.archived || old.running != next.running
+                    });
                 group.needs_sort |= order_changed;
                 group.summaries.insert(id, next);
                 changed = true;
@@ -636,7 +634,6 @@ impl SidebarState {
                     let summary = &group.summaries[&id];
                     let session_group = SessionGroup::new(
                         summary.pinned,
-                        summary.running,
                         summary.activity,
                         inputs.age_tick * inputs.age_interval,
                     );

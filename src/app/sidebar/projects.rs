@@ -154,6 +154,28 @@ impl Groups {
 }
 
 impl ConduitApp {
+    fn set_sidebar_project_workspaces_expanded(
+        &mut self,
+        key: &Path,
+        expanded: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(project) = self.sidebar.projects.projects.get(key) else {
+            return;
+        };
+        let members = project.members.clone();
+        for path in members {
+            self.set_workspace_collapsed(&path, !expanded);
+        }
+        if expanded {
+            self.sidebar.expanded_projects.insert(key.to_owned());
+        }
+        self.refresh_sidebar();
+        self.sidebar.reveal_project(key);
+        self.focus_sidebar(window, cx);
+    }
+
     pub(super) fn set_sidebar_project_expanded(
         &mut self,
         key: &Path,
@@ -184,6 +206,17 @@ impl ConduitApp {
         };
         let expanded =
             self.sidebar.expanded_projects.contains(key) || !self.search_query.trim().is_empty();
+        let workspaces_expanded = expanded
+            && self.sidebar.projects.projects[key]
+                .members
+                .iter()
+                .all(|path| !self.workspace_collapsed(path));
+        let workspaces_key = key.clone();
+        let workspaces_label = conduit::i18n::text_static(if workspaces_expanded {
+            "sidebar.collapse_project_workspaces"
+        } else {
+            "sidebar.expand_project_workspaces"
+        });
         let toggle_key = key.clone();
         let selector = self.sidebar.workspace_index(key).expect("project anchor");
         h_flex()
@@ -262,23 +295,45 @@ impl ConduitApp {
                     .truncate()
                     .child(name.clone()),
             )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_size(ui_text_size(12.))
-                    .text_color(rgb(palette().faint))
-                    .child(format!("×{copies}")),
-            )
             .when_some(*activity, |row, (id, running)| {
                 row.child(session_activity_dot("project-activity", id, running))
             })
             .child(
-                div()
-                    .debug_selector(move || format!("project-count-{selector}"))
+                Button::new(("project-toggle-workspaces", selector))
+                    .debug_selector(move || {
+                        format!(
+                            "project-{}-workspaces-{selector}",
+                            if workspaces_expanded {
+                                "collapse"
+                            } else {
+                                "expand"
+                            }
+                        )
+                    })
+                    .ghost()
+                    .small()
+                    .compact()
+                    .w(px(24.))
+                    .h(px(24.))
+                    .p_0()
                     .flex_shrink_0()
-                    .text_size(ui_text_size(12.))
-                    .text_color(rgb(palette().faint))
-                    .child(count.to_string()),
+                    .cursor_pointer()
+                    .icon(if workspaces_expanded {
+                        FullIconName::ListChevronsDownUp
+                    } else {
+                        FullIconName::ListChevronsUpDown
+                    })
+                    .tooltip(workspaces_label)
+                    .accessibility_label(workspaces_label)
+                    .on_click(cx.listener(move |app, _, window, cx| {
+                        cx.stop_propagation();
+                        app.set_sidebar_project_workspaces_expanded(
+                            &workspaces_key,
+                            !workspaces_expanded,
+                            window,
+                            cx,
+                        );
+                    })),
             )
             .into_any_element()
     }

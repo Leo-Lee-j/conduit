@@ -1399,6 +1399,8 @@
   "sidebar.cleanup_pending": "等待清理",
   "sidebar.projects": "项目",
   "sidebar.project_summary": "%{name}，%{copies} 个工作区，%{count} 条会话",
+  "sidebar.expand_project_workspaces": "展开组内所有工作区的会话列表",
+  "sidebar.collapse_project_workspaces": "折叠组内所有工作区的会话列表",
   "sidebar.group_pinned": "已置顶",
   "sidebar.group_day": "24 小时内",
   "sidebar.group_week": "过去 7 天",

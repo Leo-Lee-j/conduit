@@ -9,6 +9,114 @@ fn draw(cx: &mut VisualTestContext) {
 }
 
 #[gpui_kit::test]
+fn project_workspace_toggle_preserves_session_limits_and_selection(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx, root) = crate::app::queue::tests::fixture(cx, "sidebar-project-toggle");
+    let base = root.join("jupiter");
+    let copy = root.join("jupiter-2");
+    let outside = root.join("unrelated");
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.startup = None;
+            app.writable = false;
+            app.store.ui.auto_collapse_inactive_workspaces = false;
+            app.store.ui.auto_sort_workspaces = false;
+            app.store.ui.sessions_per_workspace = 2;
+            app.expanded_workspaces.clear();
+            app.store.workspaces[0].path = base.clone();
+            app.store.workspaces[1].path = copy.clone();
+            app.store.workspaces[0].sessions[0].pinned = true;
+            for id in 3..=6 {
+                let mut session = crate::app::tests::session();
+                session.id = id;
+                app.store.workspaces[0].sessions.push(session);
+            }
+            app.store.workspaces.push(crate::app::Workspace {
+                path: outside.clone(),
+                sessions: vec![],
+            });
+            app.input.update(cx, |input, cx| {
+                input.set_value("keep my draft", window, cx);
+            });
+            app.refresh_sidebar();
+            app.set_workspace_collapsed(&copy, true);
+            app.set_workspace_collapsed(&outside, true);
+            app.set_sidebar_project_expanded(&base, false, window, cx);
+        });
+    });
+    cx.simulate_resize(size(px(1000.), px(800.)));
+    draw(cx);
+    let click = |cx: &mut VisualTestContext, selector: &'static str| {
+        let point = cx.debug_bounds(selector).unwrap().center();
+        cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+        draw(cx);
+    };
+    let visible = |app: &ConduitApp, path: &std::path::Path| {
+        app.sidebar
+            .rows
+            .iter()
+            .filter(|row| matches!(row, cache::Row::Session { path: p, .. } if p == path))
+            .count()
+    };
+    click(cx, "project-expand-workspaces-0");
+    assert!(cx.debug_bounds("project-collapse-workspaces-0").is_some());
+    assert!(cx.debug_bounds("project-count-0").is_none());
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert!(app.sidebar.expanded_projects.contains(&base));
+        assert!(!app.workspace_collapsed(&base));
+        assert!(!app.workspace_collapsed(&copy));
+        assert!(app.workspace_collapsed(&outside));
+        assert_eq!(
+            visible(app, &base),
+            3,
+            "pinned plus the normal recent limit"
+        );
+        assert_eq!(visible(app, &copy), 1);
+        assert!(app.expanded_workspaces.is_empty());
+        assert_eq!(app.selected_session, Some(1));
+        assert_eq!(app.input.read(cx).value().to_string(), "keep my draft");
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.set_sidebar_sessions_expanded(&base, true, window, cx);
+        });
+    });
+    draw(cx);
+    click(cx, "project-collapse-workspaces-0");
+    assert!(cx.debug_bounds("project-expand-workspaces-0").is_some());
+    assert!(cx.debug_bounds("workspace-item-0").is_some());
+    assert!(cx.debug_bounds("workspace-item-1").is_some());
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert!(app.sidebar.expanded_projects.contains(&base));
+        assert!(app.workspace_collapsed(&base));
+        assert!(app.workspace_collapsed(&copy));
+        assert_eq!(visible(app, &base), 0);
+        assert_eq!(visible(app, &copy), 0);
+        assert!(app.expanded_workspaces.contains(&0));
+    });
+    click(cx, "workspace-project-0");
+    assert!(cx.debug_bounds("workspace-item-0").is_none());
+    click(cx, "project-expand-workspaces-0");
+    assert!(cx.debug_bounds("project-collapse-workspaces-0").is_some());
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert_eq!(
+            visible(app, &base),
+            5,
+            "preserve an existing show-more choice"
+        );
+        assert_eq!(visible(app, &copy), 1);
+        assert!(app.workspace_collapsed(&outside));
+        assert_eq!(app.selected_workspace, Some(0));
+        assert_eq!(app.selected_session, Some(1));
+        assert_eq!(app.input.read(cx).value().to_string(), "keep my draft");
+    });
+}
+
+#[gpui_kit::test]
 fn project_groups_keep_nested_guides_and_keyboard_navigation_connected(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     let (app, cx, root) = crate::app::queue::tests::fixture(cx, "sidebar-project-tree");
