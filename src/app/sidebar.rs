@@ -3,6 +3,7 @@
 use super::*;
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::status_bar::StatusBar;
+use gpui_kit::component::tag::Tag;
 
 mod cache;
 mod keyboard;
@@ -557,10 +558,12 @@ impl ConduitApp {
                         .h(px(row.height()))
                         .pl(px(TREE_TITLE_LEFT + indent))
                         .items_center()
-                        .text_size(ui_text_size(11.))
-                        .font_semibold()
-                        .text_color(rgb(palette().faint))
-                        .child(group.label())
+                        .child(
+                            Tag::secondary()
+                                .small()
+                                .text_size(ui_text_size(11.))
+                                .child(group.label()),
+                        )
                         .into_any_element(),
                     cache::Row::Loading(_) => {
                         let workspace = &self.store.workspaces[index];
@@ -1159,7 +1162,6 @@ impl ConduitApp {
                         row.bg(rgb(palette().surface))
                             .border_1()
                             .border_color(rgb(palette().border))
-                            .shadow_sm()
                     })
                     .when(!active && index + 1 < count, |row| {
                         row.border_b_1().border_color(rgb(palette().border))
