@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 /// A CLI-side session discovered on disk, ready to become a `SessionRecord`.
 #[derive(Clone, Debug)]
 pub struct ImportedSession {
+    pub is_subagent: bool,
     pub provider: Provider,
     pub native_id: String,
     pub created_at: u64,
@@ -79,6 +80,19 @@ pub(crate) fn prepare_imported(
             session.provider == imported.provider
                 && session.native_id.as_deref() == Some(imported.native_id.as_str())
         });
+        if imported.is_subagent {
+            // Reclassify earlier imports without loading or rewriting their bodies.
+            for previous in workspace.sessions.iter().filter(|session| {
+                !session.is_subagent
+                    && session.provider == imported.provider
+                    && session.native_id.as_deref() == Some(imported.native_id.as_str())
+            }) {
+                let mut record = previous.clone();
+                record.is_subagent = true;
+                prepared.push(record);
+            }
+            continue;
+        }
         let keep_loaded = previous.is_some_and(|session| session.transcript.loaded);
         let result = (|| -> anyhow::Result<crate::domain::SessionRecord> {
             let mut staging = crate::domain::Workspace {
@@ -117,6 +131,10 @@ fn merge_session(
     if let Some(existing) = workspace.sessions.iter_mut().find(|s| {
         s.provider == session.provider && s.native_id.as_deref() == Some(session.native_id.as_str())
     }) {
+        existing.is_subagent = session.is_subagent;
+        if session.is_subagent {
+            return 0;
+        }
         existing.created_at = session.created_at;
         if existing.title.is_empty() && !session.title.is_empty() {
             existing.title = session.title;
@@ -129,10 +147,14 @@ fn merge_session(
         existing.messages = merge_transcript(&existing.messages, messages);
         return 0;
     }
+    if session.is_subagent {
+        return 0;
+    }
     let id = *next_id;
     *next_id += 1;
     workspace.sessions.push(crate::domain::SessionRecord {
         subagents: Default::default(),
+        is_subagent: false,
         branching: Default::default(),
         transcript: Default::default(),
         id,
@@ -512,6 +534,7 @@ impl ClaudeState {
         Some((
             cwds,
             ImportedSession {
+                is_subagent: false,
                 provider: Provider::Claude,
                 native_id,
                 created_at,
@@ -572,6 +595,8 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 struct CodexState {
     native_id: Option<String>,
+    #[serde(default)]
+    is_subagent: bool,
     created_at: u64,
     cwd: String,
     model: Option<String>,
@@ -615,6 +640,7 @@ fn extend_codex(
             let found = value.get("type").and_then(Value::as_str) == Some("session_meta");
             if found {
                 let meta = value.get("payload").unwrap_or(&value);
+                state.is_subagent = codex_subagent_meta(meta);
                 state.native_id = meta
                     .get("id")
                     .or_else(|| meta.get("session_id"))
@@ -640,8 +666,17 @@ fn extend_codex(
             return state;
         }
     }
+    if state.is_subagent {
+        // Retain only identity metadata for migration; child transcripts are not list entries.
+        for (index, _) in values {
+            state.next_index = index + 1;
+        }
+        state.pending.clear();
+        return state;
+    }
     let CodexState {
         native_id,
+        is_subagent,
         created_at,
         cwd,
         mut model,
@@ -1070,6 +1105,7 @@ fn extend_codex(
 
     CodexState {
         native_id,
+        is_subagent,
         created_at,
         cwd,
         model,
@@ -1094,6 +1130,7 @@ impl CodexState {
     fn finish(self) -> Option<(String, ImportedSession)> {
         let Self {
             native_id,
+            is_subagent,
             created_at,
             cwd,
             mut model,
@@ -1109,6 +1146,20 @@ impl CodexState {
             ..
         } = self;
         let native_id = native_id?;
+        if is_subagent {
+            return Some((
+                cwd,
+                ImportedSession {
+                    is_subagent: true,
+                    provider: Provider::Codex,
+                    native_id,
+                    created_at,
+                    title: String::new(),
+                    model,
+                    messages: Vec::new(),
+                },
+            ));
+        }
         let mut rows = event_rows;
         rows.extend(
             response_rows
@@ -1193,6 +1244,7 @@ impl CodexState {
         Some((
             cwd,
             ImportedSession {
+                is_subagent: false,
                 provider: Provider::Codex,
                 native_id,
                 created_at,
@@ -1202,6 +1254,19 @@ impl CodexState {
             },
         ))
     }
+}
+
+fn codex_subagent_meta(meta: &Value) -> bool {
+    // A parent/fork id alone also occurs in ordinary user-created branches.
+    ["source", "thread_source"].into_iter().any(|field| {
+        let source = &meta[field];
+        matches!(source.as_str(), Some("subagent" | "subAgent"))
+            || ["subagent", "subAgent"].into_iter().any(|key| {
+                source
+                    .get(key)
+                    .is_some_and(|value| value.is_object() || value.is_string())
+            })
+    })
 }
 
 fn codex_event_text(item: &Value) -> Option<String> {
@@ -1408,6 +1473,53 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("conduit-history-{name}"));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn codex_subagent_metadata_keeps_user_forks_visible() {
+        let variants = [
+            (
+                serde_json::json!({"thread_source":"subagent", "source":"vscode"}),
+                true,
+            ),
+            (
+                serde_json::json!({"source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}}}),
+                true,
+            ),
+            (
+                serde_json::json!({"source":{"subAgent":{"thread_spawn":{"parent_thread_id":"parent"}}}}),
+                true,
+            ),
+            (serde_json::json!({"source":{"subagent":"review"}}), true),
+            (
+                serde_json::json!({"thread_source":{"subAgent":"compact"}}),
+                true,
+            ),
+            (serde_json::json!({"source":"subagent"}), true),
+            (
+                serde_json::json!({"source":"vscode", "thread_source":"user"}),
+                false,
+            ),
+            (
+                serde_json::json!({"source":"cli", "forked_from_id":"parent"}),
+                false,
+            ),
+            (serde_json::json!({"parent_thread_id":"parent"}), false),
+            (serde_json::json!({"source":{"subagent":null}}), false),
+            (serde_json::json!({"source":{"subagent":false}}), false),
+            (serde_json::json!({}), false),
+        ];
+        for (mut meta, expected) in variants {
+            meta["id"] = "native".into();
+            meta["cwd"] = "D:/workspace".into();
+            let text = [
+                serde_json::json!({"type":"session_meta", "payload":meta}),
+                serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"user", "content":[{"type":"input_text", "text":"visible prompt"}]}}),
+            ].iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
+            let (_, session) = parse_codex_any(&text, None).unwrap();
+            assert_eq!(session.is_subagent, expected, "{meta}");
+            assert_eq!(session.messages.is_empty(), expected, "{meta}");
+        }
     }
 
     #[test]
@@ -1779,6 +1891,7 @@ mod tests {
         // imported session plus one completely new import.
         workspace.sessions.push(crate::domain::SessionRecord {
             subagents: Default::default(),
+            is_subagent: false,
             branching: Default::default(),
             transcript: Default::default(),
             id: 7,
@@ -1814,6 +1927,7 @@ mod tests {
         // through merge_imported instead.
         let imported = vec![
             ImportedSession {
+                is_subagent: false,
                 provider: Provider::Claude,
                 native_id: "known".into(),
                 created_at: 100,
@@ -1834,6 +1948,7 @@ mod tests {
                 })],
             },
             ImportedSession {
+                is_subagent: false,
                 provider: Provider::Codex,
                 native_id: "fresh".into(),
                 created_at: 200,

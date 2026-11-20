@@ -156,6 +156,9 @@ impl Usage {
 pub struct SessionRecord {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subagents: Vec<crate::subagents::Agent>,
+    /// Native child conversations stay available to their parent, outside workspace lists.
+    #[serde(default)]
+    pub is_subagent: bool,
     pub id: u64,
     pub provider: Provider,
     pub created_at: u64,
@@ -487,6 +490,10 @@ pub struct Workspace {
 }
 
 impl Workspace {
+    pub fn visible_sessions(&self) -> impl Iterator<Item = &SessionRecord> {
+        self.sessions.iter().filter(|session| !session.is_subagent)
+    }
+
     pub fn name(&self) -> String {
         self.path
             .file_name()
@@ -545,6 +552,19 @@ mod snapshot_tests {
             serde_json::from_str(r#"{"id":1,"provider":"Claude","created_at":0,"exit_code":null}"#)
                 .unwrap();
         assert!(!session.pinned);
+    }
+
+    #[test]
+    fn subagent_visibility_defaults_to_main_and_roundtrips() {
+        let mut session: SessionRecord = serde_json::from_value(serde_json::json!({
+            "id":1, "provider":"Codex", "created_at":0, "exit_code":null
+        }))
+        .unwrap();
+        assert!(!session.is_subagent);
+        session.is_subagent = true;
+        let restored: SessionRecord =
+            serde_json::from_value(serde_json::to_value(session).unwrap()).unwrap();
+        assert!(restored.is_subagent);
     }
 
     #[test]

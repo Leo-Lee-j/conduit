@@ -476,7 +476,7 @@ impl ConduitApp {
                     let session = self.store.workspaces[index]
                         .sessions
                         .iter()
-                        .find(|s| !s.archived)
+                        .find(|s| !s.archived && !s.is_subagent)
                         .map(|s| s.id);
                     self.switch_context(index, session, false, window, cx);
                 }
@@ -498,7 +498,7 @@ impl ConduitApp {
                     let session = self.store.workspaces[index]
                         .sessions
                         .iter()
-                        .find(|s| !s.archived)
+                        .find(|s| !s.archived && !s.is_subagent)
                         .map(|s| s.id);
                     self.switch_context(index, session, false, window, cx);
                 }
@@ -515,7 +515,7 @@ impl ConduitApp {
                     .store
                     .workspaces
                     .iter()
-                    .position(|w| w.sessions.iter().any(|s| s.id == id))
+                    .position(|w| w.visible_sessions().any(|s| s.id == id))
                 {
                     if self.selected_session == Some(id) && self.selected_workspace == Some(index) {
                         self.active_file = None;
@@ -555,13 +555,13 @@ impl ConduitApp {
                             self.store.workspaces[index]
                                 .sessions
                                 .iter()
-                                .any(|s| s.id == *id && !s.archived)
+                                .any(|s| s.id == *id && !s.archived && !s.is_subagent)
                         })
                         .or_else(|| {
                             self.store.workspaces[index]
                                 .sessions
                                 .iter()
-                                .find(|s| !s.archived)
+                                .find(|s| !s.archived && !s.is_subagent)
                                 .map(|s| s.id)
                         });
                     self.switch_context(index, session, false, window, cx);
@@ -596,13 +596,13 @@ impl ConduitApp {
                             self.store.workspaces[index]
                                 .sessions
                                 .iter()
-                                .any(|s| s.id == *id && !s.archived)
+                                .any(|s| s.id == *id && !s.archived && !s.is_subagent)
                         })
                         .or_else(|| {
                             self.store.workspaces[index]
                                 .sessions
                                 .iter()
-                                .find(|s| !s.archived)
+                                .find(|s| !s.archived && !s.is_subagent)
                                 .map(|s| s.id)
                         });
                     self.switch_context(index, session, false, window, cx);
@@ -698,7 +698,9 @@ impl ConduitApp {
             let sessions = &self.store.workspaces[workspace].sessions;
             let available = |id: &u64| {
                 !tabs.contains(&DocumentTab::Chat(*id))
-                    && sessions.iter().any(|s| s.id == *id && !s.archived)
+                    && sessions
+                        .iter()
+                        .any(|s| s.id == *id && !s.archived && !s.is_subagent)
             };
             let session = self
                 .selected_session
@@ -2418,16 +2420,15 @@ impl ConduitApp {
                                         .rev()
                                         .filter_map(|t| t.chat())
                                         .find(|id| {
-                                            this.store.workspaces[i]
-                                                .sessions
-                                                .iter()
-                                                .any(|s| s.id == *id && !s.archived)
+                                            this.store.workspaces[i].sessions.iter().any(|s| {
+                                                s.id == *id && !s.archived && !s.is_subagent
+                                            })
                                         })
                                         .or_else(|| {
                                             this.store.workspaces[i]
                                                 .sessions
                                                 .iter()
-                                                .find(|s| !s.archived)
+                                                .find(|s| !s.archived && !s.is_subagent)
                                                 .map(|s| s.id)
                                         });
                                     let navigation = this.plugins.selected().clone();

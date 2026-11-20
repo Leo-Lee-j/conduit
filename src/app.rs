@@ -589,7 +589,7 @@ impl ConduitApp {
         let selected_session = store
             .workspaces
             .first()
-            .and_then(|w| w.sessions.iter().find(|session| !session.archived))
+            .and_then(|w| w.visible_sessions().find(|session| !session.archived))
             .map(|s| s.id);
         let pending_permission = store.ui.default_session_permission;
         let new_session_provider = store

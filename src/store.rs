@@ -1082,6 +1082,7 @@ mod tests {
         store.save_to(&path).unwrap();
         store.workspaces[0].sessions.push(SessionRecord {
             subagents: Default::default(),
+            is_subagent: false,
             branching: Default::default(),
             transcript: Default::default(),
             id: 1,

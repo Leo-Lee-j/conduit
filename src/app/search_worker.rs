@@ -151,7 +151,7 @@ impl Results {
     pub fn retain_current(&mut self, workspaces: &[Workspace]) -> bool {
         let current: HashMap<_, _> = workspaces
             .iter()
-            .flat_map(|w| w.sessions.iter().map(move |s| (s.id, (w, s))))
+            .flat_map(|w| w.visible_sessions().map(move |s| (s.id, (w, s))))
             .collect();
         let mut refresh_needed = false;
         self.matches.retain(|id| {
@@ -203,7 +203,7 @@ impl Version {
         }
     }
     pub fn matches(&self, session: &SessionRecord) -> bool {
-        if self.title != session.title {
+        if session.is_subagent || self.title != session.title {
             return false;
         }
         match &self.body {
@@ -267,7 +267,7 @@ pub(super) fn collect_cached(
     }
     let ids: HashSet<_> = workspaces
         .iter()
-        .flat_map(|w| w.sessions.iter().map(|s| s.id))
+        .flat_map(|w| w.visible_sessions().map(|s| s.id))
         .collect();
     cache.entries.retain(|id, _| ids.contains(id));
     let matcher = Matcher::new(query);
@@ -277,7 +277,7 @@ pub(super) fn collect_cached(
     let mut versions = HashMap::new();
     for workspace in workspaces {
         let name = workspace.name();
-        for session in &workspace.sessions {
+        for session in workspace.visible_sessions() {
             if cancel.load(Ordering::Acquire) {
                 return (
                     Results {
@@ -424,6 +424,32 @@ fn hit(session: &SessionRecord, workspace_name: &str, snippet: String) -> Search
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subagent_reclassification_drops_inflight_hits_and_cached_search_entries() {
+        let fixture = crate::transcript::tests::Fixture::new();
+        let mut store = fixture.store(2);
+        let cancel = AtomicBool::new(false);
+        let (mut results, cache) = collect_cached(
+            &store.workspaces,
+            "original reply",
+            &cancel,
+            Cache::default(),
+        );
+        assert_eq!(results.hits.len(), 2);
+        let id = store.workspaces[0].sessions[0].id;
+        store.workspaces[0].sessions[0].is_subagent = true;
+        assert!(!results.retain_current(&store.workspaces));
+        assert_eq!(results.hits.len(), 1);
+        assert!(!results.matches.contains(&id));
+        // A hidden transcript must not be read, even when its disk body is unavailable.
+        store.workspaces[0].sessions[0].transcript.loaded = false;
+        let (results, cache) = collect_cached(&store.workspaces, "original reply", &cancel, cache);
+        assert_eq!(results.hits.len(), 1);
+        assert_eq!(results.errors, 0);
+        assert_eq!(cache.scans, 2);
+        assert!(!cache.entries.contains_key(&id));
+    }
 
     #[test]
     fn saved_search_matches_and_cache_survive_load_unload_and_reload() {

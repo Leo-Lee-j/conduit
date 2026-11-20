@@ -117,6 +117,7 @@ struct Summary {
     title: String,
     provider: Provider,
     native_id: Option<String>,
+    is_subagent: bool,
     archived: bool,
     pinned: bool,
     activity: u64,
@@ -129,6 +130,7 @@ impl Summary {
             title: session.title.clone(),
             provider: session.provider,
             native_id: session.native_id.clone(),
+            is_subagent: session.is_subagent,
             archived: session.archived,
             pinned: session.pinned,
             activity: session.last_activity_at(),
@@ -527,7 +529,9 @@ impl SidebarState {
                     previous.is_none_or(|old| old.sort_key(id) != next.sort_key(id));
                 rebuild |= order_changed
                     || previous.is_none_or(|old| {
-                        old.archived != next.archived || old.running != next.running
+                        old.archived != next.archived
+                            || old.is_subagent != next.is_subagent
+                            || old.running != next.running
                     });
                 group.needs_sort |= order_changed;
                 group.summaries.insert(id, next);
@@ -544,11 +548,16 @@ impl SidebarState {
                     .filter(|(path, group)| {
                         self.indices.get(*path).copied() != inputs.selected_workspace
                             && !inputs.auto_expanded.contains(*path)
-                            && !group.summaries.values().any(|s| {
-                                s.running
-                                    || (s.activity > 0
-                                        && now.saturating_sub(s.activity) < INACTIVE_WORKSPACE_AGE)
-                            })
+                            && !group
+                                .summaries
+                                .values()
+                                .filter(|s| !s.is_subagent)
+                                .any(|s| {
+                                    s.running
+                                        || (s.activity > 0
+                                            && now.saturating_sub(s.activity)
+                                                < INACTIVE_WORKSPACE_AGE)
+                                })
                     })
                     .map(|(path, _)| path.clone())
                     .collect()
@@ -569,8 +578,9 @@ impl SidebarState {
             if inputs.auto_sort_workspaces {
                 workspaces.sort_by_cached_key(|(_, workspace)| {
                     let summaries = &self.groups[&workspace.path].summaries;
-                    let running = summaries.values().any(|s| s.running);
-                    let activity = summaries.values().map(|s| s.activity).max().unwrap_or(0);
+                    let visible = || summaries.values().filter(|s| !s.is_subagent);
+                    let running = visible().any(|s| s.running);
+                    let activity = visible().map(|s| s.activity).max().unwrap_or(0);
                     std::cmp::Reverse((running, activity))
                 });
             }
@@ -594,7 +604,8 @@ impl SidebarState {
                     .iter()
                     .copied()
                     .filter(|id| {
-                        (inputs.show_archived || !group.summaries[id].archived)
+                        !group.summaries[id].is_subagent
+                            && (inputs.show_archived || !group.summaries[id].archived)
                             && (inputs.query.is_empty()
                                 || (search.result_query == inputs.query
                                     && search.matches.contains(id)))
@@ -611,7 +622,7 @@ impl SidebarState {
                     last: filtered
                         .first()
                         .copied()
-                        .or_else(|| workspace.sessions.first().map(|s| s.id)),
+                        .or_else(|| workspace.visible_sessions().next().map(|s| s.id)),
                 });
                 if inputs.collapsed.contains(path) || self.auto_collapsed.contains(path) {
                     continue;
@@ -667,7 +678,10 @@ impl SidebarState {
                 .map(|id| (id, false))
                 .chain(inputs.runs.iter().map(|id| (id, true)))
             {
-                if let Some((index, _)) = control.locate(&store.workspaces, id) {
+                if let Some((index, row)) = control.locate(&store.workspaces, id) {
+                    if store.workspaces[index].sessions[row].is_subagent {
+                        continue;
+                    }
                     let entry = attention
                         .entry(store.workspaces[index].path.clone())
                         .or_insert((id, running));
@@ -853,6 +867,70 @@ mod tests {
     use super::{INACTIVE_WORKSPACE_AGE, Inputs, Row};
     use crate::app::{ConduitApp, Store, Workspace};
     use gpui_kit::{AppContext, TestAppContext};
+
+    #[gpui_kit::test]
+    fn subagent_visibility_refreshes_cached_rows_counts_and_empty_workspace_target(
+        cx: &mut TestAppContext,
+    ) {
+        let _locale = crate::test_support::chinese();
+        let (app, cx, _) = crate::app::queue::tests::fixture(cx, "subagent-sidebar");
+        cx.update(|_, cx| {
+            app.update(cx, |app, _| {
+                app.store.workspaces.truncate(1);
+                app.store.workspaces[0].sessions.truncate(1);
+                let mut child = app.store.workspaces[0].sessions[0].clone();
+                child.id = 2;
+                child.pinned = true;
+                app.store.workspaces[0].sessions.push(child);
+                let path = app.store.workspaces[0].path.clone();
+                app.sidebar.invalidate_workspace(&path);
+                app.refresh_sidebar();
+                assert_eq!(
+                    app.sidebar
+                        .rows
+                        .iter()
+                        .filter(|r| matches!(r, Row::Session { .. }))
+                        .count(),
+                    2
+                );
+                app.session_mut(2).unwrap().is_subagent = true;
+                app.refresh_sidebar();
+                assert!(
+                    !app.sidebar
+                        .rows
+                        .iter()
+                        .any(|r| matches!(r, Row::Session { id: 2, .. }))
+                );
+                assert!(app.sidebar.rows.iter().any(|r| matches!(
+                    r,
+                    Row::Workspace {
+                        count: 1,
+                        last: Some(1),
+                        ..
+                    }
+                )));
+                app.show_archived = true;
+                app.session_mut(2).unwrap().archived = true;
+                app.refresh_sidebar();
+                assert!(
+                    !app.sidebar
+                        .rows
+                        .iter()
+                        .any(|r| matches!(r, Row::Session { id: 2, .. }))
+                );
+                app.session_mut(1).unwrap().is_subagent = true;
+                app.refresh_sidebar();
+                assert!(app.sidebar.rows.iter().any(|r| matches!(
+                    r,
+                    Row::Workspace {
+                        count: 0,
+                        last: None,
+                        ..
+                    }
+                )));
+            });
+        });
+    }
 
     #[gpui_kit::test]
     fn long_workspace_can_return_to_summary_without_switching_chat(cx: &mut TestAppContext) {

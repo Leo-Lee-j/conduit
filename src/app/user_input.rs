@@ -226,6 +226,7 @@ mod tests {
                         path: std::env::temp_dir(),
                         sessions: vec![SessionRecord {
                             subagents: Default::default(),
+                            is_subagent: false,
                             branching: Default::default(),
                             transcript: Default::default(),
                             id: 1,

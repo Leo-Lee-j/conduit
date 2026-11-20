@@ -72,16 +72,16 @@ impl ConduitApp {
         if self.active_file.is_some() || self.active_diff.is_some() {
             if self
                 .selected_session
-                .is_some_and(|id| self.session(id).is_none_or(|s| s.archived))
+                .is_some_and(|id| self.session(id).is_none_or(|s| s.archived || s.is_subagent))
             {
                 self.selected_session = None;
             }
             return;
         }
-        if self
-            .selected_session
-            .is_some_and(|id| self.session(id).is_some_and(|session| !session.archived))
-        {
+        if self.selected_session.is_some_and(|id| {
+            self.session(id)
+                .is_some_and(|session| !session.archived && !session.is_subagent)
+        }) {
             self.push_tab(self.selected_session.unwrap());
             self.session_control
                 .unread_completed
@@ -89,7 +89,11 @@ impl ConduitApp {
             return;
         }
         for (index, workspace) in self.store.workspaces.iter().enumerate() {
-            if let Some(session) = workspace.sessions.iter().find(|s| !s.archived) {
+            if let Some(session) = workspace
+                .sessions
+                .iter()
+                .find(|s| !s.archived && !s.is_subagent)
+            {
                 self.selected_workspace = Some(index);
                 self.selected_session = Some(session.id);
                 self.session_control.unread_completed.remove(&session.id);
@@ -110,6 +114,9 @@ impl ConduitApp {
 
     /// Chat tabs keep their own limit; file browsing cannot evict a conversation.
     pub(super) fn push_tab(&mut self, id: u64) {
+        if self.session(id).is_some_and(|session| session.is_subagent) {
+            return;
+        }
         let tab = DocumentTab::Chat(id);
         if !self.open_tabs.contains(&tab) {
             self.open_tabs.push(tab);
@@ -152,7 +159,10 @@ impl ConduitApp {
             .open_tabs
             .iter()
             .filter_map(|tab| tab.chat())
-            .filter(|id| self.session(*id).is_none_or(|s| s.archived))
+            .filter(|id| {
+                self.session(*id)
+                    .is_none_or(|s| s.archived || s.is_subagent)
+            })
             .collect();
         self.open_tabs
             .retain(|tab| tab.chat().is_none_or(|id| !archived_tabs.contains(&id)));
@@ -769,6 +779,7 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let session = session.filter(|id| self.session(*id).is_none_or(|s| !s.is_subagent));
         if session.is_some_and(|id| self.pending_new_session(id)) {
             self.message = Some(
                 conduit::i18n::text_static("sessions.saving_new_session_please_wait_your_draft")
@@ -888,7 +899,7 @@ impl ConduitApp {
                                 let session = this.store.workspaces[index]
                                     .sessions
                                     .iter()
-                                    .find(|session| !session.archived)
+                                    .find(|session| !session.archived && !session.is_subagent)
                                     .map(|session| session.id);
                                 this.switch(index, session, window, cx);
                                 this.persist();
@@ -1154,10 +1165,35 @@ impl ConduitApp {
         else {
             return;
         };
+        let mut reclassified = Vec::new();
+        let mut updates = Vec::new();
+        for record in imported {
+            if !record.is_subagent {
+                updates.push(record);
+                continue;
+            }
+            // Source classification is independent of transcript revisions. A turn
+            // or manual edit during the scan must keep its current body intact.
+            for existing in self.store.workspaces[index]
+                .sessions
+                .iter_mut()
+                .filter(|s| {
+                    !s.is_subagent
+                        && s.provider == record.provider
+                        && s.native_id == record.native_id
+                })
+            {
+                existing.is_subagent = true;
+                reclassified.push(existing.id);
+            }
+        }
+        for &id in &reclassified {
+            self.session_control.changed(id);
+        }
         // A scan can finish after a turn has started. Its older transcript must
         // never replace messages or invalidate the active run's message index.
         let versions = self.session_control.imports.get(path);
-        let imported = imported
+        let imported = updates
             .into_iter()
             .filter(|imported| {
                 !self.store.workspaces[index].sessions.iter().any(|session| {
@@ -1173,7 +1209,7 @@ impl ConduitApp {
         if complete {
             self.session_control.imports.remove(path);
         }
-        let discovered = !imported.is_empty();
+        let discovered = !imported.is_empty() || !reclassified.is_empty();
         if discovered {
             self.sidebar.invalidate_workspace(path);
             self.session_control.global_revision =
@@ -1208,6 +1244,14 @@ impl ConduitApp {
         self.store.workspaces[index]
             .sessions
             .sort_by_key(|session| std::cmp::Reverse((session.last_activity_at(), session.id)));
+        if !reclassified.is_empty() {
+            self.store
+                .ui
+                .recent_sessions
+                .retain(|id| !reclassified.contains(id));
+            let tabs: Vec<_> = reclassified.into_iter().map(DocumentTab::Chat).collect();
+            self.close_documents(&tabs, window, cx);
+        }
         self.ensure_selected_transcript(cx);
         self.trim_transcripts();
         // Open the newest session on the workspace the user just added, unless
@@ -1222,7 +1266,7 @@ impl ConduitApp {
             && let Some(session) = self.store.workspaces[index]
                 .sessions
                 .iter()
-                .find(|session| !session.archived)
+                .find(|session| !session.archived && !session.is_subagent)
                 .map(|session| session.id)
         {
             self.switch(index, Some(session), window, cx);
@@ -1299,6 +1343,7 @@ impl ConduitApp {
             .and_then(|catalog| catalog.current.clone());
         let mut session = SessionRecord {
             subagents: Default::default(),
+            is_subagent: false,
             branching: Default::default(),
             transcript: Default::default(),
             id,
@@ -1380,7 +1425,7 @@ impl ConduitApp {
         let start_day = today - chrono::Duration::days((days - 1) as i64);
         let mut counts = vec![0u32; days];
         for workspace in &self.store.workspaces {
-            for session in &workspace.sessions {
+            for session in workspace.visible_sessions() {
                 if session.created_at == 0 {
                     continue;
                 }

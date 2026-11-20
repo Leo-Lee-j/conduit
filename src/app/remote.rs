@@ -268,7 +268,7 @@ impl ConduitApp {
             Read::Workspaces { offset } => {
                 let items = if offset == 0 {
                     vec![
-                        json!({"id": host.epoch(), "name": workspace.name(), "session_count": workspace.sessions.len()}),
+                        json!({"id": host.epoch(), "name": workspace.name(), "session_count": workspace.visible_sessions().count()}),
                     ]
                 } else {
                     Vec::new()
@@ -284,8 +284,7 @@ impl ConduitApp {
                     return Err(Fault::missing());
                 }
                 let mut sessions: Vec<_> = workspace
-                    .sessions
-                    .iter()
+                    .visible_sessions()
                     .filter(|session| session.archived == archived)
                     .collect();
                 sessions.sort_unstable_by_key(|session| {
@@ -405,6 +404,7 @@ impl ConduitApp {
             .locate(&self.store.workspaces, id)
             .filter(|(index, _)| *index == workspace)
             .map(|(index, row)| &self.store.workspaces[index].sessions[row])
+            .filter(|session| !session.is_subagent)
             .ok_or_else(Fault::missing)
     }
 

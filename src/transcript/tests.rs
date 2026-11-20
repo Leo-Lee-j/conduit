@@ -376,6 +376,7 @@ fn cold_history_merge_preserves_local_messages_and_remains_cold() {
     state.save_to(&fixture.state).unwrap();
     let cold = Store::load_from(&fixture.state).unwrap();
     let incoming = crate::history::ImportedSession {
+        is_subagent: false,
         provider: cold.workspaces[0].sessions[0].provider,
         native_id: "native-1".into(),
         created_at: 1,

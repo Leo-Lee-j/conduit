@@ -3,8 +3,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 
-// Reparse Codex reasoning to retain its source and native phase duration.
-const PARSER_VERSION: u32 = 4;
+// Reparse native metadata so earlier child imports can be hidden without losing history.
+const PARSER_VERSION: u32 = 5;
 const MAX_ENTRY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_INDEX_BYTES: i64 = 256 * 1024 * 1024;
 

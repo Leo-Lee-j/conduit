@@ -824,6 +824,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
 
     let session = |id, provider, native: &str| SessionRecord {
         subagents: Default::default(),
+        is_subagent: false,
         branching: Default::default(),
         transcript: Default::default(),
         id,
@@ -996,6 +997,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
             this.finish_history_import(
                 &root,
                 vec![crate::history::ImportedSession {
+                    is_subagent: false,
                     provider: Provider::Claude,
                     native_id: "first".into(),
                     created_at: 0,
@@ -1294,6 +1296,7 @@ fn composer_files_paste_drafts_removal_and_failed_send(cx: &mut TestAppContext) 
     std::fs::write(&second, b"fn second() {}").unwrap();
     let session = |id| SessionRecord {
         subagents: Default::default(),
+        is_subagent: false,
         branching: Default::default(),
         transcript: Default::default(),
         id,
@@ -1775,6 +1778,7 @@ mod history_and_search {
     }
     fn imported(messages: Vec<ChatItem>) -> crate::history::ImportedSession {
         crate::history::ImportedSession {
+            is_subagent: false,
             provider: Provider::Claude,
             native_id: "review-native".into(),
             created_at: 0,
@@ -1810,6 +1814,62 @@ mod history_and_search {
                 assert_eq!(app.session(1).unwrap().messages[1].text, "completed turn");
                 assert_eq!(app.session(1).unwrap().title, "手动命名");
             })
+        });
+    }
+
+    #[gpui_kit::test]
+    fn subagent_history_migration_preserves_new_messages_and_drafts_and_selects_main(
+        cx: &mut TestAppContext,
+    ) {
+        let _locale = crate::test_support::chinese();
+        let (app, cx, path) = fixture(cx);
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let mut main = super::super::tests::session();
+                main.id = 2;
+                main.native_id = Some("main-native".into());
+                app.store.workspaces[0].sessions.push(main);
+                app.push_tab(2);
+                app.store.ui.recent_sessions = vec![1, 2];
+                app.input.update(cx, |input, cx| {
+                    input.set_value("unsent child draft", window, cx)
+                });
+                app.session_control.begin_import(&app.store.workspaces[0]);
+                app.session_mut(1).unwrap().messages =
+                    vec![item("local-user", "a turn completed during scanning")];
+                app.session_mut(1).unwrap().pinned = true;
+                let mut incoming = imported(vec![item("import-0", "stale transcript")]);
+                incoming.is_subagent = true;
+                let mut new_child = incoming.clone();
+                new_child.native_id = "never-import-this-child".into();
+                app.finish_history_import(
+                    &path,
+                    vec![incoming, new_child],
+                    false,
+                    true,
+                    window,
+                    cx,
+                );
+                let child = app.session(1).unwrap();
+                assert!(child.is_subagent && child.pinned);
+                assert_eq!(child.title, "手动命名");
+                assert_eq!(child.messages[0].text, "a turn completed during scanning");
+                assert_eq!(app.drafts[&1], "unsent child draft");
+                assert_eq!(app.store.workspaces[0].sessions.len(), 2);
+                assert_eq!(
+                    app.store.workspaces[0]
+                        .visible_sessions()
+                        .map(|s| s.id)
+                        .collect::<Vec<_>>(),
+                    vec![2]
+                );
+                assert_eq!(app.selected_session, Some(2));
+                assert!(!app.open_tabs.contains(&super::super::DocumentTab::Chat(1)));
+                assert!(!app.store.ui.recent_sessions.contains(&1));
+                app.selected_session = Some(1);
+                app.select_fallback_session();
+                assert_eq!(app.selected_session, Some(2));
+            });
         });
     }
 

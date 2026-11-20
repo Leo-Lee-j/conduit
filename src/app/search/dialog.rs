@@ -224,7 +224,7 @@ impl WorkspaceSearch {
                         let mut recent: Vec<_> = workspaces
                             .iter()
                             .flat_map(|w| {
-                                w.sessions.iter().filter(|s| !s.archived).map(|s| {
+                                w.visible_sessions().filter(|s| !s.archived).map(|s| {
                                     (
                                         s.last_activity_at(),
                                         SearchHit {
@@ -269,10 +269,11 @@ impl WorkspaceSearch {
                 let _ = this.app.update(cx, |app, _| {
                     sessions.retain(|hit| {
                         app.session(hit.session).is_some_and(|session| {
-                            versions.get(&hit.session).map_or(
-                                session.title == hit.title || session.title.is_empty(),
-                                |version| version.matches(session),
-                            )
+                            !session.is_subagent
+                                && versions.get(&hit.session).map_or(
+                                    session.title == hit.title || session.title.is_empty(),
+                                    |version| version.matches(session),
+                                )
                         })
                     });
                     files.retain(|item| match item {

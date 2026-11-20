@@ -63,6 +63,7 @@ impl Scanner {
                 sessions.push_back(Session {
                     cwd,
                     record: ImportedSession {
+                        is_subagent: false,
                         provider: Provider::OpenCode,
                         native_id: row.get(0)?,
                         title: row.get(2)?,

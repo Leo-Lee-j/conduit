@@ -87,8 +87,7 @@ impl ConduitApp {
                     .iter()
                     .enumerate()
                     .find_map(|(workspace, item)| {
-                        item.sessions
-                            .iter()
+                        item.visible_sessions()
                             .find(|session| session.id == *id && !session.archived)
                             .map(|session| {
                                 (workspace, session.id, item.name(), session.title.clone())

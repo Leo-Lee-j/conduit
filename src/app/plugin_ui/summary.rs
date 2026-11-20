@@ -23,16 +23,14 @@ impl WorkspaceSummary {
         Self {
             name: super::status::bounded_text(&workspace.name(), 256),
             path: super::status::bounded_text(&crate::app::display_path(&workspace.path), 4096),
-            total: workspace.sessions.len(),
-            archived: workspace.sessions.iter().filter(|s| s.archived).count(),
+            total: workspace.visible_sessions().count(),
+            archived: workspace.visible_sessions().filter(|s| s.archived).count(),
             running: workspace
-                .sessions
-                .iter()
+                .visible_sessions()
                 .filter(|s| control.runs.contains_key(&s.id))
                 .count(),
             sessions: workspace
-                .sessions
-                .iter()
+                .visible_sessions()
                 .take(SESSION_LIMIT)
                 .map(|s| SessionSummary {
                     id: s.id,
@@ -92,5 +90,10 @@ mod tests {
         assert_eq!(WorkspaceSummary::capture(&workspace, &control), summary);
         workspace.sessions[0].archived = false;
         assert_ne!(WorkspaceSummary::capture(&workspace, &control), summary);
+        workspace.sessions[0].is_subagent = true;
+        let hidden = WorkspaceSummary::capture(&workspace, &control);
+        assert_eq!(hidden.total, 109);
+        assert_eq!(hidden.archived, 54);
+        assert!(!hidden.sessions.iter().any(|s| s.id == 0));
     }
 }

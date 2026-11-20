@@ -394,6 +394,134 @@ fn opencode_large_session_keeps_a_snapshot_across_batches_and_cancels_without_pa
 }
 
 #[test]
+fn codex_subagents_stay_excluded_across_cache_rebuilds_and_appends() {
+    let fixture = Fixture::new();
+    let prompt = format!(
+        "{}\n",
+        serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"user", "content":[{"type":"input_text", "text":"question"}]}})
+    );
+    std::fs::write(
+        fixture.file(Provider::Codex, "main"),
+        fixture.codex_meta() + &prompt,
+    )
+    .unwrap();
+    let child = fixture.file(Provider::Codex, "child");
+    let text = format!(
+        "{}\n{prompt}",
+        serde_json::json!({"type":"session_meta", "payload":{"id":"child", "cwd":fixture.workspace, "thread_source":"subagent", "parent_thread_id":"native-codex"}})
+    );
+    std::fs::write(&child, &text).unwrap();
+    let mut workspace = crate::domain::Workspace {
+        path: fixture.workspace.clone(),
+        sessions: vec![],
+    };
+    let mut next_id = 1;
+    for batch in [fixture.scan(), fixture.scan()] {
+        assert!(batch.warnings.is_empty(), "{:?}", batch.warnings);
+        assert_eq!(batch.sessions[0].len(), 2);
+        assert!(
+            batch.sessions[0]
+                .iter()
+                .any(|s| s.native_id == "child" && s.is_subagent)
+        );
+        merge_imported(
+            &mut workspace,
+            &mut next_id,
+            batch.sessions.into_iter().next().unwrap(),
+        );
+        assert_eq!(workspace.sessions.len(), 1);
+        assert_eq!(
+            workspace.sessions[0].native_id.as_deref(),
+            Some("native-codex")
+        );
+    }
+    let mut index = Index::open(&fixture.index).unwrap();
+    let mut metadata = index.metadata(&child).unwrap();
+    // Reproduce an index written before source classification was introduced.
+    metadata.version = 4;
+    index
+        .save(
+            &child,
+            &metadata,
+            &Parser::Codex(Box::new(CodexState {
+                native_id: Some("child".into()),
+                cwd: fixture.workspace.to_string_lossy().into_owned(),
+                ..Default::default()
+            })),
+        )
+        .unwrap();
+    drop(index);
+    let rebuilt = fixture.scan();
+    assert!(rebuilt.bytes_read >= text.len() as u64);
+    assert!(
+        rebuilt.sessions[0]
+            .iter()
+            .any(|s| s.native_id == "child" && s.is_subagent)
+    );
+    assert_eq!(std::fs::read_to_string(&child).unwrap(), text);
+    append(&child, &prompt);
+    let appended = fixture.scan();
+    assert_eq!(appended.bytes_read, prompt.len() as u64);
+    assert!(
+        appended.sessions[0]
+            .iter()
+            .any(|s| s.native_id == "child" && s.is_subagent && s.messages.is_empty())
+    );
+    assert_eq!(next_id, 2);
+}
+
+#[test]
+fn reclassifying_an_existing_subagent_preserves_metadata_and_cold_body_without_io() {
+    let fixture = Fixture::new();
+    let previous: crate::domain::SessionRecord = serde_json::from_value(serde_json::json!({
+        "id":7, "provider":"Codex", "created_at":42, "exit_code":null,
+        "native_id":"child", "title":"Manual title", "pinned":true, "archived":true,
+        "messages":[{"key":"local-reply", "kind":"Assistant", "text":"Locally preserved reply", "elapsed_ms":1234}]
+    })).unwrap();
+    let incoming = ImportedSession {
+        is_subagent: true,
+        provider: Provider::Codex,
+        native_id: "child".into(),
+        created_at: 0,
+        title: String::new(),
+        model: None,
+        messages: vec![],
+    };
+    let directory = fixture.root.join("must-not-be-created");
+    for loaded in [true, false] {
+        let mut previous = previous.clone();
+        previous.transcript.loaded = loaded;
+        let workspace = crate::domain::Workspace {
+            path: fixture.workspace.clone(),
+            sessions: vec![previous.clone()],
+        };
+        let (mut records, warnings) =
+            prepare_imported(&workspace, vec![incoming.clone()], &directory);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(records.len(), 1);
+        let record = records.pop().unwrap();
+        assert!(record.is_subagent);
+        assert_eq!(record.id, previous.id);
+        assert_eq!(record.title, previous.title);
+        assert!(record.pinned && record.archived);
+        assert_eq!(record.created_at, previous.created_at);
+        assert_eq!(record.transcript.loaded, loaded);
+        assert_eq!(
+            serde_json::to_value(record.messages).unwrap(),
+            serde_json::to_value(&previous.messages).unwrap()
+        );
+        assert!(!directory.exists());
+    }
+    let workspace = crate::domain::Workspace {
+        path: fixture.workspace.clone(),
+        sessions: vec![],
+    };
+    let (records, warnings) = prepare_imported(&workspace, vec![incoming], &directory);
+    assert!(records.is_empty() && warnings.is_empty());
+    assert!(!directory.exists());
+}
+
+#[test]
 fn persistent_cache_and_append_match_a_fresh_claude_parse() {
     let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
