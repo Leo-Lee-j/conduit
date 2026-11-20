@@ -1120,7 +1120,9 @@ impl ConduitApp {
             .id("sidebar-active-task-list")
             .max_h(px(208.))
             .overflow_y_scroll();
-        for (index, (id, _, state)) in tasks.into_iter().enumerate() {
+        let row_radius = px(6.);
+        let outline_color = rgb(palette().focus);
+        for (id, _, state) in tasks {
             let Some(session) = self.session(id) else {
                 continue;
             };
@@ -1155,17 +1157,11 @@ impl ConduitApp {
                     .px_2()
                     .py_1()
                     .ghost()
+                    .selected(active)
                     .cursor_pointer()
-                    .rounded(px(6.))
+                    .rounded(row_radius)
                     .accessibility_label(format!("{title} · {workspace_name} · {status}"))
-                    .when(active, |row| {
-                        row.bg(rgb(palette().surface))
-                            .border_1()
-                            .border_color(rgb(palette().border))
-                    })
-                    .when(!active && index + 1 < count, |row| {
-                        row.border_b_1().border_color(rgb(palette().border))
-                    })
+                    .when(active, |row| row.bg(rgb(palette().surface)))
                     .child(
                         h_flex()
                             .w_full()
@@ -1238,7 +1234,32 @@ impl ConduitApp {
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.switch_sidebar_session(id, window, cx)
-                    })),
+                    }))
+                    .map(|button| {
+                        div()
+                            .relative()
+                            .flex_shrink_0()
+                            .group("active-task-row")
+                            .child(button)
+                            // Paint the outline separately so it never affects the row layout.
+                            .child(
+                                div()
+                                    .absolute()
+                                    .inset_0()
+                                    .rounded(row_radius)
+                                    .border_1()
+                                    .border_color(outline_color.opacity(if active {
+                                        1.
+                                    } else {
+                                        0.
+                                    }))
+                                    .when(!active, |outline| {
+                                        outline.group_hover("active-task-row", |style| {
+                                            style.border_color(outline_color.opacity(0.4))
+                                        })
+                                    }),
+                            )
+                    }),
             );
         }
         panel.child(list).into_any_element()
