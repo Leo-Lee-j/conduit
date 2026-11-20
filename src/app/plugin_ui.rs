@@ -605,51 +605,60 @@ impl ConduitApp {
             .into_any_element()
     }
     pub(super) fn branch_toolbar_button(&self, cx: &mut Context<Self>) -> AnyElement {
-        let pending_push = self.pending_push_status();
-        let branch_tooltip = pending_push.as_ref().map_or_else(
-            || conduit::i18n::text_static("plugin_ui.git_branches_and_log").to_owned(),
-            |(_, tooltip)| {
-                conduit::i18n::format(
-                    "plugin_ui.git_branches_and_log_27c010",
-                    &[("tooltip", tooltip.to_string())],
-                )
-            },
-        );
-        let button = h_flex()
-            .relative()
-            .items_center()
-            .flex_shrink_0()
-            .cursor_pointer()
-            .child(
-                Button::new("nav-branches")
-                    .debug_selector(|| "git-branch-trigger".into())
-                    .ghost()
-                    .small()
-                    .compact()
-                    .flex_shrink_0()
-                    .icon(FullIconName::GitBranch)
-                    .selected(self.branch_navigation_open())
-                    .tooltip(branch_tooltip.clone())
-                    .accessibility_label(branch_tooltip)
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if this.branch_navigation_open() {
-                            this.leave_branch_navigation();
-                            cx.notify();
-                        } else {
-                            this.show_branch_navigation(window, cx);
-                        }
-                    })),
+        let updates = [
+            ("↓", self.incoming_commits()),
+            ("↑", self.pending_push_status()),
+        ];
+        let counts = updates
+            .iter()
+            .filter_map(|(arrow, status)| {
+                let (count, _) = status.as_ref()?;
+                Some(if *count > 99 {
+                    format!("{arrow}99+")
+                } else {
+                    format!("{arrow}{count}")
+                })
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let tooltip = updates
+            .into_iter()
+            .filter_map(|(_, status)| status.map(|(_, tooltip)| tooltip))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let branch_tooltip = if tooltip.is_empty() {
+            conduit::i18n::text_static("plugin_ui.git_branches_and_log").to_owned()
+        } else {
+            conduit::i18n::format(
+                "plugin_ui.git_branches_and_log_27c010",
+                &[("tooltip", tooltip)],
             )
-            .when_some(pending_push, |row, (count, _)| {
-                row.child(
+        };
+        let button = Button::new("nav-branches")
+            .debug_selector(|| "git-branch-trigger".into())
+            .ghost()
+            .small()
+            .compact()
+            .flex_shrink_0()
+            .icon(FullIconName::GitBranch)
+            .selected(self.branch_navigation_open())
+            .tooltip(branch_tooltip.clone())
+            .accessibility_label(branch_tooltip)
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, window, cx| {
+                if this.branch_navigation_open() {
+                    this.leave_branch_navigation();
+                    cx.notify();
+                } else {
+                    this.show_branch_navigation(window, cx);
+                }
+            }))
+            .when(!counts.is_empty(), |button| {
+                button.child(
                     h_flex()
                         .id("nav-branches-badge")
                         .test_support()
                         .debug_selector(|| "nav-branches-badge".into())
-                        .absolute()
-                        .top_0()
-                        .right_0()
                         .min_w(px(14.))
                         .h(px(14.))
                         .px(px(3.))
@@ -660,11 +669,7 @@ impl ConduitApp {
                         .text_color(rgb(palette().on_text))
                         .text_size(ui_text_size(10.))
                         .line_height(relative(1.))
-                        .child(if count > 99 {
-                            "99+".to_owned()
-                        } else {
-                            count.to_string()
-                        }),
+                        .child(counts),
                 )
             });
         h_flex()
