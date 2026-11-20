@@ -4,6 +4,7 @@ use gpui_kit::component::switch::Switch;
 mod catalog;
 #[cfg(all(test, feature = "ui-tests"))]
 mod encourager_tests;
+mod provider_picker;
 
 fn pet_setting_row(
     id: &'static str,
@@ -372,73 +373,19 @@ impl ConduitApp {
                 });
             });
 
-        let providers: Vec<_> = self
-            .store
-            .providers
-            .iter()
-            .filter_map(|provider| {
-                let models = super::super::encourager::encourager_model_ids(provider);
-                (!models.is_empty()).then(|| (provider.id.clone(), provider.name.clone(), models))
-            })
-            .collect();
+        let providers = provider_picker::choices(&self.store.providers);
         let selected_provider = settings.provider_id.clone();
-        let provider_label = selected_provider
-            .as_ref()
-            .and_then(|id| providers.iter().find(|provider| &provider.0 == id))
-            .map(|provider| provider.1.clone())
-            .unwrap_or_else(|| {
-                conduit::i18n::text(if providers.is_empty() {
-                    "encourager.setting.no_service"
-                } else {
-                    "encourager.no_service"
-                })
-            });
-        let provider_view = view.clone();
-        let menu_providers = providers.clone();
-        let current_provider = selected_provider.clone();
-        let current_model = settings.model.clone();
-        let provider_picker = Button::new("encourager-provider")
-            .debug_selector(|| "encourager-provider".into())
-            .outline()
-            .h(px(32.))
-            .w_full()
-            .dropdown_caret(true)
-            .accessibility_label(conduit::i18n::text_static("encourager.setting.service"))
-            .label(provider_label)
-            .disabled(disabled || providers.is_empty())
-            .dropdown_menu(move |mut menu, _, _| {
-                for (id, name, models) in &menu_providers {
-                    let id = id.clone();
-                    let name = name.clone();
-                    let selected = current_provider.as_ref() == Some(&id);
-                    let model = current_model
-                        .as_ref()
-                        .filter(|model| selected && models.contains(model))
-                        .cloned()
-                        .or_else(|| models.first().cloned());
-                    let view = provider_view.clone();
-                    menu = menu.item(PopupMenuItem::new(name.clone()).checked(selected).on_click(
-                        move |_, _, cx| {
-                            view.update(cx, |app, cx| {
-                                if !app.writable || app.closing {
-                                    return;
-                                }
-                                app.reset_encourager_output();
-                                app.store.ui.encourager.provider_id = Some(id.clone());
-                                app.store.ui.encourager.model = model.clone();
-                                app.persist();
-                                cx.notify();
-                            });
-                        },
-                    ));
-                }
-                menu
-            });
+        let provider_picker = provider_picker::ProviderPicker {
+            app: view.clone(),
+            choices: providers.clone(),
+            selected: selected_provider.clone(),
+            disabled,
+        };
 
         let model_choices: Vec<_> = selected_provider
             .as_ref()
-            .and_then(|id| providers.iter().find(|provider| &provider.0 == id))
-            .map(|provider| provider.2.clone())
+            .and_then(|id| providers.iter().find(|provider| &provider.id == id))
+            .map(|provider| provider.models.clone())
             .unwrap_or_default();
         let model_label = settings
             .model

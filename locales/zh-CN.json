@@ -2302,6 +2302,8 @@
   "encourager.disabled": "功能已关闭",
   "encourager.description": "在桌面陪伴你的悬浮宠物。点击它互动，模型回复不会进入编程对话。",
   "encourager.setting.service": "模型服务",
+  "encourager.setting.search_services": "搜索名称、CLI 或配置来源…",
+  "encourager.setting.no_matching_services": "未找到匹配的服务",
   "encourager.setting.model": "模型",
   "encourager.setting.persona": "说话风格",
   "encourager.setting.verbosity": "回复长度",

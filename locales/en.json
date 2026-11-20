@@ -2302,6 +2302,8 @@
   "encourager.disabled": "Feature disabled",
   "encourager.description": "A floating companion for your desktop. Interact with it when you like; model replies stay out of your coding conversation.",
   "encourager.setting.service": "Model service",
+  "encourager.setting.search_services": "Search by name, CLI or source…",
+  "encourager.setting.no_matching_services": "No matching services",
   "encourager.setting.model": "Model",
   "encourager.setting.persona": "Voice",
   "encourager.setting.verbosity": "Reply length",

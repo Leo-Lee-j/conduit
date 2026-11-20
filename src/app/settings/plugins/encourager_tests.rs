@@ -25,6 +25,8 @@ impl Render for PetSettings {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
+            .text_size(px(14.))
+            .line_height(gpui_kit::relative(1.5))
             .p(px(16.))
             .bg(rgb(palette().canvas))
             .text_color(rgb(palette().text))
@@ -63,6 +65,9 @@ fn create_app(window: &mut Window, cx: &mut App, configured: bool) -> Entity<Con
     cx.new(|cx| {
         let mut app =
             ConduitApp::with_store(window, cx, Ok(sample_store(configured)), false, false);
+        // with_store imports cc-switch; keep this fixture independent of local accounts.
+        app.store.providers = sample_store(configured).providers;
+        app.ccs = Default::default();
         app.startup = None;
         app.writable = true;
         app.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
@@ -71,11 +76,17 @@ fn create_app(window: &mut Window, cx: &mut App, configured: bool) -> Entity<Con
 }
 
 fn draw(cx: &mut VisualTestContext) {
-    cx.run_until_parked();
-    cx.update(|window, cx| {
-        window.refresh();
-        let _ = window.draw(cx);
-    });
+    for _ in 0..3 {
+        cx.run_until_parked();
+        cx.background_executor
+            .advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.simulate_next_frame(cx);
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+    }
 }
 
 fn click(cx: &mut VisualTestContext, role: Role, label: &str) {
@@ -89,6 +100,13 @@ fn click(cx: &mut VisualTestContext, role: Role, label: &str) {
             .bounds()
             .center()
     });
+    cx.simulate_mouse_down(center, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(center, MouseButton::Left, Modifiers::default());
+    draw(cx);
+}
+
+fn click_provider(cx: &mut VisualTestContext, id: &'static str) {
+    let center = cx.debug_bounds(id).expect(id).center();
     cx.simulate_mouse_down(center, MouseButton::Left, Modifiers::default());
     cx.simulate_mouse_up(center, MouseButton::Left, Modifiers::default());
     draw(cx);
@@ -186,6 +204,11 @@ fn desktop_pet_selects_existing_provider_and_model(cx: &mut TestAppContext) {
                 id: "pet-imported".into(),
             };
             app.store.providers.push(imported);
+            let mut claude = app.store.providers[0].clone();
+            claude.id = "pet-claude".into();
+            claude.engine = Provider::Claude;
+            claude.models = vec!["claude-pet-model".into()];
+            app.store.providers.push(claude);
             app.store.ui.encourager.provider_id = None;
             app.store.ui.encourager.model = None;
         });
@@ -198,10 +221,10 @@ fn desktop_pet_selects_existing_provider_and_model(cx: &mut TestAppContext) {
     draw(cx);
     click(
         cx,
-        Role::Button,
+        Role::ComboBox,
         conduit::i18n::text_static("encourager.setting.service"),
     );
-    click(cx, Role::MenuItem, "Development API");
+    click_provider(cx, "encourager-provider-option-pet-test");
     cx.update(|_, cx| {
         let settings = &app.read(cx).store.ui.encourager;
         assert_eq!(settings.provider_id.as_deref(), Some("pet-test"));
@@ -222,10 +245,10 @@ fn desktop_pet_selects_existing_provider_and_model(cx: &mut TestAppContext) {
     // Reopening the same service must preserve the explicitly selected model.
     click(
         cx,
-        Role::Button,
+        Role::ComboBox,
         conduit::i18n::text_static("encourager.setting.service"),
     );
-    click(cx, Role::MenuItem, "Development API");
+    click_provider(cx, "encourager-provider-option-pet-test");
     cx.update(|_, cx| {
         assert_eq!(
             app.read(cx).store.ui.encourager.model.as_deref(),
@@ -234,10 +257,21 @@ fn desktop_pet_selects_existing_provider_and_model(cx: &mut TestAppContext) {
     });
     click(
         cx,
-        Role::Button,
+        Role::ComboBox,
         conduit::i18n::text_static("encourager.setting.service"),
     );
-    click(cx, Role::MenuItem, "Imported API");
+    // Searching the configuration source selects the underlying provider ID.
+    cx.simulate_input("CC-SWITCH");
+    draw(cx);
+    assert!(
+        cx.debug_bounds("encourager-provider-option-pet-test")
+            .is_none()
+    );
+    assert!(
+        cx.debug_bounds("encourager-provider-option-pet-claude")
+            .is_none()
+    );
+    click_provider(cx, "encourager-provider-option-ccs:codex:pet-imported");
     cx.update(|_, cx| {
         let settings = &app.read(cx).store.ui.encourager;
         assert_eq!(
@@ -254,16 +288,90 @@ fn desktop_pet_selects_existing_provider_and_model(cx: &mut TestAppContext) {
     click(cx, Role::MenuItem, "imported-model");
     click(
         cx,
-        Role::Button,
+        Role::ComboBox,
         conduit::i18n::text_static("encourager.setting.service"),
     );
-    click(cx, Role::MenuItem, "Development API");
+    click_provider(cx, "encourager-provider-option-pet-test");
     cx.update(|_, cx| {
         assert_eq!(
             app.read(cx).store.ui.encourager.model.as_deref(),
             Some("sample-chat-model")
         );
+    });
+    click(
+        cx,
+        Role::ComboBox,
+        conduit::i18n::text_static("encourager.setting.service"),
+    );
+    // A same-name service in another CLI remains independently selectable.
+    cx.simulate_input("  cLaUdE development  ");
+    draw(cx);
+    assert!(
+        cx.debug_bounds("encourager-provider-option-pet-test")
+            .is_none()
+    );
+    click_provider(cx, "encourager-provider-option-pet-claude");
+    cx.update(|_, cx| {
+        let settings = &app.read(cx).store.ui.encourager;
+        assert_eq!(settings.provider_id.as_deref(), Some("pet-claude"));
+        assert_eq!(settings.model.as_deref(), Some("claude-pet-model"));
+    });
+    click(
+        cx,
+        Role::ComboBox,
+        conduit::i18n::text_static("encourager.setting.service"),
+    );
+    cx.simulate_input("missing-service");
+    draw(cx);
+    assert!(cx.debug_bounds("encourager-provider-empty").is_some());
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+    cx.update(|_, cx| {
+        assert_eq!(
+            app.read(cx).store.ui.encourager.provider_id.as_deref(),
+            Some("pet-claude")
+        );
+    });
+    click(
+        cx,
+        Role::ComboBox,
+        conduit::i18n::text_static("encourager.setting.service"),
+    );
+    // Escape clears the previous search; a parent refresh must not clear a new one.
+    assert!(
+        cx.debug_bounds("encourager-provider-option-pet-test")
+            .is_some()
+    );
+    cx.simulate_input("CODEx development");
+    draw(cx);
+    cx.update(|_, cx| app.update(cx, |_, cx| cx.notify()));
+    draw(cx);
+    assert!(
+        cx.debug_bounds("encourager-provider-option-pet-claude")
+            .is_none()
+    );
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    cx.update(|_, cx| {
+        let settings = &app.read(cx).store.ui.encourager;
+        assert_eq!(settings.provider_id.as_deref(), Some("pet-test"));
+        assert_eq!(settings.model.as_deref(), Some("sample-chat-model"));
         app.update(cx, |app, _| app.persistence.flush());
+    });
+    click(
+        cx,
+        Role::ComboBox,
+        conduit::i18n::text_static("encourager.setting.service"),
+    );
+    cx.simulate_input("CC-SWITCH");
+    draw(cx);
+    // A menu opened while writable must not save after the app becomes read-only.
+    cx.update(|_, cx| app.update(cx, |app, _| app.writable = false));
+    click_provider(cx, "encourager-provider-option-ccs:codex:pet-imported");
+    cx.update(|_, cx| {
+        let settings = &app.read(cx).store.ui.encourager;
+        assert_eq!(settings.provider_id.as_deref(), Some("pet-test"));
+        assert_eq!(settings.model.as_deref(), Some("sample-chat-model"));
     });
 }
 
@@ -284,6 +392,9 @@ fn desktop_pet_settings_native_snapshots() {
                     ("dark-configured", 1000., 620., true, true),
                     ("light-configured", 1000., 620., false, true),
                     ("dark-narrow", 420., 800., true, true),
+                    ("dark-providers", 1000., 620., true, true),
+                    ("light-providers", 1000., 620., false, true),
+                    ("narrow-providers", 420., 800., true, true),
                 ] {
                     let handle = cx.update(|cx| {
                         cx.open_window(
@@ -297,6 +408,20 @@ fn desktop_pet_settings_native_snapshots() {
                             },
                             |window, cx| {
                                 let app = create_app(window, cx, configured);
+                                if name.ends_with("providers") {
+                                    app.update(cx, |app, _| {
+                                        let mut claude = app.store.providers[0].clone();
+                                        claude.id = "pet-claude".into();
+                                        claude.engine = Provider::Claude;
+                                        app.store.providers.push(claude);
+                                        let mut imported = app.store.providers[0].clone();
+                                        imported.id = "ccs:codex:pet-imported".into();
+                                        imported.source = ProviderSource::Ccs {
+                                            id: "pet-imported".into(),
+                                        };
+                                        app.store.providers.push(imported);
+                                    });
+                                }
                                 // App initialization applies the stored theme;
                                 // select this preview's mode afterward.
                                 let ui = Store::default().ui;
@@ -319,6 +444,49 @@ fn desktop_pet_settings_native_snapshots() {
                     cx.background_executor()
                         .timer(Duration::from_millis(200))
                         .await;
+                    if name.ends_with("providers") {
+                        handle
+                            .update(cx, |_, window, cx| {
+                                window.defer(cx, move |window, cx| {
+                                    window.refresh();
+                                    window.draw(cx).clear(cx);
+                                    let position = gpui_kit::base::test_support::snapshots(window)
+                                        .into_iter()
+                                        .find(|element| {
+                                            element.role() == Some(Role::ComboBox)
+                                                && element.label() == Some("模型服务")
+                                        })
+                                        .expect("provider select")
+                                        .bounds()
+                                        .center();
+                                    window.dispatch_event(
+                                        gpui_kit::PlatformInput::MouseDown(
+                                            gpui_kit::MouseDownEvent {
+                                                position,
+                                                button: MouseButton::Left,
+                                                click_count: 1,
+                                                ..Default::default()
+                                            },
+                                        ),
+                                        cx,
+                                    );
+                                    window.dispatch_event(
+                                        gpui_kit::PlatformInput::MouseUp(gpui_kit::MouseUpEvent {
+                                            position,
+                                            button: MouseButton::Left,
+                                            click_count: 1,
+                                            ..Default::default()
+                                        }),
+                                        cx,
+                                    );
+                                    window.draw(cx).clear(cx);
+                                });
+                            })
+                            .unwrap();
+                        cx.background_executor()
+                            .timer(Duration::from_millis(250))
+                            .await;
+                    }
                     let saved = std::rc::Rc::new(std::cell::Cell::new(false));
                     let completed = saved.clone();
                     handle
