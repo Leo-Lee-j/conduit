@@ -83,7 +83,8 @@ struct Consumption {
     elapsed_ms: u64,
     turns: usize,
     incomplete: bool,
-    cache_incomplete: bool,
+    cache_hit_input: u64,
+    cache_hit_cached: u64,
 }
 impl Consumption {
     fn add(&mut self, turn: &Observation) {
@@ -98,20 +99,17 @@ impl Consumption {
         self.elapsed_ms = self.elapsed_ms.saturating_add(turn.elapsed_ms);
         self.turns += 1;
         self.incomplete |= turn.incomplete || turn.input.is_none() || turn.output.is_none();
-        self.cache_incomplete |= match (turn.input, turn.cached) {
-            (Some(input), Some(cached)) => cached > input,
-            _ => true,
-        };
+        if let (Some(input), Some(cached)) = (turn.input, turn.cached)
+            && cached <= input
+        {
+            self.cache_hit_input = self.cache_hit_input.saturating_add(input);
+            self.cache_hit_cached = self.cache_hit_cached.saturating_add(cached);
+        }
     }
     fn cache_hit(self) -> Option<f64> {
-        if self.cache_incomplete {
-            return None;
-        }
-        match (self.cached, self.input) {
-            (Some(cached), Some(input)) if input > 0 && cached <= input => {
-                Some(cached as f64 * 100. / input as f64)
-            }
-            _ => None,
+        match self.cache_hit_input {
+            0 => None,
+            input => Some(self.cache_hit_cached as f64 * 100. / input as f64),
         }
     }
 }
@@ -1154,15 +1152,58 @@ mod tests {
     }
 
     #[test]
-    fn cache_hit_requires_matching_input_and_cache_coverage() {
+    fn cache_hit_uses_only_turns_with_known_input_and_cache() {
         let records = [
             turn("known", Some(100), Some(80), Some(20)),
             turn("uncached-unknown", Some(200), None, Some(40)),
+            turn("input-unknown", None, Some(50), Some(10)),
         ];
         let (total, _) = consumption(records.iter(), None);
         assert_eq!(total.input, Some(300));
-        assert_eq!(total.cache_hit(), None);
+        assert_eq!(total.cached, Some(130));
+        assert_eq!(total.output, Some(70));
+        assert_eq!(total.cache_hit(), Some(80.));
+    }
+
+    #[test]
+    fn cache_hit_excludes_invalid_turns() {
         let invalid = [turn("invalid", Some(100), Some(200), Some(20))];
         assert_eq!(consumption(invalid.iter(), None).0.cache_hit(), None);
+        let known = turn("known", Some(100), Some(80), Some(20));
+        let (total, _) = consumption(invalid.iter(), Some(&known));
+        assert_eq!(total.input, Some(200));
+        assert_eq!(total.cached, Some(280));
+        assert_eq!(total.cache_hit(), Some(80.));
+    }
+
+    #[test]
+    fn cache_hit_is_weighted_by_eligible_input() {
+        let records = [
+            turn("small", Some(100), Some(80), Some(20)),
+            turn("large", Some(300), Some(60), Some(40)),
+        ];
+        assert_eq!(consumption(records.iter(), None).0.cache_hit(), Some(35.));
+    }
+
+    #[test]
+    fn live_turn_without_usage_keeps_known_cache_hit() {
+        let records = [turn("known", Some(100), Some(80), Some(20))];
+        let current = turn("live", None, None, None);
+        let (total, latest) = consumption(records.iter(), Some(&current));
+        assert_eq!(total.input, Some(100));
+        assert_eq!(total.cached, Some(80));
+        assert_eq!(total.turns, 2);
+        assert_eq!(total.cache_hit(), Some(80.));
+        assert_eq!(latest.unwrap().key, "live");
+    }
+
+    #[test]
+    fn cache_hit_distinguishes_zero_from_unknown() {
+        let known_zero = [turn("zero", Some(100), Some(0), Some(20))];
+        assert_eq!(consumption(known_zero.iter(), None).0.cache_hit(), Some(0.));
+        let unknown = [turn("unknown", Some(100), None, Some(20))];
+        assert_eq!(consumption(unknown.iter(), None).0.cache_hit(), None);
+        let no_input = [turn("empty", Some(0), Some(0), Some(20))];
+        assert_eq!(consumption(no_input.iter(), None).0.cache_hit(), None);
     }
 }
