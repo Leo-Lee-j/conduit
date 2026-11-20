@@ -1747,6 +1747,20 @@ impl ConduitApp {
                             .on_click(cx.listener(move |this, _, _, cx| this.load_file(id, cx))),
                     )
                     .child(
+                        Button::new(("file-reveal-in-file-manager", id))
+                            .debug_selector(|| "file-reveal-in-file-manager".into())
+                            .ghost()
+                            .small()
+                            .compact()
+                            .icon(FullIconName::FolderOpen)
+                            .tooltip(conduit::i18n::text_static("files.reveal_in_file_manager"))
+                            .accessibility_label(conduit::i18n::text_static(
+                                "files.reveal_in_file_manager",
+                            ))
+                            .cursor_pointer()
+                            .on_click(move |_, _, cx| cx.reveal_path(&path)),
+                    )
+                    .child(
                         Button::new(("file-copy-path-toolbar", id))
                             .debug_selector(|| "file-copy-path-toolbar".into())
                             .ghost()
