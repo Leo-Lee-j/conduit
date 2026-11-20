@@ -667,7 +667,34 @@ impl ConduitApp {
                         }),
                 )
             });
-        button.into_any_element()
+        h_flex()
+            .items_center()
+            .gap(px(4.))
+            .flex_shrink_0()
+            .child(button)
+            .when_some(
+                self.git.operation.as_ref().filter(|op| !op.automatic_stage),
+                |row, operation| {
+                    let label = conduit::i18n::format(
+                        "plugin_ui.git_operation_in_progress",
+                        &[("workspace", operation.probe.path.display().to_string())],
+                    );
+                    row.child(
+                        div()
+                            .id("git-operation-progress")
+                            .debug_selector(|| "git-operation-progress".into())
+                            .role(Role::ProgressIndicator)
+                            .aria_label(label.clone())
+                            .flex_shrink_0()
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(label.clone())
+                                    .build(window, cx)
+                            })
+                            .child(Spinner::new().small()),
+                    )
+                },
+            )
+            .into_any_element()
     }
 
     pub(super) fn render_navigation(

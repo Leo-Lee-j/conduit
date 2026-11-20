@@ -374,6 +374,7 @@ fn merge_conflict_is_detected_blocks_mutations_and_can_abort_or_continue() {
     let original = repo.run(&["rev-parse", "HEAD"]);
     let result = branch_run(&repo, "other", BranchAction::Merge);
     assert!(result.error.is_some(), "{result:?}");
+    assert_eq!(result.message, "将分支 other 合并到分支 main 未完成");
     assert_eq!(repo.metadata().integration, Some(IntegrationState::Merge));
     assert_eq!(repo.metadata().conflicts, vec!["tracked.txt"]);
     assert!(
@@ -407,6 +408,8 @@ fn merge_conflict_is_detected_blocks_mutations_and_can_abort_or_continue() {
     );
     repo.stage("resolved\n");
     assert_branch_ok(recover(BranchAction::Continue(IntegrationState::Merge)));
+    let result = assert_branch_ok(branch_run(&repo, "other", BranchAction::Merge));
+    assert_eq!(result.message, "已将分支 other 合并到分支 main");
     assert_eq!(repo.metadata().integration, None);
     assert_eq!(
         repo.run(&["rev-list", "--parents", "-n", "1", "HEAD"])
@@ -423,7 +426,8 @@ fn checkout_rebase_uses_original_current_branch_and_reports_conflict_after_check
     repo.run(&["branch", "other"]);
     repo.stage("main\n");
     assert!(repo.commit("main", false).committed);
-    assert_branch_ok(branch_run(&repo, "other", BranchAction::CheckoutRebase));
+    let result = assert_branch_ok(branch_run(&repo, "other", BranchAction::CheckoutRebase));
+    assert_eq!(result.message, "已切换到 other，并将其变基到 main");
     assert_eq!(repo.metadata().current, "other");
     assert_eq!(
         repo.run(&["rev-parse", "HEAD"]),
@@ -435,7 +439,7 @@ fn checkout_rebase_uses_original_current_branch_and_reports_conflict_after_check
     repo.stage("main2\n");
     assert!(repo.commit("main2", false).committed);
     let result = branch_run(&repo, "other", BranchAction::CheckoutRebase);
-    assert!(result.message.contains("已切换到 other"), "{result:?}");
+    assert_eq!(result.message, "已切换到 other；变基到 main 未完成");
     assert!(result.error.is_some());
     assert_eq!(repo.metadata().integration, Some(IntegrationState::Rebase));
     let request = BranchRequest {
@@ -461,11 +465,9 @@ fn rebase_conflict_can_continue_after_external_resolution() {
     repo.run(&["switch", "main"]);
     repo.stage("main\n");
     assert!(repo.commit("main", false).committed);
-    assert!(
-        branch_run(&repo, "other", BranchAction::Rebase)
-            .error
-            .is_some()
-    );
+    let result = branch_run(&repo, "other", BranchAction::Rebase);
+    assert!(result.error.is_some());
+    assert_eq!(result.message, "将分支 main 变基到 other 未完成");
     assert_eq!(repo.metadata().integration, Some(IntegrationState::Rebase));
     repo.stage("resolved\n");
     let request = BranchRequest {
@@ -481,6 +483,8 @@ fn rebase_conflict_can_continue_after_external_resolution() {
     assert_eq!(repo.metadata().current, "main");
     assert_eq!(repo.metadata().integration, None);
     repo.run(&["merge-base", "--is-ancestor", "other", "main"]);
+    let result = assert_branch_ok(branch_run(&repo, "other", BranchAction::Rebase));
+    assert_eq!(result.message, "已将分支 main 变基到 other");
 }
 
 #[test]
@@ -541,11 +545,12 @@ fn update_fetches_and_fast_forwards_noncurrent_branch_without_checkout() {
     ]);
     repo.run(&["-C", clone.to_str().unwrap(), "push", "-q"]);
     let main = repo.run(&["rev-parse", "main"]);
-    assert_branch_ok(branch_run(
+    let result = assert_branch_ok(branch_run(
         &repo,
         "other",
         BranchAction::Update { rebase: true },
     ));
+    assert_eq!(result.message, "已从上游 origin/main 更新分支 other");
     assert_eq!(repo.metadata().current, "main");
     assert_eq!(repo.run(&["rev-parse", "main"]), main);
     assert_eq!(
@@ -561,6 +566,15 @@ fn update_fetches_and_fast_forwards_noncurrent_branch_without_checkout() {
     assert_eq!(
         repo.run(&["rev-parse", "HEAD"]),
         repo.run(&["rev-parse", "other"])
+    );
+    let result = assert_branch_ok(branch_run(
+        &repo,
+        "other",
+        BranchAction::CheckoutUpdate { rebase: false },
+    ));
+    assert_eq!(
+        result.message,
+        "已切换到 other，并从上游 origin/main 更新该分支"
     );
 }
 
@@ -600,13 +614,21 @@ fn update_noncurrent_ahead_branch_keeps_its_commits_and_rejects_divergence() {
     repo.stage("main\n");
     assert!(repo.commit("main", false).committed);
     repo.run(&["push", "-q"]);
-    assert!(
-        branch_run(&repo, "other", BranchAction::Update { rebase: true })
-            .error
-            .is_some()
-    );
+    let result = branch_run(&repo, "other", BranchAction::Update { rebase: true });
+    assert!(result.error.is_some());
+    assert_eq!(result.message, "从上游 origin/main 更新分支 other 未完成");
     assert_eq!(repo.run(&["rev-parse", "other"]), other);
     assert_eq!(repo.metadata().current, "main");
+    let result = branch_run(
+        &repo,
+        "other",
+        BranchAction::CheckoutUpdate { rebase: false },
+    );
+    assert!(result.error.is_some());
+    assert_eq!(
+        result.message,
+        "已切换到 other；从上游 origin/main 更新该分支未完成"
+    );
 }
 
 #[test]

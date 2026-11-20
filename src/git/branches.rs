@@ -356,6 +356,13 @@ pub(super) fn operate_branch(
                 "git.branches.branch_or_head_changed_refresh_and_retry"
             ));
         }
+        // Capture the original target before checkout/rebase changes HEAD.
+        let current = actual
+            .current_ref
+            .as_deref()
+            .map(display_ref)
+            .or(actual.head.as_deref())
+            .unwrap_or("HEAD");
         let recovery = matches!(
             request.action,
             BranchAction::Continue(_) | BranchAction::Abort(_)
@@ -590,24 +597,51 @@ pub(super) fn operate_branch(
                 Ok(conduit::i18n::text("workflow.cleaned"))
             }
             BranchAction::Merge | BranchAction::Rebase => {
+                let branch = selected()?;
+                let merging = matches!(request.action, BranchAction::Merge);
+                let names = [
+                    (
+                        "source",
+                        if merging {
+                            branch.name.clone()
+                        } else {
+                            current.to_owned()
+                        },
+                    ),
+                    (
+                        "target",
+                        if merging {
+                            current.to_owned()
+                        } else {
+                            branch.name.clone()
+                        },
+                    ),
+                ];
+                progress = conduit::i18n::format(
+                    if merging {
+                        "git.branches.merge_incomplete"
+                    } else {
+                        "git.branches.rebase_incomplete"
+                    },
+                    &names,
+                );
                 if actual.current_ref.is_none() {
                     bail!(conduit::i18n::text(
                         "git.branches.switch_back_to_a_local_branch_first"
                     ));
                 }
                 ensure_clean(&git, workspace, cancel)?;
-                let branch = selected()?;
-                if matches!(request.action, BranchAction::Merge) {
+                if merging {
                     run(&["merge", "--no-edit", &branch.oid])?;
                     Ok(conduit::i18n::format(
-                        "git.branches.merged_into_the_current_branch",
-                        &[("arg0", branch.name.to_string())],
+                        "git.branches.merged_branches",
+                        &names,
                     ))
                 } else {
                     run(&["rebase", &branch.oid])?;
                     Ok(conduit::i18n::format(
-                        "git.branches.rebased_the_current_branch_onto",
-                        &[("arg0", branch.name.to_string())],
+                        "git.branches.rebased_branches",
+                        &names,
                     ))
                 }
             }
@@ -620,17 +654,22 @@ pub(super) fn operate_branch(
                 })?;
                 let name = checkout(&git, workspace, selected()?, cancel)?;
                 progress = conduit::i18n::format(
-                    "git.branches.switched_to_subsequent_rebase_incomplete",
-                    &[("name", name.to_string())],
+                    "git.branches.checkout_rebase_incomplete",
+                    &[("name", name.clone()), ("target", current.to_owned())],
                 );
                 run(&["rebase", head])?;
                 Ok(conduit::i18n::format(
-                    "git.branches.switched_to_and_rebased_onto_the_original",
-                    &[("name", name.to_string())],
+                    "git.branches.checked_out_and_rebased",
+                    &[("name", name.to_string()), ("target", current.to_owned())],
                 ))
             }
             BranchAction::Update { rebase } | BranchAction::CheckoutUpdate { rebase } => {
                 let branch = selected()?;
+                let upstream = if branch.remote {
+                    Some(branch.full_ref.as_str())
+                } else {
+                    branch.upstream.as_deref()
+                };
                 let name = if matches!(request.action, BranchAction::CheckoutUpdate { .. }) {
                     ensure_clean(&git, workspace, cancel)?;
                     let name = checkout(&git, workspace, branch, cancel)?;
@@ -643,10 +682,27 @@ pub(super) fn operate_branch(
                     local(branch)?;
                     branch.name.clone()
                 };
-                update(&git, workspace, &name, rebase, cancel)?;
+                if let Some(upstream) = upstream {
+                    progress = conduit::i18n::format(
+                        if matches!(request.action, BranchAction::CheckoutUpdate { .. }) {
+                            "git.branches.checkout_update_incomplete"
+                        } else {
+                            "git.branches.update_incomplete"
+                        },
+                        &[
+                            ("name", name.clone()),
+                            ("upstream", display_ref(upstream).to_owned()),
+                        ],
+                    );
+                }
+                let upstream = update(&git, workspace, &name, rebase, cancel)?;
                 Ok(conduit::i18n::format(
-                    "git.branches.updated_branch",
-                    &[("name", name.to_string())],
+                    if matches!(request.action, BranchAction::CheckoutUpdate { .. }) {
+                        "git.branches.checked_out_and_updated"
+                    } else {
+                        "git.branches.updated_from_upstream"
+                    },
+                    &[("name", name.to_string()), ("upstream", upstream)],
                 ))
             }
             BranchAction::Continue(expected) | BranchAction::Abort(expected) => {
@@ -716,13 +772,20 @@ pub(super) fn operate_branch(
     }
 }
 
+fn display_ref(reference: &str) -> &str {
+    reference
+        .strip_prefix("refs/heads/")
+        .or_else(|| reference.strip_prefix("refs/remotes/"))
+        .unwrap_or(reference)
+}
+
 fn update(
     git: &Path,
     workspace: &Path,
     name: &str,
     rebase: bool,
     cancel: &AtomicBool,
-) -> Result<()> {
+) -> Result<String> {
     let (context, branches, _, _, _) = metadata(git, workspace, cancel)?;
     let branch = branches
         .iter()
@@ -814,7 +877,7 @@ fn update(
         )
         .is_ok()
         {
-            return Ok(());
+            return Ok(display_ref(upstream).to_owned());
         }
         run_git(
             git,
@@ -834,5 +897,5 @@ fn update(
             &branch.oid,
         ])?;
     }
-    Ok(())
+    Ok(display_ref(upstream).to_owned())
 }

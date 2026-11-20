@@ -8,6 +8,115 @@ use gpui_kit::{
 
 mod approvals;
 
+#[gpui_kit::test]
+fn git_results_wait_for_toast_capacity_and_clear_progress(cx: &mut TestAppContext) {
+    use crate::app::GitOperation;
+    use crate::git::{OperationProbe, OperationResult};
+    use crate::notifications::Target;
+
+    let _locale = crate::test_support::chinese();
+    let (app, cx) = fixture(cx, true);
+    for (message, error, disconnect) in [
+        ("Merged feature into main", None, false),
+        ("Updated branch main", None, false),
+        ("Merge incomplete", Some("Merge conflict"), false),
+        ("Worker disconnected", None, true),
+    ] {
+        let (sender, path, blockers) = cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.notifications.center.mark_all_read(unix_now());
+                app.poll_notifications(window, cx);
+                let blockers: Vec<_> = (0..2)
+                    .map(|index| {
+                        app.notify_user(
+                            Notice::new(Source::App, Level::Info, "Other task", index.to_string()),
+                            cx,
+                        )
+                    })
+                    .collect();
+                app.poll_notifications(window, cx);
+                assert_eq!(app.notifications.visible.len(), 2);
+                let path = app.store.workspaces[0].path.clone();
+                let (sender, events) = std::sync::mpsc::channel();
+                let mut probe = OperationProbe::test_pending(path.clone());
+                probe.events = events;
+                app.git.operation = Some(GitOperation {
+                    probe,
+                    worktree: path.clone(),
+                    draft: String::new(),
+                    commit_push: None,
+                    automatic_stage: false,
+                });
+                // Results retain the operation's workspace after navigation elsewhere.
+                app.selected_workspace = Some(1);
+                app.selected_session = Some(2);
+                app.input
+                    .update(cx, |input, cx| input.set_value("keep draft", window, cx));
+                cx.notify();
+                (sender, path, blockers)
+            })
+        });
+        draw(cx);
+        assert!(cx.debug_bounds("git-operation-progress").is_some());
+        if !disconnect {
+            sender
+                .send(Ok(OperationResult {
+                    retry_completed: false,
+                    retry_tag: None,
+                    committed: false,
+                    message: message.into(),
+                    error: error.map(str::to_owned),
+                    worktree_created: None,
+                }))
+                .unwrap();
+        }
+        drop(sender);
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.poll_git_actions(window, cx);
+                assert!(app.git.operation.is_none());
+                let record = app
+                    .notifications
+                    .center
+                    .records()
+                    .iter()
+                    .find(|record| record.source == Source::Git && record.read_at.is_none())
+                    .unwrap();
+                let id = record.id;
+                assert_eq!(record.target, Some(Target::Workspace(path)));
+                assert_eq!(
+                    record.level,
+                    if error.is_some() || disconnect {
+                        Level::Error
+                    } else {
+                        Level::Success
+                    }
+                );
+                if !disconnect {
+                    assert!(record.message.contains(message));
+                }
+                app.poll_notifications(window, cx);
+                assert_eq!(app.notifications.pending, vec![id]);
+                assert!(!app.notifications.visible.contains_key(&id));
+                let count = app.notifications.center.records().len();
+                app.poll_git_actions(window, cx);
+                app.poll_notifications(window, cx);
+                assert_eq!(app.notifications.center.records().len(), count);
+                assert_eq!(app.notifications.pending, vec![id]);
+                app.notifications.center.mark_read(blockers[0], unix_now());
+                app.poll_notifications(window, cx);
+                assert!(app.notifications.pending.is_empty());
+                assert!(app.notifications.visible.contains_key(&id));
+                assert_eq!(app.selected_workspace, Some(1));
+                assert_eq!(app.selected_session, Some(2));
+                assert_eq!(app.input.read(cx).value(), "keep draft");
+            })
+        });
+        draw(cx);
+        assert!(cx.debug_bounds("git-operation-progress").is_none());
+    }
+}
+
 fn fixture(
     cx: &mut TestAppContext,
     sessions: bool,

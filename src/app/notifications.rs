@@ -909,7 +909,9 @@ impl ConduitApp {
             if !self.notifications.visible.contains_key(&id)
                 && self.notifications.visible.len() >= 2
             {
-                self.notifications.overflow = self.notifications.overflow.saturating_add(1);
+                // Keep result toasts queued until a visible slot is released.
+                // Dropping them here makes completed background operations silent.
+                self.notifications.pending.push(id);
                 continue;
             }
             let revision = record.revision;
