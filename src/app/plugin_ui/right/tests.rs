@@ -152,6 +152,74 @@ fn session_data_opens_on_session_entry_and_respects_manual_changes(cx: &mut Test
 }
 
 #[gpui_kit::test]
+fn session_data_preserves_agent_history_statuses_and_session_isolation(cx: &mut TestAppContext) {
+    use crate::subagents::{Agent, Status};
+    use gpui_kit::base::test_support::find;
+
+    let _locale = crate::test_support::chinese();
+    let mut store = store();
+    let agents: Vec<_> = [
+        Status::Completed,
+        Status::Failed,
+        Status::Stopped,
+        Status::Idle,
+        Status::Unknown,
+        Status::Completed,
+        Status::Failed,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, status)| Agent {
+        id: format!("agent-{index}"),
+        run: format!("history-{}", index / 4),
+        name: format!("历史子代理 {index}"),
+        status,
+        ..Default::default()
+    })
+    .collect();
+    store.workspaces[0].sessions[0].subagents = agents.clone();
+    let (app, cx) = fixture(cx, store, PluginUi::new());
+    cx.simulate_resize(gpui_kit::size(px(1100.), px(1600.)));
+    draw(cx);
+
+    // Imported history can contain agents without tool messages or usage records.
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert!(app.session_control.runs.is_empty());
+        assert!(app.session(1).unwrap().messages.is_empty());
+        assert!(app.store.usage_ledger.observations.is_empty());
+    });
+    let assert_agents = |cx: &mut VisualTestContext, present: bool| {
+        for agent in &agents {
+            let id = SharedString::from(format!("session-data-agent-{}-{}", agent.run, agent.id));
+            let element = cx.update(|window, _| find(window, &[], &id.into()));
+            if present {
+                let element = element.expect("every recorded agent must remain inspectable");
+                assert!(element.visible());
+                assert!(element.label().unwrap().contains(agent.status.label()));
+            } else {
+                assert!(
+                    element.is_none(),
+                    "agents must stay scoped to their session"
+                );
+            }
+        }
+    };
+    assert_agents(cx, true);
+    click_labeled(cx, Role::Button, "工具与子代理");
+    assert_agents(cx, false);
+    click_labeled(cx, Role::Button, "工具与子代理");
+    assert_agents(cx, true);
+
+    cx.update(|window, cx| app.update(cx, |app, cx| app.switch(1, Some(2), window, cx)));
+    draw(cx);
+    assert_agents(cx, false);
+    cx.update(|window, cx| app.update(cx, |app, cx| app.switch(0, Some(1), window, cx)));
+    draw(cx);
+    assert_agents(cx, true);
+}
+
+#[gpui_kit::test]
 fn session_data_plan_stays_visible_without_usage_or_timing_details(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, tool_store(), PluginUi::new());

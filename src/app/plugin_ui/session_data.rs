@@ -373,6 +373,7 @@ fn agent_row(agent: &Agent) -> impl IntoElement {
         });
     h_flex()
         .id(identity)
+        .test_support()
         .role(Role::Group)
         .aria_label(tooltip.clone())
         .w_full()
@@ -873,7 +874,7 @@ impl ConduitApp {
                 &[
                     ("calls", stats.count.to_string()),
                     ("failed", stats.failed.to_string()),
-                    ("agents", active_agents.to_string()),
+                    ("agents", session.subagents.len().to_string()),
                 ],
             )
         } else {
@@ -929,23 +930,26 @@ impl ConduitApp {
             } else {
                 tool_details = tool_details.child(caption(text("session_data.loading_history")));
             }
-            let mut agents = v_flex().px_3().pb_3().gap_2().child(row(
-                "session_data.active_agents",
-                active_agents.to_string(),
-                cx,
-            ));
-            for agent in session
-                .subagents
-                .iter()
-                .filter(|agent| {
-                    run.is_some_and(|run| agent.run == run.prefix) && agent.status.active()
-                })
-                .take(5)
-            {
-                agents = agents.child(agent_row(agent));
-            }
             tools = tools.child(tool_details);
-            if active_agents > 0 {
+            if !session.subagents.is_empty() {
+                // History and terminal results remain inspectable after the run ends.
+                // Only the active count above is scoped to the current run.
+                let agents = v_flex()
+                    .px_3()
+                    .pb_3()
+                    .gap_2()
+                    .child(div().text_size(ui_text_size(13.)).font_semibold().child(
+                        conduit::i18n::format(
+                            "subagents.title",
+                            &[("total", session.subagents.len().to_string())],
+                        ),
+                    ))
+                    .child(row(
+                        "session_data.active_agents",
+                        active_agents.to_string(),
+                        cx,
+                    ))
+                    .children(session.subagents.iter().map(agent_row));
                 tools = tools.child(agents);
             }
         }
@@ -1065,7 +1069,7 @@ impl ConduitApp {
         if !plan.is_empty()
             || total.turns > 0
             || stats.is_some_and(|stats| stats.count > 0)
-            || active_agents > 0
+            || !session.subagents.is_empty()
         {
             content = content.child(timing);
         }
