@@ -122,8 +122,20 @@ fn branch_manager_navigation_filters_favorites_commit_diff_and_workspace_isolati
     repo.git(&["branch", "feat/a"]);
     repo.git(&["branch", "feat/b"]);
     repo.git(&["branch", "feat/ui/panel"]);
+    // Seed overlapping remote names directly: newer Git rejects them in `remote add`.
     for remote in ["origin", "origin/team"] {
-        repo.git(&["remote", "add", remote, other.0.to_str().unwrap()]);
+        repo.git(&[
+            "config",
+            "--local",
+            &format!("remote.{remote}.url"),
+            other.0.to_str().unwrap(),
+        ]);
+        repo.git(&[
+            "config",
+            "--local",
+            &format!("remote.{remote}.fetch"),
+            &format!("+refs/heads/*:refs/remotes/{remote}/*"),
+        ]);
         repo.git(&[
             "update-ref",
             &format!("refs/remotes/{remote}/feat/a"),
