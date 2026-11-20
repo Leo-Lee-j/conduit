@@ -157,7 +157,7 @@ fn session_age_label_at(activity_at: u64, now: u64) -> Option<String> {
     DateTime::from_timestamp(activity_at as i64, 0)?;
     let seconds = now.saturating_sub(activity_at);
     if seconds < 60 {
-        return Some(conduit::i18n::text_static("sidebar.age_just_now").into());
+        return None;
     }
     let (key, count) = match seconds {
         seconds if seconds < 60 * 60 => ("sidebar.age_minutes", seconds / 60),
@@ -423,8 +423,6 @@ mod relative_time_tests {
     fn sidebar_age_labels_use_localized_units_and_handle_boundaries() {
         let now = 10_000_000;
         let cases = [
-            (0, "刚刚", "Just now"),
-            (59, "刚刚", "Just now"),
             (60, "1 分钟前", "1 min ago"),
             (5 * 60, "5 分钟前", "5 min ago"),
             (3599, "59 分钟前", "59 min ago"),
@@ -446,6 +444,9 @@ mod relative_time_tests {
                     session_age_label_at(now - elapsed, now).as_deref(),
                     Some(expected)
                 );
+            }
+            for elapsed in [0, 1, 59] {
+                assert!(session_age_label_at(now - elapsed, now).is_none());
             }
             assert!(session_age_label_at(0, now).is_none());
             assert!(session_age_label_at(i64::MAX as u64, now).is_none());
