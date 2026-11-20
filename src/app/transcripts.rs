@@ -21,6 +21,9 @@ impl ConduitApp {
         if let Some(id) = self.selected_session {
             self.request_transcript(id, cx);
         }
+        if let Some(id) = self.visible_subagent_transcript() {
+            self.request_transcript(id, cx);
+        }
     }
 
     pub(super) fn request_transcript(&mut self, id: u64, cx: &mut Context<Self>) {
@@ -129,6 +132,7 @@ impl ConduitApp {
     }
 
     pub(super) fn trim_transcripts(&mut self) {
+        let visible_child = self.visible_subagent_transcript();
         let mut count = 0;
         let mut bytes = 0;
         let mut candidates = Vec::new();
@@ -141,6 +145,7 @@ impl ConduitApp {
                 count += 1;
                 bytes += size;
                 if self.selected_session != Some(session.id)
+                    && visible_child != Some(session.id)
                     && !self.session_control.runs.contains_key(&session.id)
                     && !self.session_control.namings.contains_key(&session.id)
                     && !self.queued_messages.contains_key(&session.id)

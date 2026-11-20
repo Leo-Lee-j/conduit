@@ -62,6 +62,8 @@ pub struct Agent {
     pub run: String,
     /// Provider turn/task identity; permits completed agents to accept a new task.
     pub task_id: String,
+    /// Observed from this owning connection, never inferred from a task ID.
+    pub direct_input: Option<bool>,
 }
 impl Agent {
     pub fn new(id: &str, parent_id: &str) -> Self {
@@ -242,4 +244,39 @@ mod tests {
         );
         std::fs::remove_dir_all(root).unwrap();
     }
+}
+
+/// Verified by a metadata-only native history read in this data-source namespace.
+/// Kept separately from task summaries, which are bounded and can be replaced.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChildBinding {
+    pub root: u64,
+    pub root_native: String,
+    pub native: String,
+    pub parent: String,
+    pub source: std::path::PathBuf,
+    pub idle: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChildCommand {
+    pub thread: String,
+    pub turn: String,
+    /// None interrupts exactly `turn`; Some steers with an expected-turn precondition.
+    pub text: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub enum CommandOutcome {
+    Accepted,
+    Rejected(String),
+    Unknown(String),
+}
+
+/// Durable unresolved command: crash recovery never resubmits this automatically.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PendingChildCommand {
+    pub root: u64,
+    pub run: String,
+    pub command: ChildCommand,
 }

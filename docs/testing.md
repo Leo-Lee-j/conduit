@@ -34,6 +34,8 @@ cargo run --locked
 | 多引擎协议、权限审批、用户输入、会话恢复 | `protocol::`、`cli_adapter::`、`chat_runtime::` |
 | 取消、异常退出、子进程与终端清理 | `child::`、`chat_runtime::`、`terminal::` |
 | 跨会话隔离、审批失效、插件权限与路径边界 | `app::ui_tests`、`app::notifications::tests::approvals`、`plugins::`、`plugin_packages::` |
+| 内容分栏的发送目标、预览归属、异步刷新及引用定位 | `app::files::panes::tests`、`app::github::tests`、`app::usage::tests`、`store::tests::ui_settings_default_to_five_sessions_and_roundtrip` |
+| 文件变化、工具证据核对、Unicode 回放及新版本取消 | `content_review_`，覆盖不明确替换/截断 patch/竞争工具拒绝关联、可见快照语义、Markdown 恢复、减少动态效果与跟随暂停 |
 | Git 写操作、更新验签、安装回滚、重启恢复 | `git::`、`update::`、`app::update::tests` |
 
 纯布局尺寸、渲染次数、缓存命中次数、主题样式和品牌图标映射交由界面改动时人工验收。滚动保留异步正文、流式输出与待处理输入的行为回归，不逐一锁定控件几何尺寸。缓存测试检查过期结果隔离和数据正确性，不要求指针复用或固定解析次数。新增测试应说明它保护的核心行为；已有覆盖足够时扩展现有用例，不为每个控件或辅助函数增加一组测试。
@@ -61,6 +63,8 @@ cargo test --locked --lib update:: -- --test-threads=1
 | 工作区长列表 | 100 条会话展开后从中间精简；标题吸顶与跨组替换、标题上的滚轮、置顶保留、当前聊天与草稿不变；标题右侧浅底列表图标和底部“精简列表”均可点击，鼠标精简无边框，键盘圆角焦点不改变行尺寸与位置 |
 | 队列与恢复 | 排队、撤回编辑、保存失败、取消、普通退出及更新后恢复正文与附件，不重复发送 |
 | 阅读与文件 | 长回复、代码、Mermaid、文本选择复制、冷正文加载/重试、精确/模糊查找和独立滚动；Markdown 悬浮大纲的层级、折叠、重复标题跳转、窄视口和内容刷新 |
+| 内容分栏 | 跨工作区参考文件不改变发送目标；全区/并排搬移、组内批量关闭、窄窗切组与比例恢复；双文件刷新、旧快照保留及删除重建恢复 |
+| 文件变化与回放 | 普通刷新不滚动或切文件；修改块与删除边界；主动回放、暂停/继续/重播、返回当前 Markdown；中文/组合字符/emoji、查找和复制当前可见内容；滚动/换会话/隐藏暂停跟随，新版本结束旧回放 |
 | Git | 部分暂存与未选中文件、按钮状态、分支鼠标菜单、冲突恢复、标签推送失败重试、统一通知 |
 | 终端 | 实际 cwd、中文/空格路径、TUI/鼠标、Ctrl+C 与复制区别、多行粘贴、切换/收起/关闭及子进程清理 |
 | 设置 | 表单未保存离开、只读、模型/来源切换、敏感信息、CLI 检查与安装状态、MCP 检测取消 |
@@ -77,3 +81,10 @@ cargo test --locked --lib update:: -- --test-threads=1
 人工结果需要实际操作步骤、窗口/DPI/主题、预期与观察。截图和日志保留在 `target/` 或原型 artifacts，不提交账户数据或凭据。性能使用固定负载和完整报告，见[性能与指标](performance.md)；Shell 的 G1–G6 准入另见[插件验证](plugins/validation.md)。
 
 新增回归放进所属模块，不按审查批次另建测试文件。更新实现约束和验收清单即可，无需将每次命令输出追加到长期文档。
+
+子代理导航与编辑回归：`cargo test --locked --features ui-tests --bin conduit app::subagents:: -- --test-threads=1`。覆盖主任务持续输出、任务行/详情/返回的键盘操作、根草稿与输入选区保留、错误目标与重复原生 ID 拒绝关联、读取失败返回、标签路由恢复及主记录缺失时禁止误发。同时覆盖独立子草稿、附件恢复、来源身份隔离、发送前保存、定向控制回执和根记录删除保护；真实 CLI 的子会话写入或停止能力由下述原生探针验证。
+
+
+子会话交互回归使用 `app::subagents::`、`protocol::subagents::`、`cli_adapter::child_history::` 三组过滤器，覆盖独立输入恢复、历史/实时去重、保存门闩、旧回合拒绝及未知命令不重发。跨模块回归包括 `app::runtime::saves::`、`app::queue::`、`app::transcripts::`、`app::update::` 和通知/审批测试。
+
+原生协议探针：`python scripts/probe-subagent-protocol.py --codex <绝对可执行文件路径>`。探针使用独立 CODEX_HOME 和本地合成模型响应，验证真实父子关系的定向控制、历史与续聊，不连接真实模型服务。成功必须包含全部断言；结果和原生事件在 `target/subagent-protocol-probe/`，不作为实际模型质量或真实窗口验收证据。

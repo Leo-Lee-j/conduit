@@ -5,6 +5,29 @@ use crate::workspace_files::{self, Entry, FileKey, Stamp};
 use conduit::plugins::{builtins, ids::ViewId};
 use std::ops::Range;
 
+mod observations;
+mod panes;
+use super::file_preview::changes::ChangeSet;
+pub(super) use panes::Pane;
+
+/// Shared by image/error pages and the text preview's current visible snapshot.
+pub(super) fn file_status(status: String) -> AnyElement {
+    h_flex()
+        .id("file-document-status")
+        .debug_selector(|| "file-document-status".into())
+        .h(px(24.))
+        .flex_shrink_0()
+        .min_w_0()
+        .px_3()
+        .items_center()
+        .border_t_1()
+        .border_color(rgb(palette().border))
+        .text_size(ui_text_size(10.))
+        .text_color(rgb(palette().muted))
+        .child(div().min_w_0().truncate().child(status))
+        .into_any_element()
+}
+
 fn is_markdown(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -53,6 +76,10 @@ struct Explorer {
 }
 struct Document {
     key: FileKey,
+    changes: Option<Arc<ChangeSet>>,
+    updated: bool,
+    matched_tool: Option<(u64, String)>,
+    observations: Vec<observations::Observation>,
     is_image: bool,
     text: SharedString,
     image: Option<Arc<RenderImage>>,
@@ -61,6 +88,9 @@ struct Document {
     stamp: Option<Stamp>,
     encoding: &'static str,
     loading: bool,
+    dirty: bool,
+    retry_at: Option<Instant>,
+    failures: u32,
     error: Option<String>,
     revision: u64,
     sequence: u64,
@@ -71,6 +101,7 @@ enum LoadedDocumentFile {
     Text {
         file: workspace_files::TextFile,
         highlights: Vec<(Range<usize>, &'static str)>,
+        changes: Option<Arc<ChangeSet>>,
     },
     Image {
         image: Arc<RenderImage>,
@@ -83,10 +114,13 @@ struct DiffDocument {
     file: git::ChangedFile,
     view: Entity<GitDiffDialog>,
 }
+type TabLayout = std::cell::RefCell<(Vec<DocumentTab>, Option<DocumentTab>, Pixels, bool)>;
+
 #[derive(Default)]
 pub(super) struct FileBrowser {
+    panes: panes::State,
     tab_scroll: ScrollHandle,
-    tab_layout: std::cell::RefCell<(Vec<DocumentTab>, Option<DocumentTab>, Pixels, bool)>,
+    tab_layout: TabLayout,
     explorers: HashMap<PathBuf, Explorer>,
     documents: HashMap<u64, Document>,
     diffs: HashMap<u64, DiffDocument>,
@@ -340,7 +374,7 @@ struct FileViewSnapshot {
     appearance: (u32, u32, u32, Option<String>, u32, bool),
 }
 impl FileViewSnapshot {
-    fn new(app: &ConduitApp) -> Self {
+    fn new(app: &ConduitApp, pane: Pane) -> Self {
         let mut approvals: Vec<_> = app
             .session_control
             .runs
@@ -361,7 +395,7 @@ impl FileViewSnapshot {
             .collect();
         errors.sort_unstable();
         Self {
-            document: app.active_file.and_then(|id| {
+            document: app.pane_file(pane).and_then(|id| {
                 app.files.documents.get(&id).map(|d| {
                     (
                         id,
@@ -388,6 +422,7 @@ impl FileViewSnapshot {
     }
 }
 pub(super) struct FileDocumentView {
+    pane: Pane,
     app: WeakEntity<ConduitApp>,
     snapshot: Option<FileViewSnapshot>,
     #[cfg(test)]
@@ -395,15 +430,16 @@ pub(super) struct FileDocumentView {
     _subscription: Subscription,
 }
 impl FileDocumentView {
-    pub(super) fn new(app: WeakEntity<ConduitApp>, cx: &mut Context<Self>) -> Self {
+    pub(super) fn new(app: WeakEntity<ConduitApp>, pane: Pane, cx: &mut Context<Self>) -> Self {
         let subscription = cx.observe(&app.upgrade().expect("app is alive"), |view, app, cx| {
-            let next = FileViewSnapshot::new(app.read(cx));
+            let next = FileViewSnapshot::new(app.read(cx), view.pane);
             if view.snapshot.as_ref() != Some(&next) {
                 view.snapshot = Some(next);
                 cx.notify();
             }
         });
         Self {
+            pane,
             app,
             snapshot: None,
             #[cfg(test)]
@@ -419,10 +455,10 @@ impl Render for FileDocumentView {
             self.render_count += 1;
         }
         if let Some(app) = self.app.upgrade() {
-            self.snapshot = Some(FileViewSnapshot::new(app.read(cx)));
+            self.snapshot = Some(FileViewSnapshot::new(app.read(cx), self.pane));
         }
         self.app
-            .update(cx, |app, cx| app.render_file_document(cx))
+            .update(cx, |app, cx| app.render_file_document(self.pane, cx))
             .unwrap_or_else(|_| div().into_any_element())
     }
 }
@@ -449,7 +485,25 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.leave_branch_navigation();
+        let overlay = matches!(
+            tab,
+            DocumentTab::Settings | DocumentTab::Usage(_) | DocumentTab::PullRequest(_)
+        );
+        if overlay {
+            self.remember_content_overlay();
+        } else {
+            self.leave_content_overlay();
+        }
+        if let DocumentTab::File(id) = tab
+            && let Some(document) = self.files.documents.get(&id)
+        {
+            document
+                .preview
+                .update(cx, |preview, cx| preview.pause_review(cx));
+        }
+        if self.document_pane(tab) == Pane::Main {
+            self.leave_branch_navigation();
+        }
         if !matches!(tab, DocumentTab::Settings) {
             self.usage_ui.active = None;
             self.github_ui.active = None;
@@ -462,6 +516,15 @@ impl ConduitApp {
             self.settings_ui
                 .search
                 .update(cx, |input, cx| input.set_value("", window, cx));
+        }
+        if let DocumentTab::File(id) = tab
+            && self.document_pane(tab) == Pane::Reference
+        {
+            self.select_reference_file(id, window, cx);
+            return;
+        }
+        if !overlay {
+            self.focus_main_pane();
         }
         match tab {
             DocumentTab::PullRequest(id) => {
@@ -479,6 +542,11 @@ impl ConduitApp {
                         .find(|s| !s.archived && !s.is_subagent)
                         .map(|s| s.id);
                     self.switch_context(index, session, false, window, cx);
+                    // Navigating a full-page document to another workspace
+                    // also changes Main's return context. Keep its pane layout.
+                    if let Some((tab, _, _)) = self.files.panes.overlay.as_mut() {
+                        *tab = self.selected_session.map(DocumentTab::Chat);
+                    }
                 }
                 self.active_file = None;
                 self.active_diff = None;
@@ -501,6 +569,11 @@ impl ConduitApp {
                         .find(|s| !s.archived && !s.is_subagent)
                         .map(|s| s.id);
                     self.switch_context(index, session, false, window, cx);
+                    // Navigating a full-page document to another workspace
+                    // also changes Main's return context. Keep its pane layout.
+                    if let Some((tab, _, _)) = self.files.panes.overlay.as_mut() {
+                        *tab = self.selected_session.map(DocumentTab::Chat);
+                    }
                 }
                 self.active_file = None;
                 self.active_diff = None;
@@ -520,7 +593,9 @@ impl ConduitApp {
                     if self.selected_session == Some(id) && self.selected_workspace == Some(index) {
                         self.active_file = None;
                         self.push_tab(id);
-                        self.session_control.unread_completed.remove(&id);
+                        if !self.viewing_subagent() {
+                            self.session_control.unread_completed.remove(&id);
+                        }
                         if let Some(provider) = self.session(id).map(|s| s.provider) {
                             self.new_session_provider = provider;
                             self.remember_provider(provider);
@@ -528,11 +603,17 @@ impl ConduitApp {
                         self.input.read(cx).focus_handle(cx).focus(window, cx);
                         cx.notify();
                     } else {
-                        self.switch(index, Some(id), window, cx);
+                        self.switch_context(index, Some(id), true, window, cx);
                     }
+                    self.ensure_child_editor(window, cx);
+                    self.request_child_history(false, cx);
+                    self.focus_subagent_page(window, cx);
                 }
             }
             DocumentTab::File(id) => {
+                if self.active_file != Some(id) && self.active_document().is_some() {
+                    self.files.panes.return_main = self.active_document();
+                }
                 self.active_diff = None;
                 let Some(key) = self.files.documents.get(&id).map(|d| d.key.clone()) else {
                     return;
@@ -572,6 +653,9 @@ impl ConduitApp {
                     .read(cx)
                     .focus_handle(cx)
                     .focus(window, cx);
+                if !self.files.documents[&id].loading {
+                    self.load_file(id, cx);
+                }
                 cx.notify();
             }
             DocumentTab::Diff(id) => {
@@ -629,6 +713,14 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let overlay_return = self.content_overlay_return();
+        let overlay_pane = self.files.panes.overlay.map(|(_, _, pane)| pane);
+        let closing_reference = self
+            .files
+            .panes
+            .active
+            .is_some_and(|id| tabs.contains(&DocumentTab::File(id)));
+        let reference_focused = self.files.panes.last == Pane::Reference;
         let active = self.active_document();
         let closing_active = active.is_some_and(|tab| tabs.contains(&tab));
         // Capture the owner before removing the document. Tab order is global,
@@ -692,6 +784,32 @@ impl ConduitApp {
                 }
             }
         }
+        self.repair_reference_pane();
+        // Settings can cover another full-page document. Preserve that page's
+        // own return route instead of skipping straight back to the chat.
+        if closing_settings
+            && closing_active
+            && (self.usage_ui.active.is_some() || self.github_ui.active.is_some())
+            && let Some(previous) = self
+                .active_document()
+                .filter(|tab| self.open_tabs.contains(tab))
+        {
+            self.select_document(previous, window, cx);
+            return;
+        }
+        if closing_active
+            && matches!(
+                active,
+                Some(DocumentTab::Settings | DocumentTab::Usage(_) | DocumentTab::PullRequest(_))
+            )
+            && let Some(previous) = overlay_return.filter(|tab| !tabs.contains(tab))
+        {
+            self.select_document(previous, window, cx);
+            if overlay_pane == Some(Pane::Reference) && self.files.panes.split {
+                self.show_content_pane(Pane::Reference, window, cx);
+            }
+            return;
+        }
         if closing_active && let Some(workspace) = document_workspace {
             self.active_diff = None;
             self.active_file = None;
@@ -731,7 +849,13 @@ impl ConduitApp {
         } else if closing_active && !closing_settings {
             self.active_diff = None;
             self.active_file = None;
-            if let Some(next) = self.open_tabs.last().copied() {
+            if let Some(next) = self
+                .open_tabs
+                .iter()
+                .rev()
+                .copied()
+                .find(|tab| self.document_pane(*tab) == Pane::Main)
+            {
                 self.select_document(next, window, cx);
             } else if let Some(workspace) = self.selected_workspace {
                 self.switch(workspace, None, window, cx);
@@ -742,7 +866,13 @@ impl ConduitApp {
             let next = self
                 .active_document()
                 .filter(|tab| self.open_tabs.contains(tab))
-                .or_else(|| self.open_tabs.last().copied());
+                .or_else(|| {
+                    self.open_tabs
+                        .iter()
+                        .rev()
+                        .copied()
+                        .find(|tab| self.document_pane(*tab) == Pane::Main)
+                });
             if let Some(active) = next {
                 self.select_document(active, window, cx);
             } else if tabs.iter().any(|tab| *tab != DocumentTab::Settings) {
@@ -753,6 +883,17 @@ impl ConduitApp {
                 }
             } else {
                 self.input.read(cx).focus_handle(cx).focus(window, cx);
+            }
+        }
+        if closing_reference && reference_focused && !closing_active {
+            if let Some(id) = self.files.panes.active {
+                self.files.documents[&id]
+                    .preview
+                    .read(cx)
+                    .focus_handle(cx)
+                    .focus(window, cx);
+            } else {
+                self.focus_main_content(window, cx);
             }
         }
         cx.notify();
@@ -830,6 +971,7 @@ impl ConduitApp {
         if self.files.preview.is_some_and(|id| ids.contains(&id)) {
             self.files.preview = None;
         }
+        self.repair_reference_pane();
     }
 
     pub(super) fn open_workspace_file(
@@ -858,12 +1000,15 @@ impl ConduitApp {
 
     pub(super) fn reveal_file_position(
         &self,
+        key: &FileKey,
         position: super::file_preview::SourcePosition,
         cx: &mut Context<Self>,
     ) {
         if let Some(document) = self
-            .active_file
-            .and_then(|id| self.files.documents.get(&id))
+            .files
+            .documents
+            .values()
+            .find(|document| &document.key == key)
         {
             document
                 .preview
@@ -885,14 +1030,25 @@ impl ConduitApp {
             .find(|(_, d)| d.key == key)
             .map(|(id, _)| *id)
         {
-            if pinned && self.files.preview == Some(id) {
-                self.files.preview = None;
+            if pinned {
+                self.pin_file(id);
             }
             self.select_document(DocumentTab::File(id), window, cx);
             return;
         }
+        let pane = if self.store.ui.files_open_beside
+            && (self.selected_session.is_some()
+                || self.active_file.is_some()
+                || self.active_diff.is_some())
+        {
+            Pane::Reference
+        } else {
+            Pane::Main
+        };
         let mut preview_position = None;
-        if !pinned && let Some(old) = self.files.preview.take() {
+        if !pinned && let Some(old) = self.pane_preview(pane) {
+            self.set_pane_preview(pane, None);
+            self.files.panes.files.remove(&old);
             preview_position = self
                 .open_tabs
                 .iter()
@@ -914,6 +1070,10 @@ impl ConduitApp {
             id,
             Document {
                 key,
+                changes: None,
+                updated: false,
+                matched_tool: None,
+                observations: Vec::new(),
                 is_image,
                 text: "".into(),
                 image: None,
@@ -922,6 +1082,9 @@ impl ConduitApp {
                 stamp: None,
                 encoding: "",
                 loading: false,
+                dirty: false,
+                retry_at: None,
+                failures: 0,
                 error: None,
                 revision: 0,
                 sequence: 0,
@@ -935,13 +1098,22 @@ impl ConduitApp {
         } else {
             self.open_tabs.push(DocumentTab::File(id));
         }
+        if pane == Pane::Reference {
+            self.files.panes.files.insert(id);
+        }
         if !pinned {
-            self.files.preview = Some(id);
+            self.set_pane_preview(pane, Some(id));
         }
         // Read-only files have a separate cap; browsing must never evict chat tabs.
         while self.files.documents.len() > 20 {
             let Some(old) = self.open_tabs.iter().find_map(|t| match t {
-                DocumentTab::File(old) if *old != id => Some(*old),
+                DocumentTab::File(old)
+                    if *old != id
+                        && Some(*old) != self.active_file
+                        && Some(*old) != self.files.panes.active =>
+                {
+                    Some(*old)
+                }
                 _ => None,
             }) else {
                 break;
@@ -956,8 +1128,12 @@ impl ConduitApp {
                 self.files.preview = None;
             }
         }
+        self.repair_reference_pane();
         self.select_document(DocumentTab::File(id), window, cx);
-        self.load_file(id, cx);
+        if pane == Pane::Main {
+            self.files.panes.split = false;
+        }
+        // Both group activation paths schedule the initial read.
     }
 
     fn load_file(&mut self, id: u64, cx: &mut Context<Self>) {
@@ -965,17 +1141,16 @@ impl ConduitApp {
             return;
         };
         if document.loading {
+            document.dirty = true;
             return;
         }
-        if let Some(image) = document.image.take() {
-            cx.drop_image(image, None);
-        }
-        document.image_dimensions = None;
+        document.dirty = false;
         document.loading = true;
         document.sequence += 1;
         let sequence = document.sequence;
         let key = document.key.clone();
         let is_image = document.is_image;
+        let before = document.stamp.as_ref().map(|_| document.text.clone());
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -998,7 +1173,15 @@ impl ConduitApp {
                         workspace_files::read(&key).map(|file| {
                             let highlights =
                                 super::code_highlight::highlight_file(&key.relative, &file.text);
-                            LoadedDocumentFile::Text { file, highlights }
+                            let changes = before
+                                .as_ref()
+                                .and_then(|before| ChangeSet::between(before, &file.text))
+                                .map(Arc::new);
+                            LoadedDocumentFile::Text {
+                                file,
+                                highlights,
+                                changes,
+                            }
                         })
                     }
                 })
@@ -1011,10 +1194,24 @@ impl ConduitApp {
                     return;
                 }
                 document.loading = false;
+                if result.is_ok() {
+                    document.failures = 0;
+                    document.retry_at = None;
+                    if let Some(image) = document.image.take() {
+                        cx.drop_image(image, None);
+                    }
+                }
                 match result {
-                    Ok(LoadedDocumentFile::Text { file, highlights }) => {
+                    Ok(LoadedDocumentFile::Text {
+                        file,
+                        highlights,
+                        changes,
+                    }) => {
                         if document.text.as_ref() != file.text {
                             document.revision += 1;
+                            document.updated = document.stamp.is_some();
+                            document.changes = changes;
+                            document.matched_tool = None;
                         }
                         document.text = file.text.into();
                         document.image = None;
@@ -1023,12 +1220,14 @@ impl ConduitApp {
                         document.stamp = Some(file.stamp);
                         document.encoding = file.encoding;
                         document.error = None;
+                        observations::match_observation(document);
                     }
                     Ok(LoadedDocumentFile::Image {
                         image,
                         dimensions,
                         stamp,
                     }) => {
+                        document.updated = document.stamp.as_ref().is_some_and(|old| old != &stamp);
                         document.revision += 1;
                         document.text = "".into();
                         document.image = Some(image);
@@ -1039,8 +1238,20 @@ impl ConduitApp {
                         document.error = None;
                     }
                     Err(error) => {
+                        document
+                            .preview
+                            .update(cx, |preview, cx| preview.stop_replay(cx));
                         document.error = Some(error);
+                        document.failures = document.failures.saturating_add(1);
+                        document.retry_at = Some(
+                            Instant::now()
+                                + Duration::from_secs(2u64.pow(document.failures.min(5))),
+                        );
                     }
+                }
+                let reread = document.dirty && document.error.is_none();
+                if reread && this.visible_file_documents().contains(&id) {
+                    this.load_file(id, cx);
                 }
                 cx.notify();
             });
@@ -1137,13 +1348,24 @@ impl ConduitApp {
             return;
         }
         self.files.last_poll = Some(Instant::now());
-        let document = self.active_file.and_then(|id| {
-            self.files
-                .documents
-                .get(&id)
-                .filter(|d| !d.loading && d.error.is_none())
-                .map(|d| (id, d.key.clone(), d.stamp.clone()))
-        });
+        let documents: Vec<_> = self
+            .visible_file_documents()
+            .into_iter()
+            .filter_map(|id| {
+                self.files
+                    .documents
+                    .get(&id)
+                    .filter(|d| !d.loading && d.retry_at.is_none_or(|at| Instant::now() >= at))
+                    .map(|d| {
+                        (
+                            id,
+                            d.key.clone(),
+                            d.stamp.clone(),
+                            d.dirty || d.error.is_some(),
+                        )
+                    })
+            })
+            .collect();
         let root = (self.plugins.is_selected(builtins::FILES))
             .then(|| {
                 self.selected_workspace
@@ -1165,18 +1387,23 @@ impl ConduitApp {
                     .collect()
             })
             .unwrap_or_default();
-        if document.is_none() && directories.is_empty() {
+        if documents.is_empty() && directories.is_empty() {
             return;
         }
         self.files.polling = true;
         cx.spawn(async move |this, cx| {
-            let (changed_file, changed_dirs) = cx
+            let (changed_files, changed_dirs) = cx
                 .background_executor()
                 .spawn(async move {
-                    let file = document.and_then(|(id, key, old)| {
-                        (workspace_files::stamp(&key.workspace.join(&key.relative)).ok() != old)
-                            .then_some(id)
-                    });
+                    let files: Vec<_> = documents
+                        .into_iter()
+                        .filter_map(|(id, key, old, force)| {
+                            (force
+                                || workspace_files::stamp(&key.workspace.join(&key.relative)).ok()
+                                    != old)
+                                .then_some(id)
+                        })
+                        .collect();
                     let dirs: Vec<_> = directories
                         .into_iter()
                         .filter_map(|(root, path, old)| {
@@ -1184,13 +1411,16 @@ impl ConduitApp {
                                 .then_some((root, path))
                         })
                         .collect();
-                    (file, dirs)
+                    (files, dirs)
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.files.polling = false;
-                if let Some(id) = changed_file {
-                    this.load_file(id, cx);
+                let visible = this.visible_file_documents();
+                for id in changed_files {
+                    if visible.contains(&id) {
+                        this.load_file(id, cx);
+                    }
                 }
                 for (root, path) in changed_dirs {
                     if this.files.explorers.contains_key(&root) {
@@ -1548,8 +1778,8 @@ impl ConduitApp {
             .into_any_element()
     }
 
-    pub(super) fn render_file_document(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(id) = self.active_file else {
+    pub(super) fn render_file_document(&self, pane: Pane, cx: &mut Context<Self>) -> AnyElement {
+        let Some(id) = self.pane_file(pane) else {
             return div().into_any_element();
         };
         let Some(document) = self.files.documents.get(&id) else {
@@ -1577,13 +1807,18 @@ impl ConduitApp {
         let is_image = document.is_image;
         let parent_label = parts.join(" / ");
         let text = document.text.clone();
-        let copy = text.clone();
+
         let wrap = document.wrap;
         let image = document.image.clone();
         let status = if document.loading {
             conduit::i18n::text_static("files.reading").to_string()
         } else if document.error.is_some() {
-            conduit::i18n::text_static("files.read_only_preview_unavailable").to_string()
+            conduit::i18n::text_static(if document.stamp.is_some() {
+                "files.preview_stale"
+            } else {
+                "files.read_only_preview_unavailable"
+            })
+            .to_string()
         } else if let Some((width, height)) = document.image_dimensions {
             conduit::i18n::format(
                 "files.read_only_image",
@@ -1651,6 +1886,42 @@ impl ConduitApp {
                                 }
                                 this.input.read(cx).focus_handle(cx).focus(window, cx);
                                 cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new(("file-move-pane", id))
+                            .debug_selector(move || format!("file-move-pane-{id}"))
+                            .ghost()
+                            .small()
+                            .compact()
+                            .icon(if pane == Pane::Main {
+                                FullIconName::Columns2
+                            } else {
+                                FullIconName::Maximize
+                            })
+                            .tooltip(conduit::i18n::text_static(if pane == Pane::Main {
+                                "files.show_beside"
+                            } else {
+                                "files.show_full"
+                            }))
+                            .accessibility_label(conduit::i18n::text_static(
+                                if pane == Pane::Main {
+                                    "files.show_beside"
+                                } else {
+                                    "files.show_full"
+                                },
+                            ))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.move_file_to_pane(
+                                    id,
+                                    if pane == Pane::Main {
+                                        Pane::Reference
+                                    } else {
+                                        Pane::Main
+                                    },
+                                    window,
+                                    cx,
+                                )
                             })),
                     )
                     .child(
@@ -1788,13 +2059,48 @@ impl ConduitApp {
                                 "files.copy_file_contents",
                             ))
                             .cursor_pointer()
-                            .disabled(document.error.is_some() || document.loading || is_image)
-                            .on_click(move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(copy.to_string()))
-                            }),
+                            .disabled(document.stamp.is_none() || is_image)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(document) = this.files.documents.get(&id) {
+                                    let text = document.preview.update(cx, |preview, cx| {
+                                        preview.pause_replay(cx);
+                                        preview.visible_source()
+                                    });
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        text.to_string(),
+                                    ));
+                                }
+                            })),
                     ),
             );
-        if let Some(error) = &document.error {
+        let mut external_status = true;
+        if document.is_image && document.updated {
+            page = page.child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_size(ui_text_size(11.))
+                    .child(conduit::i18n::text_static("files.changes.updated")),
+            );
+        }
+        if let Some(error) = &document.error
+            && document.stamp.is_some()
+        {
+            page = page.child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_size(ui_text_size(11.))
+                    .text_color(rgb(palette().warning_text))
+                    .child(format!(
+                        "{} · {error}",
+                        conduit::i18n::text_static("files.preview_stale")
+                    )),
+            );
+        }
+        if let Some(error) = &document.error
+            && document.stamp.is_none()
+        {
             page = page.child(
                 v_flex()
                     .flex_1()
@@ -1826,7 +2132,7 @@ impl ConduitApp {
                     .justify_center()
                     .child(Spinner::new()),
             );
-        } else if text.is_empty() {
+        } else if text.is_empty() && (is_image || !document.updated) {
             if let Some(image) = image {
                 page = page.child(
                     div()
@@ -1856,34 +2162,46 @@ impl ConduitApp {
             if typography.body_font.is_none() {
                 typography.body_font = Some(Theme::global(cx).font_family.clone());
             }
+            // The preview renders the line count itself so replay frames and
+            // their status always describe the same visible snapshot.
+            external_status = document.loading || document.error.is_some();
             document.preview.update(cx, |preview, cx| {
+                preview.set_status_encoding((!external_status).then_some(document.encoding), cx);
                 preview.sync(text, document.highlights.clone(), wrap, typography, cx);
+                preview.set_changes(
+                    document.changes.clone(),
+                    document.updated,
+                    document.matched_tool.as_ref().map(|(id, key)| {
+                        (
+                            *id,
+                            self.session(*id)
+                                .map_or_else(|| key.clone(), |session| session.title.clone()),
+                        )
+                    }),
+                    self.selected_session,
+                    cx,
+                );
             });
             page = page.child(document.preview.clone());
         }
-        page = page.child(
-            h_flex()
-                .id("file-document-status")
-                .debug_selector(|| "file-document-status".into())
-                .h(px(24.))
-                .flex_shrink_0()
-                .min_w_0()
-                .px_3()
-                .items_center()
-                .border_t_1()
-                .border_color(rgb(palette().border))
-                .text_size(ui_text_size(10.))
-                .text_color(rgb(palette().muted))
-                .child(div().min_w_0().truncate().child(status)),
-        );
-        if let Some(attention) = self.document_attention(cx) {
+        if external_status {
+            page = page.child(file_status(status));
+        }
+        if pane == Pane::Main
+            && let Some(attention) = self.document_attention(cx)
+        {
             page = page.child(attention);
         }
         page.into_any_element()
     }
 
-    fn document_tabs(&self) -> Vec<DocumentTab> {
-        let tabs = self.open_tabs.clone();
+    fn document_tabs_for(&self, pane: Pane) -> Vec<DocumentTab> {
+        let tabs: Vec<_> = self
+            .open_tabs
+            .iter()
+            .copied()
+            .filter(|tab| self.document_pane(*tab) == pane)
+            .collect();
         if !self.store.ui.group_tabs {
             return tabs;
         }
@@ -1915,27 +2233,32 @@ impl ConduitApp {
     }
 
     pub(super) fn document_tab_bar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let tabs = self.document_tabs();
+        self.document_tab_bar_for(Pane::Main, cx)
+    }
+
+    fn document_tab_bar_for(&self, pane: Pane, cx: &mut Context<Self>) -> AnyElement {
+        let tabs = self.document_tabs_for(pane);
         let selected = self
-            .active_document()
+            .pane_document(pane)
             .and_then(|t| tabs.iter().position(|item| *item == t));
-        let active = self.active_document();
+        let active = self.pane_document(pane);
         {
-            let mut layout = self.files.tab_layout.borrow_mut();
+            let mut layout = self.pane_tab_layout(pane).borrow_mut();
             if layout.0 != tabs || layout.1 != active || layout.3 != self.store.ui.group_tabs {
                 layout.0 = tabs.clone();
                 layout.1 = active;
                 layout.3 = self.store.ui.group_tabs;
                 if let Some(index) = selected {
-                    self.files.tab_scroll.scroll_to_item(index);
+                    self.pane_tab_scroll(pane).scroll_to_item(index);
                 }
             }
         }
-        let mut bar = TabBar::new("session-tabs")
+        let mut bar = TabBar::new(SharedString::from(format!("session-tabs-{}", pane.key())))
             .folder()
+            .bg(rgb(palette().document_tab_bar_bg))
             .menu(true)
             .max_width(px(240.))
-            .track_scroll(&self.files.tab_scroll)
+            .track_scroll(self.pane_tab_scroll(pane))
             .with_size(Size::Medium)
             .h(px(TAB_BAR_HEIGHT))
             .pr(px(8.))
@@ -2117,7 +2440,8 @@ impl ConduitApp {
                 icon
             };
             let group = SharedString::from(selector.clone());
-            let preview = matches!(tab, DocumentTab::File(id) if self.files.preview == Some(id));
+            let preview =
+                matches!(tab, DocumentTab::File(id) if self.pane_preview(pane) == Some(id));
             let mut item = Tab::new()
                 .debug_selector(move || selector.clone())
                 .aria_label(title.clone())
@@ -2128,8 +2452,8 @@ impl ConduitApp {
                 })
                 .on_hover(cx.listener(move |this, hovered, _, _| {
                     if *hovered {
-                        this.tab_menu_target = Some(tab);
-                    } else if this.tab_menu_target == Some(tab) {
+                        this.tab_menu_target = Some((pane, tab));
+                    } else if this.tab_menu_target == Some((pane, tab)) {
                         this.tab_menu_target = None;
                     }
                 }))
@@ -2165,9 +2489,8 @@ impl ConduitApp {
                         this.select_document(tab, window, cx);
                         if event.click_count() == 2
                             && let DocumentTab::File(id) = tab
-                            && this.files.preview == Some(id)
                         {
-                            this.files.preview = None;
+                            this.pin_file(id);
                             cx.notify();
                         }
                     },
@@ -2185,16 +2508,25 @@ impl ConduitApp {
         let app = cx.entity();
         let resize_app = app.downgrade();
         div()
-            .id("document-tab-strip")
+            .id(SharedString::from(format!(
+                "document-tab-strip-{}",
+                pane.key()
+            )))
             .test_support()
-            .debug_selector(|| "document-tab-strip".into())
+            .debug_selector(move || {
+                if pane == Pane::Main {
+                    "document-tab-strip".into()
+                } else {
+                    "reference-tab-strip".into()
+                }
+            })
             .relative()
             .h(px(TAB_BAR_HEIGHT))
             .min_w_0()
             .flex_shrink_0()
             .on_prepaint(move |bounds, window, cx| {
                 let _ = resize_app.update(cx, |this, cx| {
-                    let mut layout = this.files.tab_layout.borrow_mut();
+                    let mut layout = this.pane_tab_layout(pane).borrow_mut();
                     if layout.2 != bounds.size.width {
                         layout.2 = bounds.size.width;
                         // The tracked viewport still contains the previous
@@ -2202,10 +2534,12 @@ impl ConduitApp {
                         let view = cx.weak_entity();
                         window.on_next_frame(move |_, cx| {
                             let _ = view.update(cx, |this, cx| {
-                                if let Some(index) = this.active_document().and_then(|tab| {
-                                    this.document_tabs().iter().position(|item| *item == tab)
+                                if let Some(index) = this.pane_document(pane).and_then(|tab| {
+                                    this.document_tabs_for(pane)
+                                        .iter()
+                                        .position(|item| *item == tab)
                                 }) {
-                                    this.files.tab_scroll.scroll_to_item(index);
+                                    this.pane_tab_scroll(pane).scroll_to_item(index);
                                     cx.notify();
                                 }
                             });
@@ -2215,33 +2549,60 @@ impl ConduitApp {
             })
             .child(bar)
             .context_menu(move |menu, _, cx| {
-                let Some(target) = app.read(cx).tab_menu_target else {
+                let Some((owner, target)) = app.read(cx).tab_menu_target else {
                     return menu;
                 };
+                if owner != pane {
+                    return menu;
+                }
                 let right = app.clone();
                 let left = app.clone();
                 let all = app.clone();
                 let pin = app.clone();
+                let move_view = app.clone();
                 menu.when(matches!(target, DocumentTab::File(_)), |menu| {
                     menu.item(
                         PopupMenuItem::new(conduit::i18n::text_static("files.pin_file_tab"))
                             .on_click(move |_, _, cx| {
                                 pin.update(cx, |this, cx| {
-                                    if let DocumentTab::File(id) = target
-                                        && this.files.preview == Some(id)
-                                    {
-                                        this.files.preview = None;
+                                    if let DocumentTab::File(id) = target {
+                                        this.pin_file(id);
                                         cx.notify();
                                     }
                                 });
                             }),
                     )
                 })
+                .when(matches!(target, DocumentTab::File(_)), |menu| {
+                    menu.item(
+                        PopupMenuItem::new(conduit::i18n::text_static(if pane == Pane::Main {
+                            "files.show_beside"
+                        } else {
+                            "files.show_full"
+                        }))
+                        .on_click(move |_, window, cx| {
+                            if let DocumentTab::File(id) = target {
+                                move_view.update(cx, |this, cx| {
+                                    this.move_file_to_pane(
+                                        id,
+                                        if pane == Pane::Main {
+                                            Pane::Reference
+                                        } else {
+                                            Pane::Main
+                                        },
+                                        window,
+                                        cx,
+                                    )
+                                });
+                            }
+                        }),
+                    )
+                })
                 .item(
                     PopupMenuItem::new(conduit::i18n::text_static("files.close_tabs_to_the_right"))
                         .on_click(move |_, window, cx| {
                             right.update(cx, |this, cx| {
-                                let ordered = this.document_tabs();
+                                let ordered = this.document_tabs_for(pane);
                                 if let Some(i) = ordered.iter().position(|t| *t == target) {
                                     let tabs = ordered[i + 1..].to_vec();
                                     this.close_documents(&tabs, window, cx);
@@ -2253,7 +2614,7 @@ impl ConduitApp {
                     PopupMenuItem::new(conduit::i18n::text_static("files.close_tabs_to_the_left"))
                         .on_click(move |_, window, cx| {
                             left.update(cx, |this, cx| {
-                                let ordered = this.document_tabs();
+                                let ordered = this.document_tabs_for(pane);
                                 if let Some(i) = ordered.iter().position(|t| *t == target) {
                                     let tabs = ordered[..i].to_vec();
                                     this.close_documents(&tabs, window, cx);
@@ -2265,7 +2626,7 @@ impl ConduitApp {
                     PopupMenuItem::new(conduit::i18n::text_static("files.close_all")).on_click(
                         move |_, window, cx| {
                             all.update(cx, |this, cx| {
-                                let tabs = this.open_tabs.clone();
+                                let tabs = this.document_tabs_for(pane);
                                 this.close_documents(&tabs, window, cx);
                             });
                         },

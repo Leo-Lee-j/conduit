@@ -51,6 +51,8 @@ pub enum Completion {
 /// save gate. The runtime retains this object until its process tree is empty.
 /// JSON-lines over stdio is the base transport; poll/route_response provide
 /// bounded native side channels without exposing them to the runtime.
+pub(crate) mod child_history;
+
 pub trait CliAdapter: Send {
     fn launch(&mut self) -> anyhow::Result<LaunchSpec>;
     fn accept(&mut self, value: Value) -> Step;
@@ -77,6 +79,12 @@ pub trait CliAdapter: Send {
         answers: &BTreeMap<String, Vec<String>>,
     ) -> Option<Value>;
     fn enable_full_access(&mut self);
+    fn child_command(
+        &mut self,
+        _command: &crate::subagents::ChildCommand,
+    ) -> Result<Value, String> {
+        Err(conduit::i18n::text("subagents.control_unavailable"))
+    }
 }
 
 pub type AdapterFactory = fn(AdapterRequest) -> Box<dyn CliAdapter>;

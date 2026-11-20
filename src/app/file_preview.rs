@@ -6,6 +6,9 @@ use gpui_kit::component::{
 };
 use std::{cell::Cell, ops::Range, rc::Rc};
 
+pub(super) mod changes;
+mod review;
+pub(super) use review::mark_color as change_color;
 mod outline;
 mod search;
 
@@ -108,6 +111,8 @@ fn reveal_bounds(
 #[derive(Clone)]
 pub(super) struct CodeSearch {
     pub(super) ranges: Vec<(Range<usize>, bool)>,
+    pub(super) changes: Vec<(Range<usize>, bool)>,
+    pub(super) caret: Option<usize>,
     target: Option<Range<usize>>,
     pending: Rc<Cell<bool>>,
     scroll: ScrollHandle,
@@ -177,6 +182,8 @@ pub(super) struct FilePreview {
     location: Option<SourcePosition>,
     location_pending: Rc<Cell<bool>>,
     outline: outline::Outline,
+    review: review::State,
+    status_encoding: Option<&'static str>,
 }
 
 impl FilePreview {
@@ -207,6 +214,7 @@ impl FilePreview {
                     this.search(cx);
                     this.reveal_location(cx);
                     this.reveal_outline(cx);
+                    this.apply_highlights(cx);
                 }
             }));
         }
@@ -246,6 +254,8 @@ impl FilePreview {
             location: None,
             location_pending: Rc::new(Cell::new(false)),
             outline: outline::Outline::default(),
+            review: review::State::default(),
+            status_encoding: None,
         }
     }
 
@@ -257,6 +267,13 @@ impl FilePreview {
         typography: ChatTypography,
         cx: &mut Context<Self>,
     ) {
+        if self.review.latest != source && self.review.playback.is_some() {
+            self.stop_replay(cx);
+        }
+        self.review.latest = source.clone();
+        if self.review.playback.is_some() {
+            return;
+        }
         let changed = self.source != source;
         let appearance = (palette().canvas, palette().warning_accent);
         let restyled =
@@ -279,6 +296,17 @@ impl FilePreview {
         if restyled {
             self.apply_highlights(cx);
             self.reveal(cx);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn set_status_encoding(
+        &mut self,
+        encoding: Option<&'static str>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.status_encoding != encoding {
+            self.status_encoding = encoding;
             cx.notify();
         }
     }
@@ -345,6 +373,7 @@ impl FilePreview {
     }
 
     pub(super) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pause_review(cx);
         self.outline.cancel_reveal();
         self.location_pending.set(false);
         let was_open = self.open;
@@ -398,6 +427,7 @@ impl FilePreview {
         if let Some(state) = &self.markdown {
             state.update(cx, |state, cx| state.clear_range_highlights(cx));
         }
+        self.apply_highlights(cx);
         self.focus.focus(window, cx);
         cx.notify();
     }
@@ -480,7 +510,7 @@ impl FilePreview {
 
     fn apply_highlights(&self, cx: &mut Context<Self>) {
         let Some(state) = &self.markdown else { return };
-        let ranges =
+        let mut ranges =
             self.hits
                 .iter()
                 .enumerate()
@@ -490,12 +520,17 @@ impl FilePreview {
                     })
                 })
                 .collect::<Vec<_>>();
+        if !self.open {
+            ranges.clear();
+        }
+        ranges.extend(
+            self.review_marks()
+                .into_iter()
+                .filter(|(range, _)| !range.is_empty())
+                .map(|(range, deleted)| RangeHighlight::new(range, review::mark_color(deleted))),
+        );
         state.update(cx, |state, cx| {
-            if self.open {
-                let _ = state.set_range_highlights(ranges, cx);
-            } else {
-                state.clear_range_highlights(cx);
-            }
+            let _ = state.set_range_highlights(ranges, cx);
         });
     }
 
@@ -515,13 +550,15 @@ impl FilePreview {
         }
     }
 
-    fn code_search(&self, block: Range<usize>) -> Option<CodeSearch> {
+    fn search_decoration(&self, block: Range<usize>) -> Option<CodeSearch> {
         if let Some(range) = self.location_range() {
             let target = (block.contains(&range.start)
                 || (range.is_empty() && range.start == block.end))
                 .then(|| range.start - block.start..range.end.min(block.end) - block.start);
             return target.map(|target| CodeSearch {
                 ranges: Vec::new(),
+                changes: Vec::new(),
+                caret: None,
                 target: Some(target),
                 pending: self.location_pending.clone(),
                 scroll: self.scroll.clone(),
@@ -554,11 +591,44 @@ impl FilePreview {
             .map(|hit| hit.range.start - block.start..hit.range.end.min(block.end) - block.start);
         Some(CodeSearch {
             ranges,
+            changes: Vec::new(),
+            caret: None,
             target,
             pending: self.pending.clone(),
             scroll: self.scroll.clone(),
             horizontal: self.markdown.is_none() && !self.wrap,
         })
+    }
+
+    fn code_search(&self, block: Range<usize>) -> Option<CodeSearch> {
+        let marks = self.review_marks();
+        let changes: Vec<_> = marks
+            .into_iter()
+            .filter_map(|(range, deleted)| {
+                let start = range.start.max(block.start);
+                let end = range.end.min(block.end);
+                (start < end || (range.is_empty() && block.start <= start && start <= block.end))
+                    .then(|| (start - block.start..end.max(start) - block.start, deleted))
+            })
+            .collect();
+        let caret = self
+            .review_caret()
+            .filter(|caret| block.start <= *caret && *caret <= block.end)
+            .map(|caret| caret - block.start);
+        let mut result = self.search_decoration(block).or_else(|| {
+            (!changes.is_empty() || caret.is_some()).then(|| CodeSearch {
+                ranges: Vec::new(),
+                changes: Vec::new(),
+                caret: None,
+                target: None,
+                pending: Rc::new(Cell::new(false)),
+                scroll: self.scroll.clone(),
+                horizontal: self.markdown.is_none() && !self.wrap,
+            })
+        })?;
+        result.changes = changes;
+        result.caret = caret;
+        Some(result)
     }
 
     pub(super) fn block_search(&self, source: Range<usize>) -> Option<CodeSearch> {
@@ -568,6 +638,16 @@ impl FilePreview {
 
     pub(super) fn code_block_search(&self, source: Range<usize>, code: &str) -> Option<CodeSearch> {
         let mut search = self.block_search(source.clone())?;
+        if self.review.playback.is_none()
+            && let Some(changes) = &self.review.changes
+        {
+            search.changes = changes
+                .hunks
+                .iter()
+                .filter(|h| h.new.start < source.end && h.new.end >= source.start)
+                .map(|h| (0..code.len(), h.added == 0))
+                .collect();
+        }
         if self.location_pending.get() {
             let position = self.location?;
             let target = position.range(&self.source);
@@ -734,6 +814,7 @@ impl Focusable for FilePreview {
 
 impl Render for FilePreview {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let review_bar = self.review_bar(window, cx);
         let horizontal = self.markdown.is_none() && !self.wrap;
         let viewport_size = self.viewport_size.clone();
         let owner = cx.entity().downgrade();
@@ -801,7 +882,8 @@ impl Render for FilePreview {
             )
             .on_action(cx.listener(|this, _: &CloseFind, window, cx| this.close_find(window, cx)))
             .on_action(
-                cx.listener(|_, _: &gpui_kit::component::input::Copy, window, cx| {
+                cx.listener(|this, _: &gpui_kit::component::input::Copy, window, cx| {
+                    this.pause_replay(cx);
                     let text = TextSelection::selected_text(window, cx);
                     if text.is_empty() {
                         cx.propagate();
@@ -810,6 +892,12 @@ impl Render for FilePreview {
                     }
                 }),
             )
+            .on_scroll_wheel(cx.listener(|this, _, _, cx| this.pause_review(cx)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.pause_replay(cx)),
+            )
+            .when_some(review_bar, |view, bar| view.child(bar))
             .when(self.open, |view| view.child(self.find_bar(window, cx)))
             .child(
                 div()
@@ -876,6 +964,15 @@ impl Render for FilePreview {
                         viewport.child(self.render_outline(outline_expanded, cx))
                     }),
             )
+            .when_some(self.status_encoding, |view, encoding| {
+                view.child(super::files::file_status(conduit::i18n::format(
+                    "files.read_only_lines",
+                    &[
+                        ("arg0", encoding.to_string()),
+                        ("arg1", self.source.lines().count().to_string()),
+                    ],
+                )))
+            })
     }
 }
 

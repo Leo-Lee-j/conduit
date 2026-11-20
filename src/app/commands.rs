@@ -92,6 +92,9 @@ impl ConduitApp {
     }
 
     fn chat_command_context(&self) -> Option<CommandContext> {
+        if self.viewing_subagent() {
+            return None;
+        }
         self.command_context_for(
             self.selected_workspace?,
             self.send_target(true),
@@ -238,6 +241,9 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.viewing_subagent() {
+            return true;
+        }
         let text = self.input.read(cx).value().to_string();
         let Some(query) = core::parse(&text) else {
             return false;

@@ -41,6 +41,11 @@ pub(crate) fn channel() -> (Sender, Receiver) {
 }
 pub(crate) fn event_bytes(event: &Event) -> usize {
     128 + match event {
+        Event::Child {
+            thread_id,
+            turn_id,
+            event,
+        } => thread_id.len() + turn_id.len() + event_bytes(event),
         Event::Subagent(agent) => agent.bytes(),
         Event::NativeTurnCompleted { thread_id, turn_id } => thread_id.len() + turn_id.len(),
         Event::Delta { key, text }

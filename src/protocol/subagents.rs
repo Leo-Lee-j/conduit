@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 #[derive(Default)]
 pub(super) struct Agents {
     pub records: BTreeMap<String, Agent>,
+    decoders: HashMap<String, Box<Protocol>>,
+    capability_reads: HashMap<String, String>,
     pub(super) claude_tasks: HashMap<String, super::claude_tasks::Task>,
     pub(super) claude_inputs: std::collections::VecDeque<(String, super::claude_tasks::TaskInput)>,
     published: BTreeMap<String, Agent>,
@@ -85,10 +87,118 @@ fn thread_status(value: &Value) -> Status {
     }
 }
 impl Protocol {
+    pub(super) fn codex_child_events(&mut self, value: &Value) -> Vec<Event> {
+        // Control requests continue through the one approval broker owned by the root.
+        if value.get("id").is_some() {
+            return Vec::new();
+        }
+        let params = &value["params"];
+        let thread = text(params, "threadId");
+        let turn = params["turnId"]
+            .as_str()
+            .or_else(|| params["turn"]["id"].as_str())
+            .unwrap_or("");
+        let Some(agent) = self.agents.records.get(thread) else {
+            return Vec::new();
+        };
+        if turn.is_empty()
+            || (!agent.task_id.starts_with("call:")
+                && !agent.task_id.is_empty()
+                && agent.task_id != turn)
+        {
+            return Vec::new();
+        }
+        let decoder = self
+            .agents
+            .decoders
+            .entry(thread.into())
+            .or_insert_with(|| {
+                let mut decoder =
+                    Protocol::new(Provider::Codex, self.cwd.clone(), String::new(), None);
+                decoder.thread_id = Some(thread.into());
+                Box::new(decoder)
+            });
+        decoder.turn_id = Some(turn.into());
+        decoder
+            .codex(value.clone())
+            .events
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    Event::Delta { .. }
+                        | Event::Text { .. }
+                        | Event::ReasoningSummary { .. }
+                        | Event::Tool { .. }
+                        | Event::ToolInput { .. }
+                )
+            })
+            .map(|event| Event::Child {
+                thread_id: thread.into(),
+                turn_id: turn.into(),
+                event: Box::new(event),
+            })
+            .collect()
+    }
+
+    pub(crate) fn child_command(
+        &self,
+        command: &crate::subagents::ChildCommand,
+    ) -> Result<Value, String> {
+        let agent = self
+            .agents
+            .records
+            .get(&command.thread)
+            .filter(|agent| {
+                self.provider == Provider::Codex
+                    && !self.text_only
+                    && agent.direct_input == Some(true)
+                    && agent.task_id == command.turn
+                    && !command.turn.is_empty()
+                    && !command.turn.starts_with("call:")
+                    && agent.status.active()
+            })
+            .ok_or_else(|| conduit::i18n::text("subagents.stale_target"))?;
+        if let Some(text) = &command.text {
+            if text.trim().is_empty()
+                || text.len() > 256 * 1024
+                || matches!(agent.status, Status::WaitingApproval | Status::WaitingInput)
+            {
+                return Err(conduit::i18n::text("subagents.stale_target"));
+            }
+            Ok(
+                json!({"method":"turn/steer","params":{"threadId":command.thread,
+                "expectedTurnId":command.turn,"input":[{"type":"text","text":text}]}}),
+            )
+        } else {
+            Ok(
+                json!({"method":"turn/interrupt","params":{"threadId":command.thread,"turnId":command.turn}}),
+            )
+        }
+    }
+
     /// Return true only for an owned child's events. Never admit arbitrary other threads.
     pub(super) fn codex_agent_event(&mut self, v: &Value) -> bool {
         if self.text_only {
             return false;
+        }
+        if let Some(request) = v["id"].as_str()
+            && let Some(id) = self.agents.capability_reads.remove(request)
+        {
+            if let Some(agent) = self.agents.records.get_mut(&id) {
+                let thread = &v["result"]["thread"];
+                let parent = thread["parentThreadId"].as_str().or_else(|| {
+                    thread
+                        .pointer("/source/subAgent/thread_spawn/parent_thread_id")
+                        .and_then(Value::as_str)
+                });
+                agent.direct_input = Some(
+                    thread["id"].as_str() == Some(id.as_str())
+                        && parent == Some(agent.parent_id.as_str())
+                        && thread["canAcceptDirectInput"] == true,
+                );
+            }
+            return true;
         }
         if let Some(request) = v["id"].as_str()
             && let Some((id, generation, _)) = self.agents.pending_reads.remove(request)
@@ -320,14 +430,30 @@ impl Protocol {
                 continue;
             }
             self.agents.read_sequence += 1;
+            if self.agents.records[id].direct_input.is_none()
+                && !self.agents.records[id].task_id.is_empty()
+                && !self.agents.records[id].task_id.starts_with("call:")
+                && !self
+                    .agents
+                    .capability_reads
+                    .values()
+                    .any(|pending| pending == id)
+            {
+                let key = format!("conduit-agent-capability-{}", self.agents.read_sequence);
+                self.agents.capability_reads.insert(key.clone(), id.clone());
+                writes.push(json!({"id":key,"method":"thread/read","params":{"threadId":id,"includeTurns":false}}));
+            }
             let key = format!("conduit-agent-read-{}", self.agents.read_sequence);
             self.agents.pending_reads.insert(
                 key.clone(),
                 (id.clone(), self.agents.records[id].task_id.clone(), now),
             );
-            writes.push(json!({"id":key,"method":"thread/turns/list","params":{
-                "threadId":id,"limit":1,"sortDirection":"desc","itemsView":"full"
-            }}));
+            writes.insert(
+                0,
+                json!({"id":key,"method":"thread/turns/list","params":{
+                    "threadId":id,"limit":1,"sortDirection":"desc","itemsView":"full"
+                }}),
+            );
         }
         writes
     }
@@ -351,6 +477,9 @@ impl Protocol {
     }
 }
 fn update_thread(agent: &mut Agent, thread: &Value, prior_turn: Option<&str>) {
+    if let Some(direct) = thread["canAcceptDirectInput"].as_bool() {
+        agent.direct_input = Some(direct);
+    }
     if let Some(role) = thread["agentRole"].as_str() {
         agent.role = role.into();
     }
@@ -568,7 +697,20 @@ mod tests {
         p.accept(json!({"method":"turn/completed","params":{"threadId":"root","turn":{"id":"main-turn","status":"completed"}}}));
         expire_reads(&mut p);
         let writes = p.poll_subagents();
-        assert_eq!(writes.len(), 1);
+        assert_eq!(
+            writes
+                .iter()
+                .filter(|request| request["method"] == "thread/turns/list")
+                .count(),
+            1
+        );
+        assert_eq!(
+            writes
+                .iter()
+                .filter(|request| request["method"] == "thread/read")
+                .count(),
+            1
+        );
         assert_eq!(p.agents.records["a"].status, Status::Running);
         assert!(!p.accept(json!({"method":"conduit/agentPoll"})).done);
         expire_reads(&mut p);
@@ -640,6 +782,59 @@ mod tests {
             main.events
                 .iter()
                 .any(|event| matches!(event, Event::Delta {key,..} if key.starts_with("main-")))
+        );
+    }
+}
+
+#[cfg(test)]
+mod child_control_tests {
+    use super::*;
+    #[test]
+    fn commands_require_owned_capable_current_child_and_do_not_retarget() {
+        let mut p = Protocol::new(Provider::Codex, "C:/work".into(), String::new(), None);
+        p.thread_id = Some("parent".into());
+        let agent = p.agents.register("child", "parent").unwrap();
+        agent.task_id = "turn".into();
+        agent.status = Status::Running;
+        let mut command = crate::subagents::ChildCommand {
+            thread: "child".into(),
+            turn: "turn".into(),
+            text: Some("follow up".into()),
+        };
+        assert!(p.child_command(&command).is_err());
+        p.agents.records.get_mut("child").unwrap().direct_input = Some(true);
+        let request = p.child_command(&command).unwrap();
+        assert_eq!(request["method"], "turn/steer");
+        assert_eq!(request["params"]["expectedTurnId"], "turn");
+        command.turn = "stale".into();
+        assert!(p.child_command(&command).is_err());
+        command.turn = "turn".into();
+        command.text = None;
+        let request = p.child_command(&command).unwrap();
+        assert_eq!(request["method"], "turn/interrupt");
+        assert_eq!(request["params"]["threadId"], "child");
+        command.thread = "parent".into();
+        assert!(p.child_command(&command).is_err());
+    }
+    #[test]
+    fn child_stream_keeps_native_identity_and_does_not_change_parent_cursor() {
+        let mut p = Protocol::new(Provider::Codex, "C:/work".into(), String::new(), None);
+        p.thread_id = Some("parent".into());
+        p.turn_id = Some("parent-turn".into());
+        p.agents
+            .register("child", "parent")
+            .unwrap()
+            .restart("child-turn");
+        let step = p.accept(json!({"method":"item/agentMessage/delta","params":{"threadId":"child","turnId":"child-turn","itemId":"item","delta":"hello"}}));
+        assert!(step.events.iter().any(|event| matches!(event, Event::Child { thread_id, turn_id, event } if thread_id == "child" && turn_id == "child-turn" && matches!(event.as_ref(), Event::Delta {text,..} if text == "hello"))));
+        assert_eq!(p.turn_id.as_deref(), Some("parent-turn"));
+        assert!(!step.done);
+        let stale = p.accept(json!({"method":"item/agentMessage/delta","params":{"threadId":"child","turnId":"old-turn","itemId":"item","delta":"late"}}));
+        assert!(
+            !stale
+                .events
+                .iter()
+                .any(|event| matches!(event, Event::Child { .. } | Event::Delta { .. }))
         );
     }
 }

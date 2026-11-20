@@ -376,6 +376,28 @@ impl Element for NumberedCode {
         let layout = self.text.layout().clone();
 
         if let Some(search) = &self.search {
+            for (range, deleted) in &search.changes {
+                let color = super::file_preview::change_color(*deleted);
+                paint_selection(&layout, range.clone(), color, window);
+                if let Some(position) = layout.position_for_index(range.start) {
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            point(text_bounds.left() - px(5.), position.y),
+                            size(px(3.), layout.line_height()),
+                        ),
+                        color,
+                    ));
+                }
+            }
+            if let Some(caret) = search
+                .caret
+                .and_then(|caret| layout.position_for_index(caret))
+            {
+                window.paint_quad(fill(
+                    Bounds::new(caret, size(px(2.), layout.line_height())),
+                    rgb(palette().warning_accent),
+                ));
+            }
             for (range, active) in &search.ranges {
                 paint_selection(
                     &layout,

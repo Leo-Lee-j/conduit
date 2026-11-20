@@ -2064,5 +2064,8 @@
   "UTF-16 编码无效。": "workspace_files.invalid_utf_16_encoding",
   "无法识别编码或这是二进制文件。首版支持 UTF-8 和带 BOM 的 UTF-16，请使用外部编辑器打开。": "workspace_files.unknown_encoding_or_binary_file_utf_8",
   "这是二进制文件，暂不提供文本预览。": "workspace_files.this_is_a_binary_file_text_preview",
-  "文件行数或单行长度超过安全预览上限，请使用外部编辑器打开。": "workspace_files.file_line_count_or_line_length_exceeds"
+  "文件行数或单行长度超过安全预览上限，请使用外部编辑器打开。": "workspace_files.file_line_count_or_line_length_exceeds",
+  "使用系统通知": "settings.general.system_notifications",
+  "开启后使用 Windows 系统通知，不再显示应用内弹窗；系统通知不可用时自动回退到应用内通知。": "settings.general.system_notifications_description",
+  "Windows 系统通知当前不可用，Conduit 已回退到应用内弹窗。": "settings.general.system_notifications_unavailable"
 }

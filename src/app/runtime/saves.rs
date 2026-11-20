@@ -20,6 +20,7 @@ pub(in crate::app) struct PendingTurn {
     pub(super) release: std::sync::mpsc::Sender<()>,
     pub(super) before: Option<SessionRecord>,
     pub(in crate::app) composer: Option<SentComposer>,
+    pub(in crate::app) child_composer: Option<super::super::subagents::navigation::SentChild>,
     pub(in crate::app) queued: Option<queue::QueuedMessage>,
     pub(super) naming_snippet: Option<String>,
     pub(super) selection: Option<ComposerSelection>,
@@ -220,6 +221,9 @@ impl ConduitApp {
                         return Err(conduit::i18n::text("branching.changed"));
                     }
                 }
+                if let Some(reason) = self.child_resume_blocked(id) {
+                    return Err(reason);
+                }
                 pending.release.send(()).map_err(|_| {
                     conduit::i18n::text_static(
                         "runtime.saves.cli_wait_thread_exited_the_message_was",
@@ -242,6 +246,9 @@ impl ConduitApp {
                     if let Some(remote) = remote {
                         remote.complete(id);
                     }
+                    if let Some(sent) = &pending.child_composer {
+                        self.clear_child_draft(sent, window, cx);
+                    }
                     self.session_control.plans.remove(&id);
                     self.session_control.unread_completed.remove(&id);
                     let composer_cleared = pending
@@ -250,6 +257,7 @@ impl ConduitApp {
                         .is_some_and(|sent| self.clear_saved_composer(sent, window, cx));
                     if let Some(selection) = pending.selection.take() {
                         let current = composer_cleared
+                            && !self.viewing_subagent()
                             && pending.composer.as_ref().is_some_and(|sent| {
                                 self.composer_target().as_ref() == Some(&sent.target)
                                     && (sent.preserve || self.input.read(cx).value().is_empty())

@@ -179,11 +179,13 @@ impl ConduitApp {
                             error.clone(),
                         )
                         .target(target)
-                        .presentation(if self.session_is_visible(id) {
-                            NoticePresentation::History
-                        } else {
-                            NoticePresentation::Toast
-                        }),
+                        .presentation(
+                            if self.session_is_notification_visible(id) {
+                                NoticePresentation::History
+                            } else {
+                                NoticePresentation::Toast
+                            },
+                        ),
                         cx,
                     );
                 }

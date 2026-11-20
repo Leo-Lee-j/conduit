@@ -30,6 +30,10 @@ mod adapter_tests;
 mod opencode_tests;
 
 enum Control {
+    Child {
+        command: crate::subagents::ChildCommand,
+        result: mpsc::Sender<crate::subagents::CommandOutcome>,
+    },
     Decision {
         id: String,
         allow: bool,
@@ -159,6 +163,23 @@ impl ChatRuntime {
             Err(_) => None,
         })
     }
+    #[cfg(all(test, feature = "ui-tests"))]
+    pub(crate) fn test_child_channel() -> (
+        Self,
+        impl Fn() -> Option<(
+            crate::subagents::ChildCommand,
+            mpsc::Sender<crate::subagents::CommandOutcome>,
+        )>,
+    ) {
+        let (mut runtime, _) = Self::test_channel();
+        let (controls, receiver) = mpsc::channel();
+        runtime.controls = controls;
+        (runtime, move || match receiver.try_recv() {
+            Ok(Control::Child { command, result }) => Some((command, result)),
+            _ => None,
+        })
+    }
+
     /// Isolated helper turn; never resumes or mutates the chat conversation.
     #[cfg(test)]
     #[allow(dead_code)]
@@ -295,6 +316,25 @@ impl ChatRuntime {
         let adapter = crate::cli_adapter::from_protocol(protocol, cwd.clone());
         Self::start_adapter_gated(adapter, executable, Some(args), cwd, None)
     }
+    /// A read-only history adapter has no resumed thread and never owns a model turn.
+    pub(crate) fn read_child_history(
+        executable: PathBuf,
+        cwd: PathBuf,
+        route: crate::providers::RuntimeRoute,
+        thread: String,
+        parent: String,
+        result: mpsc::Sender<crate::cli_adapter::child_history::Snapshot>,
+    ) -> Self {
+        let adapter = crate::cli_adapter::child_history::Reader::new(
+            cwd.clone(),
+            route,
+            thread,
+            parent,
+            result,
+        );
+        Self::start_adapter_gated(Box::new(adapter), executable, None, cwd, None)
+    }
+
     fn start_adapter_gated(
         mut adapter: Box<dyn CliAdapter>,
         executable: PathBuf,
@@ -369,6 +409,17 @@ impl ChatRuntime {
             controls,
             cancelled,
         }
+    }
+    pub(crate) fn child_command(
+        &self,
+        command: crate::subagents::ChildCommand,
+    ) -> Receiver<crate::subagents::CommandOutcome> {
+        let (tx, rx) = mpsc::channel();
+        let _ = self.controls.send(Control::Child {
+            command,
+            result: tx,
+        });
+        rx
     }
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
@@ -567,6 +618,11 @@ fn execute(
         let mut lines = Lines::new();
         let mut stderr = Vec::new();
         let mut approvals = ApprovalBroker::default();
+        let mut child_requests: HashMap<
+            String,
+            (mpsc::Sender<crate::subagents::CommandOutcome>, Instant),
+        > = HashMap::new();
+        let mut child_sequence = 0u64;
         let startup_started = Instant::now();
         let mut exited_at = None;
         let mut cancel_started: Option<Instant> = None;
@@ -601,6 +657,25 @@ fn execute(
                 question_poll = Instant::now();
             }
             for message in messages {
+                if let Some(id) = message["id"]
+                    .as_str()
+                    .filter(|id| id.starts_with("conduit-child-control-"))
+                {
+                    if let Some((result, _)) = child_requests.remove(id) {
+                        let outcome = if let Some(error) = message.get("error") {
+                            crate::subagents::CommandOutcome::Rejected(error.to_string())
+                        } else if message.get("result").is_some() {
+                            crate::subagents::CommandOutcome::Accepted
+                        } else {
+                            crate::subagents::CommandOutcome::Unknown(conduit::i18n::text(
+                                "subagents.command_unknown",
+                            ))
+                        };
+                        let _ = result.send(outcome);
+                    }
+                    // Late child command responses never enter the parent's fatal RPC path.
+                    continue;
+                }
                 let step = protocol.accept(message);
                 for write in step.writes {
                     // A queued configuration reply must not start a new prompt
@@ -661,6 +736,23 @@ fn execute(
                     break;
                 }
                 match control {
+                    Control::Child { command, result } => match protocol.child_command(&command) {
+                        Ok(mut message) => {
+                            child_sequence += 1;
+                            let id = format!("conduit-child-control-{child_sequence}");
+                            message["id"] = serde_json::json!(id);
+                            if let Err(error) = send(&writer, message) {
+                                let _ = result.send(crate::subagents::CommandOutcome::Unknown(
+                                    format!("{error:#}"),
+                                ));
+                            } else {
+                                child_requests.insert(id, (result, Instant::now()));
+                            }
+                        }
+                        Err(error) => {
+                            let _ = result.send(crate::subagents::CommandOutcome::Rejected(error));
+                        }
+                    },
                     Control::Decision { id, allow } => {
                         if allow && approvals.get(&id).is_some_and(Approval::is_user_input) {
                             continue;
@@ -712,6 +804,15 @@ fn execute(
                     }
                 }
             }
+            child_requests.retain(|_, (result, started)| {
+                if started.elapsed() < Duration::from_secs(15) {
+                    return true;
+                }
+                let _ = result.send(crate::subagents::CommandOutcome::Unknown(
+                    conduit::i18n::text("subagents.command_unknown"),
+                ));
+                false
+            });
             if let Ok(count) = available(&pipes.stderr)
                 && count > 0
             {

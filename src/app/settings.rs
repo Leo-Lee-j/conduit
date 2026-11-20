@@ -476,6 +476,7 @@ impl ConduitApp {
                 .focus(window, cx);
             return;
         }
+        self.remember_content_overlay();
         if !self.open_tabs.contains(&files::DocumentTab::Settings) {
             self.open_tabs.push(files::DocumentTab::Settings);
         }
@@ -504,7 +505,10 @@ impl ConduitApp {
         self.settings_ui
             .search
             .update(cx, |input, cx| input.set_value("", window, cx));
-        if let Some(active) = self.active_document() {
+        if let Some(active) = self
+            .active_document()
+            .or_else(|| self.content_overlay_return())
+        {
             self.select_document(active, window, cx);
         } else {
             self.input.read(cx).focus_handle(cx).focus(window, cx);

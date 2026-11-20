@@ -94,6 +94,9 @@ impl CliAdapter for StdioAdapter {
     ) -> Option<Value> {
         self.protocol.user_input_response(approval, answers)
     }
+    fn child_command(&mut self, command: &crate::subagents::ChildCommand) -> Result<Value, String> {
+        self.protocol.child_command(command)
+    }
     fn enable_full_access(&mut self) {
         self.protocol.enable_full_access();
     }

@@ -400,7 +400,23 @@ impl ConduitApp {
     }
 
     pub(super) fn delete_session(&mut self, id: u64, cx: &mut Context<Self>) {
-        if self.session_control.runs.contains_key(&id)
+        if self.child_draft_pending(id, cx)
+            || self
+                .store
+                .child_commands
+                .iter()
+                .any(|command| command.root == id)
+        {
+            self.message = Some(conduit::i18n::text("subagents.child_draft_pending"));
+            self.delete_target = None;
+            cx.notify();
+            return;
+        }
+        if self.store.child_bindings.iter().any(|(child, binding)| {
+            binding.root == id
+                && (self.session_busy(*child)
+                    || self.session_control.queue_saves.contains_key(child))
+        }) || self.session_control.runs.contains_key(&id)
             || self.session_control.queue_saves.contains_key(&id)
             || self.session_draft_save_pending(id)
         {
@@ -417,6 +433,13 @@ impl ConduitApp {
         for workspace in &mut self.store.workspaces {
             workspace.sessions.retain(|session| session.id != id);
         }
+        self.session_control.agent_navigation.forget_root(id);
+        self.store
+            .child_bindings
+            .retain(|child, binding| *child != id && binding.root != id);
+        self.store
+            .child_commands
+            .retain(|command| command.root != id);
         self.drafts.remove(&id);
         self.queued_messages.remove(&id);
         self.session_control.unread_completed.remove(&id);
@@ -638,6 +661,15 @@ impl ConduitApp {
             .retain(|target, _| target.workspace != removed.path);
         self.expanded_workspaces.clear();
         for session in &removed.sessions {
+            self.session_control
+                .agent_navigation
+                .forget_root(session.id);
+            self.store
+                .child_bindings
+                .retain(|child, binding| *child != session.id && binding.root != session.id);
+            self.store
+                .child_commands
+                .retain(|command| command.root != session.id);
             self.drafts.remove(&session.id);
             self.queued_messages.remove(&session.id);
             self.session_control.unread_completed.remove(&session.id);
@@ -768,6 +800,13 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) {
         self.leave_branch_navigation();
+        if let Some(id) = session {
+            if self.selected_session == Some(id) && self.viewing_subagent() {
+                self.return_from_subagent(id, window, cx);
+                return;
+            }
+            self.session_control.agent_navigation.show_root(id);
+        }
         self.switch_context(workspace, session, true, window, cx);
     }
 
@@ -824,7 +863,9 @@ impl ConduitApp {
         self.pending_model_selection = None;
         self.pending_permission = self.store.ui.default_session_permission;
         if activate_chat && let Some(id) = session {
-            self.session_control.unread_completed.remove(&id);
+            if !self.viewing_subagent() {
+                self.session_control.unread_completed.remove(&id);
+            }
             self.push_tab(id);
         }
         self.message_focus = None;

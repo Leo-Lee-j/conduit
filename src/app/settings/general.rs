@@ -36,6 +36,24 @@ impl ConduitApp {
             |app| app.store.ui.full_width_content,
             |app, value| app.store.ui.full_width_content = value,
         );
+        let files_beside = switch_field(
+            view.clone(),
+            |app| app.store.ui.files_open_beside,
+            |app, value| app.store.ui.files_open_beside = value,
+        );
+        let system_notifications = switch_field(
+            view.clone(),
+            |app| app.store.ui.system_notifications,
+            |app, value| app.store.ui.system_notifications = value,
+        );
+        let system_notifications_description = if self.store.ui.system_notifications
+            && self.notifications.system_preference == Some(true)
+            && !self.notifications.system_available
+        {
+            conduit::i18n::text_static("settings.general.system_notifications_unavailable")
+        } else {
+            conduit::i18n::text_static("settings.general.system_notifications_description")
+        };
         let compact_middle_packages = switch_field(
             view.clone(),
             |app| app.store.ui.compact_middle_packages,
@@ -143,6 +161,20 @@ impl ConduitApp {
                 )
                 .description(settings_description(conduit::i18n::text_static(
                     "settings.general.fill_the_available_area_with_chat_content",
+                )))
+                .disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.system_notifications"),
+                    system_notifications,
+                )
+                .description(settings_description(system_notifications_description))
+                .disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.files_open_beside"),
+                    files_beside,
+                )
+                .description(settings_description(conduit::i18n::text_static(
+                    "settings.general.files_open_beside_description",
                 )))
                 .disabled(disabled),
                 SettingItem::new(

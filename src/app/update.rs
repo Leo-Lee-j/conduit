@@ -77,6 +77,12 @@ impl UpdateUi {
 
 #[derive(Default, Serialize, Deserialize)]
 struct Recovery {
+    #[serde(default)]
+    child_editors: Vec<super::subagents::navigation::SavedEditor>,
+    #[serde(default)]
+    child_routes: Vec<super::subagents::navigation::TaskKey>,
+    #[serde(default)]
+    child_pages: Vec<super::subagents::navigation::SavedPage>,
     schema: u32,
     workspace: Option<PathBuf>,
     session: Option<u64>,
@@ -404,6 +410,9 @@ impl ConduitApp {
             conduit::i18n::text("update.waiting_for_application_data_to_finish_saving")
         );
         let recovery = Recovery {
+            child_editors: self.saved_child_editors(cx),
+            child_routes: self.saved_child_routes(),
+            child_pages: self.saved_child_pages(),
             schema: 1,
             workspace: self.selected_workspace_path(),
             session: self.selected_session,
@@ -543,6 +552,13 @@ impl ConduitApp {
                 self.selected_session = None;
                 self.switch(workspace, session, window, cx);
             }
+            self.restore_child_navigation(
+                recovery.child_editors,
+                recovery.child_routes,
+                recovery.child_pages,
+                window,
+                cx,
+            );
             std::fs::remove_file(&path)?;
             Ok(())
         })();

@@ -1745,6 +1745,36 @@ fn session_activity_survives_restore_and_legacy_messages() {
 }
 
 #[test]
+fn codex_file_change_aliases_keep_the_chat_edit_disclosure_visible() {
+    let _locale = crate::test_support::chinese();
+    let patch = "@@ -1 +1 @@\n-old\n+new";
+    for title in [
+        "编辑文件",
+        "fileChange",
+        "FileChange",
+        "file_change",
+        "update",
+    ] {
+        let item: ChatItem = serde_json::from_value(serde_json::json!({
+            "key": "codex-file-edit",
+            "kind": "Tool",
+            "text": title,
+            "status": "已完成",
+            "input": serde_json::json!([{
+                "path": "src/main.rs",
+                "kind": "update",
+                "diff": patch
+            }]).to_string()
+        }))
+        .unwrap();
+        assert!(super::is_tool_edit(&item), "title={title}");
+        assert!(!super::is_groupable_activity(&item), "title={title}");
+        let diffs = super::edit_tool_diffs(&item).unwrap_or_else(|| panic!("title={title}"));
+        assert_eq!(diffs[0].path, "src/main.rs", "title={title}");
+    }
+}
+
+#[test]
 fn localized_tool_labels_preserve_edit_detection_and_approval_semantics() {
     let _locale = crate::test_support::scoped("en");
     for language in ["en", "zh-CN"] {

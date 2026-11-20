@@ -9,6 +9,7 @@ use std::rc::Rc;
 pub(super) struct Palette {
     pub(super) canvas: u32,
     pub(super) sidebar_bg: u32,
+    pub(super) document_tab_bar_bg: u32,
     pub(super) surface: u32,
     pub(super) surface_hover: u32,
     pub(super) surface_strong: u32,
@@ -49,6 +50,7 @@ pub(super) struct Palette {
 const DARK_PALETTE: Palette = Palette {
     canvas: 0x0e0e10,
     sidebar_bg: 0x131315,
+    document_tab_bar_bg: 0x1b1b1e,
     surface: 0x19191c,
     surface_hover: 0x232327,
     surface_strong: 0x202024,
@@ -89,6 +91,7 @@ const DARK_PALETTE: Palette = Palette {
 const LIGHT_PALETTE: Palette = Palette {
     canvas: 0xf7f7f8,
     sidebar_bg: 0xf1f1f3,
+    document_tab_bar_bg: 0xeaeaed,
     surface: 0xffffff,
     surface_hover: 0xe9e9ee,
     surface_strong: 0xf7f7f9,
@@ -347,6 +350,14 @@ fn palette_from_theme(theme: &Theme) -> Palette {
     let canvas = color_on(theme.background, if theme.is_dark() { 0 } else { 0xffffff });
     let surface = color_on(theme.popover, canvas);
     let sidebar_bg = color_on(theme.tab_bar, canvas);
+    // Some theme packs use the canvas color for the strip too. Give the
+    // document tabs a subtle tonal step while preserving the theme's tint.
+    let document_tab_bar_bg = if contrast(sidebar_bg, canvas) < 1.09 {
+        let tone = if theme.is_dark() { 0xffffff } else { 0 };
+        blend(tone, canvas, 0.06)
+    } else {
+        sidebar_bg
+    };
     let surface_hover = color_on(theme.secondary_hover, canvas);
     let surface_strong = color_on(theme.group_box, canvas);
     let backgrounds = [canvas, sidebar_bg, surface, surface_hover, surface_strong];
@@ -359,6 +370,7 @@ fn palette_from_theme(theme: &Theme) -> Palette {
     Palette {
         canvas,
         sidebar_bg,
+        document_tab_bar_bg,
         surface,
         surface_hover,
         surface_strong,

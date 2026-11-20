@@ -1,6 +1,7 @@
 //! Event-backed child tasks, sharing the composer's outer frame.
 use super::*;
 use crate::subagents::{Agent, Status};
+pub(super) mod navigation;
 
 #[derive(Default)]
 pub(super) struct PanelState {
@@ -345,7 +346,31 @@ impl ConduitApp {
                             .child(agent.status.label()),
                     );
                 }
-                content = content.child(
+                let navigation_run = agent.run.clone();
+                let navigation_id = agent.id.clone();
+                let open = Button::new(SharedString::from(format!("subagent-open-{identity}")))
+                    .ghost()
+                    .compact()
+                    .flex_1()
+                    .min_w_0()
+                    .h(px(40.))
+                    .px_3()
+                    .accessibility_label(conduit::i18n::format(
+                        "subagents.open",
+                        &[("title", label.to_owned())],
+                    ))
+                    .child(content)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.open_subagent(
+                            session_id,
+                            navigation_run.clone(),
+                            navigation_id.clone(),
+                            window,
+                            cx,
+                        );
+                    }));
+                let content = div().child(
                     Icon::new(if detail_expanded {
                         IconName::ChevronDown
                     } else {
@@ -357,9 +382,8 @@ impl ConduitApp {
                 let button = Button::new(SharedString::from(format!("subagent-{identity}")))
                     .ghost()
                     .compact()
-                    .w_full()
+                    .w(px(36.))
                     .h(px(40.))
-                    .px_3()
                     .accessibility_label(disclosure_label(
                         &if agent.role.trim().is_empty() {
                             format!("{}: {label}", agent.status.label())
@@ -382,7 +406,7 @@ impl ConduitApp {
                     .min_w_0()
                     .border_t_1()
                     .border_color(rgb(palette().border))
-                    .child(button);
+                    .child(h_flex().w_full().min_w_0().child(open).child(button));
                 if detail_expanded {
                     let mut detail = v_flex()
                         .w_full()

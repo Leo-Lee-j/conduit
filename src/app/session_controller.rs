@@ -10,6 +10,7 @@ pub(super) struct SessionController {
     pub(super) queue_saves: HashMap<u64, super::runtime::PendingQueueSave>,
     pub(super) agent_panels: HashMap<u64, super::subagents::PanelState>,
     pub(super) expanded_agents: HashSet<(u64, String)>,
+    pub(super) agent_navigation: super::subagents::navigation::Navigation,
     pub(super) plans: HashMap<u64, Vec<PlanStep>>,
     pub(super) namings: HashMap<u64, SessionNaming>,
     pub(super) naming_errors: HashMap<u64, String>,

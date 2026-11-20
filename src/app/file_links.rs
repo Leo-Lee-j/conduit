@@ -273,9 +273,9 @@ impl ConduitApp {
                 find_workspace(&path.canonicalize().ok()?, true)
             })
             .unwrap_or(key);
-        self.open_file_preview(key, false, window, cx);
+        self.open_file_preview(key.clone(), false, window, cx);
         if let Some(position) = position {
-            self.reveal_file_position(position, cx);
+            self.reveal_file_position(&key, position, cx);
         }
     }
 

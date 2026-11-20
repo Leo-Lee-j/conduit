@@ -238,6 +238,8 @@ impl Render for ConduitApp {
             format!("diff:{id}")
         } else if let Some(id) = self.active_file {
             format!("file:{id}")
+        } else if let Some(route) = self.subagent_route() {
+            format!("child:{}:{}:{}", route.root, route.run, route.agent)
         } else if let Some(session) = &selected {
             format!("chat:{}:{}", session.id, session.message_count == 0)
         } else {
@@ -344,6 +346,7 @@ impl Render for ConduitApp {
                 0.
             })
         .max(0.);
+        self.update_content_pane_layout(settings_width, window, cx);
         let mut conversation = if self.settings_ui.open {
             v_flex()
                 .flex_1()
@@ -396,6 +399,14 @@ impl Render for ConduitApp {
                         .clone()
                         .cached(StyleRefinement::default().w_full().flex_1().min_h_0()),
                 )
+        } else if self.viewing_subagent() {
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .h_full()
+                .child(self.session_tab_bar(cx))
+                .child(self.render_subagent_page(window, cx))
         } else {
             let mut messages = div()
                 .v_flex()
@@ -623,8 +634,12 @@ impl Render for ConduitApp {
                 .and_then(|r| r.approvals.front().cloned());
             for (index, approval) in approvals.into_iter().enumerate() {
                 if approval.is_user_input() {
-                    conversation =
-                        conversation.child(self.render_user_input(&approval, window, cx));
+                    conversation = conversation.child(self.render_user_input(
+                        self.selected_session.unwrap(),
+                        &approval,
+                        window,
+                        cx,
+                    ));
                     continue;
                 }
                 let submitted = self
@@ -1001,13 +1016,14 @@ impl Render for ConduitApp {
                         })),
                 ),
         );
+        let conversation = self.render_content_panes(conversation.into_any_element(), cx);
         let conversation = if self.settings_ui.open
             || self.usage_ui.active.is_some()
             || self.github_ui.active.is_some()
         {
-            conversation.into_any_element()
+            conversation
         } else {
-            self.with_terminal_panel(conversation.into_any_element(), window, cx)
+            self.with_terminal_panel(conversation, window, cx)
         };
         let conversation = if self.branch_navigation_open()
             && !self.settings_ui.open

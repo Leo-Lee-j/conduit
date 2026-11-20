@@ -241,9 +241,15 @@ fn background_completion_and_approval_publish_once_without_switching_sessions(
     let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, true);
     cx.update(|window, cx| {
+        cx.set_app_identity(
+            crate::system_notifications::APP_USER_MODEL_ID,
+            crate::system_notifications::APP_NAME,
+        );
         app.update(cx, |app, cx| {
-            app.selected_workspace = Some(0);
-            app.selected_session = Some(1);
+            app.selected_workspace = Some(1);
+            app.selected_session = Some(2);
+            app.window_active = false;
+            app.store.ui.system_notifications = true;
             let (runtime, sender) = ChatRuntime::test_channel();
             let path = app.store.workspaces[1].path.clone();
             app.session_control.runs.insert(
@@ -264,11 +270,17 @@ fn background_completion_and_approval_publish_once_without_switching_sessions(
                 })
                 .unwrap();
             app.poll_streams(window, cx);
-            assert_eq!(app.selected_session, Some(1));
+            assert_eq!(app.selected_session, Some(2));
             let records = app.notifications.center.records();
             assert_eq!(records.len(), 1);
             assert_eq!(records[0].source, Source::Session);
             assert_eq!(records[0].level, Level::Success);
+            assert!(app.session_is_visible(2));
+            assert!(!app.session_is_notification_visible(2));
+            app.poll_notifications(window, cx);
+            assert!(app.notifications.visible.is_empty());
+            assert_eq!(app.notifications.system_visible.len(), 1);
+            assert!(app.notifications.pending.is_empty());
             app.poll_streams(window, cx);
             assert_eq!(app.notifications.center.records().len(), 1);
             let id = app.notify_user(
@@ -289,6 +301,9 @@ fn background_completion_and_approval_publish_once_without_switching_sessions(
             assert!(app.notifications.center.records().is_empty());
         })
     });
+    // System notification delivery is queued on the test platform executor.
+    cx.run_until_parked();
+    assert_eq!(cx.shown_system_notifications().len(), 1);
 }
 
 #[gpui_kit::test]

@@ -70,6 +70,7 @@ impl ConduitApp {
             .values()
             .flat_map(|files| files.references.iter().map(|file| file.path.clone()))
             .collect::<Vec<_>>();
+        referenced.extend(self.child_attachment_paths());
         referenced.extend(
             self.queued_messages
                 .values()
@@ -524,7 +525,7 @@ impl ConduitApp {
 
 impl ConduitApp {
     pub(super) fn stop_reply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.closing || self.composer_is_composing(window, cx) {
+        if self.viewing_subagent() || self.closing || self.composer_is_composing(window, cx) {
             return;
         }
         if let Some(id) = self.selected_session

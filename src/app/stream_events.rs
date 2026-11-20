@@ -2,6 +2,8 @@
 use super::*;
 impl ConduitApp {
     pub(super) fn poll_streams(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.poll_child_controls(window, cx);
+        self.poll_child_histories(cx);
         let navigating = self.pending_message_jump.is_some();
         // Follow is reader intent, not a measurement of a changing document.
         // Unknown heights and parser completion must not toggle it. Only a
@@ -53,10 +55,12 @@ impl ConduitApp {
         }
         let mut changed = false;
         let mut terminal = false;
+        let mut files_changed = false;
         let mut visible = false;
         let mut dirty_messages = Vec::new();
         let mut structural_change = false;
         let mut completed_turns = Vec::new();
+        let mut file_tool_events = Vec::new();
         for (id, prefix, event) in incoming {
             if self
                 .session_control
@@ -112,10 +116,19 @@ impl ConduitApp {
                         run.activity_message = None;
                     }
                 }
+                Event::Child {
+                    thread_id,
+                    turn_id,
+                    event,
+                } => {
+                    self.apply_child_event(id, &prefix, &thread_id, &turn_id, *event);
+                    cx.notify();
+                }
                 Event::Subagent(agent) => {
                     if let Some(session) = self.session_mut(id) {
                         crate::subagents::upsert(&mut session.subagents, agent, &prefix);
                     }
+                    self.invalidate_child_body(id);
                     self.session_control.changed(id);
                 }
                 Event::NativeTurnCompleted { thread_id, turn_id } => {
@@ -343,6 +356,7 @@ impl ConduitApp {
                     }
                 }
                 Event::Finished { error, cancelled } => {
+                    self.finish_child_observation(id);
                     if let Some(session) = self.session_mut(id) {
                         crate::subagents::disconnect(
                             &mut session.subagents,
@@ -414,7 +428,7 @@ impl ConduitApp {
                     self.notifications.center.resolve_session(id, unix_now());
                     if finished_run.is_some()
                         && !cancelled
-                        && (error.is_some() || !self.session_is_visible(id))
+                        && (error.is_some() || !self.session_is_notification_visible(id))
                         && let Some(target) = self.session_notice_target(id)
                     {
                         let session_title = self
@@ -438,7 +452,7 @@ impl ConduitApp {
                             Notice::new(NoticeSource::Session, level, title, message)
                                 .target(target)
                                 .key(format!("session/{id}/{prefix}/finished"), "finished")
-                                .presentation(if self.session_is_visible(id) {
+                                .presentation(if self.session_is_notification_visible(id) {
                                     NoticePresentation::History
                                 } else {
                                     NoticePresentation::Toast
@@ -470,7 +484,11 @@ impl ConduitApp {
                         });
                     self.session_control.unread_completed.remove(&id);
                     terminal = true;
-                    if (self.active_file.is_some() || self.active_diff.is_some())
+                    // The selected chat can be hidden by a file or child page.
+                    // Errors in other chats retain their error notification, not
+                    // a successful-completion marker on an unrelated tab.
+                    if self.selected_session == Some(id)
+                        && !self.session_is_notification_visible(id)
                         && error.is_some()
                         && !cancelled
                     {
@@ -482,9 +500,7 @@ impl ConduitApp {
                         }) {
                             completed_turns.push(id);
                         }
-                        if self.selected_session != Some(id)
-                            || (self.active_file.is_some() || self.active_diff.is_some())
-                        {
+                        if !self.session_is_notification_visible(id) {
                             self.session_control.unread_completed.insert(id);
                         }
                     }
@@ -702,11 +718,30 @@ impl ConduitApp {
                         .get(&id)
                         .and_then(|run| run.model.clone());
                     let selected = Some(id) == self.selected_session;
+                    let file_root = self
+                        .session_control
+                        .runs
+                        .get(&id)
+                        .map(|run| run.worktree.clone());
                     if let Some(session) = self.session_mut(id) {
                         let old_len = session.messages.len();
                         let shape = |item: &ChatItem| {
                             (is_empty_chat_placeholder(item), is_groupable_activity(item))
                         };
+                        if let Event::Tool { key, status, .. } = &other
+                            && matches!(
+                                status,
+                                crate::message_status::ToolStatus::Completed
+                                    | crate::message_status::ToolStatus::Failed
+                                    | crate::message_status::ToolStatus::Cancelled
+                                    | crate::message_status::ToolStatus::Interrupted
+                            )
+                            && index
+                                .find(&session.messages, &format!("{prefix}-{key}"))
+                                .is_none_or(|position| session.messages[position].status != *status)
+                        {
+                            files_changed = true;
+                        }
                         let previous_shape = match &other {
                             Event::Delta { key, .. }
                             | Event::Text { key, .. }
@@ -719,6 +754,15 @@ impl ConduitApp {
                         if let Some(changed_index) =
                             apply_event_indexed(session, &prefix, other, &mut index)
                         {
+                            if session.messages[changed_index].kind == ItemKind::Tool
+                                && let Some(root) = &file_root
+                            {
+                                file_tool_events.push((
+                                    id,
+                                    root.clone(),
+                                    session.messages[changed_index].clone(),
+                                ));
+                            }
                             if let Some(model) = &turn_model {
                                 let item = &mut session.messages[changed_index];
                                 if item.kind == ItemKind::Assistant && item.model.is_none() {
@@ -757,6 +801,12 @@ impl ConduitApp {
             }
         }
         if changed {
+            for id in &ids {
+                if self.store.child_bindings.contains_key(id) {
+                    self.invalidate_child_body(*id);
+                    self.session_control.changed(*id);
+                }
+            }
             self.sync_chat_rows();
             if structural_change {
                 self.scroll.remeasure_items(0..self.scroll.item_count());
@@ -785,6 +835,12 @@ impl ConduitApp {
                     self.refresh_git(cx);
                 }
             }
+        }
+        for (session, root, item) in file_tool_events {
+            self.observe_file_tool(session, &root, &item, cx);
+        }
+        if files_changed || terminal {
+            self.refresh_visible_files(cx);
         }
         for id in completed_turns {
             self.dispatch_queued_message(id, cx);

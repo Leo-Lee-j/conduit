@@ -115,6 +115,9 @@ impl ConduitApp {
 
     /// Shared by keyboard sends and the composer button.
     pub(super) fn send_blocked(&self, append_user: bool) -> Option<&'static str> {
+        if self.viewing_subagent() {
+            return Some(conduit::i18n::text_static("subagents.read_only"));
+        }
         if self
             .send_target(append_user)
             .is_some_and(|id| self.session_fork_pending(id))
@@ -170,6 +173,9 @@ impl ConduitApp {
     }
 
     pub(super) fn send_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.viewing_subagent() {
+            return;
+        }
         if self.composer_is_composing(window, cx) {
             return;
         }
@@ -183,6 +189,9 @@ impl ConduitApp {
     }
 
     pub(super) fn send_ordinary_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.viewing_subagent() {
+            return;
+        }
         if self
             .send_target(true)
             .is_some_and(|id| self.session_fork_pending(id))
@@ -367,6 +376,9 @@ impl ConduitApp {
             return Err(
                 conduit::i18n::text_static("runtime.unable_to_send_a_message_right_now").into(),
             );
+        }
+        if let Some(reason) = target.and_then(|id| self.child_resume_blocked(id)) {
+            return Err(reason);
         }
         if target.is_some_and(|id| self.session_busy(id)) {
             return Err(
@@ -633,6 +645,7 @@ impl ConduitApp {
                 release,
                 before,
                 composer: None,
+                child_composer: None,
                 queued: None,
                 naming_snippet,
                 selection,
@@ -655,7 +668,7 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.closing || !self.writable {
+        if self.viewing_subagent() || self.closing || !self.writable {
             return;
         }
         let Some(id) = self.selected_session else {
@@ -695,6 +708,9 @@ impl ConduitApp {
     /// Re-runs the latest exchange: keeps its user message, drops everything
     /// after it, and starts a fresh engine turn with the same prompt.
     pub(super) fn regenerate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.viewing_subagent() {
+            return;
+        }
         if self.closing || !self.writable {
             return;
         }
@@ -934,11 +950,15 @@ impl ConduitApp {
             .session_control
             .runs
             .get(&session)
-            .and_then(|run| run.approvals.front())
-            .is_some_and(|approval| approval.id == request)
+            .and_then(|run| run.approvals.get(&request))
+            .is_some()
             && self.submit_approval(session, &request, allow, cx)
         {
-            self.input.read(cx).focus_handle(cx).focus(window, cx);
+            if self.viewing_subagent() {
+                self.focus_subagent_page(window, cx);
+            } else {
+                self.input.read(cx).focus_handle(cx).focus(window, cx);
+            }
         }
     }
 

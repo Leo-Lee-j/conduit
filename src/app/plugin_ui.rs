@@ -605,25 +605,47 @@ impl ConduitApp {
             .into_any_element()
     }
     pub(super) fn branch_toolbar_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        let colors = palette();
         let updates = [
-            ("↓", self.incoming_commits()),
-            ("↑", self.pending_push_status()),
+            (
+                IconName::ArrowDown,
+                colors.activity_running,
+                self.incoming_commits(),
+            ),
+            (
+                IconName::ArrowUp,
+                colors.activity_completed,
+                self.pending_push_status(),
+            ),
         ];
         let counts = updates
             .iter()
-            .filter_map(|(arrow, status)| {
+            .filter_map(|(arrow, color, status)| {
                 let (count, _) = status.as_ref()?;
-                Some(if *count > 99 {
-                    format!("{arrow}99+")
+                let label = if *count > 99 {
+                    "99+".to_owned()
                 } else {
-                    format!("{arrow}{count}")
-                })
+                    count.to_string()
+                };
+                Some(
+                    h_flex()
+                        .items_center()
+                        .gap(px(2.))
+                        .text_color(rgb(*color))
+                        .text_size(ui_text_size(12.))
+                        .line_height(relative(1.))
+                        .child(
+                            Icon::new(arrow.clone())
+                                .size(px(14.))
+                                .text_color(rgb(*color)),
+                        )
+                        .child(label),
+                )
             })
-            .collect::<Vec<_>>()
-            .join(" ");
+            .collect::<Vec<_>>();
         let tooltip = updates
             .into_iter()
-            .filter_map(|(_, status)| status.map(|(_, tooltip)| tooltip))
+            .filter_map(|(_, _, status)| status.map(|(_, tooltip)| tooltip))
             .collect::<Vec<_>>()
             .join("\n");
         let branch_tooltip = if tooltip.is_empty() {
@@ -656,20 +678,12 @@ impl ConduitApp {
             .when(!counts.is_empty(), |button| {
                 button.child(
                     h_flex()
-                        .id("nav-branches-badge")
+                        .id("nav-branches-counts")
                         .test_support()
-                        .debug_selector(|| "nav-branches-badge".into())
-                        .min_w(px(14.))
-                        .h(px(14.))
-                        .px(px(3.))
+                        .debug_selector(|| "nav-branches-counts".into())
                         .items_center()
-                        .justify_center()
-                        .rounded_full()
-                        .bg(rgb(palette().text))
-                        .text_color(rgb(palette().on_text))
-                        .text_size(ui_text_size(10.))
-                        .line_height(relative(1.))
-                        .child(counts),
+                        .gap(px(4.))
+                        .children(counts),
                 )
             });
         h_flex()

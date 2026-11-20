@@ -233,6 +233,32 @@ impl ConduitApp {
                 engine: None,
             })
             .collect();
+        let notification_title =
+            conduit::i18n::text_static("settings.general.system_notifications");
+        let notification_description =
+            conduit::i18n::text_static("settings.general.system_notifications_description");
+        let mut notification_search = format!(
+            "{notification_title} {notification_description} notifications system toast native Windows"
+        );
+        for language in conduit::i18n::languages() {
+            let locale = language.id.clone().into();
+            for key in [
+                "settings.general.system_notifications",
+                "settings.general.system_notifications_description",
+            ] {
+                notification_search.push(' ');
+                notification_search.push_str(&conduit::i18n::text_for(&locale, key));
+            }
+        }
+        if matches_search(&notification_search, query) {
+            results.push(SettingsResult {
+                page: 0,
+                group: Some(0),
+                title: notification_title.into(),
+                description: notification_description.into(),
+                engine: None,
+            });
+        }
         let fetch_title = conduit::i18n::text_static("settings.general.auto_fetch_incoming");
         let fetch_description =
             conduit::i18n::text_static("settings.general.auto_fetch_incoming_description");

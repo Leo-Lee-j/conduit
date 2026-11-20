@@ -23,6 +23,10 @@ pub(super) struct NotificationUi {
     history: History,
     pending: Vec<u64>,
     visible: HashMap<u64, u64>,
+    system_visible: HashMap<u64, u64>,
+    pub(super) system_preference: Option<bool>,
+    pub(super) system_available: bool,
+    system_checked_at: Option<Instant>,
     banners: BTreeMap<u64, Record>,
     overflow: usize,
     overflow_shown: usize,
@@ -60,6 +64,10 @@ impl NotificationUi {
             history,
             pending: vec![],
             visible: HashMap::new(),
+            system_visible: HashMap::new(),
+            system_preference: None,
+            system_available: false,
+            system_checked_at: None,
             banners: BTreeMap::new(),
             overflow: 0,
             overflow_shown: 0,
@@ -195,9 +203,15 @@ impl ConduitApp {
     }
     pub(super) fn session_is_visible(&self, id: u64) -> bool {
         self.selected_session == Some(id)
+            && !self.viewing_subagent()
             && self.active_file.is_none()
             && self.active_diff.is_none()
+            && self.main_pane_visible()
+            && !self.content_overlay_open()
             && !self.branch_navigation_open()
+    }
+    pub(super) fn session_is_notification_visible(&self, id: u64) -> bool {
+        self.session_is_visible(id) && (!self.store.ui.system_notifications || self.window_active)
     }
     pub(super) fn resolve_notification(&mut self, key: &str, cx: &mut Context<Self>) {
         let before = self.notifications.center.revision();
@@ -757,6 +771,21 @@ impl ConduitApp {
         self.refresh_notifications(cx);
     }
     fn dismiss_read_toasts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let remove_system: Vec<_> = self
+            .notifications
+            .system_visible
+            .keys()
+            .copied()
+            .filter(|id| {
+                self.notifications.center.get(*id).is_none_or(|record| {
+                    record.read_at.is_some() || record.lifecycle == Lifecycle::Resolved
+                })
+            })
+            .collect();
+        for id in remove_system {
+            self.notifications.system_visible.remove(&id);
+            window.remove_notification1::<AppToast>(id, cx);
+        }
         let remove: Vec<_> = self
             .notifications
             .visible
@@ -900,6 +929,51 @@ impl ConduitApp {
         if self.closing || self.startup.is_some() {
             return;
         }
+        let system_preference = self.store.ui.system_notifications;
+        let preference_changed = self.notifications.system_preference != Some(system_preference);
+        self.notifications.system_preference = Some(system_preference);
+        if preference_changed {
+            cx.notify();
+        }
+        if !system_preference {
+            self.notifications.system_available = false;
+            self.notifications.system_checked_at = None;
+        } else if preference_changed
+            || self
+                .notifications
+                .system_checked_at
+                .is_none_or(|checked| checked.elapsed() >= Duration::from_secs(30))
+        {
+            let available = system_notifications_available();
+            self.notifications.system_checked_at = Some(Instant::now());
+            if available != self.notifications.system_available {
+                self.notifications.system_available = available;
+                cx.notify();
+            }
+        }
+        let use_system = notification_delivery_uses_system(
+            system_preference,
+            self.notifications.system_available,
+        );
+        if use_system {
+            // Switching channels must not leave old in-app pop-ups on screen.
+            let remove: Vec<_> = self.notifications.visible.keys().copied().collect();
+            for id in remove {
+                self.notifications.visible.remove(&id);
+                window.remove_notification1::<AppToast>(id, cx);
+            }
+            window.remove_notification::<OverflowToast>(cx);
+            self.notifications.overflow = 0;
+            self.notifications.overflow_shown = 0;
+        } else {
+            // Revoke already-posted system toasts when the preference is turned off or
+            // Windows no longer permits delivery. New reminders use the in-app fallback.
+            let remove: Vec<_> = self.notifications.system_visible.keys().copied().collect();
+            for id in remove {
+                self.notifications.system_visible.remove(&id);
+                window.remove_notification1::<AppToast>(id, cx);
+            }
+        }
         for id in std::mem::take(&mut self.notifications.pending) {
             let Some(record) = self.notifications.center.get(id).cloned() else {
                 continue;
@@ -907,7 +981,8 @@ impl ConduitApp {
             if record.read_at.is_some() || record.lifecycle == Lifecycle::Resolved {
                 continue;
             }
-            if !self.notifications.visible.contains_key(&id)
+            if !use_system
+                && !self.notifications.visible.contains_key(&id)
                 && self.notifications.visible.len() >= 2
             {
                 // Keep result toasts queued until a visible slot is released.
@@ -916,7 +991,9 @@ impl ConduitApp {
                 continue;
             }
             let revision = record.revision;
-            self.notifications.visible.insert(id, revision);
+            if !use_system {
+                self.notifications.visible.insert(id, revision);
+            }
             let view = cx.weak_entity();
             let close_view = view.clone();
             let mut preview: String = record.display_message().chars().take(180).collect();
@@ -969,7 +1046,16 @@ impl ConduitApp {
             } else {
                 note
             };
-            window.push_notification(note, cx);
+            if use_system {
+                window.push_notification(note.system(), cx);
+                self.notifications.system_visible.insert(id, revision);
+            } else {
+                window.push_notification(note, cx);
+            }
+        }
+        if use_system {
+            // A system-only delivery should not create a second, in-app overflow toast.
+            return;
         }
         if self.notifications.overflow > self.notifications.overflow_shown {
             self.notifications.overflow_shown = self.notifications.overflow;
@@ -993,6 +1079,38 @@ impl ConduitApp {
                 cx,
             );
         }
+    }
+}
+
+#[cfg(test)]
+fn system_notifications_available() -> bool {
+    // The UI test platform records system delivery without contacting Windows.
+    true
+}
+
+#[cfg(all(not(test), target_os = "windows"))]
+fn system_notifications_available() -> bool {
+    crate::system_notifications::enabled()
+}
+
+#[cfg(all(not(test), not(target_os = "windows")))]
+fn system_notifications_available() -> bool {
+    false
+}
+
+fn notification_delivery_uses_system(preference: bool, available: bool) -> bool {
+    preference && available
+}
+
+#[cfg(test)]
+mod notification_delivery_tests {
+    use super::notification_delivery_uses_system;
+
+    #[test]
+    fn disabled_or_unavailable_system_notifications_fall_back_to_in_app() {
+        assert!(!notification_delivery_uses_system(false, true));
+        assert!(!notification_delivery_uses_system(true, false));
+        assert!(notification_delivery_uses_system(true, true));
     }
 }
 

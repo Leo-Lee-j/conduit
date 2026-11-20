@@ -104,7 +104,7 @@ impl ConduitApp {
             .target(target)
             .key(key, "waiting")
             .active()
-            .presentation(if self.session_is_visible(session) {
+            .presentation(if self.session_is_notification_visible(session) {
                 Presentation::History
             } else {
                 Presentation::Toast

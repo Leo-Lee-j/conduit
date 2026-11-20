@@ -37,6 +37,9 @@ pub struct UiSettings {
     /// Missing fields in existing installations retain their original language.
     #[serde(default = "conduit::i18n::Locale::legacy")]
     pub language: conduit::i18n::Locale,
+    /// Deliver toast notifications through the operating system when available.
+    #[serde(default)]
+    pub system_notifications: bool,
     #[serde(default)]
     pub terminal_profile: crate::terminal::ShellProfile,
     #[serde(default = "default_terminal_height")]
@@ -76,6 +79,9 @@ pub struct UiSettings {
     /// Fill the available chat area instead of a centered 840px column.
     #[serde(default = "default_full_width_content")]
     pub full_width_content: bool,
+    /// Open new read-only files beside Main. Missing preferences keep full-page navigation.
+    #[serde(default)]
+    pub files_open_beside: bool,
     /// Collapse directory chains that contain only another directory in the file tree.
     #[serde(default = "default_compact_middle_packages")]
     pub compact_middle_packages: bool,
@@ -240,6 +246,7 @@ impl Default for UiSettings {
             plugins: Default::default(),
             encourager: Default::default(),
             language: Default::default(),
+            system_notifications: false,
             terminal_profile: Default::default(),
             terminal_height: default_terminal_height(),
             recent_sessions: Vec::new(),
@@ -255,6 +262,7 @@ impl Default for UiSettings {
             auto_collapse_inactive_workspaces: false,
             auto_sort_workspaces: true,
             full_width_content: default_full_width_content(),
+            files_open_beside: false,
             compact_middle_packages: default_compact_middle_packages(),
             group_tabs: default_group_tabs(),
             collapse_reasoning: default_collapse_reasoning(),
@@ -463,6 +471,10 @@ pub struct QueuedMessage {
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Store {
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub child_bindings: std::collections::HashMap<u64, crate::subagents::ChildBinding>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub child_commands: Vec<crate::subagents::PendingChildCommand>,
     pub version: u32,
     pub workspaces: Vec<Workspace>,
     #[serde(default)]
@@ -598,6 +610,8 @@ impl Store {
     pub(crate) fn load_from(path: &Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self {
+                child_bindings: Default::default(),
+                child_commands: Default::default(),
                 version: 2,
                 workspaces: vec![],
                 scheduler: Default::default(),
@@ -1065,6 +1079,8 @@ mod tests {
         ));
         let path = directory.join("state.json");
         let mut store = Store {
+            child_bindings: Default::default(),
+            child_commands: Default::default(),
             version: 2,
             scheduler: Default::default(),
             usage_ledger: Default::default(),
@@ -1281,6 +1297,7 @@ mod tests {
         );
         assert_eq!(store.ui.max_tabs, 8);
         assert!(store.ui.full_width_content);
+        assert!(!store.ui.files_open_beside);
         assert!(store.ui.compact_middle_packages);
         assert!(store.ui.group_tabs);
         assert!(!store.ui.collapse_reasoning);
@@ -1325,6 +1342,7 @@ mod tests {
         store.ui.auto_sort_workspaces = false;
         store.ui.max_tabs = 12;
         store.ui.full_width_content = false;
+        store.ui.files_open_beside = true;
         store.ui.compact_middle_packages = false;
         store.ui.group_tabs = false;
         store.ui.collapse_reasoning = true;
@@ -1381,6 +1399,7 @@ mod tests {
         assert!(!reloaded.ui.auto_sort_workspaces);
         assert_eq!(reloaded.ui.max_tabs, 12);
         assert!(!reloaded.ui.full_width_content);
+        assert!(reloaded.ui.files_open_beside);
         assert!(!reloaded.ui.compact_middle_packages);
         assert!(!reloaded.ui.group_tabs);
         assert!(reloaded.ui.collapse_reasoning);
@@ -1581,11 +1600,14 @@ mod language_tests {
         )
         .unwrap();
         assert_eq!(old.language.as_str(), "zh-CN");
+        assert!(!old.system_notifications);
         let mut saved = old;
+        saved.system_notifications = true;
         saved.language = conduit::i18n::Locale::default();
         let restored: UiSettings =
             serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
         assert_eq!(restored.language.as_str(), "en");
+        assert!(restored.system_notifications);
         assert_eq!(restored.ui_font_family.as_deref(), Some("Custom CJK"));
         assert_eq!(restored.chat_font_size, 18.);
         let unknown: UiSettings =

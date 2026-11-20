@@ -48,6 +48,11 @@ pub struct Approval {
 }
 #[derive(Clone, Debug)]
 pub enum Event {
+    Child {
+        thread_id: String,
+        turn_id: String,
+        event: Box<Event>,
+    },
     Subagent(crate::subagents::Agent),
     NativeTurnCompleted {
         thread_id: String,
@@ -592,6 +597,21 @@ impl Protocol {
             }
         }
     }
+    /// Decode explicitly published history with the same allowlist as live output.
+    /// This entry point never runs handshake, approval, or task-control handlers.
+    pub(crate) fn history_item(&mut self, item: &Value) -> Vec<Event> {
+        let mut step = Step::new();
+        match text(item, "type") {
+            "agentMessage" => step.events.push(Event::Text {
+                key: text(item, "id").into(),
+                text: text(item, "text").into(),
+            }),
+            "reasoning" => self.codex_reasoning.complete(item, &mut step.events),
+            _ => self.codex_item(item, true, &mut step),
+        }
+        step.events
+    }
+
     pub fn accept(&mut self, value: Value) -> Step {
         self.initialized |= match self.provider {
             Provider::Qoder => unreachable!("Qoder uses its own CliAdapter"),
@@ -636,6 +656,7 @@ impl Protocol {
         }
         // Observer RPC failures belong to the child, not the main turn.
         if self.codex_agent_event(&v) {
+            step.events.extend(self.codex_child_events(&v));
             return step;
         }
         if let Some(error) = v.get("error")

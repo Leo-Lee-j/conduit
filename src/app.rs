@@ -217,7 +217,7 @@ pub struct ConduitApp {
     plugins: plugin_ui::PluginUi,
     /// The open tab under the pointer, so the strip's right-click menu knows
     /// which tab it was opened on.
-    tab_menu_target: Option<DocumentTab>,
+    tab_menu_target: Option<(files::Pane, DocumentTab)>,
     input: Entity<TextareaState>,
     drafts: HashMap<u64, String>,
     workspace_drafts: HashMap<PathBuf, String>,
@@ -278,12 +278,14 @@ pub struct ConduitApp {
     remove_workspace_target: Option<usize>,
     _subscriptions: Vec<Subscription>,
     dirty: bool,
+    window_active: bool,
     last_save: Instant,
     scroll: gpui_kit::ListState,
     timeline: Entity<shell::ChatTimeline>,
     sidebar_view: Entity<sidebar::SidebarView>,
     sidebar: sidebar::SidebarState,
     file_view: Entity<files::FileDocumentView>,
+    reference_file_view: Entity<files::FileDocumentView>,
     /// Focus target for the conversation, so a finished selection drag leaves the
     /// composer and Ctrl+C reaches the window root's copy handler.
     chat_focus: FocusHandle,
@@ -624,7 +626,8 @@ impl ConduitApp {
             this.refresh_chat_commands(cx);
             this.refresh_file_mentions(cx);
         });
-        let shift_subscription = cx.observe_window_activation(window, |this, _, _| {
+        let shift_subscription = cx.observe_window_activation(window, |this, window, _| {
+            this.window_active = window.is_window_active();
             this.double_shift = file_picker::DoubleShift::default();
         });
         let search = cx.new(|cx| {
@@ -737,7 +740,10 @@ impl ConduitApp {
         let app = cx.entity().downgrade();
         let timeline = cx.new(|_| shell::ChatTimeline::new(app.clone(), scroll.clone()));
         let sidebar_view = cx.new(|cx| sidebar::SidebarView::new(app.clone(), window, cx));
-        let file_view = cx.new(|cx| files::FileDocumentView::new(app, cx));
+        let file_view =
+            cx.new(|cx| files::FileDocumentView::new(app.clone(), files::Pane::Main, cx));
+        let reference_file_view =
+            cx.new(|cx| files::FileDocumentView::new(app, files::Pane::Reference, cx));
         let encourager_enabled = store.ui.encourager.enabled;
         let mut app = Self {
             background: background::BackgroundState::new(cx),
@@ -851,12 +857,14 @@ impl ConduitApp {
                 dark_theme_subscription,
             ],
             dirty: false,
+            window_active: window.is_window_active(),
             last_save: Instant::now(),
             scroll,
             timeline,
             sidebar_view,
             sidebar: sidebar::SidebarState::default(),
             file_view,
+            reference_file_view,
             chat_focus: cx.focus_handle(),
             timeline_session: None,
             chat_rows: Default::default(),

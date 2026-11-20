@@ -21,6 +21,9 @@ impl ApprovalQueue {
         let index = self.items.iter().position(|a| a.id == id)?;
         self.items.remove(index)
     }
+    pub fn iter(&self) -> impl Iterator<Item = &Approval> {
+        self.items.iter()
+    }
     pub fn front(&self) -> Option<&Approval> {
         self.items.front()
     }

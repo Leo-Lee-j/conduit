@@ -36,6 +36,8 @@ mod remote;
 mod review;
 mod store;
 mod subagents;
+#[cfg(target_os = "windows")]
+mod system_notifications;
 mod terminal;
 mod transcript;
 mod usage_ledger;
@@ -112,6 +114,11 @@ fn main() {
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            #[cfg(target_os = "windows")]
+            cx.set_app_identity(
+                system_notifications::APP_USER_MODEL_ID,
+                system_notifications::APP_NAME,
+            );
             #[cfg(conduit_shell_desktop)]
             gpui_shell::init(cx);
             conduit::i18n::set_locale(&language);

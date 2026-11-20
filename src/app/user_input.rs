@@ -444,11 +444,11 @@ impl ConduitApp {
 
     pub(super) fn render_user_input(
         &self,
+        session: u64,
         approval: &Approval,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let session = self.selected_session.unwrap();
         let run = &self.session_control.runs[&session];
         let submitted = run.approvals.is_submitted(&approval.id);
         let disabled = self.closing || submitted || run.runtime.is_cancelled();
@@ -545,7 +545,7 @@ impl ConduitApp {
                         };
                         if run.runtime.is_cancelled()
                             || run.approvals.is_submitted(&request)
-                            || run.approvals.front().is_none_or(|a| a.id != request)
+                            || run.approvals.get(&request).is_none()
                         {
                             return;
                         }
@@ -713,8 +713,7 @@ impl ConduitApp {
                             let Some(run) = this.session_control.runs.get_mut(&session) else {
                                 return;
                             };
-                            if run.runtime.is_cancelled()
-                                || run.approvals.front().is_none_or(|a| a.id != submit_id)
+                            if run.runtime.is_cancelled() || run.approvals.get(&submit_id).is_none()
                             {
                                 return;
                             }
@@ -733,7 +732,11 @@ impl ConduitApp {
                             run.runtime.answer(submit_id.clone(), answers);
                             run.status =
                                 conduit::i18n::text_static("user_input.submitting_answer").into();
-                            this.input.read(cx).focus_handle(cx).focus(window, cx);
+                            if this.viewing_subagent() {
+                                this.focus_subagent_page(window, cx);
+                            } else {
+                                this.input.read(cx).focus_handle(cx).focus(window, cx);
+                            }
                             cx.notify();
                         })),
                 ),

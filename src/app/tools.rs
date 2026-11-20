@@ -77,17 +77,66 @@ pub(super) fn tool_group_has_reply(session: &SessionRecord, end: usize) -> bool 
         .any(|item| item.kind == ItemKind::Assistant && !item.text.trim().is_empty())
 }
 
+fn is_file_change_title(title: &str) -> bool {
+    matches!(
+        title,
+        "修改文件" | "编辑文件" | "fileChange" | "FileChange" | "file_change"
+    )
+}
+
+fn has_codex_file_changes(text: &str) -> bool {
+    serde_json::from_str::<Vec<serde_json::Value>>(text)
+        .ok()
+        .is_some_and(|changes| {
+            changes.iter().any(|change| {
+                let kind = change
+                    .get("kind")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| {
+                        change
+                            .pointer("/kind/type")
+                            .and_then(serde_json::Value::as_str)
+                    });
+                json_path(change).is_some()
+                    && matches!(
+                        kind,
+                        Some(
+                            "add"
+                                | "added"
+                                | "create"
+                                | "update"
+                                | "modified"
+                                | "edit"
+                                | "delete"
+                                | "deleted"
+                                | "remove"
+                        )
+                    )
+                    && ["diff", "content"].iter().any(|key| {
+                        change
+                            .get(*key)
+                            .and_then(serde_json::Value::as_str)
+                            .is_some()
+                    })
+            })
+        })
+}
+
 pub(super) fn is_tool_edit(item: &ChatItem) -> bool {
     #[derive(serde::Deserialize)]
     struct Kind<'a> {
         #[serde(rename = "acpKind", borrow)]
         kind: Option<std::borrow::Cow<'a, str>>,
     }
-    matches!(
-        item.text.trim(),
-        "修改文件" | "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "apply_patch"
-    ) || serde_json::from_str::<Kind<'_>>(&item.detail)
-        .is_ok_and(|value| value.kind.as_deref() == Some("edit"))
+    is_file_change_title(item.text.trim())
+        || matches!(
+            item.text.trim(),
+            "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "apply_patch"
+        )
+        || has_codex_file_changes(&item.input)
+        || has_codex_file_changes(&item.detail)
+        || serde_json::from_str::<Kind<'_>>(&item.detail)
+            .is_ok_and(|value| value.kind.as_deref() == Some("edit"))
 }
 
 pub(super) fn is_tool_command(item: &ChatItem) -> bool {
@@ -694,8 +743,13 @@ pub(super) fn edit_tool_diffs(item: &ChatItem) -> Option<Vec<EditFileDiff>> {
     if let Some(diffs) = opencode_edit_diffs(&item.detail) {
         return Some(diffs);
     }
+    if is_file_change_title(item.text.trim())
+        || has_codex_file_changes(&item.input)
+        || has_codex_file_changes(&item.detail)
+    {
+        return codex_edit_diffs(&item.input, &item.detail);
+    }
     match item.text.trim() {
-        "修改文件" => codex_edit_diffs(&item.input, &item.detail),
         "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => {
             claude_edit_diffs(item.text.trim(), &item.input)
         }
