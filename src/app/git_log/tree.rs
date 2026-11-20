@@ -188,6 +188,7 @@ impl GitLogView {
             .and_then(|r| r.context.current_ref.as_ref())
             == Some(&branch.full_ref);
         let selected = self.query.reference.as_ref() == Some(&branch.full_ref);
+        let menu_active = self.interaction.read(cx).menu_ref.as_ref() == Some(&branch.full_ref);
         let favorite = favorites.contains(&branch.full_ref);
         let group: SharedString = format!("git-branch-row-{index}").into();
         let reference = branch.full_ref.clone();
@@ -231,7 +232,9 @@ impl GitLogView {
             .gap_1()
             .items_center()
             .cursor_pointer()
-            .when(selected, |row| row.bg(rgb(palette().surface_hover)))
+            .when(selected || menu_active, |row| {
+                row.bg(rgb(palette().surface_hover))
+            })
             .hover(|row| row.bg(rgb(palette().surface_hover)))
             .on_prepaint(move |bounds, _, cx| {
                 bounds_host.record_branch_bounds(bounds_ref.clone(), bounds, cx)
@@ -308,7 +311,8 @@ impl GitLogView {
                     .small()
                     .compact()
                     .icon(FullIconName::Ellipsis)
-                    .opacity(0.)
+                    .selected(menu_active)
+                    .opacity(if menu_active { 1. } else { 0. })
                     .group_hover(group, |style| style.opacity(1.))
                     .focus(|style| style.opacity(1.))
                     .tooltip(conduit::i18n::format(

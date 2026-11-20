@@ -4,6 +4,7 @@ use gpui_kit::component::menu::PopupMenu;
 
 pub(super) struct BranchMenuInteraction {
     menu: Option<WeakEntity<PopupMenu>>,
+    pub(super) menu_ref: Option<String>,
     form: Option<Entity<BranchForm>>,
     form_ref: Option<String>,
     form_bounds: Option<Bounds<Pixels>>,
@@ -16,6 +17,7 @@ impl Default for BranchMenuInteraction {
     fn default() -> Self {
         Self {
             menu: None,
+            menu_ref: None,
             form: None,
             form_ref: None,
             form_bounds: None,
@@ -133,19 +135,23 @@ impl BranchMenuHost {
         window.refresh();
     }
 
-    fn attach(&self, window: &mut Window, cx: &mut Context<PopupMenu>) {
+    fn attach(&self, full_ref: String, window: &mut Window, cx: &mut Context<PopupMenu>) {
         let menu = cx.entity().downgrade();
-        self.interaction.update(cx, |state, _| {
+        self.interaction.update(cx, |state, cx| {
             state.menu = Some(menu.clone());
+            state.menu_ref = Some(full_ref);
             state.form = None;
             state.form_bounds = None;
+            cx.notify();
         });
         let host = self.clone();
         window
             .subscribe(&cx.entity(), cx, move |_, _: &DismissEvent, window, cx| {
-                let dismiss_parent = host.interaction.update(cx, |state, _| {
+                let dismiss_parent = host.interaction.update(cx, |state, cx| {
                     if state.menu.as_ref() == Some(&menu) {
                         state.menu = None;
+                        state.menu_ref = None;
+                        cx.notify();
                         return state.form.is_none();
                     }
                     false
@@ -264,7 +270,7 @@ pub(super) fn branch_menu(
     window: &mut Window,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
-    host.attach(window, cx);
+    host.attach(selected.full_ref.clone(), window, cx);
     let workspace = host.workspace.clone();
     let state = app.read(cx);
     let Some(repository) = state
