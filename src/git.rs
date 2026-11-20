@@ -267,11 +267,29 @@ pub struct Repository {
     pub truncated: bool,
     pub upstream: Option<String>,
     pub ahead: usize,
+    pub behind: Option<usize>,
     pub context: BranchContext,
     pub branch_info: Vec<BranchInfo>,
     pub integration: Option<IntegrationState>,
     pub conflicts: Vec<String>,
     pub remotes: Vec<String>,
+}
+
+impl Repository {
+    pub(crate) fn incoming_fetch_target(&self) -> Option<IncomingFetchTarget> {
+        self.branch_info
+            .iter()
+            .find(|branch| self.context.current_ref.as_ref() == Some(&branch.full_ref))
+            .and_then(BranchInfo::incoming_fetch_target)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct IncomingFetchTarget {
+    branch: String,
+    remote: String,
+    source: String,
+    tracking: String,
 }
 
 #[derive(Clone, Debug)]
@@ -426,6 +444,20 @@ impl OperationProbe {
             Ok(operate(workspace, operation, cancel))
         })
     }
+
+    pub(crate) fn fetch_incoming(path: PathBuf, target: IncomingFetchTarget) -> Self {
+        Self::spawn(path, move |workspace, cancel| {
+            branches::fetch_incoming(workspace, &target, cancel)?;
+            Ok(OperationResult {
+                retry_completed: false,
+                retry_tag: None,
+                committed: false,
+                message: String::new(),
+                error: None,
+                worktree_created: None,
+            })
+        })
+    }
 }
 
 impl<T> Drop for Probe<T> {
@@ -502,36 +534,47 @@ pub fn load_repository(workspace: &Path, cancel: &AtomicBool) -> Result<Reposito
         run_git(
             &git,
             workspace,
-            &[
-                "rev-parse",
-                "--abbrev-ref",
-                "--symbolic-full-name",
-                "@{upstream}",
-            ],
+            &["rev-parse", "--symbolic-full-name", "@{upstream}"],
             cancel,
         )
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
     };
-    let ahead = if let Some(upstream) = &upstream {
-        run_git(
-            &git,
-            workspace,
-            &["rev-list", "--count", &format!("{upstream}..HEAD")],
-            cancel,
-        )
-    } else {
-        run_git(
-            &git,
-            workspace,
-            &["rev-list", "--count", "HEAD", "--not", "--remotes"],
-            cancel,
-        )
-    }
-    .ok()
-    .and_then(|value| value.trim().parse().ok())
-    .unwrap_or(0);
+    let (ahead, behind) =
+        if let Some((head, tracking)) = expected_context.head.as_deref().zip(upstream.as_deref()) {
+            run_git(
+                &git,
+                workspace,
+                &[
+                    "rev-list",
+                    "--left-right",
+                    "--count",
+                    &format!("{head}...{tracking}"),
+                ],
+                cancel,
+            )
+            .ok()
+            .and_then(|output| {
+                let mut counts = output.split_whitespace();
+                Some((
+                    counts.next()?.parse().ok()?,
+                    Some(counts.next()?.parse().ok()?),
+                ))
+            })
+            .unwrap_or((0, None))
+        } else {
+            let ahead = run_git(
+                &git,
+                workspace,
+                &["rev-list", "--count", "HEAD", "--not", "--remotes"],
+                cancel,
+            )
+            .ok()
+            .and_then(|value| value.trim().parse().ok())
+            .unwrap_or(0);
+            (ahead, None)
+        };
     let (context, branch_info, integration, conflicts, remotes) =
         branches::metadata(&git, workspace, cancel)?;
     if context != expected_context {
@@ -544,8 +587,15 @@ pub fn load_repository(workspace: &Path, cancel: &AtomicBool) -> Result<Reposito
         detached,
         branches,
         truncated,
-        upstream,
+        upstream: upstream.map(|value| {
+            value
+                .strip_prefix("refs/remotes/")
+                .or_else(|| value.strip_prefix("refs/heads/"))
+                .unwrap_or(&value)
+                .to_string()
+        }),
         ahead,
+        behind,
         context,
         branch_info,
         integration,
@@ -2050,6 +2100,7 @@ fn run_git_bounded(
             limit,
             timeout,
             stop_when_full,
+            background: false,
         },
     )
 }
@@ -2058,6 +2109,7 @@ struct CommandLimits {
     limit: usize,
     timeout: Duration,
     stop_when_full: bool,
+    background: bool,
 }
 
 fn run_git_with_environment(
@@ -2072,6 +2124,7 @@ fn run_git_with_environment(
         limit,
         timeout,
         stop_when_full,
+        background,
     } = limits;
     if cancel.load(Ordering::Acquire) {
         bail!(conduit::i18n::text("git.git_read_cancelled"));
@@ -2083,6 +2136,13 @@ fn run_git_with_environment(
         ("GIT_TERMINAL_PROMPT".into(), "0".into()),
         ("GCM_INTERACTIVE".into(), "Never".into()),
     ]);
+    if background {
+        environment.extend([
+            ("GIT_ASKPASS".into(), String::new()),
+            ("SSH_ASKPASS".into(), String::new()),
+            ("SSH_ASKPASS_REQUIRE".into(), "never".into()),
+        ]);
+    }
     if let Some(index) = index {
         environment.insert(
             "GIT_INDEX_FILE".into(),

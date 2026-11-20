@@ -233,6 +233,21 @@ impl ConduitApp {
                 engine: None,
             })
             .collect();
+        let fetch_title = conduit::i18n::text_static("settings.general.auto_fetch_incoming");
+        let fetch_description =
+            conduit::i18n::text_static("settings.general.auto_fetch_incoming_description");
+        if matches_search(
+            &format!("{fetch_title} {fetch_description} git fetch upstream 远端 上游"),
+            query,
+        ) {
+            results.push(SettingsResult {
+                page: 6,
+                group: Some(3),
+                title: fetch_title.into(),
+                description: fetch_description.into(),
+                engine: None,
+            });
+        }
         let background_title = conduit::i18n::text_static("wallpaper.title");
         let background_description = conduit::i18n::text_static("wallpaper.description");
         let mut background_search = String::from("Wallhaven wallpaper background");

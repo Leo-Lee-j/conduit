@@ -187,6 +187,9 @@ impl GitLogView {
             .as_ref()
             .and_then(|r| r.context.current_ref.as_ref())
             == Some(&branch.full_ref);
+        let incoming = (current && !branch.remote)
+            .then(|| app.read(cx).incoming_commits())
+            .flatten();
         let selected = self.query.reference.as_ref() == Some(&branch.full_ref);
         let menu_active = self.interaction.read(cx).menu_ref.as_ref() == Some(&branch.full_ref);
         let favorite = favorites.contains(&branch.full_ref);
@@ -278,6 +281,29 @@ impl GitLogView {
                     })
                     .child(caption),
             )
+            .when_some(incoming, |row, (count, tooltip)| {
+                row.child(
+                    div()
+                        .id(("git-branch-incoming", index))
+                        .debug_selector(move || format!("git-branch-incoming-{index}"))
+                        .aria_label(tooltip.clone())
+                        .flex_shrink_0()
+                        .rounded(px(4.))
+                        .px(px(4.))
+                        .bg(rgb(palette().surface_strong))
+                        .text_color(rgb(palette().focus))
+                        .text_size(ui_text_size(11.))
+                        .tooltip(move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(tooltip.clone())
+                                .build(window, cx)
+                        })
+                        .child(if count > 99 {
+                            "↓99+".into()
+                        } else {
+                            format!("↓{count}")
+                        }),
+                )
+            })
             .child(
                 Button::new(("git-branch-favorite", index))
                     .debug_selector(move || format!("git-branch-favorite-{index}"))

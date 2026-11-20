@@ -285,6 +285,7 @@ pub(super) fn resolve(
                 limit: MAX_COMMAND_BYTES,
                 timeout: COMMAND_TIMEOUT,
                 stop_when_full: false,
+                background: false,
             },
         )
     };

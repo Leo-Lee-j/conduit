@@ -176,6 +176,7 @@ fn run(
             limit: MAX_COMMAND_BYTES,
             timeout: Duration::from_secs(120),
             stop_when_full: false,
+            background: false,
         },
     )
     .map(|output| output.text)

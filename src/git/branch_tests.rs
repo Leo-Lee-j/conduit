@@ -698,6 +698,68 @@ fn worktree_comparison_reads_recreated_untracked_file_against_selected_branch() 
 }
 
 #[test]
+fn incoming_fetch_counts_divergence_and_only_updates_the_configured_upstream() {
+    let repo = seeded_branch_repo();
+    let remote = repo.seed_remote();
+    repo.run(&["update-ref", "refs/remotes/origin/keep", "HEAD"]);
+    repo.run(&["config", "fetch.prune", "true"]);
+    repo.run(&["config", "fetch.pruneTags", "true"]);
+    repo.run(&["tag", "local-only"]);
+    let writer = seeded_branch_repo();
+    writer.run(&["fetch", remote.to_str().unwrap(), "main"]);
+    writer.run(&["reset", "--hard", "FETCH_HEAD"]);
+    writer.run(&["commit", "--allow-empty", "-m", "first remote commit"]);
+    writer.run(&["commit", "--allow-empty", "-m", "second remote commit"]);
+    writer.run(&["tag", "remote-only"]);
+    writer.run(&[
+        "push",
+        remote.to_str().unwrap(),
+        "HEAD:main",
+        "HEAD:other",
+        "refs/tags/remote-only",
+    ]);
+    let original = repo.metadata();
+    assert_eq!((original.ahead, original.behind), (0, Some(0)));
+    let target = original.incoming_fetch_target().unwrap();
+    let fetch_head = repo.path.join(".git/FETCH_HEAD");
+    std::fs::write(&fetch_head, "sentinel\n").unwrap();
+    let cancel = AtomicBool::new(false);
+    branches::fetch_incoming(&repo.path, &target, &cancel).unwrap();
+    let fetched = repo.metadata();
+    assert_eq!((fetched.ahead, fetched.behind), (0, Some(2)));
+    assert_eq!(original.context, fetched.context);
+    assert_eq!(std::fs::read_to_string(fetch_head).unwrap(), "sentinel\n");
+    assert_eq!(
+        repo.run(&["branch", "--remotes", "--format=%(refname:short)"])
+            .lines()
+            .collect::<Vec<_>>(),
+        ["origin/keep", "origin/main"]
+    );
+    assert_eq!(repo.run(&["tag"]).trim(), "local-only");
+
+    repo.run(&["commit", "--allow-empty", "-m", "local commit"]);
+    let diverged = repo.metadata();
+    assert_eq!((diverged.ahead, diverged.behind), (1, Some(2)));
+    assert_branch_ok(branch_run(
+        &repo,
+        "main",
+        BranchAction::Update { rebase: true },
+    ));
+    let updated = repo.metadata();
+    assert_eq!((updated.ahead, updated.behind), (1, Some(0)));
+
+    repo.run(&["switch", "--detach"]);
+    let detached = repo.metadata();
+    assert_eq!(detached.behind, None);
+    assert!(detached.incoming_fetch_target().is_none());
+    assert!(branches::fetch_incoming(&repo.path, &target, &cancel).is_err());
+    repo.run(&["switch", "-c", "untracked-branch"]);
+    let untracked = repo.metadata();
+    assert_eq!(untracked.behind, None);
+    assert!(untracked.incoming_fetch_target().is_none());
+}
+
+#[test]
 fn branch_fetch_prunes_remote_refs_and_detached_head_can_create_branch() {
     let _locale = crate::test_support::chinese();
     let repo = seeded_branch_repo();

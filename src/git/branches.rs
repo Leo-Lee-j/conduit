@@ -19,6 +19,84 @@ pub struct BranchInfo {
     pub occupied: Option<PathBuf>,
 }
 
+impl BranchInfo {
+    pub(super) fn incoming_fetch_target(&self) -> Option<IncomingFetchTarget> {
+        let remote = self
+            .upstream_remote
+            .as_deref()
+            .filter(|remote| *remote != ".")?;
+        let source = self
+            .upstream_ref
+            .as_deref()
+            .filter(|r| r.starts_with("refs/heads/"))?;
+        // A background fetch may only write to the remote-tracking namespace.
+        let tracking = self
+            .upstream
+            .as_deref()
+            .filter(|r| r.starts_with("refs/remotes/"))?;
+        Some(IncomingFetchTarget {
+            branch: self.full_ref.clone(),
+            remote: remote.into(),
+            source: source.into(),
+            tracking: tracking.into(),
+        })
+    }
+}
+
+pub(super) fn fetch_incoming(
+    workspace: &Path,
+    expected: &IncomingFetchTarget,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let git = resolve_git()
+        .ok_or_else(|| anyhow!(conduit::i18n::text("git.branches.git_exe_not_found")))?;
+    let (context, branches, integration, _, _) = metadata(&git, workspace, cancel)?;
+    if context.head.is_none()
+        || context.current_ref.as_ref() != Some(&expected.branch)
+        || integration.is_some()
+        || branches
+            .iter()
+            .find(|branch| branch.full_ref == expected.branch)
+            .and_then(BranchInfo::incoming_fetch_target)
+            .as_ref()
+            != Some(expected)
+    {
+        bail!(conduit::i18n::text(
+            "git.branches.branch_or_head_changed_refresh_and_retry"
+        ));
+    }
+    run_git_with_environment(
+        &git,
+        workspace,
+        &[
+            "-c",
+            "credential.interactive=false",
+            "-c",
+            "core.askPass=",
+            "fetch",
+            "--no-tags",
+            "--no-prune",
+            "--no-prune-tags",
+            "--no-recurse-submodules",
+            "--no-auto-maintenance",
+            "--no-write-fetch-head",
+            "--refmap=",
+            "--",
+            &expected.remote,
+            &format!("+{}:{}", expected.source, expected.tracking),
+        ],
+        cancel,
+        None,
+        CommandLimits {
+            limit: MAX_COMMAND_BYTES,
+            timeout: Duration::from_secs(20),
+            stop_when_full: false,
+            background: true,
+        },
+    )?;
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IntegrationState {
     Merge,

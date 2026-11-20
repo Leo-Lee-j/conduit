@@ -5,6 +5,8 @@ use super::*;
 pub(super) use super::git_state::{GitChangeGroup, GitUi};
 use gpui_kit::component::{checkbox::Checkbox, skeleton::Skeleton};
 
+const INCOMING_FETCH_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
 impl ConduitApp {
     pub(super) fn selected_workspace_path(&self) -> Option<PathBuf> {
         self.selected_workspace
@@ -175,6 +177,7 @@ impl ConduitApp {
             draft: String::new(),
             commit_push: None,
             automatic_stage: true,
+            incoming_fetch: false,
         });
         self.git_feedback(
             path,
@@ -229,6 +232,7 @@ impl ConduitApp {
             draft: String::new(),
             commit_push: None,
             automatic_stage: false,
+            incoming_fetch: false,
         });
         self.git_feedback(
             path,
@@ -278,6 +282,7 @@ impl ConduitApp {
             draft: String::new(),
             commit_push: None,
             automatic_stage: false,
+            incoming_fetch: false,
         });
         self.git_feedback(
             path,
@@ -333,6 +338,7 @@ impl ConduitApp {
                             draft: String::new(),
                             commit_push: None,
                             automatic_stage: false,
+                            incoming_fetch: false,
                         });
                         this.git_feedback(
                             workspace.clone(),
@@ -643,6 +649,7 @@ impl ConduitApp {
             draft: message,
             commit_push: Some(push),
             automatic_stage: false,
+            incoming_fetch: false,
         });
         self.git_feedback(
             path,
@@ -721,6 +728,7 @@ impl ConduitApp {
             draft: String::new(),
             commit_push: None,
             automatic_stage: false,
+            incoming_fetch: false,
         });
         self.git_feedback(
             path,
@@ -728,6 +736,36 @@ impl ConduitApp {
             false,
             cx,
         );
+    }
+
+    pub(super) fn incoming_commits(&self) -> Option<(usize, String)> {
+        let repository = self.git.repository.as_ref()?;
+        let count = repository.behind.filter(|count| *count > 0)?;
+        let upstream = repository.upstream.as_ref()?;
+        let mut tooltip = conduit::i18n::format(
+            "git_log.tree.incoming_commits",
+            &[("count", count.to_string()), ("upstream", upstream.clone())],
+        );
+        if self.store.git.auto_fetch_incoming
+            && let Some(check) = &self.git.incoming_fetch
+            && self.git.workspace.as_ref() == Some(&check.workspace)
+            && repository.incoming_fetch_target().as_ref() == Some(&check.target)
+        {
+            if let Some(time) = check.last_success {
+                tooltip.push('\n');
+                tooltip.push_str(&conduit::i18n::format(
+                    "git_log.tree.incoming_last_checked",
+                    &[("time", time.format("%Y-%m-%d %H:%M").to_string())],
+                ));
+            }
+            if check.failed {
+                tooltip.push('\n');
+                tooltip.push_str(conduit::i18n::text_static(
+                    "git_log.tree.incoming_check_failed",
+                ));
+            }
+        }
+        Some((count, tooltip))
     }
 
     pub(super) fn pending_push_status(&self) -> Option<(usize, String)> {
@@ -940,6 +978,10 @@ impl ConduitApp {
         });
         if let Some(result) = completed {
             let operation = self.git.operation.take().unwrap();
+            if operation.incoming_fetch {
+                self.finish_incoming_fetch(operation.probe.path.clone(), result.is_ok(), cx);
+                return;
+            }
             let task_worktree = self.git.task_worktree.take();
             let task_cleanup = self.git.task_cleanup.take();
             let path = operation.probe.path.clone();
@@ -1726,6 +1768,8 @@ impl ConduitApp {
             return;
         }
         self.git.workspace = path;
+        self.git.incoming_fetch = None;
+        self.cancel_incoming_fetch();
         if let Some(probe) = self.git.remote_tags_probe.take()
             && !self.git.remote_tags.contains_key(&probe.path)
         {
@@ -1760,9 +1804,17 @@ impl ConduitApp {
                 });
         if let Some((path, repository)) = update {
             self.git.branch_probe = None;
-            if self.selected_workspace_path().as_ref() == Some(&path)
-                && self.git.repository != repository
+            if self.selected_workspace_path().as_ref() != Some(&path) {
+                return;
+            }
+            if let Some(repository) = &repository
+                && let Some(check) = &self.git.incoming_fetch
+                && repository.incoming_fetch_target().as_ref() != Some(&check.target)
             {
+                self.cancel_incoming_fetch();
+                self.git.incoming_fetch = None;
+            }
+            if self.git.repository != repository {
                 let head_changed = self
                     .git
                     .repository
@@ -1789,11 +1841,91 @@ impl ConduitApp {
                 }
                 cx.notify();
             }
+            self.poll_incoming_fetch(cx);
         }
         // Pick up changes made in an external terminal, even with the dock closed.
         if self.git.last_branch_check.elapsed() >= Duration::from_secs(10) {
             self.refresh_branches();
         }
+    }
+
+    pub(super) fn cancel_incoming_fetch(&self) {
+        if let Some(operation) = &self.git.operation
+            && operation.incoming_fetch
+        {
+            operation.probe.cancel();
+        }
+    }
+
+    fn poll_incoming_fetch(&mut self, cx: &mut Context<Self>) {
+        if !self.store.git.auto_fetch_incoming
+            || !self.writable
+            || self.closing
+            || self.git.operation.is_some()
+            || self.git.generation.is_some()
+            || self.git.branch_probe.is_some()
+        {
+            return;
+        }
+        let Some(path) = self.selected_workspace_path() else {
+            return;
+        };
+        let Some(repository) = &self.git.repository else {
+            return;
+        };
+        if repository.integration.is_some() || repository.context.head.is_none() {
+            return;
+        }
+        let Some(target) = repository.incoming_fetch_target() else {
+            return;
+        };
+        let previous = self
+            .git
+            .incoming_fetch
+            .as_ref()
+            .filter(|check| check.workspace == path && check.target == target);
+        if previous.is_some_and(|check| check.attempted_at.elapsed() < INCOMING_FETCH_INTERVAL)
+            || self.worktree_has_runs(&path)
+        {
+            return;
+        }
+        self.git.incoming_fetch = Some(super::git_state::IncomingFetch {
+            workspace: path.clone(),
+            target: target.clone(),
+            attempted_at: Instant::now(),
+            last_success: previous.and_then(|check| check.last_success),
+            failed: previous.is_some_and(|check| check.failed),
+        });
+        self.git.operation = Some(GitOperation {
+            worktree: git::worktree_root(&path),
+            probe: git::OperationProbe::fetch_incoming(path, target),
+            draft: String::new(),
+            commit_push: None,
+            automatic_stage: false,
+            incoming_fetch: true,
+        });
+        cx.notify();
+    }
+
+    fn finish_incoming_fetch(&mut self, path: PathBuf, succeeded: bool, cx: &mut Context<Self>) {
+        if self.selected_workspace_path().as_ref() != Some(&path) {
+            cx.notify();
+            return;
+        }
+        if succeeded {
+            self.git.branch_probe = None;
+            self.refresh_branches();
+        }
+        if let Some(check) = &mut self.git.incoming_fetch
+            && self.store.git.auto_fetch_incoming
+            && check.workspace == path
+        {
+            check.failed = !succeeded;
+            if succeeded {
+                check.last_success = Some(Local::now());
+            }
+        }
+        cx.notify();
     }
 
     /// Open the read-only diff window for one file of the selected workspace.

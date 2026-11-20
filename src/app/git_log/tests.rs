@@ -112,6 +112,109 @@ fn wait(cx: &mut VisualTestContext, app: &Entity<ConduitApp>) {
 }
 
 #[gpui_kit::test]
+fn incoming_badge_follows_current_branch_and_retains_count_after_remote_failure(
+    cx: &mut TestAppContext,
+) {
+    let _locale = crate::test_support::chinese();
+    cx.update(gpui_kit::init);
+    let repo = Repo::new("incoming client");
+    let remote = Repo::new("incoming remote");
+    remote.git(&["fetch", repo.0.to_str().unwrap(), "main"]);
+    remote.git(&["reset", "--hard", "FETCH_HEAD"]);
+    repo.git(&["remote", "add", "origin", remote.0.to_str().unwrap()]);
+    repo.git(&["fetch", "origin"]);
+    repo.git(&["branch", "--set-upstream-to=origin/main", "main"]);
+    repo.git(&["branch", "other"]);
+    remote.git(&["commit", "--allow-empty", "-m", "incoming"]);
+
+    let output = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let slot = output.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let store = Store {
+                workspaces: vec![Workspace {
+                    path: repo.0.clone(),
+                    sessions: vec![super::super::tests::session()],
+                }],
+                ..Default::default()
+            };
+            let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.startup = None;
+            app.selected_workspace = Some(0);
+            app.selected_session = Some(1);
+            app.git.workspace = Some(repo.0.clone());
+            app.git.branch_probe = None;
+            app.git.repository =
+                Some(git::load_repository(&repo.0, &AtomicBool::new(false)).unwrap());
+            app.show_branch_navigation(window, cx);
+            app
+        });
+        *slot.borrow_mut() = Some(app.clone());
+        Root::new(app, window, cx)
+    });
+    let app = output.borrow().as_ref().unwrap().clone();
+    cx.simulate_resize(size(px(1400.), px(1000.)));
+    wait(cx, &app);
+    assert!(cx.debug_bounds("git-branch-incoming-0").is_none());
+    cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            app.store.git.auto_fetch_incoming = true;
+            app.refresh_branches();
+        });
+    });
+    let wait_for_check = |cx: &mut VisualTestContext, failed| {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            draw(cx);
+            let done = cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    app.poll_branches(cx);
+                    app.poll_git_actions(window, cx);
+                    app.git.branch_probe.is_none()
+                        && app.git.operation.is_none()
+                        && app.git.incoming_fetch.as_ref().is_some_and(|check| {
+                            check.failed == failed && check.last_success.is_some()
+                        })
+                })
+            });
+            if done {
+                draw(cx);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("background fetch did not complete (expected failure: {failed})");
+    };
+    wait_for_check(cx, false);
+    assert!(cx.debug_bounds("git-branch-incoming-0").is_some());
+    assert!(cx.debug_bounds("git-branch-incoming-1").is_none());
+
+    repo.git(&["remote", "set-url", "origin", "./missing-remote"]);
+    cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            app.git.incoming_fetch.as_mut().unwrap().attempted_at -= Duration::from_secs(300);
+            app.refresh_branches();
+        });
+    });
+    wait_for_check(cx, true);
+    cx.update(|_, cx| {
+        let (count, tooltip) = app.read(cx).incoming_commits().unwrap();
+        assert_eq!(count, 1);
+        assert!(tooltip.contains("origin/main"));
+        assert!(tooltip.contains(conduit::i18n::text_static(
+            "git_log.tree.incoming_check_failed"
+        )));
+    });
+    assert!(cx.debug_bounds("git-branch-incoming-0").is_some());
+
+    repo.git(&["switch", "other"]);
+    cx.update(|_, cx| app.update(cx, |app, _| app.refresh_branches()));
+    wait(cx, &app);
+    assert!(cx.debug_bounds("git-branch-incoming-0").is_none());
+    assert!(cx.debug_bounds("git-branch-incoming-1").is_none());
+}
+
+#[gpui_kit::test]
 fn branch_manager_navigation_filters_favorites_commit_diff_and_workspace_isolation(
     cx: &mut TestAppContext,
 ) {

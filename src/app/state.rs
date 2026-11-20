@@ -429,6 +429,7 @@ pub(super) struct GitOperation {
     /// Whether the active commit also pushes; None for other Git operations.
     pub(super) commit_push: Option<bool>,
     pub(super) automatic_stage: bool,
+    pub(super) incoming_fetch: bool,
 }
 
 /// One-shot background request that proposes a short session title.

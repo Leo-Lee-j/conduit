@@ -19,6 +19,7 @@ pub(super) struct GitUi {
     pub(super) branch_probe: Option<BranchProbe>,
     pub(super) repository: Option<git::Repository>,
     pub(super) last_branch_check: Instant,
+    pub(super) incoming_fetch: Option<IncomingFetch>,
     pub(super) drafts: HashMap<PathBuf, CommitDraft>,
     pub(super) generation: Option<CommitGeneration>,
     pub(super) operation: Option<GitOperation>,
@@ -46,6 +47,7 @@ impl Default for GitUi {
             branch_probe: None,
             repository: None,
             last_branch_check: Instant::now(),
+            incoming_fetch: None,
             drafts: HashMap::new(),
             generation: None,
             operation: None,
@@ -61,6 +63,14 @@ impl Default for GitUi {
             selected_files: HashMap::new(),
         }
     }
+}
+
+pub(super) struct IncomingFetch {
+    pub(super) workspace: PathBuf,
+    pub(super) target: git::IncomingFetchTarget,
+    pub(super) attempted_at: Instant,
+    pub(super) last_success: Option<chrono::DateTime<chrono::Local>>,
+    pub(super) failed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

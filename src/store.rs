@@ -379,6 +379,8 @@ pub enum TagIncrement {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GitSettings {
+    #[serde(default)]
+    pub auto_fetch_incoming: bool,
     #[serde(default = "default_tag_step")]
     pub tag_step: usize,
     #[serde(default)]
@@ -411,6 +413,7 @@ fn default_commit_prompt() -> String {
 impl Default for GitSettings {
     fn default() -> Self {
         Self {
+            auto_fetch_incoming: false,
             tag_increment: TagIncrement::default(),
             tag_step: default_tag_step(),
             commit_message_prompt: conduit::i18n::text_for(
@@ -1442,9 +1445,20 @@ mod tests {
     }
 
     #[test]
+    fn incoming_auto_fetch_is_opt_in_and_persists() {
+        let mut settings: GitSettings = serde_json::from_str("{}").unwrap();
+        assert!(!settings.auto_fetch_incoming);
+        settings.auto_fetch_incoming = true;
+        let encoded = serde_json::to_string(&settings).unwrap();
+        let saved: GitSettings = serde_json::from_str(&encoded).unwrap();
+        assert!(saved.auto_fetch_incoming);
+    }
+
+    #[test]
     fn commit_prompt_uses_saved_preferences_and_appends_staged_context() {
         let _locale = crate::test_support::chinese();
         let mut settings = GitSettings {
+            auto_fetch_incoming: false,
             tag_increment: TagIncrement::Patch,
             tag_step: 1,
             commit_message_prompt: "Use English and include a concise body.".into(),

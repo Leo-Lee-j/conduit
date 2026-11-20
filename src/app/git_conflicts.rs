@@ -141,6 +141,7 @@ impl ConduitApp {
             draft: String::new(),
             commit_push: None,
             automatic_stage: false,
+            incoming_fetch: false,
         });
         cx.notify();
         Ok(())

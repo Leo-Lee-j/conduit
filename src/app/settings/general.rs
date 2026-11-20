@@ -1,6 +1,7 @@
 //! General settings.
 
 use super::*;
+use gpui_kit::component::switch::Switch;
 
 impl ConduitApp {
     pub(in crate::app) fn settings_general_page(
@@ -556,8 +557,9 @@ impl ConduitApp {
             &self.store.git.commit_message_prompt
         }
         .to_owned();
+        let prompt_view = view.clone();
         let edit = SettingItem::render(move |_, _, _| {
-            let view = view.clone();
+            let view = prompt_view.clone();
             v_flex()
                 .w_full()
                 .gap_2()
@@ -607,6 +609,32 @@ impl ConduitApp {
                 .disabled(disabled),
             ]);
         }
+        let auto_fetch_enabled = self.store.git.auto_fetch_incoming;
+        let auto_fetch = SettingField::render(move |_, _, _| {
+            let view = view.clone();
+            Switch::new("git-auto-fetch-incoming")
+                .checked(auto_fetch_enabled)
+                .accessibility_label(conduit::i18n::text_static(
+                    "settings.general.auto_fetch_incoming",
+                ))
+                .disabled(disabled)
+                .on_click(move |enabled, _, cx| {
+                    view.update(cx, |app, cx| {
+                        if !app.writable || app.closing {
+                            return;
+                        }
+                        app.store.git.auto_fetch_incoming = *enabled;
+                        if *enabled {
+                            app.refresh_branches();
+                        } else {
+                            app.cancel_incoming_fetch();
+                            app.git.incoming_fetch = None;
+                        }
+                        app.persist();
+                        cx.notify();
+                    });
+                })
+        });
         settings_page(
             conduit::i18n::text_static("settings.general.git_commits"),
             FullIconName::GitFork,
@@ -646,6 +674,19 @@ impl ConduitApp {
                     "settings.general.changes_save_automatically_and_apply_to_the",
                 )
             }),
+            settings_section(conduit::i18n::text_static(
+                "settings.general.branch_updates",
+            ))
+            .item(
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.general.auto_fetch_incoming"),
+                    auto_fetch,
+                )
+                .description(settings_description(conduit::i18n::text_static(
+                    "settings.general.auto_fetch_incoming_description",
+                )))
+                .disabled(disabled),
+            ),
         ])
     }
 }

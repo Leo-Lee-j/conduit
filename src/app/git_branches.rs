@@ -768,6 +768,7 @@ impl ConduitApp {
             draft: String::new(),
             commit_push: None,
             automatic_stage: false,
+            incoming_fetch: false,
         });
         self.git.task_worktree = None;
         self.git.task_cleanup = None;

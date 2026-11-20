@@ -46,6 +46,7 @@ fn git_results_wait_for_toast_capacity_and_clear_progress(cx: &mut TestAppContex
                     draft: String::new(),
                     commit_push: None,
                     automatic_stage: false,
+                    incoming_fetch: false,
                 });
                 // Results retain the operation's workspace after navigation elsewhere.
                 app.selected_workspace = Some(1);
