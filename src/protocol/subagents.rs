@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 pub(super) struct Agents {
     pub records: BTreeMap<String, Agent>,
     pub(super) claude_tasks: HashMap<String, super::claude_tasks::Task>,
+    pub(super) claude_inputs: std::collections::VecDeque<(String, super::claude_tasks::TaskInput)>,
     published: BTreeMap<String, Agent>,
     pending_reads: HashMap<String, (String, String, Instant)>,
     prior_turns: HashMap<String, String>,
@@ -350,6 +351,9 @@ impl Protocol {
     }
 }
 fn update_thread(agent: &mut Agent, thread: &Value, prior_turn: Option<&str>) {
+    if let Some(role) = thread["agentRole"].as_str() {
+        agent.role = role.into();
+    }
     if let Some(name) = thread["agentNickname"]
         .as_str()
         .or_else(|| thread["agentRole"].as_str())
@@ -442,6 +446,13 @@ mod tests {
         assert!(!p.agents.records.contains_key("old-child"));
         p.accept(spawn("a"));
         p.accept(spawn("b"));
+        p.accept(json!({"method":"thread/started","params":{"thread":{
+            "id":"a","parentThreadId":"root","agentNickname":"Ada","agentRole":"reviewer",
+            "status":{"type":"active","activeFlags":[]}
+        }}}));
+        assert_eq!(p.agents.records["a"].name, "Ada");
+        assert_eq!(p.agents.records["a"].role, "reviewer");
+        assert!(p.agents.records["a"].title.is_empty());
         assert_eq!(p.agents.records["a"].status, Status::Running);
         let done = p.accept(json!({"method":"turn/completed","params":{"threadId":"root","turn":{"id":"main-turn","status":"completed"}}}));
         assert!(!done.done);
@@ -600,7 +611,9 @@ mod tests {
         p.accept(json!({"type":"system","session_id":"root","subtype":"task_started","task_id":"shell","task_type":"local_bash"}));
         assert!(!p.agents.claude_tasks["shell"].agent);
         p.accept(json!({"type":"system","session_id":"root","subtype":"task_notification","task_id":"shell","status":"completed"}));
-        p.accept(json!({"type":"system","session_id":"root","subtype":"task_started","task_id":"a","task_type":"local_agent","description":"review"}));
+        p.accept(json!({"type":"system","session_id":"root","subtype":"task_started","task_id":"a","task_type":"local_agent","description":"review","subagent_type":"Explore"}));
+        assert_eq!(p.agents.records["a"].title, "review");
+        assert_eq!(p.agents.records["a"].role, "Explore");
         p.accept(json!({"type":"system","session_id":"root","subtype":"task_progress","task_id":"a","last_tool_name":"Read","usage":{"duration_ms":42}}));
         assert_eq!(p.agents.records["a"].activity, "Read");
         assert_eq!(p.agents.records["a"].elapsed_ms, Some(42));

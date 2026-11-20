@@ -14,6 +14,52 @@ pub(super) struct Task {
     run_id: String,
     background: Option<bool>,
     ends_with_final_response: bool,
+    has_prompt: bool,
+}
+
+// Pending inputs may arrive before task_started. Retain only bounded metadata,
+// never the whole tool JSON, and keep the cache local to this Protocol/run.
+const MAX_TASK_INPUTS: usize = 256;
+
+#[derive(Default)]
+pub(super) struct TaskInput {
+    prompt: String,
+    title: String,
+    role: String,
+}
+
+impl TaskInput {
+    fn merge(&mut self, input: &Value) {
+        for (target, key) in [
+            (&mut self.prompt, "prompt"),
+            (&mut self.title, "description"),
+            (&mut self.role, "subagent_type"),
+        ] {
+            if !target.is_empty() {
+                continue;
+            }
+            if let Some(value) = input[key].as_str().filter(|value| !value.trim().is_empty()) {
+                let mut end = value.len().min(8192);
+                while !value.is_char_boundary(end) {
+                    end -= 1;
+                }
+                *target = value[..end].into();
+            }
+        }
+    }
+
+    fn apply(&self, record: &mut Agent, task: &mut Task) {
+        if !self.prompt.is_empty() && !task.has_prompt {
+            record.task.clone_from(&self.prompt);
+            task.has_prompt = true;
+        }
+        if record.title.is_empty() {
+            record.title.clone_from(&self.title);
+        }
+        if record.role.is_empty() {
+            record.role.clone_from(&self.role);
+        }
+    }
 }
 
 fn tool_status(status: Status) -> ToolStatus {
@@ -53,6 +99,37 @@ impl Task {
 }
 
 impl Protocol {
+    pub(super) fn claude_task_input(&mut self, block: &Value) {
+        if self.text_only || !matches!(text(block, "name"), "Agent" | "Task") {
+            return;
+        }
+        let key = text(block, "id");
+        if key.is_empty() || key.len() > 512 || !block["input"].is_object() {
+            return;
+        }
+        let inputs = &mut self.agents.claude_inputs;
+        let index = inputs
+            .iter()
+            .position(|(id, _)| id == key)
+            .unwrap_or_else(|| {
+                if inputs.len() == MAX_TASK_INPUTS {
+                    inputs.pop_front();
+                }
+                inputs.push_back((key.into(), TaskInput::default()));
+                inputs.len() - 1
+            });
+        let input = &mut inputs[index].1;
+        input.merge(&block["input"]);
+        for (id, task) in &mut self.agents.claude_tasks {
+            if task.agent
+                && task.tool_use_id == key
+                && let Some(record) = self.agents.records.get_mut(id)
+            {
+                input.apply(record, task);
+            }
+        }
+    }
+
     pub(super) fn claude_task_event(&mut self, v: &Value) {
         let id = text(v, "task_id");
         if id.is_empty() {
@@ -97,6 +174,8 @@ impl Protocol {
                 task.ends_with_final_response = false;
                 task.tool_use_id.clear();
                 task.background = None;
+                task.has_prompt = false;
+                record.task.clear();
             }
             task.run_id = run.into();
         } else if record.task_id.is_empty() {
@@ -118,12 +197,25 @@ impl Protocol {
         }
         if let Some(name) = v["subagent_type"].as_str() {
             record.name = name.into();
+            record.role = name.into();
         }
         if let Some(description) = v["description"]
             .as_str()
             .or_else(|| v["patch"]["description"].as_str())
         {
-            record.task = description.into();
+            record.title = description.into();
+            if !task.has_prompt {
+                record.task = description.into();
+            }
+        }
+        if task.agent
+            && let Some((_, input)) = self
+                .agents
+                .claude_inputs
+                .iter()
+                .find(|(key, _)| key == &task.tool_use_id)
+        {
+            input.apply(record, task);
         }
         match text(v, "subtype") {
             "task_updated" => {

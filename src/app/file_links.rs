@@ -12,6 +12,17 @@ enum LinkTarget {
     Anchor,
 }
 
+enum LinkAddress {
+    File(String, Option<SourcePosition>),
+    External,
+    Anchor,
+}
+
+/// Uses navigation's syntax parser without requiring a workspace or filesystem I/O.
+pub(super) fn is_file_link(href: &str) -> bool {
+    matches!(parse_link(href), Ok(LinkAddress::File(..)))
+}
+
 fn decode_path(text: &str) -> Result<String, String> {
     let mut bytes = Vec::with_capacity(text.len());
     let mut source = text.bytes();
@@ -55,16 +66,26 @@ fn normalize(path: &Path) -> Result<PathBuf, String> {
 }
 
 fn resolve_link(workspace: &Path, href: &str) -> Result<LinkTarget, String> {
+    match parse_link(href)? {
+        LinkAddress::File(path, position) => {
+            resolve_file(workspace, &path).map(|key| LinkTarget::File(key, position))
+        }
+        LinkAddress::External => Ok(LinkTarget::External),
+        LinkAddress::Anchor => Ok(LinkTarget::Anchor),
+    }
+}
+
+fn parse_link(href: &str) -> Result<LinkAddress, String> {
     let href = href.trim();
     if href.starts_with('#') {
-        return Ok(LinkTarget::Anchor);
+        return Ok(LinkAddress::Anchor);
     }
     let lower = href.to_ascii_lowercase();
     if ["https:", "http:", "mailto:"]
         .iter()
         .any(|s| lower.starts_with(s))
     {
-        return Ok(LinkTarget::External);
+        return Ok(LinkAddress::External);
     }
     let native_href = display_path(Path::new(href));
     let fragment_position = native_href.split_once('#').and_then(|(_, fragment)| {
@@ -123,8 +144,9 @@ fn resolve_link(workspace: &Path, href: &str) -> Result<LinkTarget, String> {
     if path.starts_with('/') && path.as_bytes().get(2) == Some(&b':') {
         path.remove(0);
     }
-    resolve_file(workspace, &decode_path(&path)?)
-        .map(|key| LinkTarget::File(key, fragment_position.or(position)))
+    let path = decode_path(&path)?;
+    validate_file_path(&path)?;
+    Ok(LinkAddress::File(path, fragment_position.or(position)))
 }
 
 fn positive_number(value: &str) -> Option<usize> {
@@ -134,8 +156,7 @@ fn positive_number(value: &str) -> Option<usize> {
         .filter(|value| *value > 0)
 }
 
-/// Attachment references are native paths, so %, # and + stay literal.
-fn resolve_file(workspace: &Path, path: &str) -> Result<FileKey, String> {
+fn validate_file_path(path: &str) -> Result<(), String> {
     if path.is_empty() || path.chars().any(char::is_control) {
         return Err(
             conduit::i18n::text_static("file_links.the_file_link_is_missing_a_valid").into(),
@@ -148,6 +169,12 @@ fn resolve_file(workspace: &Path, path: &str) -> Result<FileKey, String> {
             conduit::i18n::text_static("file_links.this_link_cannot_be_opened_in_file").into(),
         );
     }
+    Ok(())
+}
+
+/// Attachment references are native paths, so %, # and + stay literal.
+fn resolve_file(workspace: &Path, path: &str) -> Result<FileKey, String> {
+    validate_file_path(path)?;
     let root = normalize(Path::new(&display_path(workspace)))?;
     let path = PathBuf::from(display_path(Path::new(path)));
     if (path.has_root() || path.components().any(|c| matches!(c, Component::Prefix(_))))

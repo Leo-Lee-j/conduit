@@ -585,16 +585,13 @@ impl ConduitApp {
         // workspace at all. Keeping the same shell in all three states keeps
         // the chat area from changing size when the session state changes.
         let composer_enabled = can_edit && has_workspace;
+        let subagents = self
+            .selected_session
+            .and_then(|id| self.subagent_panel(id, cx));
+        let has_subagents = subagents.is_some();
         let mut composer = v_flex()
             .id("composer")
             .debug_selector(|| "composer".into())
-            .key_context(if commands_open {
-                "ConduitComposer ChatCommand"
-            } else if mentions_open {
-                "ConduitComposer FileMention"
-            } else {
-                "ConduitComposer"
-            })
             .on_action(cx.listener(|this, _: &SendPrompt, window, cx| {
                 cx.stop_propagation();
                 if this.composer_is_composing(window, cx) {
@@ -664,9 +661,9 @@ impl ConduitApp {
                 cx.notify();
             }))
             .w_full()
-            .px(px(3.))
-            .py(px(3.))
-            .gap_1()
+            .when(!has_subagents, |composer| {
+                composer.px(px(3.)).py(px(3.)).gap_1()
+            })
             .rounded(px(11.))
             .bg(rgb(palette().surface))
             .border_1()
@@ -698,37 +695,53 @@ impl ConduitApp {
                     .bg(rgb(palette().surface_hover))
                     .border_color(rgb(palette().focus))
             })
+            .when_some(subagents, |composer, panel| composer.child(panel))
             .when_some(
                 self.render_composer_files(composer_enabled, cx),
                 |composer, files| composer.child(files),
             )
-            .child(div().px(px(3.)).pt(px(3.)).child({
-                let mut composer_input = Textarea::new(&self.input)
-                    .appearance(false)
-                    .bordered(false)
-                    .text_size(px(typography.body_size))
-                    .line_height(relative(typography.line_height))
-                    // The shared input uses its muted theme color for placeholders.
-                    // Fade only the empty field so typed text keeps full contrast.
-                    .when(self.input.read(cx).value().is_empty(), |input| {
-                        input.opacity(0.65)
+            .child(
+                div()
+                    // Input shortcuts must not shadow Enter/Space activation
+                    // on sibling subagent and composer action buttons.
+                    .key_context(if commands_open {
+                        "ConduitComposer ChatCommand"
+                    } else if mentions_open {
+                        "ConduitComposer FileMention"
+                    } else {
+                        "ConduitComposer"
                     })
-                    .disabled(self.closing || !composer_enabled);
-                if let Some(family) = typography.body_font.clone() {
-                    composer_input = composer_input.font_family(family);
-                }
-                let paste_app = app_entity.clone();
-                composer_input.on_paste(move |item, window, cx| {
-                    paste_app.update(cx, |this, cx| this.paste_attachments(item, window, cx))
-                })
-            }))
+                    .px(px(if has_subagents { 9. } else { 3. }))
+                    .pt(px(if has_subagents { 9. } else { 3. }))
+                    .child({
+                        let mut composer_input = Textarea::new(&self.input)
+                            .appearance(false)
+                            .bordered(false)
+                            .text_size(px(typography.body_size))
+                            .line_height(relative(typography.line_height))
+                            // The shared input uses its muted theme color for placeholders.
+                            // Fade only the empty field so typed text keeps full contrast.
+                            .when(self.input.read(cx).value().is_empty(), |input| {
+                                input.opacity(0.65)
+                            })
+                            .disabled(self.closing || !composer_enabled);
+                        if let Some(family) = typography.body_font.clone() {
+                            composer_input = composer_input.font_family(family);
+                        }
+                        let paste_app = app_entity.clone();
+                        composer_input.on_paste(move |item, window, cx| {
+                            paste_app
+                                .update(cx, |this, cx| this.paste_attachments(item, window, cx))
+                        })
+                    }),
+            )
             .child(
                 h_flex()
                     .id("composer-actions")
                     .debug_selector(|| "composer-actions".into())
-                    .px(px(3.))
-                    .pb(px(3.))
-                    .pt(px(3.))
+                    .px(px(if has_subagents { 6. } else { 3. }))
+                    .pb(px(if has_subagents { 6. } else { 3. }))
+                    .pt(px(if has_subagents { 6. } else { 3. }))
                     .gap_2()
                     .items_center()
                     .child(
@@ -850,9 +863,6 @@ impl ConduitApp {
         let turn_stats = self
             .selected_session
             .and_then(|id| self.turn_stats_tags(id, cx));
-        let subagents = self
-            .selected_session
-            .and_then(|id| self.subagent_panel(id, cx));
         let has_status_row = turn_activity.is_some() || turn_stats.is_some();
         // Live engine activity and the step/file tags share the transcription's
         // content width: the same 24px gutter message rows add inside the 8px
@@ -877,7 +887,6 @@ impl ConduitApp {
             v_flex()
                 .w_full()
                 .items_center()
-                .when_some(subagents, |column, panel| column.child(panel))
                 .when(has_status_row, |column| column.child(status_row))
                 .when_some(
                     self.render_queued_message(composer_enabled, cx),

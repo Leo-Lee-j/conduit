@@ -1,0 +1,15 @@
+flowchart TB
+    subgraph View["查看对象：切换不启动或停止任务"]
+        Main["主会话页面"]
+        Child["子会话页面 · 固定返回按钮"]
+        Main -->|"点击任务行"| Child
+        Child -->|"一键返回主会话"| Main
+    end
+    Main --- MainState["主会话状态：草稿 / 阅读锚点 / 正文"]
+    Child --- ChildState["子会话状态：草稿 / 阅读锚点 / 正文"]
+    Main -->|"显式发送或停止"| Commands["命令路由：固定目标与运行代次"]
+    Child -->|"显式发送或停止"| Commands
+    Commands --> Runtime["运行注册表：独立于页面存活"]
+    Runtime --> Events["事件分发：校验会话身份与运行代次"]
+    Events --> MainState
+    Events --> ChildState

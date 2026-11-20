@@ -22,6 +22,8 @@
 | --- | --- |
 | [参与贡献](../CONTRIBUTING.zh-CN.md) | 开发环境、提交前检查和文档维护规则 |
 | [架构](architecture.md) | 产品边界、模块职责与主要数据流 |
+| [聊天正文与子代理 UI](design/chat-content-and-subagents.md) | Claude 设计可行性、事件字段映射、分阶段实施与验收边界 |
+| [子代理会话导航与独立交互设计](design/subagent-conversations.md) | 待实施；一键返回主会话、双方状态保留、完整记录与定向发送/停止 |
 | [手机远程控制设计](design/mobile-remote-control.md) | Web 试用版能力、完整目标与尚待实现的配置和授权管理 |
 | [桌面宠物设计](design/desktop-pet.md) | 可启停的内置宠物、直连模型 API、悬浮交互与隐私边界 |
 | [Web 远控试用](design/mobile-remote-preview.md) | 桌面开启、浏览器配对与手机连接 |

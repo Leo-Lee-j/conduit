@@ -1168,6 +1168,7 @@ impl Protocol {
                         if text(&event["content_block"], "type") == "tool_use" =>
                     {
                         let block = &event["content_block"];
+                        self.claude_task_input(block);
                         step.events.push(self.claude_task_tool_event(Event::Tool {
                             key: text(block, "id").into(),
                             title: text(block, "name").into(),
@@ -1238,6 +1239,7 @@ impl Protocol {
                             _ => {}
                         }
                         if text(block, "type") == "tool_use" {
+                            self.claude_task_input(block);
                             if matches!(
                                 text(block, "name"),
                                 "TodoWrite" | "todo_write" | "update_plan"

@@ -2,6 +2,9 @@
 
 use super::*;
 
+#[cfg(all(test, feature = "ui-tests"))]
+mod tests;
+
 /// Chat typography resolved from settings, clamped so a hand-edited
 /// `state.json` cannot push the layout to unusable values.
 #[derive(Clone, PartialEq)]
@@ -21,6 +24,23 @@ impl ChatTypography {
     /// theme's accent sits too close to the chat canvas to read as code.
     pub(super) fn text_view_style(&self) -> TextViewStyle {
         let mut style = TextViewStyle {
+            paragraph_gap: rems(12. / DEFAULT_UI_FONT_SIZE),
+            heading_base_font_size: px(self.body_size),
+            heading_font_size: Some(Arc::new(|level, base| {
+                base * match level {
+                    1 => 20. / 15.,
+                    2 => 17. / 15.,
+                    _ => 1.,
+                }
+            })),
+            table: StyleRefinement::default()
+                .rounded(px(10.))
+                .border_color(rgb(palette().border)),
+            table_head: StyleRefinement::default()
+                .bg(rgb(palette().surface_strong))
+                .text_color(rgb(palette().muted))
+                .text_size(px(self.body_size * 0.8)),
+            table_cell: StyleRefinement::default().px(px(14.)).py(px(10.)),
             inline_code: HighlightStyle {
                 background_color: Some(Hsla::from(rgb(palette().inline_code_bg))),
                 font_weight: Some(FontWeight::MEDIUM),
@@ -30,10 +50,6 @@ impl ChatTypography {
         };
         if !self.syntax_highlight {
             style.highlight_theme = plain_highlight_theme();
-        }
-        if self.code_copy {
-            // The action row floats over the block's top-right corner.
-            style.code_block = StyleRefinement::default().pt(px(34.));
         }
         style
     }
@@ -50,24 +66,6 @@ pub(super) fn plain_highlight_theme() -> std::sync::Arc<HighlightTheme> {
             })
         })
         .clone()
-}
-
-/// The corner row every chat code block gets: the language tag and a copy
-/// button. Each block needs its own element id, otherwise all blocks share one
-/// "已复制" state.
-pub(super) fn code_block_actions(
-    scope: SharedString,
-) -> impl Fn(&gpui_kit::base::text::CodeBlock, &mut Window, &mut App) -> Div + Send + Sync + 'static
-{
-    let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    move |block, _, _| {
-        let index = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        super::numbered_code::code_actions(
-            SharedString::from(format!("{scope}-{index}")),
-            block.lang(),
-            block.code(),
-        )
-    }
 }
 
 /// A chat markdown view carrying the current typography: prose follows the body
@@ -98,10 +96,37 @@ pub(super) fn styled_markdown_view(
     let mut view = view
         .text_size(px(typography.body_size))
         .line_height(relative(typography.line_height))
+        .blockquote_style(
+            StyleRefinement::default()
+                .border_l(px(3.))
+                .border_color(rgb(palette().border))
+                .pl(px(typography.body_size * 0.95))
+                .text_color(rgb(palette().muted)),
+        )
+        .list_indent(px(typography.body_size * 1.6))
+        .list_item_style(StyleRefinement::default().pb(px(typography.body_size * 0.2)))
+        .table_body_column_style(
+            0,
+            StyleRefinement::default()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(palette().text))
+                .text,
+        )
+        .link_style(file_link_style())
+        .link_icon(file_link_icon())
+        .link_underline_on_hover(true)
         // Vertical padding switches the chip from its tight cap-height box to
         // the full ascender..descender extent, so the background stops hugging
         // the glyphs. The builder keeps this apart from the themed style.
-        .inline_code_style(StyleRefinement::default().py(px(1.)))
+        .inline_code_style(
+            StyleRefinement::default()
+                .text_size(px(typography.body_size * 0.88))
+                .px(px(5.))
+                .py(px(1.))
+                .border_1()
+                .border_color(rgb(palette().border))
+                .rounded(px(5.)),
+        )
         .selectable(selectable);
     if let Some(family) = typography.body_font.clone() {
         view = view.font_family(family);
@@ -112,24 +137,41 @@ pub(super) fn styled_markdown_view(
         selectable,
         search.clone(),
     );
-    if typography.code_line_numbers {
-        // The numbered renderer replaces fenced blocks wholesale, so it draws
-        // its own action row and padding; the stock refinement above would
-        // double-pad.
-        view = super::numbered_code::numbered_code_blocks(
-            view,
-            super::numbered_code::NumberedCodeConfig {
-                copy_scope: copy_scope.into(),
-                copy: typography.code_copy,
-                syntax_highlight: typography.syntax_highlight,
-                selectable,
-                search,
-            },
-        );
-    } else if typography.code_copy {
-        view = view.code_block_actions(code_block_actions(copy_scope.into()));
-    }
-    view
+    super::numbered_code::numbered_code_blocks(
+        view,
+        super::numbered_code::NumberedCodeConfig {
+            copy_scope: copy_scope.into(),
+            copy: typography.code_copy,
+            line_numbers: typography.code_line_numbers,
+            syntax_highlight: typography.syntax_highlight,
+            selectable,
+            search,
+        },
+    )
+}
+
+fn file_link_icon() -> gpui_kit::base::text::LinkIconResolver {
+    static ICON: std::sync::OnceLock<gpui_kit::base::text::LinkIconResolver> =
+        std::sync::OnceLock::new();
+    ICON.get_or_init(|| {
+        Arc::new(|url| super::file_links::is_file_link(url).then(|| FullIconName::FileText.path()))
+    })
+    .clone()
+}
+
+fn file_link_style() -> gpui_kit::base::text::LinkStyleResolver {
+    static STYLE: std::sync::OnceLock<gpui_kit::base::text::LinkStyleResolver> =
+        std::sync::OnceLock::new();
+    STYLE
+        .get_or_init(|| {
+            Arc::new(|url| {
+                super::file_links::is_file_link(url).then_some(HighlightStyle {
+                    font_weight: Some(FontWeight::MEDIUM),
+                    ..Default::default()
+                })
+            })
+        })
+        .clone()
 }
 
 /// Scales an interface text size with the base font, preserving its original

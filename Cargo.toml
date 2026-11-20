@@ -1,6 +1,6 @@
 [package]
 name = "conduit"
-version = "0.3.13"
+version = "0.3.14"
 edition = "2024"
 license = "GPL-3.0-only"
 publish = false
@@ -66,3 +66,8 @@ opt-level = 1
 # window dragging and animations visibly stutter. Optimizing dependencies keeps
 # iteration builds responsive without switching to a release build.
 opt-level = 2
+
+# Pinned renderer extensions; see vendor/gpui-kit/CONDUIT.md.
+[patch."https://github.com/longbridge/gpui-kit.git"]
+gpui-base = { path = "vendor/gpui-kit/crates/base" }
+gpui-component = { path = "vendor/gpui-kit/crates/component" }

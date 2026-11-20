@@ -11,6 +11,7 @@ function Invoke-Check([string]$Program, [string[]]$Arguments) {
 
 Push-Location (Join-Path $PSScriptRoot '..')
 try {
+    Invoke-Check python @('scripts/check-gpui-vendor.py')
     Invoke-Check python @('scripts/check-i18n.py')
     Invoke-Check cargo @('fmt', '--all', '--check')
     Invoke-Check cargo @('clippy', '--locked', '--all-targets', '--features', 'ui-tests', '--', '-D', 'warnings')

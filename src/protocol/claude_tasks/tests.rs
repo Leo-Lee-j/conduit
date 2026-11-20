@@ -20,6 +20,125 @@ fn tool_state(step: &Step, key: &str) -> Option<ToolStatus> {
     })
 }
 
+fn agent_input(key: &str, prompt: &str) -> Value {
+    json!({"type":"assistant","message":{"id":format!("message-{key}"),"content":[{
+        "type":"tool_use","id":key,"name":"Agent",
+        "input":{"prompt":prompt,"description":"Review code","subagent_type":"Explore"}
+    }]}})
+}
+
+#[test]
+fn claude_task_prompt_joins_inputs_in_either_order_and_survives_description_updates() {
+    for input_first in [false, true] {
+        let mut p = claude();
+        let input = agent_input("tool", "检查代码\nPreserve this complete task.");
+        let started = start("agent", "local_agent", "tool", "run-1");
+        let (first, second) = if input_first {
+            (input.clone(), started)
+        } else {
+            (started, input.clone())
+        };
+        p.accept(first);
+        let step = p.accept(second);
+        let record = &p.agents.records["agent"];
+        assert_eq!(record.task, "检查代码\nPreserve this complete task.");
+        assert_eq!(record.title, "inspect");
+        assert_eq!(record.role, "Explore");
+        assert!(
+            step.events
+                .iter()
+                .any(|event| matches!(event, Event::Subagent(a) if a == record))
+        );
+        assert!(
+            !p.accept(input)
+                .events
+                .iter()
+                .any(|event| matches!(event, Event::Subagent(_)))
+        );
+        p.accept(json!({"type":"system","subtype":"task_updated","task_id":"agent","run_id":"run-1","patch":{"description":"New short title"}}));
+        assert_eq!(p.agents.records["agent"].title, "New short title");
+        assert_eq!(
+            p.agents.records["agent"].task,
+            "检查代码\nPreserve this complete task."
+        );
+    }
+}
+
+#[test]
+fn claude_late_task_input_enriches_completion_without_reviving_it_or_crossing_runs() {
+    let mut p = claude();
+    p.accept(start("agent", "local_agent", "tool-1", "run-1"));
+    p.accept(json!({"type":"system","subtype":"task_notification","task_id":"agent","run_id":"run-1","status":"completed","summary":"done"}));
+    let finished_at = p.agents.records["agent"].finished_at;
+    let step = p.accept(agent_input("tool-1", "Original task"));
+    assert_eq!(tool_state(&step, "tool-1"), Some(ToolStatus::Completed));
+    let record = &p.agents.records["agent"];
+    assert_eq!(record.task, "Original task");
+    assert_eq!(record.result, "done");
+    assert_eq!(record.finished_at, finished_at);
+
+    let mut restarted = start("agent", "local_agent", "tool-2", "run-2");
+    restarted.as_object_mut().unwrap().remove("description");
+    p.accept(restarted);
+    assert!(p.agents.records["agent"].task.is_empty());
+    p.accept(agent_input("tool-1", "Stale task"));
+    assert!(p.agents.records["agent"].task.is_empty());
+    p.accept(agent_input("tool-2", "Next task"));
+    assert_eq!(p.agents.records["agent"].task, "Next task");
+    assert_eq!(p.agents.records["agent"].status, Status::Running);
+}
+
+#[test]
+fn claude_task_input_cache_is_bounded_without_erasing_correlated_prompts() {
+    let mut p = claude();
+    p.accept(start("agent", "local_agent", "tool", "run-1"));
+    p.accept(agent_input("tool", &"中😀".repeat(2000)));
+    let prompt = p.agents.records["agent"].task.clone();
+    assert!(prompt.len() <= 8192);
+    assert!(prompt.len() >= 8185);
+    for index in 0..MAX_TASK_INPUTS + 1 {
+        p.accept(agent_input(&format!("pending-{index}"), "Pending"));
+    }
+    assert_eq!(p.agents.claude_inputs.len(), MAX_TASK_INPUTS);
+    assert!(!p.agents.claude_inputs.iter().any(|(key, _)| key == "tool"));
+    p.accept(start("agent", "local_agent", "tool", "run-1"));
+    assert_eq!(p.agents.records["agent"].task, prompt);
+}
+
+#[test]
+fn claude_task_inputs_reject_unrelated_tools_and_child_transcripts() {
+    for kind in ["Bash", "mcp__custom__Agent"] {
+        let mut p = claude();
+        let mut input = agent_input("tool", "Not an agent task");
+        input["message"]["content"][0]["name"] = json!(kind);
+        p.accept(input);
+        p.accept(start("agent", "local_agent", "tool", "run-1"));
+        assert_eq!(p.agents.records["agent"].task, "inspect");
+        assert!(p.agents.claude_inputs.is_empty());
+    }
+    let mut p = claude();
+    let mut input = agent_input("nested-tool", "Private child transcript");
+    input["parent_tool_use_id"] = json!("parent-tool");
+    assert!(p.accept(input).events.is_empty());
+    assert!(p.agents.claude_inputs.is_empty());
+    let mut p = claude().text_only();
+    p.accept(agent_input("tool", "Do not retain in naming requests"));
+    assert!(p.agents.claude_inputs.is_empty());
+}
+
+#[test]
+fn claude_structured_launch_and_legacy_task_inputs_preserve_original_prompt() {
+    let mut p = claude();
+    let mut input = agent_input("tool", "Legacy complete prompt");
+    input["message"]["content"][0]["name"] = json!("Task");
+    p.accept(input);
+    p.accept(json!({"type":"user","tool_use_result":{"status":"async_launched","agentId":"agent"},"message":{"content":[{"type":"tool_result","tool_use_id":"tool","content":"launched"}]}}));
+    assert_eq!(p.agents.records["agent"].task, "Legacy complete prompt");
+    p.accept(start("agent", "local_agent", "tool", "run-1"));
+    p.accept(json!({"type":"assistant","message":{"id":"partial","content":[{"type":"tool_use","id":"tool","name":"Task","input":{}}]}}));
+    assert_eq!(p.agents.records["agent"].task, "Legacy complete prompt");
+}
+
 #[test]
 fn claude_background_task_return_is_not_completion_and_notifications_update_the_tool() {
     for (native, expected) in [

@@ -1088,7 +1088,7 @@ dependencies = [
 
 [[package]]
 name = "conduit"
-version = "0.3.13"
+version = "0.3.14"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -2440,7 +2440,6 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.8.0"
-source = "git+https://github.com/longbridge/gpui-kit.git?rev=11345ec002d9f182a266b5d5dd3a217090700a87#11345ec002d9f182a266b5d5dd3a217090700a87"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -2481,7 +2480,6 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.8.0"
-source = "git+https://github.com/longbridge/gpui-kit.git?rev=11345ec002d9f182a266b5d5dd3a217090700a87#11345ec002d9f182a266b5d5dd3a217090700a87"
 dependencies = [
  "anyhow",
  "chrono",

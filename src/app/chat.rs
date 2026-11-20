@@ -3,7 +3,7 @@
 use super::*;
 use std::{borrow::Cow, rc::Rc};
 
-fn activates_link(event: &ClickEvent) -> bool {
+pub(super) fn activates_link(event: &ClickEvent) -> bool {
     match event {
         ClickEvent::Mouse(click) => {
             matches!(click.up.button, MouseButton::Left | MouseButton::Middle)
@@ -163,7 +163,7 @@ fn reasoning_label_key(item: &ChatItem, codex: bool, running: bool) -> &'static 
 }
 
 /// Keep short counters in seconds and longer turns readable as minutes/seconds.
-fn format_elapsed(elapsed: Duration, precise: bool) -> String {
+pub(super) fn format_elapsed(elapsed: Duration, precise: bool) -> String {
     if elapsed > Duration::from_secs(60) {
         let seconds = elapsed.as_secs();
         conduit::i18n::format(

@@ -8,7 +8,7 @@ use std::{cell::RefCell, collections::HashMap, path::PathBuf};
 pub(super) struct SessionController {
     pub(super) runs: HashMap<u64, ActiveRun>,
     pub(super) queue_saves: HashMap<u64, super::runtime::PendingQueueSave>,
-    pub(super) collapsed_agents: HashSet<u64>,
+    pub(super) agent_panels: HashMap<u64, super::subagents::PanelState>,
     pub(super) expanded_agents: HashSet<(u64, String)>,
     pub(super) plans: HashMap<u64, Vec<PlanStep>>,
     pub(super) namings: HashMap<u64, SessionNaming>,

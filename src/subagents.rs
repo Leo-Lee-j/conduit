@@ -46,6 +46,10 @@ pub struct Agent {
     pub id: String,
     pub parent_id: String,
     pub name: String,
+    /// Provider-supplied short description, kept separate from the original task.
+    pub title: String,
+    /// Explicit provider role/type; a nickname is not a role.
+    pub role: String,
     pub task: String,
     pub activity: String,
     pub result: String,
@@ -85,15 +89,18 @@ impl Agent {
         self.started_at = now();
         self.finished_at = None;
         self.elapsed_ms = None;
+        self.title.clear();
         self.activity.clear();
         self.result.clear();
         self.status = Status::Running;
     }
     pub fn bytes(&self) -> usize {
-        192 + [
+        240 + [
             &self.id,
             &self.parent_id,
             &self.name,
+            &self.title,
+            &self.role,
             &self.task,
             &self.activity,
             &self.result,
@@ -107,6 +114,8 @@ impl Agent {
     pub fn bounded(&mut self) {
         for text in [
             &mut self.name,
+            &mut self.title,
+            &mut self.role,
             &mut self.task,
             &mut self.activity,
             &mut self.result,
@@ -175,6 +184,9 @@ mod tests {
     #[test]
     fn snapshots_roundtrip_and_disconnect_never_invent_success() {
         let mut agent = Agent::new("child", "parent");
+        agent.title = "Review storage".into();
+        agent.role = "reviewer".into();
+        agent.task = "Inspect storage\nKeep the original task".into();
         agent.status = Status::Running;
         let mut records = vec![];
         upsert(&mut records, agent.clone(), "run-a");
@@ -185,8 +197,19 @@ mod tests {
         let mut restored: Vec<Agent> =
             serde_json::from_str(&serde_json::to_string(&records).unwrap()).unwrap();
         disconnect(&mut restored, None, false);
-        assert_eq!(restored[0].status, Status::Unknown);
+        assert_eq!(restored[0].title, "Review storage");
+        assert_eq!(restored[0].role, "reviewer");
         assert_eq!(restored[1].status, Status::Completed);
+        let legacy: Agent = serde_json::from_str(r#"{"id":"legacy","task":"old task"}"#).unwrap();
+        assert!(legacy.title.is_empty() && legacy.role.is_empty());
+        restored[1].restart("next-task");
+        assert!(
+            restored[1].title.is_empty(),
+            "a new task cannot inherit the old short title"
+        );
+        assert_eq!(restored[1].role, "reviewer");
+        assert_eq!(restored[0].status, Status::Unknown);
+        assert_eq!(restored[1].status, Status::Running);
         assert_eq!(records[0].status, Status::Running);
         disconnect(&mut records, Some("run-a"), true);
         assert_eq!(records[0].status, Status::Stopped);

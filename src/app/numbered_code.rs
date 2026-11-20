@@ -1,9 +1,7 @@
-//! Fenced code blocks with a line-number gutter.
+//! Fenced code blocks with a shared header and an optional line-number gutter.
 //!
-//! The base text view draws every fenced block with its own chrome and no
-//! gutter. When the setting is on, each fenced block is parsed into a custom
-//! node drawn here instead: the same chrome, language tag and copy button, the
-//! same syntax highlighting, and one number per logical line. The numbers live
+//! Every fenced block uses the same language/copy header and selection path.
+//! The line-number setting only controls the gutter. Its numbers live
 //! in the block's left padding, outside the text run, so selection and copying
 //! still return only the code.
 
@@ -26,10 +24,11 @@ use gpui_kit::Edges;
 /// Node name shared by the parser and the renderer registration.
 pub(super) const NUMBERED_CODE: &str = "conduit-numbered-code";
 
-/// What one numbered block needs from the settings behind the markup.
+/// Settings shared by numbered and unnumbered fenced blocks.
 pub(super) struct NumberedCodeConfig {
     pub(super) copy_scope: SharedString,
     pub(super) copy: bool,
+    pub(super) line_numbers: bool,
     pub(super) syntax_highlight: bool,
     pub(super) selectable: bool,
     pub(super) search: Option<WeakEntity<super::file_preview::FilePreview>>,
@@ -103,8 +102,6 @@ fn render_numbered_code(
     let mono_family = theme.mono_font_family.clone();
     let mono_size = theme.mono_font_size;
     let sans_family = theme.font_family.clone();
-    let xs_size = theme.semantic_tokens().typography.xs.size;
-    let muted_foreground = theme.muted_foreground;
     let highlight_theme = theme.highlight_theme.clone();
     let highlights: Vec<(Range<usize>, HighlightStyle)> = if config.syntax_highlight {
         data.highlights
@@ -120,23 +117,14 @@ fn render_numbered_code(
     } else {
         Vec::new()
     };
-    // The action row floats over the block's top-right corner, so the first
-    // line starts below it. Without actions the language tag gets the same
-    // treatment at a smaller height.
-    let top = if config.copy {
-        px(34.)
-    } else if data.lang.is_some() {
-        px(28.)
-    } else {
-        px(14.)
-    };
     let start = node.source_range().map(|span| span.start).unwrap_or(0);
     let id = SharedString::from(format!("{}-lines-{start}", config.copy_scope));
     let code = NumberedCode {
         id: ElementId::Name(id.clone()),
         text: StyledText::new(data.code.clone()).with_highlights(highlights),
         code: data.code.clone(),
-        top,
+        top: px(14.),
+        line_numbers: config.line_numbers,
         selectable: config.selectable,
         search: config
             .search
@@ -148,72 +136,62 @@ fn render_numbered_code(
             }),
     };
 
-    let actions = config.copy.then(|| {
-        div()
-            .absolute()
-            .top_2()
-            .right_2()
-            .bg(background)
-            .rounded(radius)
-            .child(code_actions(
-                id.clone(),
-                data.lang.clone(),
-                data.code.clone(),
-            ))
-    });
-    let lang_label = data.lang.clone().filter(|_| !config.copy).map(|lang| {
-        div()
-            .absolute()
-            .top(px(7.))
-            .right_3()
-            .font_family(sans_family)
-            .text_size(xs_size)
-            .line_height(px(16.))
-            .text_color(muted_foreground)
-            .child(lang)
-    });
-
-    div()
+    let selector = format!("{id}-block");
+    v_flex()
+        .id(id.clone())
+        .debug_selector(move || selector.clone())
         .w_full()
         .min_w_0()
         .bg(background)
         .border_1()
         .border_color(border)
         .rounded(radius)
+        .overflow_hidden()
         .font_family(mono_family)
         .text_size(mono_size)
         .line_height(relative(1.6))
-        .relative()
+        .child(
+            code_header(id, data.lang.clone(), data.code.clone(), config.copy)
+                .font_family(sans_family),
+        )
         .child(code)
-        .children(actions)
-        .children(lang_label)
         .into_any_element()
 }
 
-/// The language tag and copy button shared by numbered and stock blocks.
-pub(super) fn code_actions(
+/// Header is outside the selectable code, so labels and controls are never copied.
+fn code_header(
     id: SharedString,
     lang: Option<SharedString>,
     code: SharedString,
+    copy: bool,
 ) -> Div {
     h_flex()
-        .gap_1()
+        .h(px(32.))
+        .flex_shrink_0()
+        .px(px(12.))
+        .gap_2()
         .items_center()
-        .when_some(lang, |row, lang| {
+        .text_size(px(12.))
+        .line_height(px(16.))
+        .bg(rgb(palette().surface_strong))
+        .border_b_1()
+        .border_color(rgb(palette().border))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_ellipsis()
+                .text_color(rgb(palette().muted))
+                .child(lang.unwrap_or_else(|| "text".into())),
+        )
+        .when(copy, |row| {
             row.child(
-                div()
-                    .text_size(px(10.))
-                    .line_height(px(16.))
-                    .text_color(rgb(palette().faint))
-                    .child(lang),
+                Clipboard::new(id)
+                    .tooltip(conduit::i18n::text_static("numbered_code.copy_code"))
+                    .accessibility_label(conduit::i18n::text_static("numbered_code.copy_code"))
+                    .value(code),
             )
         })
-        .child(
-            Clipboard::new(id)
-                .tooltip(conduit::i18n::text_static("numbered_code.copy_code"))
-                .accessibility_label(conduit::i18n::text_static("numbered_code.copy_code"))
-                .value(code),
-        )
 }
 
 /// Standalone read-only source viewer, sharing theme colors and real multi-line selection.
@@ -251,6 +229,7 @@ pub(super) fn file_code(
             text: StyledText::new(code.clone()).with_highlights(highlights),
             code,
             top: px(8.),
+            line_numbers: true,
             selectable: true,
             search,
         })
@@ -265,6 +244,7 @@ struct NumberedCode {
     text: StyledText,
     code: SharedString,
     top: Pixels,
+    line_numbers: bool,
     selectable: bool,
     search: Option<super::file_preview::CodeSearch>,
 }
@@ -325,15 +305,19 @@ impl Element for NumberedCode {
 
         // Reserve room for the widest number the block will show, measured in
         // the same font the numbers are painted with.
-        let text_style = window.text_style();
-        let font_size = text_style.font_size.to_pixels(window.rem_size());
-        let digits = line_count(&self.code).to_string().len().max(1);
-        let run = text_style.to_run(1);
-        let digit_width = window
-            .text_system()
-            .shape_line("8".into(), font_size, &[run], None)
-            .width;
-        let gutter = digit_width * digits as f32 + NUMBER_GAP;
+        let gutter = if self.line_numbers {
+            let text_style = window.text_style();
+            let font_size = text_style.font_size.to_pixels(window.rem_size());
+            let digits = line_count(&self.code).to_string().len().max(1);
+            let run = text_style.to_run(1);
+            let digit_width = window
+                .text_system()
+                .shape_line("8".into(), font_size, &[run], None)
+                .width;
+            digit_width * digits as f32 + NUMBER_GAP
+        } else {
+            px(0.)
+        };
         let style = Style {
             padding: Edges {
                 top: self.top.into(),
@@ -420,7 +404,9 @@ impl Element for NumberedCode {
             }
         }
 
-        self.paint_numbers(&layout, text_bounds, window, cx);
+        if self.line_numbers {
+            self.paint_numbers(&layout, text_bounds, window, cx);
+        }
         self.text
             .paint(None, None, text_bounds, &mut (), &mut (), window, cx);
     }
@@ -525,3 +511,6 @@ fn selection_quad_bounds(
     ));
     quads
 }
+
+#[cfg(all(test, feature = "ui-tests"))]
+mod tests;
