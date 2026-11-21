@@ -24,7 +24,7 @@ fn prepare(app: &mut ConduitApp, window: &mut Window, cx: &mut Context<ConduitAp
     app.subagent_route().unwrap().clone()
 }
 fn snapshot(text: &str) -> Snapshot {
-    Snapshot {
+    Snapshot::Codex {
         thread: json!({"id":"child","createdAt":1}),
         turns: vec![json!({
             "id":"native-turn","status":"completed","items":[
@@ -383,6 +383,108 @@ fn root_deletion_waits_for_child_run_then_releases_navigation(cx: &mut TestAppCo
             assert!(app.saved_child_routes().is_empty());
             assert!(app.saved_child_pages().is_empty());
             assert!(!app.store.child_bindings.contains_key(&id));
+            app.persistence.flush();
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn native_child_histories_keep_provider_identity_and_require_connection_release(
+    cx: &mut TestAppContext,
+) {
+    let (app, cx, root_path) = crate::app::queue::tests::fixture(cx, "native-child-identity");
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let key = prepare(app, window, cx);
+            app.session_mut(1).unwrap().provider = Provider::OpenCode;
+            app.session_mut(1).unwrap().subagents[0].status = Status::Completed;
+            let binding = app.history_binding(&key).unwrap();
+            app.install_child_history(
+                &key,
+                binding,
+                Snapshot::Native {
+                    created_at: 2,
+                    idle: true,
+                    messages: vec![],
+                },
+            );
+            let id = app.visible_subagent_transcript().unwrap();
+            assert_eq!(app.session(id).unwrap().provider, Provider::OpenCode);
+            assert_eq!(app.session(id).unwrap().native_id.as_deref(), Some("child"));
+            assert!(app.child_resume_blocked(id).is_none());
+            let (runtime, _) = ChatRuntime::test_channel();
+            app.session_control.runs.insert(
+                1,
+                ActiveRun::new(
+                    runtime,
+                    root_path.clone(),
+                    "turn-0".into(),
+                    Default::default(),
+                    None,
+                    Default::default(),
+                ),
+            );
+            assert!(app.child_resume_blocked(id).is_some());
+            assert!(app.live_child_owner(&key).is_none());
+            app.stop_child(&key, cx);
+            assert!(!app.session_control.runs[&1].runtime.is_cancelled());
+            app.session_control.runs.remove(&1);
+            app.session_mut(1).unwrap().subagents[0].status = Status::Unknown;
+            assert!(app.child_resume_blocked(id).is_some());
+            app.session_mut(1).unwrap().subagents[0].status = Status::Completed;
+            app.store.child_bindings.get_mut(&id).unwrap().source = "other-data-source".into();
+            assert!(app.child_resume_blocked(id).is_some());
+            assert!(app.saved_child(&key).is_none());
+            app.persistence.flush();
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn claude_child_body_uses_agent_identity_and_never_enables_session_resume(cx: &mut TestAppContext) {
+    let (app, cx, _) = crate::app::queue::tests::fixture(cx, "claude-child-body");
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let key = prepare(app, window, cx);
+            let root = app.session_mut(1).unwrap();
+            root.provider = Provider::Claude;
+            root.subagents[0].status = Status::Completed;
+            assert!(
+                app.history_binding(&key).is_none(),
+                "task ID is not an agent ID"
+            );
+            app.session_mut(1).unwrap().subagents[0].conversation_id = Some("native-agent".into());
+            let binding = app.history_binding(&key).unwrap();
+            assert_eq!(binding.native, "native-agent");
+            app.install_child_history(
+                &key,
+                binding.clone(),
+                Snapshot::Native {
+                    created_at: 2,
+                    idle: false,
+                    messages: vec![],
+                },
+            );
+            let id = app.visible_subagent_transcript().unwrap();
+            assert_eq!(app.session(id).unwrap().provider, Provider::Claude);
+            assert_eq!(
+                app.session(id).unwrap().native_id.as_deref(),
+                Some("native-agent")
+            );
+            assert!(app.child_resume_blocked(id).is_some());
+            assert!(app.live_child_owner(&key).is_none());
+            app.install_child_history(
+                &key,
+                binding,
+                Snapshot::Native {
+                    created_at: 2,
+                    idle: false,
+                    messages: vec![],
+                },
+            );
+            assert_eq!(app.visible_subagent_transcript(), Some(id));
+            app.session_mut(1).unwrap().subagents[0].conversation_id = Some("replacement".into());
+            assert!(app.visible_subagent_transcript().is_none());
             app.persistence.flush();
         })
     });

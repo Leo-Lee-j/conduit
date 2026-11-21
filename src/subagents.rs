@@ -64,6 +64,8 @@ pub struct Agent {
     pub task_id: String,
     /// Observed from this owning connection, never inferred from a task ID.
     pub direct_input: Option<bool>,
+    /// Explicit native conversation identity when different from the task ID (Claude).
+    pub conversation_id: Option<String>,
 }
 impl Agent {
     pub fn new(id: &str, parent_id: &str) -> Self {
@@ -97,21 +99,22 @@ impl Agent {
         self.status = Status::Running;
     }
     pub fn bytes(&self) -> usize {
-        240 + [
-            &self.id,
-            &self.parent_id,
-            &self.name,
-            &self.title,
-            &self.role,
-            &self.task,
-            &self.activity,
-            &self.result,
-            &self.run,
-            &self.task_id,
-        ]
-        .iter()
-        .map(|s| s.len())
-        .sum::<usize>()
+        240 + self.conversation_id.as_ref().map_or(0, String::len)
+            + [
+                &self.id,
+                &self.parent_id,
+                &self.name,
+                &self.title,
+                &self.role,
+                &self.task,
+                &self.activity,
+                &self.result,
+                &self.run,
+                &self.task_id,
+            ]
+            .iter()
+            .map(|s| s.len())
+            .sum::<usize>()
     }
     pub fn bounded(&mut self) {
         for text in [

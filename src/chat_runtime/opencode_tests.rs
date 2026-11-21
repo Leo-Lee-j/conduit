@@ -1,9 +1,10 @@
 //! Opt-in real-binary checks using a local synthetic OpenAI-compatible endpoint.
 //! All provider configuration and history are isolated; no account is contacted.
+use super::local_http::read_request;
 use super::*;
-use crate::cli;
+use crate::{cli, domain::ItemKind};
 use serde_json::json;
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 
 struct MockModel {
     address: String,
@@ -82,7 +83,19 @@ impl MockModel {
                             } else if latest.contains("CONDUIT_TOOL") && has_write && !tool_result {
                                 json!({"role":"assistant","tool_calls":[{"index":0,"id":"call_conduit_write","type":"function","function":{"name":"write","arguments":json!({"filePath":file,"content":"APPROVED_WRITE"}).to_string()}}]})
                             } else {
-                                let text = if latest.contains("CONDUIT_RESUME") {
+                                let text = if latest.contains("CONDUIT_CHILD_RESUME") {
+                                    if messages.iter().any(|v| {
+                                        v["role"] == "user"
+                                            && v.to_string().contains("CONDUIT_SUBAGENT_CHILD")
+                                    }) && !messages.iter().any(|v| {
+                                        v["role"] == "user"
+                                            && v.to_string().contains("CONDUIT_SUBAGENT_PARENT")
+                                    }) {
+                                        "CHILD_RESUME_OK"
+                                    } else {
+                                        "CHILD_RESUME_WRONG_HISTORY"
+                                    }
+                                } else if latest.contains("CONDUIT_RESUME") {
                                     if messages.iter().any(|v| {
                                         v["role"] == "user"
                                             && v.to_string().contains("CONDUIT_REMEMBER_ORANGE")
@@ -216,36 +229,6 @@ impl Drop for MockModel {
         self.stopped.store(true, Ordering::Release);
         if let Some(worker) = self.worker.take() {
             worker.join().unwrap();
-        }
-    }
-}
-
-fn read_request(socket: &mut TcpStream) -> Option<Value> {
-    socket.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
-    let mut bytes = vec![];
-    let mut buffer = [0_u8; 8192];
-    loop {
-        let count = socket.read(&mut buffer).ok()?;
-        if count == 0 || bytes.len() > 2 * 1024 * 1024 {
-            return None;
-        }
-        bytes.extend_from_slice(&buffer[..count]);
-        let Some(index) = bytes.windows(4).position(|v| v == b"\r\n\r\n") else {
-            continue;
-        };
-        let header = String::from_utf8_lossy(&bytes[..index]);
-        let size: usize = header
-            .lines()
-            .find_map(|line| {
-                line.to_ascii_lowercase()
-                    .strip_prefix("content-length:")
-                    .map(str::trim)
-                    .map(str::to_owned)
-            })?
-            .parse()
-            .ok()?;
-        if bytes.len() >= index + 4 + size {
-            return serde_json::from_slice(&bytes[index + 4..index + 4 + size]).ok();
         }
     }
 }
@@ -692,6 +675,7 @@ fn installed_opencode_subagent_lifecycle() {
     );
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut agents = vec![];
+    let mut parent_native = None;
     let mut approved = 0;
     loop {
         assert!(
@@ -699,6 +683,7 @@ fn installed_opencode_subagent_lifecycle() {
             "child lifecycle timeout: {agents:?}"
         );
         match runtime.events.recv_timeout(Duration::from_secs(1)) {
+            Ok(Event::NativeId(id)) => parent_native = Some(id),
             Ok(Event::Subagent(agent)) => agents.push(agent),
             Ok(Event::Approval(approval)) => {
                 approved += 1;
@@ -727,5 +712,87 @@ fn installed_opencode_subagent_lifecycle() {
                 && a.result.contains("CONDUIT_LOCAL_OK")),
         "must observe confirmed result: {agents:?}"
     );
+    // Finished is the runtime cleanup barrier; release the parent before loading
+    // the native child history and creating an independent ACP connection.
+    drop(runtime);
+    let parent_native = parent_native.expect("parent native identity");
+    let child = agents
+        .iter()
+        .rev()
+        .find(|a| a.status == crate::subagents::Status::Completed)
+        .unwrap();
+    assert_ne!(child.id, parent_native);
+    let source = crate::history::children::source(
+        Provider::OpenCode,
+        &route(&root, &server).env,
+        &root.join("workspace"),
+    )
+    .unwrap();
+    let binding = crate::subagents::ChildBinding {
+        root: 1,
+        root_native: parent_native.clone(),
+        native: child.id.clone(),
+        parent: parent_native.clone(),
+        source: source.clone(),
+        idle: false,
+    };
+    let read_child = || {
+        let crate::cli_adapter::child_history::Snapshot::Native { messages, idle, .. } =
+            crate::history::children::read(
+                Provider::OpenCode,
+                &root.join("workspace"),
+                &binding,
+                &AtomicBool::new(false),
+            )
+            .unwrap()
+        else {
+            panic!("expected native child history")
+        };
+        assert!(idle, "finished child must be idle");
+        messages
+    };
+    let messages = read_child();
+    assert!(messages.iter().any(|item| {
+        item.kind == ItemKind::User && item.text.contains("CONDUIT_SUBAGENT_CHILD")
+    }));
+    assert!(messages.iter().any(|item| item.text == "CONDUIT_LOCAL_OK"));
+    let parent_messages = || {
+        let database = rusqlite::Connection::open_with_flags(
+            &source,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        database
+            .prepare("SELECT id, data FROM message WHERE session_id = ?1 ORDER BY id")
+            .unwrap()
+            .query_map([&parent_native], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    };
+    let before = parent_messages();
+    let resumed = run(
+        &root,
+        &server,
+        "CONDUIT_CHILD_RESUME",
+        Some(child.id.clone()),
+        PermissionLevel::WorkspaceWrite,
+    );
+    let (native, output, _) = finish(&resumed, Decision::Allow);
+    drop(resumed);
+    assert_eq!(native, child.id);
+    assert!(output.contains("CHILD_RESUME_OK"), "{output}");
+    assert!(!output.contains("CHILD_RESUME_WRONG_HISTORY"), "{output}");
+    assert_eq!(before, parent_messages(), "child resume changed its parent");
+    let messages = read_child();
+    assert!(
+        messages
+            .iter()
+            .any(|item| item.text == "CONDUIT_CHILD_RESUME")
+    );
+    assert!(messages.iter().any(|item| item.text == "CHILD_RESUME_OK"));
+    drop(server);
     std::fs::remove_dir_all(root).unwrap();
 }

@@ -76,7 +76,11 @@ Codex 使用独立的只读适配器核对原生子 ID、父 ID、工作区及�
 
 父连接报告 `canAcceptDirectInput=true` 且回合身份明确时，追加输入走其原连接的 `turn/steer(expectedTurnId)`，停止走 `turn/interrupt(threadId,turnId)`。命令先持久化，再复核所属运行和预期回合；响应按命令 ID 处理，子命令错误不结束父运行。未知结果保留待核对状态，用户核对历史后解除；应用不会自动重发。审批和问答复用原连接的精确票据及答案草稿。
 
-父连接释放后，已核对完整历史且空闲的 Codex 子记录可沿原生 ID 续聊，继续使用既有保存门闩和独立运行；子运行存续期间限制根会话重新派发。其他引擎保留独立草稿，能精确关联的 OpenCode 本地子记录显示已保存正文；没有可信正文时明确显示任务摘要。Claude 任务 ID 不当作会话 ID，未验证的引擎不开放发送与停止。
+父连接释放后，已核对完整历史且空闲的 Codex/OpenCode 子记录可沿原生 ID 续聊，继续使用既有保存门闩和独立运行；子运行存续期间限制根会话重新派发。OpenCode 还要求根摘要中该子任务已进入终态/空闲，且没有同根其他写入者；恢复后发送、审批和停止由该独立运行处理。父连接持有期间不开放 OpenCode 定向追加/中断。
+
+OpenCode 从 `OPENCODE_DB` 或 `XDG_DATA_HOME/opencode/opencode.db` 只读读取完整 message/part，核对直接父身份、完整祖先链和工作区。Claude 从 `CLAUDE_CONFIG_DIR/projects` 读取已知根会话下的子代理 JSONL，只接受原生事件或已关联 Agent/Task 工具结果中的可信 agent ID，并核对 transcript/sidecar 的 session、agent、cwd 和父身份；按 `parentUuid` 还原当前分支。两者沿用已打开页面的后台刷新和读取版本检查，失败保留缓存，不把部分正文当作完整快照。
+
+Claude 的任务 ID 与 agent ID 分开保存，agent ID 不能作为独立 session ID 恢复；本机 Claude CLI 已通过本地模拟模型验证前台/后台 Agent 与 Read 生命周期、后台完成等待及隔离原生历史读取；无可信映射时只显示任务摘要。Qoder 继续摘要降级。两者保留独立草稿，但不开放未经验证的子会话发送/停止。各引擎能力和读取预算见[子会话设计 11.2](design/subagent-conversations.md#112-多引擎原生历史与-opencode-续聊2026-11-21)。
 
 | 引擎 | 状态来源 |
 | --- | --- |
@@ -144,6 +148,8 @@ OpenCode 普通聊天提供一个具有相同权限配置的托管 worker，并�
 
 实现见 [qoder.rs](../src/cli_adapter/qoder.rs)，协议回归见 [qoder/tests.rs](../src/cli_adapter/qoder/tests.rs)，跨进程回归见 [adapter_tests.rs](../src/chat_runtime/adapter_tests.rs)。
 
+截至 2026-11-22，本机 npm 发布包为 1.1.95，包内也可见 CLI 内部子代理生命周期代码。但当前工作区尚未验证 ACP 事件是否提供可核验的子会话 ID、父身份及完整历史读取接口；本机未安装 Qoder CLI，未完成真实子任务端到端验证。当前适配器只把 `session/update` 中的 `tool_call` 与 `tool_call_update` 呈现为普通工具事件；工具标题、`rawInput` 或 `rawOutput` 中类似 `agentId`/`sessionId` 的字段不足以建立可信父子绑定。故子会话仍按任务摘要降级，不读取或恢复猜测出的子历史。
+
 ## 验证边界
 
 各 CLI 的消息、异常和兼容降级行为，以及本轮缺陷与回归用例，见[CLI 消息审查](cli-message-review.md)。进度通知只更新运行状态；ACP 回复中的文本资源和安全资源链接可阅读，图片、音频、二进制资源等暂以去重的兼容提示呈现。不支持的反向请求仍返回协议错误，并提示交互未完成。
@@ -152,4 +158,4 @@ OpenCode 普通聊天提供一个具有相同权限配置的托管 worker，并�
 
 真实安装的 OpenCode 可以结合隔离的本地模拟 HTTP/SSE 端点验证协议和本地工具路径，不调用真实账户；这仍不等于服务商认证、计费模型或长时间桌面验收。显式集成测试和常规命令见[测试与验收](testing.md)。
 
-Qoder 的离线协议和跨进程夹具覆盖恢复、审批、表单、取消与辅助任务限制；隔离 CLI 探测覆盖初始化、建会话、恢复会话、权限模式切换及未登录错误。未将这些检查等同于已登录模型端到端验收。
+Qoder 的离线协议和跨进程夹具覆盖恢复、审批、表单、取消与辅助任务限制、普通 ACP 工具元数据不创建未验证的子会话绑定；隔离 CLI 探测覆盖初始化、建会话、恢复会话、权限模式切换及未登录错误。未将这些检查等同于已登录模型端到端验收。子会话相关结论仅为协议/包内容检查与离线夹具结果，不是本机真实 Qoder CLI 子任务 E2E。

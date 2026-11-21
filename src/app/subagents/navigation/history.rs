@@ -147,28 +147,18 @@ impl ConduitApp {
 
     pub(super) fn child_source(&self, root: u64) -> Option<PathBuf> {
         let route = self.session_route(root).ok()?;
-        let source = route
-            .env
-            .get("CODEX_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("CODEX_HOME").map(PathBuf::from))
-            .or_else(|| {
-                std::env::var_os("USERPROFILE")
-                    .or_else(|| std::env::var_os("HOME"))
-                    .map(|home| PathBuf::from(home).join(".codex"))
-            })?;
-        let source = if source.is_absolute() {
-            source
-        } else {
-            let (workspace, _) = self.session_control.locate(&self.store.workspaces, root)?;
-            self.store.workspaces[workspace].path.join(source)
-        };
-        Some(source.canonicalize().unwrap_or(source))
+        let provider = self.session(root)?.provider;
+        let (workspace, _) = self.session_control.locate(&self.store.workspaces, root)?;
+        crate::history::children::source(
+            provider,
+            &route.env,
+            &self.store.workspaces[workspace].path,
+        )
     }
 
     pub(super) fn history_binding(&self, key: &TaskKey) -> Option<crate::subagents::ChildBinding> {
         let root = self.session(key.root)?;
-        if root.provider != Provider::Codex {
+        if root.provider == Provider::Qoder {
             return None;
         }
         let native = root.native_id.as_deref().filter(|id| !id.is_empty())?;
@@ -187,8 +177,16 @@ impl ConduitApp {
         Some(crate::subagents::ChildBinding {
             root: key.root,
             root_native: native.into(),
-            native: key.agent.clone(),
-            parent: agent.parent_id.clone(),
+            native: self.child_native_id(key)?,
+            parent: if root.provider == Provider::Claude && agent.parent_id != native {
+                root.subagents
+                    .iter()
+                    .find(|parent| parent.run == key.run && parent.id == agent.parent_id)?
+                    .conversation_id
+                    .clone()?
+            } else {
+                agent.parent_id.clone()
+            },
             source: self.child_source(key.root)?,
             idle: false,
         })
@@ -202,6 +200,8 @@ impl ConduitApp {
     }
 
     fn child_history_conflict(&self, key: &TaskKey) -> Option<&'static str> {
+        let root = self.session(key.root)?;
+        let native = self.child_native_id(key)?;
         let candidates = self
             .store
             .workspaces
@@ -209,8 +209,16 @@ impl ConduitApp {
             .flat_map(|workspace| &workspace.sessions)
             .filter(|session| {
                 session.is_subagent
-                    && session.provider == Provider::Codex
-                    && session.native_id.as_ref() == Some(&key.agent)
+                    && session.provider == root.provider
+                    && session.native_id.as_ref() == Some(&native)
+                    && (root.provider != Provider::Claude
+                        || self
+                            .store
+                            .child_bindings
+                            .get(&session.id)
+                            .is_some_and(|binding| {
+                                binding.root_native == root.native_id.clone().unwrap_or_default()
+                            }))
             })
             .count();
         if candidates > 1 {
@@ -257,28 +265,34 @@ impl ConduitApp {
         else {
             return;
         };
-        let executable = match cli::resolve_for_launch(Provider::Codex, &self.store.cli) {
-            Ok(executable) => executable.path,
-            Err(error) => {
-                self.session_control
-                    .agent_navigation
-                    .history_errors
-                    .insert(key, format!("{error:#}"));
-                return;
-            }
-        };
-        let Ok(route) = self.session_route(key.root) else {
-            return;
-        };
+        let provider = self.session(key.root).unwrap().provider;
+        let cwd = self.store.workspaces[workspace].path.clone();
         let (tx, rx) = std::sync::mpsc::channel();
-        let runtime = ChatRuntime::read_child_history(
-            executable,
-            self.store.workspaces[workspace].path.clone(),
-            route,
-            key.agent.clone(),
-            binding.parent.clone(),
-            tx,
-        );
+        let runtime = if provider == Provider::Codex {
+            let executable = match cli::resolve_for_launch(provider, &self.store.cli) {
+                Ok(executable) => executable.path,
+                Err(error) => {
+                    self.session_control
+                        .agent_navigation
+                        .history_errors
+                        .insert(key, format!("{error:#}"));
+                    return;
+                }
+            };
+            let Ok(route) = self.session_route(key.root) else {
+                return;
+            };
+            ChatRuntime::read_child_history(
+                executable,
+                cwd,
+                route,
+                binding.native.clone(),
+                binding.parent.clone(),
+                tx,
+            )
+        } else {
+            ChatRuntime::read_native_child_history(provider, cwd, binding.clone(), tx)
+        };
         self.session_control
             .agent_navigation
             .final_reads
@@ -426,12 +440,23 @@ impl ConduitApp {
             return;
         }
         let mut binding = binding;
-        binding.idle = snapshot.turns.last().is_none_or(|turn| {
-            matches!(
-                turn["status"].as_str(),
-                Some("completed" | "failed" | "interrupted")
-            )
-        });
+        let (created_at, idle, turns, messages) = match snapshot {
+            Snapshot::Codex { thread, turns } => {
+                let idle = turns.last().is_none_or(|turn| {
+                    matches!(
+                        turn["status"].as_str(),
+                        Some("completed" | "failed" | "interrupted")
+                    )
+                });
+                (thread["createdAt"].as_u64(), idle, turns, Vec::new())
+            }
+            Snapshot::Native {
+                created_at,
+                messages,
+                idle,
+            } => (Some(created_at), idle, Vec::new(), messages),
+        };
+        binding.idle = idle;
         let Some((workspace, _)) = self
             .session_control
             .locate(&self.store.workspaces, key.root)
@@ -443,13 +468,13 @@ impl ConduitApp {
             return;
         };
         record.id = existing.unwrap_or(self.next_id);
-        record.native_id = Some(key.agent.clone());
+        record.native_id = Some(binding.native.clone());
         record.is_subagent = true;
         record.archived = false;
         record.pinned = false;
         record.subagents.clear();
         record.branching = Default::default();
-        record.messages.clear();
+        record.messages = messages;
         record.transcript = Default::default();
         record.interrupted = false;
         record.usage = Default::default();
@@ -457,9 +482,7 @@ impl ConduitApp {
             .routed_agent(key)
             .map(|agent| title(agent).0.to_string())
             .unwrap_or_default();
-        record.created_at = snapshot.thread["createdAt"]
-            .as_u64()
-            .unwrap_or(record.created_at);
+        record.created_at = created_at.unwrap_or(record.created_at);
         let mut parser = crate::protocol::Protocol::new(
             Provider::Codex,
             self.store.workspaces[workspace]
@@ -470,7 +493,7 @@ impl ConduitApp {
             None,
         );
         let mut index = super::super::super::state::MessageIndex::default();
-        for turn in snapshot.turns {
+        for turn in turns {
             let turn_id = turn["id"].as_str().unwrap_or("");
             let prefix = format!("native-{turn_id}");
             for item in turn["items"].as_array().into_iter().flatten() {
@@ -512,11 +535,12 @@ impl ConduitApp {
                 }
             }
         }
-        if let Some(live) = self
-            .session_control
-            .agent_navigation
-            .live
-            .get(&(key.root, key.agent.clone()))
+        if record.provider == Provider::Codex
+            && let Some(live) = self
+                .session_control
+                .agent_navigation
+                .live
+                .get(&(key.root, key.agent.clone()))
         {
             for item in &live.messages {
                 if let Some(old) = record.messages.iter_mut().find(|old| old.key == item.key) {
@@ -535,15 +559,17 @@ impl ConduitApp {
         }
         // Seed the next live delta from the merged baseline instead of overwriting
         // a saved prefix with a new suffix when observation begins mid-message.
-        let live = self
-            .session_control
-            .agent_navigation
-            .live
-            .entry((key.root, key.agent.clone()))
-            .or_default();
-        live.run = key.run.clone();
-        live.messages = record.messages.clone();
-        live.index = Default::default();
+        if record.provider == Provider::Codex {
+            let live = self
+                .session_control
+                .agent_navigation
+                .live
+                .entry((key.root, key.agent.clone()))
+                .or_default();
+            live.run = key.run.clone();
+            live.messages = record.messages.clone();
+            live.index = Default::default();
+        }
         let id = record.id;
         if let Some(old) = existing.and_then(|id| self.session_mut(id)) {
             // Preserve independently chosen child configuration and transcript storage lineage.

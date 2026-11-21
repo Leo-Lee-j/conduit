@@ -197,11 +197,18 @@ impl ConduitApp {
 
     // Only these adapters expose native conversation IDs as agent IDs. Claude
     // task/tool-use IDs must never be interpreted as conversation IDs.
+    fn child_native_id(&self, key: &TaskKey) -> Option<String> {
+        let root = self.session(key.root)?;
+        match root.provider {
+            Provider::Claude => self.routed_agent(key)?.conversation_id.clone(),
+            Provider::Codex | Provider::OpenCode => Some(key.agent.clone()),
+            Provider::Qoder => None,
+        }
+    }
+
     fn saved_child(&self, key: &TaskKey) -> Option<u64> {
         let root = self.session(key.root)?;
-        if !matches!(root.provider, Provider::Codex | Provider::OpenCode) {
-            return None;
-        }
+        let native_child = self.child_native_id(key)?;
         let native_root = root.native_id.as_deref().filter(|id| !id.is_empty())?;
         let mut agent = self.routed_agent(key)?;
         let mut seen = HashSet::new();
@@ -224,7 +231,16 @@ impl ConduitApp {
                 child.is_subagent
                     && child.id != key.root
                     && child.provider == root.provider
-                    && child.native_id.as_deref() == Some(key.agent.as_str())
+                    && child.native_id.as_deref() == Some(native_child.as_str())
+                    && (root.provider != Provider::Claude
+                        || self
+                            .store
+                            .child_bindings
+                            .get(&child.id)
+                            .is_some_and(|binding| {
+                                binding.root == key.root
+                                    && Some(&binding.root_native) == root.native_id.as_ref()
+                            }))
             });
         let id = candidates.next()?.id;
         if candidates.next().is_some() {

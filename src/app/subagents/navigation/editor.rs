@@ -207,13 +207,21 @@ impl ConduitApp {
         let Some(root) = self.session(binding.root) else {
             return blocked();
         };
-        if session.provider != Provider::Codex
-            || root.provider != Provider::Codex
+        if !matches!(session.provider, Provider::Codex | Provider::OpenCode)
+            || root.provider != session.provider
             || session.native_id.as_deref() != Some(binding.native.as_str())
             || root.native_id.as_deref() != Some(binding.root_native.as_str())
             || self.child_source(binding.root).as_ref() != Some(&binding.source)
             || session.channel != root.channel
             || !binding.idle
+        {
+            return blocked();
+        }
+        if session.provider == Provider::OpenCode
+            && !root.subagents.iter().any(|agent| {
+                agent.id == binding.native
+                    && (agent.status.terminal() || agent.status == Status::Idle)
+            })
         {
             return blocked();
         }
@@ -348,7 +356,10 @@ impl ConduitApp {
             self.start_child_control(key, Some(prompt), Some(sent), cx);
             return;
         }
-        match self.start_turn(workspace, target, Provider::Codex, prompt, true, cx) {
+        let Some(provider) = target.and_then(|id| self.session(id)).map(|s| s.provider) else {
+            return;
+        };
+        match self.start_turn(workspace, target, provider, prompt, true, cx) {
             Ok(id) => {
                 if let Some(pending) = self
                     .session_control

@@ -10,6 +10,7 @@
 //! `native_id`, so sending a message in an imported session continues the very
 //! same conversation the terminal CLI sees.
 
+pub(crate) mod children;
 mod index;
 mod opencode;
 mod scan;

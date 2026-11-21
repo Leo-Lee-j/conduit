@@ -88,3 +88,7 @@ cargo test --locked --lib update:: -- --test-threads=1
 子会话交互回归使用 `app::subagents::`、`protocol::subagents::`、`cli_adapter::child_history::` 三组过滤器，覆盖独立输入恢复、历史/实时去重、保存门闩、旧回合拒绝及未知命令不重发。跨模块回归包括 `app::runtime::saves::`、`app::queue::`、`app::transcripts::`、`app::update::` 和通知/审批测试。
 
 原生协议探针：`python scripts/probe-subagent-protocol.py --codex <绝对可执行文件路径>`。探针使用独立 CODEX_HOME 和本地合成模型响应，验证真实父子关系的定向控制、历史与续聊，不连接真实模型服务。成功必须包含全部断言；结果和原生事件在 `target/subagent-protocol-probe/`，不作为实际模型质量或真实窗口验收证据。
+
+多引擎子历史回归增加 `history::children::` 和 `protocol::claude_tasks::`，覆盖 OpenCode 全量快照/祖先链、Claude 分支/sidecar/结构化 agent 身份、截断尾行与损坏记录、累计读取预算和数据源覆盖。`app::subagents::` 同时验证原生 provider 身份、父连接持有时禁止续聊、Claude 只读降级以及错误来源不重新绑定。
+
+OpenCode 子会话端到端验收显式执行：`cargo test --locked --features ui-tests --bin conduit chat_runtime::opencode_tests::installed_opencode_subagent_lifecycle -- --exact --ignored --nocapture --test-threads=1`。使用已安装 OpenCode、隔离 XDG/数据库目录及本地 HTTP/SSE 模拟模型；真实创建子任务，读取其原生历史，等待父连接清理后恢复原有子会话 ID，断言旧子上下文保留且父消息不变。Claude 前台/后台子代理生命周期与只读历史验收显式执行：`cargo test --locked --features ui-tests --bin conduit chat_runtime::claude_subagent_tests:: -- --ignored --nocapture --test-threads=1`。隔离 `CLAUDE_CONFIG_DIR`，使用本地 Anthropic SSE 模拟模型，验证真实 Agent/Read 工具流、主子正文隔离、后台子任务延迟完成时父 runtime 等待、子代理 JSONL 历史读取及读取不修改源文件。两组测试均不需要模型账户，但不代表真实模型服务、认证或窗口验收；Claude 子历史仍不可独立恢复、追加或定向中断。

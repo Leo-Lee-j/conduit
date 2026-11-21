@@ -261,3 +261,98 @@ fn part_item(id: &str, message: &Value, part: Value, timestamp: i64) -> Option<C
     }
     (!item.text.trim().is_empty()).then(|| ChatItem::from(item))
 }
+
+/// Read one verified descendant in a single SQLite snapshot. No migrations or writes.
+pub(super) fn read_child(
+    cwd: &Path,
+    binding: &crate::subagents::ChildBinding,
+    budget: &super::children::Budget<'_>,
+) -> anyhow::Result<crate::cli_adapter::child_history::Snapshot> {
+    use anyhow::{Context, ensure};
+    let connection = Connection::open_with_flags(
+        &binding.source,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    connection.busy_timeout(Duration::from_millis(100))?;
+    connection.execute_batch("BEGIN")?;
+    let metadata = |id: &str| -> anyhow::Result<(String, Option<String>, i64)> {
+        Ok(connection.query_row(
+            "SELECT directory, parent_id, time_created FROM session WHERE id = ?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?)
+    };
+    let (directory, parent, created) = metadata(&binding.native)?;
+    ensure!(
+        same_dir(&directory, cwd) && parent.as_deref() == Some(binding.parent.as_str()),
+        "Child history identity or workspace does not match"
+    );
+    let mut ancestor = binding.parent.clone();
+    let mut seen = std::collections::HashSet::from([binding.native.clone()]);
+    loop {
+        budget.check(0, seen.len())?;
+        ensure!(
+            seen.insert(ancestor.clone()) && seen.len() <= 256,
+            "Invalid child ancestry"
+        );
+        let (directory, parent, _) = metadata(&ancestor)?;
+        ensure!(
+            same_dir(&directory, cwd),
+            "Child history ancestor workspace does not match"
+        );
+        if ancestor == binding.root_native {
+            break;
+        }
+        ancestor = parent.context("Child history is not descended from the root session")?;
+    }
+    let mut statement = connection.prepare(
+        "SELECT m.id, m.data, COALESCE(p.id, ''), p.data, COALESCE(p.time_created, m.time_created)
+         FROM message m LEFT JOIN part p ON p.message_id = m.id AND p.session_id = m.session_id
+         WHERE m.session_id = ?1 ORDER BY m.time_created, m.id, p.id",
+    )?;
+    let mut rows = statement.query([&binding.native])?;
+    let mut bytes = 0;
+    let mut count = 0;
+    let mut messages = Vec::new();
+    let mut last_id = String::new();
+    let mut message = Value::Null;
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        if id != last_id {
+            let data = row.get_ref(1)?.as_str()?;
+            bytes += data.len() as u64;
+            budget.check(bytes, count)?;
+            message = serde_json::from_str(data)?;
+            last_id = id;
+        }
+        count += 1;
+        budget.check(bytes, count)?;
+        let data = row.get_ref(3)?;
+        if data != rusqlite::types::ValueRef::Null {
+            let data = data.as_str()?;
+            bytes += data.len() as u64;
+            budget.check(bytes, count)?;
+            let part: Value = serde_json::from_str(data)?;
+            let part_id: String = row.get(2)?;
+            ensure!(!part_id.is_empty(), "Missing child message part identity");
+            if let Some(mut item) = part_item(&part_id, &message, part, row.get(4)?) {
+                item.key = format!("native-{}-{part_id}", last_id);
+                messages.push(item);
+            }
+        }
+    }
+    // Database completion alone does not confer ownership; the UI also requires
+    // the parent connection to be gone and an observed terminal child task.
+    let idle = message["role"] == "assistant"
+        && (message.get("error").is_some_and(|v| !v.is_null())
+            || (message["time"]["completed"].as_u64().is_some()
+                && message["finish"]
+                    .as_str()
+                    .is_some_and(|v| !matches!(v, "tool-calls" | "unknown"))));
+    budget.check(bytes, count)?;
+    Ok(crate::cli_adapter::child_history::Snapshot::Native {
+        created_at: created.max(0) as u64 / 1000,
+        messages,
+        idle,
+    })
+}

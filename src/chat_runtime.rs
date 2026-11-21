@@ -27,6 +27,10 @@ use crate::protocol::Protocol;
 #[cfg(test)]
 mod adapter_tests;
 #[cfg(test)]
+mod claude_subagent_tests;
+#[cfg(test)]
+mod local_http;
+#[cfg(test)]
 mod opencode_tests;
 
 enum Control {
@@ -333,6 +337,20 @@ impl ChatRuntime {
             result,
         );
         Self::start_adapter_gated(Box::new(adapter), executable, None, cwd, None)
+    }
+
+    /// Native files are read on a cancellable worker; no CLI or model turn is started.
+    pub(crate) fn read_native_child_history(
+        provider: Provider,
+        cwd: PathBuf,
+        binding: crate::subagents::ChildBinding,
+        result: mpsc::Sender<crate::cli_adapter::child_history::Snapshot>,
+    ) -> Self {
+        Self::start_worker(move |stop, _, _, _| {
+            let snapshot = crate::history::children::read(provider, &cwd, &binding, &stop)?;
+            result.send(snapshot)?;
+            Ok(())
+        })
     }
 
     fn start_adapter_gated(

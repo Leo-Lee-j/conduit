@@ -286,6 +286,51 @@ fn qoder_streams_merge_tools_filter_sessions_and_display_thinking() {
 }
 
 #[test]
+fn qoder_generic_tool_metadata_does_not_create_a_child_session_binding() {
+    let (mut adapter, _) = ready(request(), true);
+    let started = adapter.accept(notification(
+        "original",
+        json!({
+            "sessionUpdate":"tool_call",
+            "toolCallId":"subagent-like-tool",
+            "title":"Task: inspect the project",
+            "kind":"other",
+            "rawInput":{"prompt":"inspect","agentId":"agent-1","sessionId":"child-1"}
+        }),
+    ));
+    assert!(
+        started
+            .events
+            .iter()
+            .any(|event| matches!(event, Event::Tool { key, .. } if key == "subagent-like-tool"))
+    );
+    assert!(started.events.iter().any(|event| matches!(event, Event::ToolInput { key, input } if key == "subagent-like-tool" && input.contains("agent-1"))));
+    assert!(
+        !started
+            .events
+            .iter()
+            .any(|event| matches!(event, Event::Subagent(_)))
+    );
+
+    let completed = adapter.accept(notification(
+        "original",
+        json!({
+            "sessionUpdate":"tool_call_update",
+            "toolCallId":"subagent-like-tool",
+            "status":"completed",
+            "rawOutput":{"agentId":"agent-1","sessionId":"child-1","result":"done"}
+        }),
+    ));
+    assert!(completed.events.iter().any(|event| matches!(event, Event::Tool { key, status, .. } if key == "subagent-like-tool" && *status == crate::message_status::ToolStatus::Completed)));
+    assert!(
+        !completed
+            .events
+            .iter()
+            .any(|event| matches!(event, Event::Subagent(_)))
+    );
+}
+
+#[test]
 fn qoder_permissions_preserve_wire_ids_one_shot_choices_and_helper_restrictions() {
     for permission_level in [
         PermissionLevel::ReadOnly,

@@ -321,3 +321,34 @@ fn claude_foreground_task_results_finish_but_background_transitions_keep_running
         );
     }
 }
+
+#[test]
+fn claude_conversation_identity_requires_native_agent_evidence_and_survives_task_ids() {
+    let mut p = claude();
+    p.accept(agent_input("tool", "inspect"));
+    p.accept(start("task-1", "local_agent", "tool", "run-1"));
+    assert!(p.agents.records["task-1"].conversation_id.is_none());
+    p.accept(
+        json!({"type":"user","tool_use_result":{"status":"completed","agentId":"agent-1"},
+        "message":{"content":[{"type":"tool_result","tool_use_id":"tool","content":"done"}]}}),
+    );
+    assert_eq!(
+        p.agents.records["task-1"].conversation_id.as_deref(),
+        Some("agent-1")
+    );
+    assert!(!p.agents.records.contains_key("agent-1"));
+    let mut p = claude();
+    p.accept(agent_input("foreground", "inspect"));
+    p.accept(json!({"type":"user","tool_use_result":{"status":"completed","agentId":"agent-2"},
+        "message":{"content":[{"type":"tool_result","tool_use_id":"foreground","content":"done"}]}}));
+    assert_eq!(
+        p.agents.records["agent-2"].conversation_id.as_deref(),
+        Some("agent-2")
+    );
+    assert_eq!(p.agents.records["agent-2"].status, Status::Completed);
+    p.accept(
+        json!({"type":"user","tool_use_result":{"status":"completed","agentId":"foreign"},
+        "message":{"content":[{"type":"tool_result","tool_use_id":"unrelated","content":"done"}]}}),
+    );
+    assert!(!p.agents.records.contains_key("foreign"));
+}

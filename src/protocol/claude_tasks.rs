@@ -246,6 +246,14 @@ impl Protocol {
             }
             _ => {}
         }
+        if task.agent
+            && let Some(native) = v["agent_id"]
+                .as_str()
+                .or_else(|| v["agentId"].as_str())
+                .filter(|id| crate::history::children::safe_id(id))
+        {
+            record.conversation_id = Some(native.into());
+        }
         if let Some(ms) = v["usage"]["duration_ms"].as_u64() {
             record.elapsed_ms = Some(ms);
         }
@@ -316,6 +324,39 @@ impl Protocol {
                     task.tool_use_id = key.into();
                 }
                 task.ends_with_final_response |= output["backgroundEndsWithFinalResponse"] == true;
+            }
+        }
+        if (self
+            .agents
+            .claude_inputs
+            .iter()
+            .any(|(tool, _)| tool == key)
+            || self
+                .agents
+                .claude_tasks
+                .values()
+                .any(|task| task.agent && task.tool_use_id == key))
+            && let Some(native) = output["agentId"]
+                .as_str()
+                .filter(|id| crate::history::children::safe_id(id))
+        {
+            let known = self
+                .agents
+                .claude_tasks
+                .iter()
+                .find(|(_, task)| task.tool_use_id == key)
+                .map(|(id, _)| id.clone());
+            let id = known.unwrap_or_else(|| native.to_owned());
+            // Foreground Agent calls may return an agentId without any task_started event.
+            if !self.agents.records.contains_key(&id) {
+                self.claude_task_event(&json!({"subtype":"task_started", "task_id":id,
+                    "tool_use_id":key,"task_type":"local_agent"}));
+            }
+            if let Some(record) = self.agents.records.get_mut(&id) {
+                record.conversation_id = Some(native.into());
+                if background_id.is_none() && output["status"] == "completed" {
+                    record.set_status(Status::Completed);
+                }
             }
         }
     }

@@ -8,9 +8,16 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) struct Snapshot {
-    pub thread: Value,
-    pub turns: Vec<Value>,
+pub(crate) enum Snapshot {
+    Codex {
+        thread: Value,
+        turns: Vec<Value>,
+    },
+    Native {
+        created_at: u64,
+        messages: Vec<crate::domain::ChatItem>,
+        idle: bool,
+    },
 }
 
 pub(crate) struct Reader {
@@ -131,7 +138,7 @@ impl Reader {
                 );
                 self.page(Some(cursor), step);
             } else {
-                self.result.send(Snapshot {
+                self.result.send(Snapshot::Codex {
                     thread: self.metadata.take().unwrap(),
                     turns: std::mem::take(&mut self.turns),
                 })?;
@@ -223,7 +230,10 @@ mod tests {
                 .accept(json!({"id":4,"result":{"data":[{"id":"b","items":[]}],"nextCursor":null}}))
                 .done
         );
-        assert_eq!(rx.try_recv().unwrap().turns.len(), 2);
+        let Snapshot::Codex { turns, .. } = rx.try_recv().unwrap() else {
+            panic!("expected Codex history")
+        };
+        assert_eq!(turns.len(), 2);
     }
     #[test]
     fn child_history_rejects_identity_mismatch_partial_pages_and_cursor_loops() {
