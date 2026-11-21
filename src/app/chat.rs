@@ -28,6 +28,63 @@ mod turn_diff;
 #[cfg(all(test, feature = "ui-tests"))]
 mod reasoning_tests;
 
+const ACTIVITY_ROW_HEIGHT: f32 = 28.;
+const ACTIVITY_ROW_INSET: f32 = 12.;
+const ACTIVITY_MARKER_SIZE: f32 = 14.;
+const ACTIVITY_LABEL_GAP: f32 = 8.;
+const MESSAGE_CARD_BORDER: f32 = 1.;
+
+fn activity_container(
+    content: AnyElement,
+    group: Option<(usize, usize)>,
+    session_id: u64,
+    index: usize,
+) -> AnyElement {
+    let wrapper = v_flex().relative().w_full().min_w_0().pb(px(2.));
+    let wrapper = if let Some((start, end)) = group {
+        let guide_width = 1.;
+        let guide_left = ACTIVITY_ROW_INSET + (ACTIVITY_MARKER_SIZE - guide_width) / 2.;
+        let marker_top = (ACTIVITY_ROW_HEIGHT - ACTIVITY_MARKER_SIZE) / 2.;
+        let marker_bottom = marker_top + ACTIVITY_MARKER_SIZE;
+        // Each virtualized message has its own border. Bridge those borders
+        // so adjacent guide segments meet without changing row spacing.
+        let top_extension = if index > start {
+            MESSAGE_CARD_BORDER
+        } else {
+            0.
+        };
+        let bottom_extension = if index + 1 < end {
+            MESSAGE_CARD_BORDER
+        } else {
+            0.
+        };
+        let guide = || {
+            div()
+                .absolute()
+                .left(px(guide_left))
+                .w(px(guide_width))
+                .bg(rgb(palette().border))
+        };
+        // Leave a gap for the status icon, including on translucent backgrounds.
+        wrapper
+            .child(
+                guide()
+                    .debug_selector(move || format!("activity-guide-top-{session_id}-{index}"))
+                    .top(px(-top_extension))
+                    .h(px(marker_top + top_extension)),
+            )
+            .child(
+                guide()
+                    .debug_selector(move || format!("activity-guide-bottom-{session_id}-{index}"))
+                    .top(px(marker_bottom))
+                    .bottom(px(-bottom_extension)),
+            )
+    } else {
+        wrapper
+    };
+    wrapper.child(content).into_any_element()
+}
+
 /// A short provider heading belongs on the disclosure line. Keep its body on
 /// one stable Markdown surface, rather than parsing/painting the title twice.
 fn reasoning_parts(text: &str) -> (Option<&str>, &str) {
@@ -997,8 +1054,8 @@ impl ConduitApp {
         .ghost()
         .debug_selector(move || format!("activity-{session_id}-{index}"))
         .w_full()
-        .h(px(28.))
-        .px_3()
+        .h(px(ACTIVITY_ROW_HEIGHT))
+        .px(px(ACTIVITY_ROW_INSET))
         .rounded(px(6.))
         .cursor_pointer()
         .accessibility_label(format!(
@@ -1022,28 +1079,36 @@ impl ConduitApp {
                 .w_full()
                 .min_w_0()
                 .items_center()
-                .gap_2()
-                .child(if running {
-                    Spinner::new()
-                        .small()
-                        .color(rgb(palette().muted).into())
-                        .into_any_element()
-                } else if failed {
-                    Icon::new(IconName::CircleX)
-                        .size(px(13.))
-                        .text_color(rgb(palette().danger_text))
-                        .into_any_element()
-                } else if tool_succeeded(item) {
-                    Icon::new(IconName::CircleCheck)
-                        .size(px(13.))
-                        .text_color(rgb(palette().diff_add_text))
-                        .into_any_element()
-                } else {
-                    Icon::new(FullIconName::CircleDashed)
-                        .size(px(13.))
-                        .text_color(rgb(palette().muted))
-                        .into_any_element()
-                })
+                .gap(px(ACTIVITY_LABEL_GAP))
+                .child(
+                    h_flex()
+                        .debug_selector(move || format!("activity-marker-{session_id}-{index}"))
+                        .size(px(ACTIVITY_MARKER_SIZE))
+                        .flex_shrink_0()
+                        .items_center()
+                        .justify_center()
+                        .child(if running {
+                            Spinner::new()
+                                .with_size(px(ACTIVITY_MARKER_SIZE))
+                                .color(rgb(palette().muted).into())
+                                .into_any_element()
+                        } else if failed {
+                            Icon::new(IconName::CircleX)
+                                .size(px(ACTIVITY_MARKER_SIZE))
+                                .text_color(rgb(palette().danger_text))
+                                .into_any_element()
+                        } else if tool_succeeded(item) {
+                            Icon::new(IconName::CircleCheck)
+                                .size(px(ACTIVITY_MARKER_SIZE))
+                                .text_color(rgb(palette().diff_add_text))
+                                .into_any_element()
+                        } else {
+                            Icon::new(FullIconName::CircleDashed)
+                                .size(px(ACTIVITY_MARKER_SIZE))
+                                .text_color(rgb(palette().muted))
+                                .into_any_element()
+                        }),
+                )
                 .child(
                     div()
                         .flex_shrink_0()
@@ -1646,7 +1711,7 @@ impl ConduitApp {
                         .entry((session_id, item.key.clone()))
                         .or_default()
                         .clone();
-                    content = content.child(tool_detail_panel(
+                    let panel = tool_detail_panel(
                         &detail_key,
                         item,
                         &tool_scroll,
@@ -1654,9 +1719,22 @@ impl ConduitApp {
                         &mut self.tool_diffs,
                         &mut self.tool_analysis,
                         cx,
-                    ));
+                    );
+                    content = if tool_group.is_some() {
+                        content.child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .pl(px(ACTIVITY_ROW_INSET
+                                    + ACTIVITY_MARKER_SIZE
+                                    + ACTIVITY_LABEL_GAP))
+                                .child(panel),
+                        )
+                    } else {
+                        content.child(panel)
+                    };
                 }
-                activity_container(content.into_any_element(), tool_group.is_some())
+                activity_container(content.into_any_element(), tool_group, session_id, index)
             }
             ItemKind::Tool => {
                 let detail_key = (session_id, item.key.clone());
@@ -2117,7 +2195,7 @@ impl ConduitApp {
                         card.max_w(px(840.)).mx_auto()
                     })
                     .rounded(px(12.))
-                    .border_1()
+                    .border(px(MESSAGE_CARD_BORDER))
                     .border_color(if highlighted {
                         rgb(palette().focus).into()
                     } else {

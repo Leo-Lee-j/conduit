@@ -90,9 +90,17 @@ fn session_data_opens_on_session_entry_and_respects_manual_changes(cx: &mut Test
             output: Some(100),
             elapsed_ms: 1_000,
             incomplete: false,
+            api_first_response_ms: Some(1_000),
+            api_request_outcome: Some(crate::usage_ledger::ApiRequestOutcome::Succeeded),
         });
     let (app, cx) = fixture(cx, store, PluginUi::new());
+    cx.simulate_resize(gpui_kit::size(px(1100.), px(1600.)));
+    draw(cx);
     assert!(cx.element_bounds("session-data-panel").is_some());
+    assert!(
+        cx.labeled_bounds(Role::Group, "API 连接质量 · 连接顺畅")
+            .is_some()
+    );
     assert!(cx.element_bounds("session-data-usage-summary").is_some());
     assert!(cx.element_bounds("session-data-token-details").is_some());
     click_labeled(cx, Role::Button, "Token 明细");
@@ -144,6 +152,10 @@ fn session_data_opens_on_session_entry_and_respects_manual_changes(cx: &mut Test
     assert!(cx.element_bounds("session-data-token-details").is_some());
     cx.update(|_, cx| assert!(app.read(cx).plugins.right_is(builtins::SESSION_DATA)));
     assert!(cx.element_bounds("session-data-empty-state").is_some());
+    assert!(
+        cx.labeled_bounds(Role::Group, "API 连接质量 · 暂无请求数据")
+            .is_some()
+    );
     assert!(cx.element_bounds("session-data-usage-summary").is_none());
     cx.update(|window, cx| app.update(cx, |app, cx| app.switch(0, Some(1), window, cx)));
     draw(cx);
@@ -223,6 +235,7 @@ fn session_data_preserves_agent_history_statuses_and_session_isolation(cx: &mut 
 fn session_data_plan_stays_visible_without_usage_or_timing_details(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, tool_store(), PluginUi::new());
+    cx.simulate_resize(gpui_kit::size(px(1100.), px(1600.)));
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
             app.session_control.plans.insert(
@@ -245,7 +258,9 @@ fn session_data_plan_stays_visible_without_usage_or_timing_details(cx: &mut Test
 
     assert!(cx.element_bounds("session-data-plan-list").is_some());
     assert!(cx.element_bounds("session-data-empty-state").is_some());
-    assert!(cx.element_bounds("session-data-timing-toggle").is_none());
+    click_labeled(cx, Role::Button, "耗时与轮次");
+    assert!(cx.element_bounds("session-data-plan-list").is_some());
+    assert!(cx.element_bounds("session-data-timing-toggle").is_some());
 }
 
 #[gpui_kit::test]

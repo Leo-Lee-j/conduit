@@ -228,8 +228,14 @@ impl ConduitApp {
                     conduit::i18n::text_static(
                         "runtime.saves.cli_wait_thread_exited_the_message_was",
                     )
-                    .into()
-                })
+                    .to_owned()
+                })?;
+                if let Some(run) = self.session_control.runs.get_mut(&id)
+                    && matches!(run.intent, crate::commands::RequestIntent::Message)
+                {
+                    run.api_request_started = Some(std::time::Instant::now());
+                }
+                Ok(())
             });
             #[cfg(feature = "remote")]
             let remote = pending.remote.take();

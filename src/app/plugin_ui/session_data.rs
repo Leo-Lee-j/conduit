@@ -4,7 +4,7 @@ use super::right::{RightBody, RightView};
 use super::*;
 use crate::app::state::{PlanStatus, plan_from_messages};
 use crate::subagents::{Agent, Status as AgentStatus};
-use crate::usage_ledger::Observation;
+use crate::usage_ledger::{ApiRequestOutcome, Observation};
 use conduit::plugins::{context::ScopeKey, state::ViewInstanceKey};
 use gpui_kit::component::{
     empty::{Empty, EmptyDescription, EmptyHeader, EmptyMedia},
@@ -162,6 +162,101 @@ fn duration(value: Option<u64>) -> String {
         None => "—".into(),
     }
 }
+const API_QUALITY_WINDOW: usize = 10;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ApiQualityLevel {
+    Preparing,
+    Waiting,
+    Responding,
+    Unknown,
+    Smooth,
+    Good,
+    Slow,
+    Unstable,
+    Failed,
+}
+
+impl ApiQualityLevel {
+    fn emoji(self) -> &'static str {
+        match self {
+            Self::Preparing | Self::Waiting => "\u{23F3}",
+            Self::Responding | Self::Good => "\u{1F642}",
+            Self::Unknown => "\u{1F636}",
+            Self::Smooth => "\u{1F604}",
+            Self::Slow => "\u{1F610}",
+            Self::Unstable => "\u{1F622}",
+            Self::Failed => "\u{1F62D}",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        text(match self {
+            Self::Preparing => "session_data.api_quality_preparing",
+            Self::Waiting => "session_data.api_quality_waiting",
+            Self::Responding => "session_data.api_quality_responding",
+            Self::Unknown => "session_data.api_quality_unknown",
+            Self::Smooth => "session_data.api_quality_smooth",
+            Self::Good => "session_data.api_quality_good",
+            Self::Slow => "session_data.api_quality_slow",
+            Self::Unstable => "session_data.api_quality_unstable",
+            Self::Failed => "session_data.api_quality_failed",
+        })
+    }
+
+    fn color(self) -> u32 {
+        match self {
+            Self::Preparing | Self::Waiting | Self::Unknown => palette().muted,
+            Self::Responding | Self::Smooth | Self::Good => palette().activity_completed,
+            Self::Slow => palette().warning_text,
+            Self::Unstable | Self::Failed => palette().error_text,
+        }
+    }
+}
+
+fn api_quality<'a>(records: impl Iterator<Item = &'a Observation>) -> ApiQualityLevel {
+    let mut samples = records
+        .filter(|record| {
+            record
+                .api_request_outcome
+                .is_some_and(|outcome| outcome != ApiRequestOutcome::Cancelled)
+        })
+        .collect::<Vec<_>>();
+    samples.sort_by_key(|record| record.finished_at);
+    let recent = samples
+        .into_iter()
+        .rev()
+        .take(API_QUALITY_WINDOW)
+        .collect::<Vec<_>>();
+    if recent.is_empty() {
+        return ApiQualityLevel::Unknown;
+    }
+    if recent[0].api_request_outcome == Some(ApiRequestOutcome::Failed) {
+        return ApiQualityLevel::Failed;
+    }
+    if recent
+        .iter()
+        .any(|record| record.api_request_outcome == Some(ApiRequestOutcome::Failed))
+    {
+        return ApiQualityLevel::Unstable;
+    }
+    let mut latencies = recent
+        .iter()
+        .filter(|record| record.api_request_outcome == Some(ApiRequestOutcome::Succeeded))
+        .filter_map(|record| record.api_first_response_ms)
+        .collect::<Vec<_>>();
+    latencies.sort_unstable();
+    let Some(median) = latencies.get(latencies.len() / 2) else {
+        return ApiQualityLevel::Unknown;
+    };
+    match *median {
+        ms if ms <= 2_000 => ApiQualityLevel::Smooth,
+        ms if ms <= 5_000 => ApiQualityLevel::Good,
+        ms if ms <= 10_000 => ApiQualityLevel::Slow,
+        _ => ApiQualityLevel::Unstable,
+    }
+}
+
 fn caption(value: impl Into<SharedString>) -> Div {
     div()
         .text_size(ui_text_size(11.))
@@ -454,14 +549,13 @@ impl ConduitApp {
         let show_timing = expanded.timing;
         let usage = run.map_or(session.usage, |run| run.usage);
         let current = run.and_then(|run| self.turn_usage_observation(*id, run, false));
-        let (total, latest) = consumption(
-            self.store
-                .usage_ledger
-                .observations
-                .iter()
-                .filter(|turn| turn.session == *id && turn.workspace == workspace.path()),
-            current.as_ref(),
-        );
+        let records = self
+            .store
+            .usage_ledger
+            .observations
+            .iter()
+            .filter(|turn| turn.session == *id && turn.workspace == workspace.path());
+        let (total, latest) = consumption(records.clone(), current.as_ref());
         let model = match run {
             Some(run) => run.model.as_deref(),
             None => session.model.as_deref(),
@@ -698,6 +792,20 @@ impl ConduitApp {
             );
         }
         content = content.child(context);
+        let request_quality = if let Some(run) = run.filter(|run| {
+            matches!(run.intent, crate::commands::RequestIntent::Message)
+                && !run.runtime.is_cancelled()
+        }) {
+            if run.api_request_started.is_none() {
+                ApiQualityLevel::Preparing
+            } else if run.api_first_response_ms.is_none() {
+                ApiQualityLevel::Waiting
+            } else {
+                ApiQualityLevel::Responding
+            }
+        } else {
+            api_quality(records)
+        };
         let turn = latest.as_ref();
         let cache_hit = total.cache_hit();
         let turn_elapsed = turn.map(|turn| turn.elapsed_ms);
@@ -825,6 +933,43 @@ impl ConduitApp {
             content = content.child(summary);
         }
 
+        content = content.child(
+            card()
+                .id("session-data-api-quality-card")
+                .test_support()
+                .debug_selector(|| "session-data-api-quality-card".into())
+                .role(Role::Group)
+                .aria_label(format!(
+                    "{} · {}",
+                    text("session_data.api_quality"),
+                    request_quality.label(),
+                ))
+                .px_3()
+                .py_2()
+                .tooltip(|window, cx| {
+                    Tooltip::new(text("session_data.api_quality_note")).build(window, cx)
+                })
+                .child(
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .text_size(ui_text_size(18.))
+                                .child(request_quality.emoji()),
+                        )
+                        .child(caption(text("session_data.api_quality")).flex_1())
+                        .child(
+                            div()
+                                .text_size(ui_text_size(12.))
+                                .font_semibold()
+                                .text_color(rgb(request_quality.color()))
+                                .child(request_quality.label()),
+                        ),
+                ),
+        );
         let token_summary = conduit::i18n::format(
             "session_data.cache_read_summary",
             &[("count", tokens(total.cached))],
@@ -1109,7 +1254,7 @@ impl ConduitApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{Observation, consumption};
+    use super::{ApiQualityLevel, ApiRequestOutcome, Observation, api_quality, consumption};
     use crate::domain::Provider;
     use std::path::PathBuf;
     fn turn(
@@ -1132,8 +1277,58 @@ mod tests {
             output,
             elapsed_ms: 1000,
             incomplete: false,
+            api_first_response_ms: None,
+            api_request_outcome: None,
         }
     }
+    fn api_turn(key: &str, outcome: ApiRequestOutcome, response_ms: Option<u64>) -> Observation {
+        let mut turn = turn(key, None, None, None);
+        turn.api_request_outcome = Some(outcome);
+        turn.api_first_response_ms = response_ms;
+        turn
+    }
+
+    #[test]
+    fn api_quality_maps_latency_and_failures_to_qualitative_states() {
+        assert_eq!(
+            api_quality([api_turn("fast", ApiRequestOutcome::Succeeded, Some(1_500))].iter()),
+            ApiQualityLevel::Smooth,
+        );
+        assert_eq!(
+            api_quality([api_turn("slow", ApiRequestOutcome::Succeeded, Some(6_000))].iter()),
+            ApiQualityLevel::Slow,
+        );
+        assert_eq!(
+            api_quality([api_turn("failed", ApiRequestOutcome::Failed, None)].iter()),
+            ApiQualityLevel::Failed,
+        );
+        assert_eq!(
+            api_quality(
+                [
+                    api_turn("old-failure", ApiRequestOutcome::Failed, None),
+                    api_turn("recovered", ApiRequestOutcome::Succeeded, Some(1_000)),
+                ]
+                .iter()
+            ),
+            ApiQualityLevel::Unstable,
+        );
+    }
+
+    #[test]
+    fn api_quality_ignores_cancelled_requests_and_uses_only_the_latest_ten() {
+        let mut records = vec![api_turn("old-failure", ApiRequestOutcome::Failed, None)];
+        records.extend((0..10).map(|index| {
+            api_turn(
+                &format!("success-{index}"),
+                ApiRequestOutcome::Succeeded,
+                Some(1_000),
+            )
+        }));
+        records.push(api_turn("cancelled", ApiRequestOutcome::Cancelled, None));
+        let quality = api_quality(records.iter());
+        assert_eq!(quality, ApiQualityLevel::Smooth);
+    }
+
     #[test]
     fn live_snapshot_replaces_its_record_and_unknowns_are_not_zero() {
         let records = [

@@ -271,6 +271,10 @@ pub(super) struct ActiveRun {
     pub(super) context_window_fallback: u64,
     /// Wall time never resets when the provider compacts token usage.
     pub(super) turn_started: Instant,
+    /// Time a saved chat request was released to its provider process.
+    pub(super) api_request_started: Option<Instant>,
+    /// End-to-end time to the first visible assistant output, when observed.
+    pub(super) api_first_response_ms: Option<u64>,
 }
 
 impl ActiveRun {
@@ -345,6 +349,8 @@ impl ActiveRun {
             completed_usage,
             context_window_fallback: 0,
             turn_started: now,
+            api_request_started: None,
+            api_first_response_ms: None,
         }
     }
 

@@ -1139,6 +1139,8 @@ mod tests {
             output: Some(500),
             elapsed_ms: 12_000,
             incomplete: false,
+            api_first_response_ms: None,
+            api_request_outcome: None,
         });
         store
             .cli

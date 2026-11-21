@@ -20,6 +20,20 @@ pub struct Observation {
     pub output: Option<u64>,
     pub elapsed_ms: u64,
     pub incomplete: bool,
+    /// End-to-end time to the first visible assistant output, not pure network latency.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_first_response_ms: Option<u64>,
+    /// Outcome for a dispatched chat request; absent on older records/non-chat operations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_request_outcome: Option<ApiRequestOutcome>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiRequestOutcome {
+    Succeeded,
+    Failed,
+    Cancelled,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -152,6 +166,8 @@ mod tests {
             output: Some(50),
             elapsed_ms: 1_000,
             incomplete: false,
+            api_first_response_ms: Some(250),
+            api_request_outcome: Some(ApiRequestOutcome::Succeeded),
         };
         ledger.record(record.clone());
         ledger.record(record.clone());
@@ -163,7 +179,12 @@ mod tests {
         unknown.key = "turn-2".into();
         unknown.input = None;
         unknown.output = None;
-        ledger.record(unknown);
+        unknown.api_first_response_ms = None;
+        unknown.api_request_outcome = None;
+        let legacy = serde_json::to_string(&unknown).unwrap();
+        assert!(!legacy.contains("api_first_response_ms"));
+        assert!(!legacy.contains("api_request_outcome"));
+        ledger.record(serde_json::from_str(&legacy).unwrap());
         let totals = ledger.monthly(&workspace, &month);
         assert_eq!(totals.turns, 2);
         assert_eq!(totals.incomplete, 1);
@@ -171,5 +192,12 @@ mod tests {
         let restored: Ledger =
             serde_json::from_str(&serde_json::to_string(&ledger).unwrap()).unwrap();
         assert_eq!(restored.monthly(&workspace, &month).incomplete, 1);
+        assert_eq!(restored.observations[0].api_first_response_ms, Some(250));
+        assert_eq!(
+            restored.observations[0].api_request_outcome,
+            Some(ApiRequestOutcome::Succeeded)
+        );
+        assert_eq!(restored.observations[1].api_first_response_ms, None);
+        assert_eq!(restored.observations[1].api_request_outcome, None);
     }
 }

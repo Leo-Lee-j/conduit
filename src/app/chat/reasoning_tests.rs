@@ -545,7 +545,29 @@ fn tool_groups_can_collapse_before_reply_and_while_running(cx: &mut TestAppConte
             });
         });
         draw(cx);
-        assert!(cx.debug_bounds("activity-1-2").is_some());
+        let first_lower = cx.debug_bounds("activity-guide-bottom-1-1").unwrap();
+        let second_upper = cx.debug_bounds("activity-guide-top-1-2").unwrap();
+        assert_eq!(first_lower.bottom(), second_upper.top());
+        for (marker, upper, lower) in [
+            (
+                "activity-marker-1-1",
+                "activity-guide-top-1-1",
+                "activity-guide-bottom-1-1",
+            ),
+            (
+                "activity-marker-1-2",
+                "activity-guide-top-1-2",
+                "activity-guide-bottom-1-2",
+            ),
+        ] {
+            let marker = cx.debug_bounds(marker).unwrap();
+            let upper = cx.debug_bounds(upper).unwrap();
+            let lower = cx.debug_bounds(lower).unwrap();
+            assert_eq!(upper.center().x, marker.center().x);
+            assert_eq!(lower.center().x, marker.center().x);
+            assert_eq!(upper.bottom(), marker.top());
+            assert_eq!(lower.top(), marker.bottom());
+        }
         let point = cx.debug_bounds("tool-group-header-1-1").unwrap().center();
         cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
         cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());

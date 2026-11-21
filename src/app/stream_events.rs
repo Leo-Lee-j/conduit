@@ -1,5 +1,6 @@
 //! Bounded stream consumption and transcript invalidation.
 use super::*;
+use crate::usage_ledger::ApiRequestOutcome;
 impl ConduitApp {
     pub(super) fn poll_streams(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.poll_child_controls(window, cx);
@@ -78,6 +79,20 @@ impl ConduitApp {
                 Event::CommandCatalog(_) | Event::Delta { .. } | Event::Text { .. }
             ) {
                 continue;
+            }
+            let first_response = match &event {
+                Event::Delta { text, .. } | Event::Text { text, .. } => !text.trim().is_empty(),
+                Event::ReasoningSummary { text, .. } => !text.trim().is_empty(),
+                Event::Tool { .. } | Event::Approval(_) => true,
+                _ => false,
+            };
+            if first_response
+                && let Some(run) = self.session_control.runs.get_mut(&id)
+                && run.api_first_response_ms.is_none()
+                && let Some(started) = run.api_request_started
+            {
+                run.api_first_response_ms =
+                    Some(started.elapsed().as_millis().min(u64::MAX as u128) as u64);
             }
             changed = true;
             visible |= Some(id) == self.selected_session;
@@ -389,7 +404,19 @@ impl ConduitApp {
                     if let Some(run) = &finished_run
                         && !matches!(run.intent, crate::commands::RequestIntent::Fork(_))
                     {
-                        self.record_turn_usage(id, run, error.is_some() || cancelled, cx);
+                        self.record_turn_usage(
+                            id,
+                            run,
+                            error.is_some() || cancelled,
+                            if cancelled || run.runtime.is_cancelled() {
+                                ApiRequestOutcome::Cancelled
+                            } else if error.is_some() {
+                                ApiRequestOutcome::Failed
+                            } else {
+                                ApiRequestOutcome::Succeeded
+                            },
+                            cx,
+                        );
                     }
                     if let Some(run) = &finished_run {
                         if let Some(ticket) = &run.command_ticket {

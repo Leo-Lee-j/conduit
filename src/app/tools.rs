@@ -1090,20 +1090,3 @@ pub(super) fn tool_detail_panel(
         .child(content)
         .into_any_element()
 }
-
-pub(super) fn activity_container(content: AnyElement, grouped: bool) -> AnyElement {
-    let mut wrapper = v_flex().relative().w_full().min_w_0().pb(px(2.));
-    if grouped {
-        // The guide decorates the group without shifting its activity rows.
-        wrapper = wrapper.child(
-            div()
-                .absolute()
-                .left_0()
-                .top_0()
-                .bottom_0()
-                .w(px(1.))
-                .bg(rgb(palette().border)),
-        );
-    }
-    wrapper.child(content).into_any_element()
-}

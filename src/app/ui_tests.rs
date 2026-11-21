@@ -819,6 +819,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
         domain::{Provider, SessionRecord, Workspace},
         protocol::{Approval, ApprovalKind, Event},
         store::Store,
+        usage_ledger::ApiRequestOutcome,
     };
     use gpui_kit::AppContext as _;
 
@@ -904,8 +905,20 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
                         Default::default(),
                     ),
                 );
+                this.session_control
+                    .runs
+                    .get_mut(&id)
+                    .unwrap()
+                    .api_request_started = Some(std::time::Instant::now());
                 senders.insert(id, sender);
             }
+            senders[&2].send(Event::NativeId("second".into())).unwrap();
+            this.poll_streams(window, cx);
+            assert!(
+                this.session_control.runs[&2]
+                    .api_first_response_ms
+                    .is_none()
+            );
             assert_eq!(this.session_control.runs.len(), 3);
             assert!(this.worktree_has_runs(&root));
             assert!(this.worktree_has_runs(&other));
@@ -978,6 +991,8 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
                 );
                 this.toggle_approval_detail(id, "approval-1".into(), cx);
             }
+            let first_response = this.session_control.runs[&2].api_first_response_ms;
+            assert!(first_response.is_some());
             senders[&1]
                 .send(Event::ApprovalResolved {
                     id: "approval-1".into(),
@@ -1041,6 +1056,10 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
             );
             assert!(!this.session(1).unwrap().interrupted);
             assert!(this.session(2).unwrap().interrupted);
+            assert_eq!(
+                this.session_control.runs[&2].api_first_response_ms,
+                first_response
+            );
             assert!(
                 this.send_blocked(true).is_none(),
                 "finished session can send while its neighbour runs"
@@ -1081,6 +1100,25 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
                 this.session(3).unwrap().messages.last().unwrap().detail,
                 "network timeout\nraw details"
             );
+            for (id, workspace, outcome) in [
+                (1, &root, ApiRequestOutcome::Cancelled),
+                (2, &root, ApiRequestOutcome::Succeeded),
+                (3, &other, ApiRequestOutcome::Failed),
+            ] {
+                let observation = this
+                    .store
+                    .usage_ledger
+                    .observations
+                    .iter()
+                    .find(|row| row.session == id && row.workspace == *workspace)
+                    .unwrap();
+                assert_eq!(observation.api_request_outcome, Some(outcome));
+                assert_eq!(observation.input, None);
+                assert_eq!(observation.output, None);
+                if id == 2 {
+                    assert_eq!(observation.api_first_response_ms, first_response);
+                }
+            }
             this.selected_session = Some(1);
             this.selected_workspace = Some(0);
             this.git.operation = Some(super::GitOperation {

@@ -135,6 +135,8 @@ mod tests {
             output: Some(50),
             elapsed_ms: 1000,
             incomplete: false,
+            api_first_response_ms: None,
+            api_request_outcome: None,
         };
         let month = usage_ledger::date(record.finished_at)[..7].to_owned();
         let mut modern = record.clone();

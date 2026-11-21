@@ -1,6 +1,6 @@
 //! Known usage and advisory token budgets; no inferred monetary billing.
 use super::*;
-use crate::usage_ledger::{Observation, Totals};
+use crate::usage_ledger::{ApiRequestOutcome, Observation, Totals};
 use chrono::{Datelike, Months};
 use gpui_kit::component::{chart::BarChart, progress::Progress, tag::Tag};
 mod report;
@@ -74,6 +74,8 @@ impl ConduitApp {
                 .flatten(),
             elapsed_ms: run.turn_started.elapsed().as_millis().min(u64::MAX as u128) as u64,
             incomplete,
+            api_first_response_ms: run.api_first_response_ms,
+            api_request_outcome: None,
         })
     }
 
@@ -82,11 +84,17 @@ impl ConduitApp {
         id: u64,
         run: &ActiveRun,
         incomplete: bool,
+        api_outcome: ApiRequestOutcome,
         cx: &mut Context<Self>,
     ) {
-        let Some(observation) = self.turn_usage_observation(id, run, incomplete) else {
+        let Some(mut observation) = self.turn_usage_observation(id, run, incomplete) else {
             return;
         };
+        if matches!(run.intent, crate::commands::RequestIntent::Message)
+            && run.api_request_started.is_some()
+        {
+            observation.api_request_outcome = Some(api_outcome);
+        }
         let workspace = observation.workspace.clone();
         self.store.usage_ledger.record(observation);
         self.check_usage_budget(&workspace, cx);
@@ -1282,6 +1290,8 @@ mod tests {
                     output: Some(400),
                     elapsed_ms: 1000,
                     incomplete: false,
+                    api_first_response_ms: None,
+                    api_request_outcome: None,
                 });
                 app.open_usage(window, cx);
             })

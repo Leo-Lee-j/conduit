@@ -317,6 +317,7 @@ fn slow_save_retains_draft_and_attachments_and_gates_cli(cx: &mut TestAppContext
             );
             let run = &this.session_control.runs[&1];
             assert_eq!(run.activity, "正在保存消息…");
+            assert!(run.api_request_started.is_none());
             assert!(matches!(
                 run.runtime.events.recv_timeout(Duration::from_millis(100)),
                 Err(mpsc::RecvTimeoutError::Timeout)
@@ -330,6 +331,7 @@ fn slow_save_retains_draft_and_attachments_and_gates_cli(cx: &mut TestAppContext
             assert!(this.input.read(cx).value().is_empty());
             assert!(this.current_files().is_none());
             assert!(this.session_control.runs[&1].pending_save.is_none());
+            assert!(this.session_control.runs[&1].api_request_started.is_some());
             assert!(matches!(
                 this.session_control.runs[&1]
                     .runtime

@@ -2067,5 +2067,16 @@
   "文件行数或单行长度超过安全预览上限，请使用外部编辑器打开。": "workspace_files.file_line_count_or_line_length_exceeds",
   "使用系统通知": "settings.general.system_notifications",
   "开启后使用 Windows 系统通知，不再显示应用内弹窗；系统通知不可用时自动回退到应用内通知。": "settings.general.system_notifications_description",
-  "Windows 系统通知当前不可用，Conduit 已回退到应用内弹窗。": "settings.general.system_notifications_unavailable"
+  "Windows 系统通知当前不可用，Conduit 已回退到应用内弹窗。": "settings.general.system_notifications_unavailable",
+  "API 连接质量": "session_data.api_quality",
+  "暂无请求数据": "session_data.api_quality_unknown",
+  "连接顺畅": "session_data.api_quality_smooth",
+  "连接良好": "session_data.api_quality_good",
+  "响应较慢": "session_data.api_quality_slow",
+  "连接不稳定": "session_data.api_quality_unstable",
+  "准备中": "session_data.api_quality_preparing",
+  "等待响应": "session_data.api_quality_waiting",
+  "已收到响应": "session_data.api_quality_responding",
+  "根据近期请求的首响应时间和结果估算端到端体验。": "session_data.api_quality_note",
+  "最近请求失败": "session_data.api_quality_failed"
 }
