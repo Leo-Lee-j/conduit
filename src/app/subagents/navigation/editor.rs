@@ -521,8 +521,10 @@ impl ConduitApp {
         };
         let disabled = reason.is_some()
             || (editor.input.read(cx).value().trim().is_empty() && editor.references.is_empty());
+        let can_edit = self.writable && !self.closing;
         let error = editor.error.clone();
         let input = editor.input.clone();
+        let has_files = !editor.references.is_empty();
         let files = editor.references.iter().enumerate().fold(
             h_flex().flex_wrap().gap_2(),
             |view, (index, reference)| {
@@ -574,7 +576,6 @@ impl ConduitApp {
             .id("child-composer")
             .flex_shrink_0()
             .p_3()
-            .gap_2()
             .key_context("ConduitComposer")
             .on_action(cx.listener(|this, _: &SendPrompt, window, cx| {
                 cx.stop_propagation();
@@ -585,74 +586,135 @@ impl ConduitApp {
                 this.stop_child(&expected, cx);
             }))
             .child(
-                Textarea::new(&input)
-                    .disabled(self.closing || !self.writable)
-                    .on_paste(move |item, _, cx| {
-                        paste_app
-                            .update(cx, |this, cx| {
-                                this.paste_child_files(&paste_owner, item, cx)
-                            })
-                            .unwrap_or(true)
-                    }),
-            )
-            .child(files)
-            .when(unresolved, |view| {
-                view.child(
-                    Button::new("child-reviewed")
-                        .ghost()
-                        .small()
-                        .label(conduit::i18n::text_static("subagents.acknowledge"))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.store.child_commands.retain(|pending| {
-                                pending.root != acknowledge.root
-                                    || pending.command.thread != acknowledge.agent
-                            });
-                            this.persist();
-                            this.request_child_history(true, cx);
-                            cx.notify();
-                        })),
-                )
-            })
-            .when_some(error.or(reason), |view, error| {
-                view.child(div().text_color(rgb(palette().muted)).child(error))
-            })
-            .child(
-                h_flex()
+                v_flex()
+                    .id("child-composer-shell")
+                    .debug_selector(|| "child-composer-shell".into())
+                    .w_full()
                     .gap_2()
+                    .rounded(px(11.))
+                    .bg(rgb(palette().surface))
+                    .border_1()
+                    .border_color(rgb(palette().border))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if let Some(key) = this.subagent_route()
+                            && let Some(editor) = this
+                                .session_control
+                                .agent_navigation
+                                .editors
+                                .get(&EditorKey::from(key))
+                        {
+                            editor.input.read(cx).focus_handle(cx).focus(window, cx);
+                        }
+                    }))
+                    .when(has_files, |view| view.child(files))
                     .child(
-                        Button::new("child-attach")
-                            .ghost()
-                            .small()
-                            .label(conduit::i18n::text_static("subagents.attach"))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.pick_child_files(owner.clone(), window, cx)
-                            })),
+                        div().px(px(9.)).pt(px(9.)).child(
+                            Textarea::new(&input)
+                                .appearance(false)
+                                .bordered(false)
+                                .text_size(ui_text_size(13.))
+                                .disabled(!can_edit)
+                                .on_paste(move |item, _, cx| {
+                                    paste_app
+                                        .update(cx, |this, cx| {
+                                            this.paste_child_files(&paste_owner, item, cx)
+                                        })
+                                        .unwrap_or(true)
+                                }),
+                        ),
                     )
-                    .child(
-                        Button::new("child-send")
-                            .small()
-                            .disabled(disabled)
-                            .label(conduit::i18n::text_static(
-                                if self.live_child_owner(key).is_some() {
-                                    "subagents.steer"
-                                } else {
-                                    "subagents.send"
-                                },
-                            ))
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.send_child(window, cx)),
-                            ),
-                    )
-                    .when(busy, |view| {
+                    .when(unresolved, |view| {
                         view.child(
-                            Button::new("child-stop")
+                            Button::new("child-reviewed")
+                                .ghost()
                                 .small()
-                                .label(conduit::i18n::text_static("subagents.stop"))
+                                .label(conduit::i18n::text_static("subagents.acknowledge"))
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.stop_child(&stop_key, cx);
+                                    this.store.child_commands.retain(|pending| {
+                                        pending.root != acknowledge.root
+                                            || pending.command.thread != acknowledge.agent
+                                    });
+                                    this.persist();
+                                    this.request_child_history(true, cx);
+                                    cx.notify();
                                 })),
                         )
-                    }),
+                    })
+                    .when_some(error, |view, error| {
+                        view.child(div().px_2().text_color(rgb(palette().muted)).child(error))
+                    })
+                    .child(
+                        h_flex()
+                            .px(px(6.))
+                            .py(px(6.))
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                Button::new("child-attach")
+                                    .ghost()
+                                    .small()
+                                    .compact()
+                                    .w(px(30.))
+                                    .h(px(30.))
+                                    .icon(Icon::new(FullIconName::Paperclip))
+                                    .tooltip(conduit::i18n::text_static("subagents.attach"))
+                                    .accessibility_label(conduit::i18n::text_static(
+                                        "subagents.attach",
+                                    ))
+                                    .disabled(!can_edit)
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.pick_child_files(owner.clone(), window, cx)
+                                    })),
+                            )
+                            .child(div().flex_1())
+                            .when(busy, |view| {
+                                view.child(
+                                    Button::new("child-stop")
+                                        .small()
+                                        .compact()
+                                        .w(px(30.))
+                                        .h(px(30.))
+                                        .rounded_full()
+                                        .icon(Icon::new(FullIconName::Square).size(px(12.)))
+                                        .tooltip(conduit::i18n::text_static("subagents.stop"))
+                                        .accessibility_label(conduit::i18n::text_static(
+                                            "subagents.stop",
+                                        ))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.stop_child(&stop_key, cx);
+                                        })),
+                                )
+                            })
+                            .child(
+                                Button::new("child-send")
+                                    .small()
+                                    .compact()
+                                    .w(px(30.))
+                                    .h(px(30.))
+                                    .flex_shrink_0()
+                                    .rounded_full()
+                                    .primary()
+                                    .icon(IconName::ArrowUp)
+                                    .tooltip(conduit::i18n::text_static(
+                                        if self.live_child_owner(key).is_some() {
+                                            "subagents.steer"
+                                        } else {
+                                            "subagents.send"
+                                        },
+                                    ))
+                                    .accessibility_label(conduit::i18n::text_static(
+                                        if self.live_child_owner(key).is_some() {
+                                            "subagents.steer"
+                                        } else {
+                                            "subagents.send"
+                                        },
+                                    ))
+                                    .disabled(disabled || !can_edit)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.send_child(window, cx)
+                                    })),
+                            ),
+                    ),
             )
             .into_any_element()
     }

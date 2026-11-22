@@ -1,5 +1,6 @@
 //! Child navigation with independent editors. Routes never own the parent connection.
 use super::*;
+use gpui_kit::component::skeleton::Skeleton;
 mod controls;
 mod editor;
 mod history;
@@ -393,10 +394,6 @@ impl ConduitApp {
     ) -> AnyElement {
         let key = self.subagent_route().cloned().expect("visible child route");
         let agent = self.routed_agent(&key).cloned();
-        let root_title = self
-            .session(key.root)
-            .map(|root| root.title.clone())
-            .unwrap_or_default();
         let label = agent
             .as_ref()
             .map(|agent| title(agent).0.to_owned())
@@ -467,35 +464,10 @@ impl ConduitApp {
                 );
             }
         }
-        let pending = self
-            .session_control
-            .runs
-            .get(&root)
-            .is_some_and(|run| !run.approvals.is_empty());
-        let mut parent = h_flex()
-            .min_w_0()
-            .gap_2()
-            .text_color(rgb(palette().muted))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child(conduit::i18n::format(
-                        "subagents.parent",
-                        &[("title", root_title)],
-                    )),
-            );
-        if pending || self.session_control.unread_completed.contains(&root) {
-            parent = parent.child(conduit::i18n::text_static(if pending {
-                "subagents.parent_waiting"
-            } else {
-                "subagents.parent_updated"
-            }));
-        }
         if let Some(agent) = &agent {
-            parent = parent.child(
+            heading = heading.child(
                 div()
+                    .flex_shrink_0()
                     .text_color(rgb(status_color(agent.status)))
                     .child(agent.status.label()),
             );
@@ -513,19 +485,12 @@ impl ConduitApp {
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.request_child_history(true, cx))),
         );
-        let history_status = self
+        let history_error = self
             .session_control
             .agent_navigation
             .history_errors
             .get(&key)
-            .cloned()
-            .or_else(|| {
-                self.session_control
-                    .agent_navigation
-                    .reads
-                    .contains_key(&key)
-                    .then(|| conduit::i18n::text("subagents.loading"))
-            });
+            .cloned();
         let editor = self.render_child_editor(&key, cx);
         let approvals = self.child_approvals(&key, window, cx);
         let body = if self.session(root).is_none() {
@@ -554,15 +519,33 @@ impl ConduitApp {
                     .gap_2()
                     .border_b_1()
                     .border_color(rgb(palette().border))
-                    .child(heading)
-                    .child(parent),
+                    .child(heading),
             )
-            .when_some(history_status, |view, status| {
-                view.child(div().px_3().py_2().child(status))
+            .when_some(history_error, |view, error| {
+                view.child(
+                    div()
+                        .px_3()
+                        .py_2()
+                        .text_color(rgb(palette().muted))
+                        .child(error),
+                )
             })
-            .child(body)
+            .child(
+                v_flex()
+                    .w_full()
+                    .max_w(px(840.))
+                    .mx_auto()
+                    .min_h_0()
+                    .flex_1()
+                    .child(body),
+            )
             .child(approvals)
-            .child(editor)
+            .child(
+                div()
+                    .w_full()
+                    .flex_shrink_0()
+                    .child(div().w_full().max_w(px(840.)).mx_auto().child(editor)),
+            )
             .into_any_element()
     }
 
@@ -582,12 +565,7 @@ impl ConduitApp {
             .track_scroll(&page.scroll)
             .p_4()
             .gap_3()
-            .text_size(ui_text_size(13.))
-            .child(
-                div()
-                    .text_color(rgb(palette().muted))
-                    .child(conduit::i18n::text_static("subagents.history_unavailable")),
-            );
+            .text_size(ui_text_size(13.));
         if let Some(agent) = agent {
             for (name, text) in [
                 ("task", &agent.task),
@@ -629,11 +607,47 @@ impl ConduitApp {
             .session(id)
             .is_some_and(|session| session.transcript.loaded);
         if !loaded || error.is_some() {
-            let mut body = v_flex().flex_1().min_h_0().p_4().gap_2().child(
-                error
-                    .clone()
-                    .unwrap_or_else(|| conduit::i18n::text("subagents.loading")),
-            );
+            if error.is_none() {
+                return v_flex()
+                    .id("subagent-history-skeleton")
+                    .debug_selector(|| "subagent-history-skeleton".into())
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .justify_center()
+                    .items_center()
+                    .child(
+                        v_flex().w_full().max_w(px(560.)).gap_5().px_4().children(
+                            [0.74, 0.88, 0.62]
+                                .into_iter()
+                                .enumerate()
+                                .map(|(index, width)| {
+                                    let mut message = v_flex()
+                                        .debug_selector(move || {
+                                            format!("subagent-history-skeleton-message-{index}")
+                                        })
+                                        .gap_2()
+                                        .w(relative(width));
+                                    for line in [0.94, 0.78, 0.58] {
+                                        message = message.child(
+                                            Skeleton::new()
+                                                .h(px(12.))
+                                                .w(relative(line))
+                                                .rounded(px(4.)),
+                                        );
+                                    }
+                                    message
+                                }),
+                        ),
+                    )
+                    .into_any_element();
+            }
+            let mut body = v_flex()
+                .flex_1()
+                .min_h_0()
+                .p_4()
+                .gap_2()
+                .child(error.clone().unwrap());
             if error.is_some() {
                 let expected = key.clone();
                 body = body.child(
@@ -693,16 +707,11 @@ impl ConduitApp {
         })
         .size_full();
         v_flex()
+            .id("subagent-message-list")
+            .debug_selector(|| "subagent-message-list".into())
             .flex_1()
             .min_h_0()
             .min_w_0()
-            .child(div().px_4().py_2().text_color(rgb(palette().muted)).child(
-                conduit::i18n::text_static(if self.store.child_bindings.contains_key(&id) {
-                    "subagents.native_history"
-                } else {
-                    "subagents.saved_history"
-                }),
-            ))
             .child(list)
             .into_any_element()
     }
@@ -769,38 +778,69 @@ impl ConduitApp {
             }
             return body.into_any_element();
         }
-        let kind = match item.kind {
-            ItemKind::User => "user",
-            ItemKind::Assistant => "assistant",
-            ItemKind::Reasoning => "reasoning",
-            ItemKind::Tool => unreachable!(),
-            ItemKind::Notice => "notice",
-            ItemKind::Error => "error",
-        };
         let identity = format!("child-message-{id}-{}", item.key);
-        let body = v_flex().w_full().min_w_0().px_4().py_3().gap_2().child(
-            div()
-                .font_semibold()
-                .text_color(rgb(palette().muted))
-                .child(conduit::i18n::text(&format!("subagents.message_{kind}"))),
-        );
         let text = super::super::chat::message_markdown(&item, provider).into_owned();
         let app = cx.weak_entity();
-        body.child(
-            chat_markdown_view(
-                identity.clone().into(),
-                text,
-                &self.chat_typography(),
-                &identity,
-                true,
-            )
-            .on_link_click(move |url, event, window, cx| {
-                if super::super::chat::activates_link(event) {
-                    let _ = app.update(cx, |this, cx| this.open_chat_link(id, url, window, cx));
-                }
-            }),
+        let message = chat_markdown_view(
+            identity.clone().into(),
+            text,
+            &self.chat_typography(),
+            &identity,
+            true,
         )
-        .into_any_element()
+        .on_link_click(move |url, event, window, cx| {
+            if super::super::chat::activates_link(event) {
+                let _ = app.update(cx, |this, cx| this.open_chat_link(id, url, window, cx));
+            }
+        });
+        match item.kind {
+            ItemKind::User => v_flex()
+                .w_full()
+                .min_w_0()
+                .items_end()
+                .px_4()
+                .py_2()
+                .child(
+                    v_flex()
+                        .max_w(px(680.))
+                        .min_w_0()
+                        .rounded(px(8.))
+                        .bg(rgb(palette().surface_hover))
+                        .px_4()
+                        .py_3()
+                        .child(message),
+                )
+                .into_any_element(),
+            ItemKind::Assistant => v_flex()
+                .w_full()
+                .min_w_0()
+                .px_4()
+                .py_2()
+                .child(message)
+                .into_any_element(),
+            ItemKind::Notice | ItemKind::Error => v_flex()
+                .w_full()
+                .min_w_0()
+                .px_4()
+                .py_3()
+                .gap_2()
+                .child(
+                    div()
+                        .font_semibold()
+                        .text_color(rgb(palette().muted))
+                        .child(conduit::i18n::text(&format!(
+                            "subagents.message_{}",
+                            if item.kind == ItemKind::Notice {
+                                "notice"
+                            } else {
+                                "error"
+                            }
+                        ))),
+                )
+                .child(message)
+                .into_any_element(),
+            ItemKind::Reasoning | ItemKind::Tool => unreachable!(),
+        }
     }
 }
 

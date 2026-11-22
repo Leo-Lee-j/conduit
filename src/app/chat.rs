@@ -124,8 +124,8 @@ pub(super) fn message_markdown(item: &ChatItem, provider: Provider) -> Cow<'_, s
     }
 }
 
-pub(super) fn should_render_message_item(item: &ChatItem, provider: Provider) -> bool {
-    !is_empty_chat_placeholder(item) && !is_hidden_reasoning(item, provider)
+pub(super) fn should_render_message_item(item: &ChatItem, _provider: Provider) -> bool {
+    !is_empty_chat_placeholder(item)
 }
 
 fn reasoning_body(item: &ChatItem, provider: Provider) -> &str {

@@ -265,7 +265,10 @@ fn child_navigation_preserves_running_root_and_rejects_desktop_writes(cx: &mut T
     focus_button(cx, "subagent-open-run:a");
     press(cx, "enter");
     assert!(cx.debug_bounds("subagent-page").is_some());
-    assert!(cx.debug_bounds("subagent-summary").is_some());
+    let summary_bounds = cx
+        .debug_bounds("subagent-summary")
+        .expect("child task summary is rendered");
+    assert!(summary_bounds.size.height > px(0.));
     assert!(button(cx, "subagent-back").visible());
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
@@ -359,6 +362,8 @@ fn saved_child_identity_loading_failure_and_tab_restore_are_isolated(cx: &mut Te
                     text: "saved child reply".into(),
                 },
             );
+            crate::transcript::save(&child, &disk.join("bodies")).unwrap();
+            assert!(crate::transcript::unload(&mut child));
             app.store.workspaces[0].sessions.push(child);
             app.input.update(cx, |input, cx| {
                 input.set_value("retained root draft", window, cx)
@@ -368,8 +373,28 @@ fn saved_child_identity_loading_failure_and_tab_restore_are_isolated(cx: &mut Te
             assert_eq!(app.selected_session, Some(1));
         })
     });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let skeleton_id = String::from_utf8(vec![
+        115, 117, 98, 97, 103, 101, 110, 116, 45, 104, 105, 115, 116, 111, 114, 121, 45, 115, 107,
+        101, 108, 101, 116, 111, 110,
+    ])
+    .unwrap();
+    let skeleton_id = Box::leak(skeleton_id.into_boxed_str());
+    assert!(cx.debug_bounds(skeleton_id).is_some());
     draw(cx);
     assert!(cx.debug_bounds("subagent-page").is_some());
+    let message_list_bounds = cx
+        .debug_bounds("subagent-message-list")
+        .expect("saved child message list is rendered");
+    assert!(message_list_bounds.size.height > px(0.));
+    cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            let child = app.session(3).unwrap();
+            assert!(child.transcript.loaded);
+            assert_eq!(child.messages.len(), 1);
+            assert_eq!(child.messages[0].text, "saved child reply");
+        })
+    });
     assert!(button(cx, "subagent-back").visible());
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {

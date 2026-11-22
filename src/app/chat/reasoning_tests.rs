@@ -174,10 +174,10 @@ fn reasoning_live_deltas_show_before_completion_with_collapse_default(cx: &mut T
         cx,
     );
     assert!(cx.debug_bounds("reasoning-body-1-0").is_none());
-    assert!(cx.debug_bounds("activity-1-0").is_none());
+    assert!(cx.debug_bounds("activity-1-0").is_some());
     cx.update(|_, cx| {
         let app = app.read(cx);
-        assert!(app.chat_rows.rows.is_empty());
+        assert_eq!(app.chat_rows.rows.len(), 1);
         assert_ne!(
             app.session_control.runs[&1].activity_label(),
             conduit::i18n::text_static("stream_events.thinking")

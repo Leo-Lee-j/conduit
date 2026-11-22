@@ -112,7 +112,6 @@ impl Rows {
             }
             let shape = Shape {
                 empty: is_empty_chat_placeholder(item)
-                    || is_hidden_reasoning(item, session.provider)
                     || (item.kind == ItemKind::Notice
                         && item.key.starts_with("session-notice:codex:mcp:")),
                 activity: is_groupable_activity(item),
@@ -352,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn summaries_have_no_rows_and_body_updates_rebuild_visibility() {
+    fn reasoning_summaries_and_bodies_share_visible_rows() {
         use crate::app::Provider;
         let mut session = crate::app::tests::session();
         session.messages = serde_json::from_value(serde_json::json!([
@@ -367,14 +366,7 @@ mod tests {
             session.provider = provider;
             rows.refresh(Some(&session), &Default::default());
             let visible: Vec<_> = rows.rows.iter().map(|row| row.message).collect();
-            assert_eq!(
-                visible,
-                if provider == Provider::Codex {
-                    vec![2, 4]
-                } else {
-                    vec![1, 2, 4]
-                }
-            );
+            assert_eq!(visible, vec![0, 1, 2, 4]);
         }
         session.provider = Provider::Codex;
         rows.refresh(Some(&session), &Default::default());
@@ -383,13 +375,13 @@ mod tests {
         assert_eq!(rows.rows[0].message, 0);
         session.messages[0].text.clear();
         rows.refresh(Some(&session), &Default::default());
-        assert_eq!(rows.rows[0].message, 2);
+        assert_eq!(rows.rows[0].message, 1);
         let saved = serde_json::to_string(&session.messages).unwrap();
         session.messages = serde_json::from_str(&saved).unwrap();
         rows.refresh(Some(&session), &Default::default());
         assert_eq!(
             rows.rows.iter().map(|row| row.message).collect::<Vec<_>>(),
-            vec![2, 4]
+            vec![1, 2, 4]
         );
     }
 
