@@ -129,7 +129,7 @@ fn desktop_pet_settings_fit_and_switches_preserve_configuration(cx: &mut TestApp
         cx.simulate_resize(size(px(width), px(900.)));
         draw(cx);
         let card = cx.debug_bounds("programmer-encourager-settings").unwrap();
-        assert!(card.size.width <= px(760.));
+        assert_eq!(card.size.width, px(width - 32.));
         assert!(card.right() <= px(width));
         for id in ["encourager-pet-row", "encourager-context-row"] {
             assert_eq!(

@@ -85,14 +85,27 @@ fn settings_actions_style() -> StyleRefinement {
 pub(super) fn settings_section(title: impl Into<SharedString>) -> SettingGroup {
     let title = title.into();
     let keywords = [title.clone()];
-    SettingGroup::new().variant(GroupBoxVariant::Fill).item(
+    let group = if is_dark_mode() {
+        SettingGroup::new().variant(GroupBoxVariant::Fill)
+    } else {
+        SettingGroup::new().variant(GroupBoxVariant::Normal)
+    };
+    group.item(
         SettingItem::render(move |_, _, _| {
+            let dark = is_dark_mode();
             div()
                 .w_full()
-                .text_size(ui_text_size(12.))
-                .line_height(ui_text_size(16.))
+                .text_size(ui_text_size(if dark { 12. } else { 13. }))
+                .line_height(ui_text_size(if dark { 16. } else { 18. }))
                 .font_semibold()
-                .text_color(rgb(palette().muted))
+                .text_color(rgb(if dark {
+                    palette().muted
+                } else {
+                    palette().text
+                }))
+                .when(!dark, |this| {
+                    this.pb_2().border_b_1().border_color(rgb(palette().border))
+                })
                 .child(title.clone())
         })
         .keywords(keywords),

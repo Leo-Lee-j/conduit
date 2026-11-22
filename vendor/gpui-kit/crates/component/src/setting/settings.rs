@@ -412,24 +412,32 @@ impl RenderOnce for Settings {
         let sidebar = self
             .render_sidebar(&state, &filter, window, cx)
             .into_any_element();
+        let settings_id = self.id.clone();
+        let sidebar_width = self.sidebar_width;
+        // A hidden sidebar should not leave its resize divider beside the page.
+        let has_sidebar = self.sidebar_width > px(0.);
+        let active_page = container_query(move |size, window, cx| {
+            let options = options.with_layout(if size.width <= STACKED_LAYOUT_MAX_WIDTH {
+                Axis::Vertical
+            } else {
+                Axis::Horizontal
+            });
+            self.render_active_page(&state, &filter, &options, window, cx)
+        });
 
-        h_resizable(self.id.clone())
-            .child(
-                resizable_panel()
-                    .size(self.sidebar_width)
-                    .size_range(sidebar_size_range)
-                    .child(sidebar),
-            )
-            .child(
-                resizable_panel().child(container_query(move |size, window, cx| {
-                    let options = options.with_layout(if size.width <= STACKED_LAYOUT_MAX_WIDTH {
-                        Axis::Vertical
-                    } else {
-                        Axis::Horizontal
-                    });
-                    self.render_active_page(&state, &filter, &options, window, cx)
-                })),
-            )
+        if !has_sidebar {
+            div().size_full().child(active_page).into_any_element()
+        } else {
+            h_resizable(settings_id)
+                .child(
+                    resizable_panel()
+                        .size(sidebar_width)
+                        .size_range(sidebar_size_range)
+                        .child(sidebar),
+                )
+                .child(resizable_panel().child(active_page))
+                .into_any_element()
+        }
     }
 }
 

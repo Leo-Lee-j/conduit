@@ -109,14 +109,14 @@ impl ConduitApp {
             })
             .child(
                 v_flex()
-                    .p_4()
+                    .w_full()
                     .gap_2()
-                    .rounded_md()
-                    .bg(rgb(if is_dark_mode() {
-                        palette().surface_strong
-                    } else {
-                        palette().surface_hover
-                    }))
+                    .when(is_dark_mode(), |this| {
+                        this.p_4().rounded_md().bg(rgb(palette().surface_strong))
+                    })
+                    .when(!is_dark_mode(), |this| {
+                        this.py_3().border_y_1().border_color(rgb(palette().border))
+                    })
                     .child(
                         h_flex()
                             .gap_2()
@@ -134,14 +134,14 @@ impl ConduitApp {
             .child(self.settings_encourager_content(view.clone()))
             .child(
                 v_flex()
-                    .p_4()
+                    .w_full()
                     .gap_3()
-                    .rounded_md()
-                    .bg(rgb(if is_dark_mode() {
-                        palette().surface_strong
-                    } else {
-                        palette().surface_hover
-                    }))
+                    .when(is_dark_mode(), |this| {
+                        this.p_4().rounded_md().bg(rgb(palette().surface_strong))
+                    })
+                    .when(!is_dark_mode(), |this| {
+                        this.py_3().border_b_1().border_color(rgb(palette().border))
+                    })
                     .child(
                         div()
                             .text_size(ui_text_size(14.))
@@ -515,14 +515,12 @@ impl ConduitApp {
             .id("programmer-encourager-settings")
             .debug_selector(|| "programmer-encourager-settings".into())
             .w_full()
-            .max_w(px(760.))
-            .p(px(20.))
-            .rounded_md()
-            .bg(rgb(if is_dark_mode() {
-                palette().surface_strong
-            } else {
-                palette().surface_hover
-            }))
+            .when(is_dark_mode(), |this| {
+                this.p(px(20.))
+                    .rounded_md()
+                    .bg(rgb(palette().surface_strong))
+            })
+            .when(!is_dark_mode(), |this| this.py_3())
             .child(
                 h_flex()
                     .w_full()
