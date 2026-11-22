@@ -755,7 +755,7 @@ impl ConduitApp {
                 v_flex()
                     .w_full()
                     .flex_shrink_0()
-                    .px(px(if narrow { 12. } else { 24. }))
+                    .px(px(settings_content_inset()))
                     .pb_3()
                     .gap_2()
                     .child(toolbar)
@@ -795,7 +795,7 @@ impl ConduitApp {
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    .px(px(if narrow { 12. } else { 24. }))
+                    .px(px(settings_content_inset()))
                     .pb_4()
                     .child(
                         v_flex()

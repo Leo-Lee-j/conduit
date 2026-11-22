@@ -65,6 +65,12 @@ fn settings_page(title: &'static str, icon: FullIconName) -> SettingPage {
     }
 }
 
+/// Horizontal inset for content rendered directly in the settings workspace.
+/// This matches the inset used by the shared `SettingPage` component.
+pub(super) fn settings_content_inset() -> f32 {
+    16.
+}
+
 fn settings_actions_style() -> StyleRefinement {
     StyleRefinement::default()
         .px(px(24.))

@@ -21,13 +21,13 @@ pub(super) fn management_badge(label: impl Into<SharedString>, active: bool) -> 
         .child(label.into())
 }
 
-fn management_actions(actions: AnyElement, narrow: bool) -> Div {
+fn management_actions(actions: AnyElement) -> Div {
     h_flex()
         .debug_selector(|| "settings-page-actions".into())
         .w_full()
         .flex_shrink_0()
         .justify_end()
-        .px(px(if narrow { 12. } else { 24. }))
+        .px(px(settings_content_inset()))
         .py(px(8.))
         .child(actions)
 }
@@ -171,7 +171,6 @@ fn management_toolbar_padding(
     } else {
         1
     };
-    let narrow = available_width < 540.;
     let tabs = engine_tabs(engine, extensions, columns, view);
     v_flex()
         .w_full()
@@ -185,7 +184,7 @@ fn management_toolbar_padding(
                 .child(tabs),
         )
         .when_some(actions, |bar, actions| {
-            bar.child(management_actions(actions, narrow))
+            bar.child(management_actions(actions))
         })
         .into_any_element()
 }
