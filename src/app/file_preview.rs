@@ -7,6 +7,7 @@ use gpui_kit::component::{
 use std::{cell::Cell, ops::Range, rc::Rc};
 
 pub(super) mod changes;
+pub(super) mod proposal;
 mod review;
 pub(super) use review::mark_color as change_color;
 mod outline;
@@ -183,6 +184,7 @@ pub(super) struct FilePreview {
     location_pending: Rc<Cell<bool>>,
     outline: outline::Outline,
     review: review::State,
+    proposal: proposal::State,
     status_encoding: Option<&'static str>,
 }
 
@@ -255,6 +257,7 @@ impl FilePreview {
             location_pending: Rc::new(Cell::new(false)),
             outline: outline::Outline::default(),
             review: review::State::default(),
+            proposal: proposal::State::default(),
             status_encoding: None,
         }
     }
@@ -267,11 +270,12 @@ impl FilePreview {
         typography: ChatTypography,
         cx: &mut Context<Self>,
     ) {
-        if self.review.latest != source && self.review.playback.is_some() {
+        if self.review.latest != source {
             self.stop_replay(cx);
+            self.set_proposal(None, cx);
         }
         self.review.latest = source.clone();
-        if self.review.playback.is_some() {
+        if self.review.playback.is_some() || self.proposal_active() {
             return;
         }
         let changed = self.source != source;
@@ -428,7 +432,9 @@ impl FilePreview {
             state.update(cx, |state, cx| state.clear_range_highlights(cx));
         }
         self.apply_highlights(cx);
-        self.focus.focus(window, cx);
+        if self.focus.contains_focused(window, cx) {
+            self.focus.focus(window, cx);
+        }
         cx.notify();
     }
 
@@ -883,7 +889,7 @@ impl Render for FilePreview {
             .on_action(cx.listener(|this, _: &CloseFind, window, cx| this.close_find(window, cx)))
             .on_action(
                 cx.listener(|this, _: &gpui_kit::component::input::Copy, window, cx| {
-                    this.pause_replay(cx);
+                    this.pause_review(cx);
                     let text = TextSelection::selected_text(window, cx);
                     if text.is_empty() {
                         cx.propagate();
@@ -891,11 +897,6 @@ impl Render for FilePreview {
                         cx.write_to_clipboard(ClipboardItem::new_string(text));
                     }
                 }),
-            )
-            .on_scroll_wheel(cx.listener(|this, _, _, cx| this.pause_review(cx)))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, _, cx| this.pause_replay(cx)),
             )
             .when_some(review_bar, |view, bar| view.child(bar))
             .when(self.open, |view| view.child(self.find_bar(window, cx)))
@@ -920,6 +921,11 @@ impl Render for FilePreview {
                     })
                     .id("file-content-viewport")
                     .debug_selector(|| "file-content-viewport".into())
+                    .on_scroll_wheel(cx.listener(|this, _, _, cx| this.pause_review(cx)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| this.pause_review(cx)),
+                    )
                     .relative()
                     .flex_1()
                     .w_full()

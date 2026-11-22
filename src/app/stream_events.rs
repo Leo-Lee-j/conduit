@@ -3,6 +3,7 @@ use super::*;
 use crate::usage_ledger::ApiRequestOutcome;
 impl ConduitApp {
     pub(super) fn poll_streams(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.maintain_file_proposals(cx);
         self.poll_child_controls(window, cx);
         self.poll_child_histories(cx);
         let navigating = self.pending_message_jump.is_some();
@@ -79,6 +80,34 @@ impl ConduitApp {
                 Event::CommandCatalog(_) | Event::Delta { .. } | Event::Text { .. }
             ) {
                 continue;
+            }
+            // Transient previews have their own entity invalidation and never enter history.
+            if let Event::FileProposal { key, update } = event {
+                if let Some(root) = self
+                    .session_control
+                    .runs
+                    .get(&id)
+                    .filter(|run| !run.runtime.is_cancelled())
+                    .map(|run| run.worktree.clone())
+                {
+                    self.file_proposal_event(id, &format!("{prefix}-{key}"), &root, update, cx);
+                }
+                continue;
+            }
+            match &event {
+                Event::Tool { key, status, .. }
+                    if !matches!(
+                        status,
+                        crate::message_status::ToolStatus::Running
+                            | crate::message_status::ToolStatus::Output
+                    ) =>
+                {
+                    self.end_file_proposals(id, Some(&format!("{prefix}-{key}")), cx)
+                }
+                Event::Finished { .. } | Event::Failure(_) | Event::CleanupBlocked(_) => {
+                    self.end_file_proposals(id, None, cx)
+                }
+                _ => (),
             }
             let first_response = match &event {
                 Event::Delta { text, .. } | Event::Text { text, .. } => !text.trim().is_empty(),

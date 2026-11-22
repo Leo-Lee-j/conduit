@@ -14,8 +14,8 @@ pub(super) struct State {
     matched: Option<(u64, String)>,
     active_session: Option<u64>,
     following: Option<u64>,
-    follow_paused: bool,
-    visible: bool,
+    pub(super) follow_paused: bool,
+    pub(super) visible: bool,
 }
 pub(super) struct Playback {
     plan: Replay,
@@ -39,6 +39,18 @@ pub(in crate::app) fn mark_color(deleted: bool) -> Hsla {
 }
 
 impl FilePreview {
+    pub(super) fn close_find_for_review(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.open {
+            self.close_find(window, cx);
+        }
+        // Keep the view paused when an IME composition is still active.
+        !self.open
+    }
+
     pub(in crate::app) fn set_changes(
         &mut self,
         changes: Option<Arc<ChangeSet>>,
@@ -68,6 +80,9 @@ impl FilePreview {
         self.review.updated = updated;
         let newly_matched = matched.is_some() && self.review.matched != matched;
         self.review.matched = matched;
+        if self.review.active_session != active_session {
+            self.retain_proposal_session(active_session, cx);
+        }
         self.review.active_session = active_session;
         if self.review.following.is_some() && self.review.following != active_session {
             self.review.follow_paused = true;
@@ -91,6 +106,7 @@ impl FilePreview {
         }
         self.review.visible = visible;
         if !visible {
+            self.set_proposal(None, cx);
             self.pause_review(cx);
             self.stop_replay(cx);
         }
@@ -111,6 +127,7 @@ impl FilePreview {
     }
     pub(in crate::app) fn pause_review(&mut self, cx: &mut Context<Self>) {
         self.pause_replay(cx);
+        self.pause_proposal(cx);
         if self.review.following.is_some() && !self.review.follow_paused {
             self.review.follow_paused = true;
             cx.notify();
@@ -118,6 +135,9 @@ impl FilePreview {
     }
 
     pub(super) fn review_caret(&self) -> Option<usize> {
+        if let Some(range) = self.proposal_range() {
+            return Some(range.end);
+        }
         if let Some(playback) = &self.review.playback {
             return Some(playback.caret);
         }
@@ -141,6 +161,9 @@ impl FilePreview {
     }
 
     pub(super) fn review_marks(&self) -> Vec<(Range<usize>, bool)> {
+        if let Some(range) = self.proposal_range() {
+            return vec![(range, false)];
+        }
         let Some(changes) = &self.review.changes else {
             return vec![];
         };
@@ -172,7 +195,7 @@ impl FilePreview {
             .collect()
     }
 
-    fn replace_display(&mut self, text: SharedString, cx: &mut Context<Self>) {
+    pub(super) fn replace_display(&mut self, text: SharedString, cx: &mut Context<Self>) {
         self.source = text;
         self.revision += 1;
         self.location_pending.set(false);
@@ -186,6 +209,7 @@ impl FilePreview {
     }
 
     pub(in crate::app) fn start_replay(&mut self, cx: &mut Context<Self>) {
+        self.stop_proposal(cx);
         let Some(changes) = self.review.changes.clone() else {
             return;
         };
@@ -296,6 +320,9 @@ impl FilePreview {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        if let Some(bar) = self.proposal_bar(cx) {
+            return Some(bar);
+        }
         if cx.reduce_motion() && self.review.playback.as_ref().is_some_and(|p| !p.paused) {
             self.pause_replay(cx);
             if let Some(p) = &mut self.review.playback {
@@ -349,6 +376,7 @@ impl FilePreview {
                     .gap_1()
                     .child(
                         Button::new("file-replay-pause")
+                            .debug_selector(|| "file-replay-pause".into())
                             .ghost()
                             .xsmall()
                             .label(conduit::i18n::text_static(if complete {
@@ -358,12 +386,15 @@ impl FilePreview {
                             } else {
                                 "files.changes.pause"
                             }))
-                            .on_click(cx.listener(move |this, _, _, cx| {
+                            .on_click(cx.listener(move |this, _, window, cx| {
                                 if complete {
-                                    this.start_replay(cx);
+                                    if this.close_find_for_review(window, cx) {
+                                        this.start_replay(cx);
+                                    }
                                 } else if paused {
-                                    this.open = false;
-                                    this.apply_highlights(cx);
+                                    if !this.close_find_for_review(window, cx) {
+                                        return;
+                                    }
                                     if let Some(p) = &mut this.review.playback {
                                         p.paused = false;
                                     }
@@ -375,6 +406,7 @@ impl FilePreview {
                     )
                     .child(
                         Button::new("file-replay-return")
+                            .debug_selector(|| "file-replay-return".into())
                             .ghost()
                             .xsmall()
                             .label(conduit::i18n::text_static("files.changes.return_current"))
@@ -401,10 +433,15 @@ impl FilePreview {
                     )
                     .child(
                         Button::new("file-change-replay")
+                            .debug_selector(|| "file-change-replay".into())
                             .ghost()
                             .xsmall()
                             .label(conduit::i18n::text_static("files.changes.replay"))
-                            .on_click(cx.listener(|this, _, _, cx| this.start_replay(cx))),
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if this.close_find_for_review(window, cx) {
+                                    this.start_replay(cx);
+                                }
+                            })),
                     )
                     .child(
                         Button::new("file-change-follow")

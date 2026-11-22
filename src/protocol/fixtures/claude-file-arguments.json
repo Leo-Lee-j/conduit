@@ -1,0 +1,945 @@
+{
+  "cli": "2.1.270 (Claude Code)",
+  "sha256": "fd7f35ec7761195ab5ba4eff423e48a78a7849e78f60d93ec31256cdb1a9ec7e",
+  "source": "Real CLI; isolated local synthetic Anthropic SSE; relative file paths; ordered native stdout; filesystem snapshot per frame",
+  "frames": [
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_start",
+          "message": {
+            "id": "msg_probe_0"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "tool_use",
+            "id": "tool_probe_0",
+            "name": "Read",
+            "input": {}
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "{\"file_"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "path\": "
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "\"note.t"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "xt\"}"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "assistant",
+        "message": {
+          "id": "msg_probe_0",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "tool_probe_0",
+              "name": "Read",
+              "input": {
+                "file_path": "note.txt"
+              }
+            }
+          ]
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_stop",
+          "index": 0
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "tool_use",
+            "stop_sequence": null
+          },
+          "usage": {
+            "output_tokens": 10
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_stop"
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "user",
+        "message": {
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "tool_probe_0"
+            }
+          ]
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_start",
+          "message": {
+            "id": "msg_probe_1"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "tool_use",
+            "id": "tool_probe_1",
+            "name": "Edit",
+            "input": {}
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "{\"file_"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "path\": "
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "\"note.t"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "xt\", \"o"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "ld_stri"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "ng\": \"b"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "efore\\n"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "\", \"new"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "_string"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "\": \"aft"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "er\\n\\u4"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "e2d\\u65"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "87 e\\u0"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "301 \\ud"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "83d\\udc"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "68\\u200"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "d\\ud83d"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "\\udc69\\"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "u200d\\u"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "d83d\\ud"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "c67\\u20"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "0d\\ud83"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "d\\udc66"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "\\n\"}"
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "assistant",
+        "message": {
+          "id": "msg_probe_1",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "tool_probe_1",
+              "name": "Edit",
+              "input": {
+                "replace_all": false,
+                "file_path": "note.txt",
+                "old_string": "before\n",
+                "new_string": "after\n中文 é 👨‍👩‍👧‍👦\n"
+              }
+            }
+          ]
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_stop",
+          "index": 0
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "tool_use",
+            "stop_sequence": null
+          },
+          "usage": {
+            "output_tokens": 10
+          }
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_stop"
+        }
+      },
+      "file": "before\n"
+    },
+    {
+      "event": {
+        "type": "user",
+        "message": {
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "tool_probe_1"
+            }
+          ]
+        }
+      },
+      "file": "after\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_start",
+          "message": {
+            "id": "msg_probe_2"
+          }
+        }
+      },
+      "file": "after\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "tool_use",
+            "id": "tool_probe_2",
+            "name": "Edit",
+            "input": {}
+          }
+        }
+      },
+      "file": "after\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "{\"file_"
+          }
+        }
+      },
+      "file": "after\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "path\": "
+          }
+        }
+      },
+      "file": "after\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "\"note.t"
+          }
+        }
+      },
+      "file": "after\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "xt\", \"o"
+          }
+        }
+      },
+      "file": "after\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "ld_stri"
+          }
+        }
+      },
+      "file": "after\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "ng\": \"a"
+          }
+        }
+      },
+      "file": "after\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "fter\", "
+          }
+        }
+      },
+      "file": "after\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "\"new_st"
+          }
+        }
+      },
+      "file": "after\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "ring\": "
+          }
+        }
+      },
+      "file": "after\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "\"update"
+          }
+        }
+      },
+      "file": "after\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "d\"}"
+          }
+        }
+      },
+      "file": "after\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "assistant",
+        "message": {
+          "id": "msg_probe_2",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "tool_probe_2",
+              "name": "Edit",
+              "input": {
+                "replace_all": false,
+                "file_path": "note.txt",
+                "old_string": "after",
+                "new_string": "updated"
+              }
+            }
+          ]
+        }
+      },
+      "file": "after\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_stop",
+          "index": 0
+        }
+      },
+      "file": "after\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "tool_use",
+            "stop_sequence": null
+          },
+          "usage": {
+            "output_tokens": 10
+          }
+        }
+      },
+      "file": "after\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_stop"
+        }
+      },
+      "file": "after\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "user",
+        "message": {
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "tool_probe_2"
+            }
+          ]
+        }
+      },
+      "file": "updated\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_start",
+          "message": {
+            "id": "msg_probe_3"
+          }
+        }
+      },
+      "file": "updated\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        }
+      },
+      "file": "updated\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "Local file-tool probe complete."
+          }
+        }
+      },
+      "file": "updated\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "assistant",
+        "message": {
+          "id": "msg_probe_3",
+          "content": [
+            {
+              "type": "text",
+              "text": "Local file-tool probe complete."
+            }
+          ]
+        }
+      },
+      "file": "updated\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_stop",
+          "index": 0
+        }
+      },
+      "file": "updated\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+          },
+          "usage": {
+            "output_tokens": 10
+          }
+        }
+      },
+      "file": "updated\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_stop"
+        }
+      },
+      "file": "updated\n中文 é 👨‍👩‍👧‍👦\n"
+    },
+    {
+      "event": {
+        "type": "result",
+        "subtype": "success",
+        "is_error": false
+      },
+      "file": "updated\n中文 é 👨‍👩‍👧‍👦\n"
+    }
+  ]
+}

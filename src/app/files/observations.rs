@@ -26,6 +26,11 @@ impl ConduitApp {
             return;
         }
         for document in self.files.documents.values_mut() {
+            if !item.input.is_empty()
+                && expected_for(item, root, &document.key, &document.text).is_some()
+            {
+                proposals::conflicting_tool(document, session, item, cx);
+            }
             document
                 .observations
                 .retain(|o| o.started.elapsed() < Duration::from_secs(120));
@@ -148,7 +153,7 @@ fn expected_for(item: &ChatItem, root: &Path, key: &FileKey, before: &str) -> Op
     (expected.len() + before.len() <= MAX_REVIEW_BYTES && expected != before).then_some(expected)
 }
 
-fn normalized(path: &Path) -> Option<PathBuf> {
+pub(super) fn normalized(path: &Path) -> Option<PathBuf> {
     use std::path::Component;
     let mut result = PathBuf::new();
     for c in path.components() {

@@ -19,7 +19,38 @@ struct Queue {
     events: VecDeque<Event>,
     bytes: usize,
     receiver: bool,
+    proposals_disabled: bool,
+    proposal_reset_pending: bool,
 }
+impl Queue {
+    fn disable_proposals(&mut self) {
+        self.proposals_disabled = true;
+        self.proposal_reset_pending = true;
+        self.events.retain(|event| {
+            if matches!(event, Event::FileProposal { .. }) {
+                self.bytes -= event_bytes(event);
+                false
+            } else {
+                true
+            }
+        });
+    }
+
+    fn pop_front(&mut self) -> Option<Event> {
+        if std::mem::take(&mut self.proposal_reset_pending) {
+            // Delivered before the remaining queue, after all queued proposals
+            // have been removed. No late snapshot can resurrect a stale view.
+            return Some(Event::FileProposal {
+                key: String::new(),
+                update: crate::protocol::file_proposals::Update::Reset,
+            });
+        }
+        let event = self.events.pop_front()?;
+        self.bytes -= event_bytes(&event);
+        Some(event)
+    }
+}
+
 struct Shared {
     queue: Mutex<Queue>,
     ready: Condvar,
@@ -33,6 +64,8 @@ pub(crate) fn channel() -> (Sender, Receiver) {
             events: VecDeque::new(),
             bytes: 0,
             receiver: true,
+            proposals_disabled: false,
+            proposal_reset_pending: false,
         }),
         ready: Condvar::new(),
         senders: AtomicUsize::new(1),
@@ -59,6 +92,7 @@ pub(crate) fn event_bytes(event: &Event) -> usize {
         } => key.len() + title.len() + detail.len() + status.len(),
         Event::SessionNotice { key, message } => key.len() + message.len(),
         Event::ToolInput { key, input } => key.len() + input.len(),
+        Event::FileProposal { key, update } => key.len() + update.bytes(),
         Event::Approval(a) => a.id.len() + a.title.len() + a.detail.len(),
         Event::NativeId(s)
         | Event::ApprovalCancelled(s)
@@ -96,10 +130,52 @@ impl Sender {
             return Err(Box::new(mpsc::SendError(event)));
         }
         let cost = event_bytes(&event);
+        if let Event::FileProposal { key, update } = &event {
+            use crate::protocol::file_proposals::Update;
+            if queue.proposals_disabled {
+                return Ok(());
+            }
+            // Account for the replaced snapshot before checking either budget.
+            // Otherwise a full queue can unnecessarily discard a valid update.
+            if matches!(update, Update::Content(_))
+                && let Some(
+                    previous @ Event::FileProposal {
+                        key: previous_key,
+                        update: Update::Content(_),
+                    },
+                ) = queue.events.back()
+                && key == previous_key
+            {
+                let old_cost = event_bytes(previous);
+                if queue.bytes - old_cost + cost <= MAX_BYTES {
+                    queue.events.pop_back();
+                    queue.bytes -= old_cost;
+                } else {
+                    queue.disable_proposals();
+                    self.0.ready.notify_one();
+                    return Ok(());
+                }
+            } else if queue.bytes + cost > MAX_BYTES || queue.events.len() >= MAX_EVENTS {
+                // Preview traffic is optional. A single out-of-band reset needs
+                // no control reserve, no per-tool tombstones, and no blocking.
+                queue.disable_proposals();
+                self.0.ready.notify_one();
+                return Ok(());
+            }
+        }
         if let Event::Activity(_) = &event
             && let Some(previous @ Event::Activity(_)) = queue.events.back()
         {
             let old_cost = event_bytes(previous);
+            if queue.bytes - old_cost + cost > MAX_BYTES
+                && queue
+                    .events
+                    .iter()
+                    .any(|queued| matches!(queued, Event::FileProposal { .. }))
+            {
+                queue.disable_proposals();
+                self.0.ready.notify_one();
+            }
             if queue.bytes - old_cost + cost > MAX_BYTES {
                 return Err(Box::new(mpsc::SendError(event)));
             }
@@ -166,6 +242,16 @@ impl Sender {
             + if control { 512 * 1024 } else { 0 }
             + if cleanup || finished { MAX_BYTES } else { 0 }
             + if finished { MAX_BYTES } else { 0 };
+        if (queue.events.len() >= limit || queue.bytes + cost > bytes)
+            && queue
+                .events
+                .iter()
+                .any(|queued| matches!(queued, Event::FileProposal { .. }))
+        {
+            // Required traffic gets back every byte and slot used by previews.
+            queue.disable_proposals();
+            self.0.ready.notify_one();
+        }
         if queue.events.len() >= limit || queue.bytes + cost > bytes {
             return Err(Box::new(mpsc::SendError(event)));
         }
@@ -178,8 +264,7 @@ impl Sender {
 impl Receiver {
     pub(crate) fn try_recv(&self) -> Result<Event, mpsc::TryRecvError> {
         let mut queue = self.0.queue.lock().unwrap();
-        if let Some(event) = queue.events.pop_front() {
-            queue.bytes -= event_bytes(&event);
+        if let Some(event) = queue.pop_front() {
             return Ok(event);
         }
         if self.0.senders.load(Ordering::Acquire) == 0 {
@@ -193,8 +278,7 @@ impl Receiver {
         let until = Instant::now() + timeout;
         let mut queue = self.0.queue.lock().unwrap();
         loop {
-            if let Some(event) = queue.events.pop_front() {
-                queue.bytes -= event_bytes(&event);
+            if let Some(event) = queue.pop_front() {
                 return Ok(event);
             }
             if self.0.senders.load(Ordering::Acquire) == 0 {
@@ -214,11 +298,323 @@ impl Drop for Receiver {
         queue.receiver = false;
         queue.events.clear();
         queue.bytes = 0;
+        queue.proposal_reset_pending = false;
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn content_proposal_snapshots_coalesce_without_crossing_identity_or_end() {
+        use crate::protocol::file_proposals::{Input, Update};
+        let (tx, rx) = channel();
+        let snapshot = |key: &str, new: String| Event::FileProposal {
+            key: key.into(),
+            update: Update::Content(Arc::new(Input {
+                path: "n".into(),
+                old: None,
+                new,
+                complete: false,
+            })),
+        };
+        tx.send(Event::FileProposal {
+            key: "one".into(),
+            update: Update::Started,
+        })
+        .unwrap();
+        for i in 0..MAX_EVENTS * 2 {
+            tx.send(snapshot("one", i.to_string())).unwrap();
+        }
+
+        tx.send(snapshot("two", "other".into())).unwrap();
+        tx.send(Event::FileProposal {
+            key: "one".into(),
+            update: Update::Ended,
+        })
+        .unwrap();
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Event::FileProposal {
+                update: Update::Started,
+                ..
+            })
+        ));
+        assert!(
+            matches!(rx.try_recv(), Ok(Event::FileProposal { key, update: Update::Content(input) }) if key == "one" && input.new == (MAX_EVENTS * 2 - 1).to_string())
+        );
+        assert!(matches!(rx.try_recv(), Ok(Event::FileProposal { key, .. }) if key == "two"));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Event::FileProposal {
+                update: Update::Ended,
+                ..
+            })
+        ));
+        assert_eq!(rx.0.queue.lock().unwrap().bytes, 0);
+    }
+    #[test]
+    fn content_proposal_backpressure_ends_preview_without_cancelling_request() {
+        use crate::protocol::file_proposals::{Input, Update};
+        let (tx, rx) = channel();
+        for _ in 0..MAX_EVENTS {
+            tx.send(Event::Notice("barrier".into())).unwrap();
+        }
+        for _ in 0..MAX_EVENTS {
+            tx.send(Event::FileProposal {
+                key: "one".into(),
+                update: Update::Content(Arc::new(Input {
+                    path: "n".into(),
+                    old: None,
+                    new: "new".into(),
+                    complete: false,
+                })),
+            })
+            .unwrap();
+        }
+        tx.send(Event::Finished {
+            error: None,
+            cancelled: false,
+        })
+        .unwrap();
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Event::FileProposal {
+                update: Update::Reset,
+                ..
+            })
+        ));
+        for _ in 0..MAX_EVENTS {
+            assert!(matches!(rx.try_recv(), Ok(Event::Notice(_))));
+        }
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Event::Finished {
+                error: None,
+                cancelled: false
+            })
+        ));
+        assert_eq!(rx.0.queue.lock().unwrap().bytes, 0);
+    }
+    #[test]
+    fn content_proposal_many_invocations_leave_control_reserve_available() {
+        use crate::protocol::file_proposals::Update;
+        let (tx, rx) = channel();
+        for _ in 0..MAX_EVENTS {
+            tx.send(Event::Notice("barrier".into())).unwrap();
+        }
+        for i in 0..MAX_EVENTS * 2 {
+            for update in [Update::Started, Update::Ended] {
+                tx.send(Event::FileProposal {
+                    key: format!("tool-{i}"),
+                    update,
+                })
+                .unwrap();
+            }
+        }
+        for i in 0..CONTROL_RESERVE {
+            tx.send(Event::ApprovalResolved {
+                id: i.to_string(),
+                allow: true,
+            })
+            .unwrap();
+        }
+        tx.send(Event::Finished {
+            error: None,
+            cancelled: false,
+        })
+        .unwrap();
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Event::FileProposal {
+                update: Update::Reset,
+                ..
+            })
+        ));
+        let mut notices = 0;
+        let mut approvals = 0;
+        let mut finished = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                Event::Notice(_) => notices += 1,
+                Event::ApprovalResolved { .. } => approvals += 1,
+                Event::Finished {
+                    error: None,
+                    cancelled: false,
+                } => finished = true,
+                _ => panic!("unexpected event"),
+            }
+        }
+        assert_eq!(notices, MAX_EVENTS);
+        assert_eq!(approvals, CONTROL_RESERVE);
+        assert!(finished);
+        assert_eq!(tx.0.queue.lock().unwrap().bytes, 0);
+    }
+
+    #[test]
+    fn content_proposal_yields_its_slot_to_chat_at_capacity() {
+        use crate::protocol::file_proposals::Update;
+        let (tx, rx) = channel();
+        tx.send(Event::FileProposal {
+            key: "tool".into(),
+            update: Update::Started,
+        })
+        .unwrap();
+        for _ in 0..MAX_EVENTS - 1 {
+            tx.send(Event::Notice("barrier".into())).unwrap();
+        }
+        tx.send(Event::Delta {
+            key: "message".into(),
+            text: "still streaming".into(),
+        })
+        .unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::ZERO),
+            Ok(Event::FileProposal {
+                update: Update::Reset,
+                ..
+            })
+        ));
+        // Draining the queue must not re-enable previews for this request.
+        // Both old and new tool IDs stay disabled after the single reset.
+        for key in ["tool", "next"] {
+            tx.send(Event::FileProposal {
+                key: key.into(),
+                update: Update::Started,
+            })
+            .unwrap();
+        }
+        let mut text = String::new();
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                Event::Delta { text: delta, .. } => text.push_str(&delta),
+                Event::Notice(_) => (),
+                _ => panic!("discarded preview was re-enabled"),
+            }
+        }
+        assert_eq!(text, "still streaming");
+    }
+
+    #[test]
+    fn content_proposal_snapshots_replace_at_both_queue_limits() {
+        use crate::protocol::file_proposals::{Input, Update};
+        for byte_limit in [false, true] {
+            let (tx, rx) = channel();
+            let snapshot = |new: &str| Event::FileProposal {
+                key: "tool".into(),
+                update: Update::Content(Arc::new(Input {
+                    path: "n".into(),
+                    old: None,
+                    new: new.into(),
+                    complete: false,
+                })),
+            };
+            let barriers = if byte_limit {
+                let filler = MAX_BYTES
+                    - event_bytes(&snapshot("old"))
+                    - event_bytes(&Event::Notice(String::new()));
+                tx.send(Event::Notice("x".repeat(filler))).unwrap();
+                1
+            } else {
+                for _ in 0..MAX_EVENTS - 1 {
+                    tx.send(Event::Notice("barrier".into())).unwrap();
+                }
+                MAX_EVENTS - 1
+            };
+            tx.send(snapshot("old")).unwrap();
+            tx.send(snapshot("new")).unwrap();
+            if byte_limit {
+                assert_eq!(tx.0.queue.lock().unwrap().bytes, MAX_BYTES);
+            }
+            for _ in 0..barriers {
+                assert!(matches!(rx.try_recv(), Ok(Event::Notice(_))));
+            }
+            assert!(matches!(rx.try_recv(),
+                Ok(Event::FileProposal { update: Update::Content(input), .. }) if input.new == "new"));
+            assert_eq!(tx.0.queue.lock().unwrap().bytes, 0);
+            assert!(rx.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn content_proposal_byte_pressure_purges_queued_snapshots_before_reset() {
+        use crate::protocol::file_proposals::{Input, Update};
+        let (tx, rx) = channel();
+        tx.send(Event::FileProposal {
+            key: "already-visible".into(),
+            update: Update::Started,
+        })
+        .unwrap();
+        rx.try_recv().unwrap();
+        let snapshot = Event::FileProposal {
+            key: "already-visible".into(),
+            update: Update::Content(Arc::new(Input {
+                path: "n".into(),
+                old: None,
+                new: "proposed".into(),
+                complete: true,
+            })),
+        };
+        let filler =
+            MAX_BYTES - event_bytes(&snapshot) - event_bytes(&Event::Notice(String::new()));
+        tx.send(Event::Notice("x".repeat(filler))).unwrap();
+        tx.send(snapshot).unwrap();
+        tx.send(Event::Delta {
+            key: "message".into(),
+            text: "chat".into(),
+        })
+        .unwrap();
+        drop(tx);
+        assert!(matches!(
+            rx.recv_timeout(Duration::ZERO),
+            Ok(Event::FileProposal {
+                update: Update::Reset,
+                ..
+            })
+        ));
+        assert!(matches!(rx.try_recv(), Ok(Event::Notice(_))));
+        assert!(matches!(rx.try_recv(), Ok(Event::Delta { text, .. }) if text == "chat"));
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+        assert_eq!(rx.0.queue.lock().unwrap().bytes, 0);
+    }
+
+    #[test]
+    fn content_proposal_yields_its_bytes_to_replaced_activity() {
+        use crate::protocol::file_proposals::{Input, Update};
+        let (tx, rx) = channel();
+        let snapshot = Event::FileProposal {
+            key: "tool".into(),
+            update: Update::Content(Arc::new(Input {
+                path: "n".into(),
+                old: None,
+                new: "proposed".into(),
+                complete: false,
+            })),
+        };
+        let activity = Event::Activity("a".into());
+        let filler = MAX_BYTES
+            - event_bytes(&snapshot)
+            - event_bytes(&activity)
+            - event_bytes(&Event::Notice(String::new()));
+        tx.send(Event::Notice("x".repeat(filler))).unwrap();
+        tx.send(snapshot).unwrap();
+        tx.send(activity).unwrap();
+        tx.send(Event::Activity("ab".into())).unwrap();
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Event::FileProposal {
+                update: Update::Reset,
+                ..
+            })
+        ));
+        assert!(matches!(rx.try_recv(), Ok(Event::Notice(_))));
+        assert!(matches!(rx.try_recv(), Ok(Event::Activity(text)) if text == "ab"));
+        assert_eq!(rx.0.queue.lock().unwrap().bytes, 0);
+        assert!(rx.try_recv().is_err());
+    }
+
     #[test]
     fn activity_updates_coalesce_preserve_barriers_and_failed_send_preserves_old_state() {
         let (tx, rx) = channel();

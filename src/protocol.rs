@@ -7,6 +7,7 @@ mod codex_async_input;
 mod codex_commands;
 mod codex_fork;
 mod codex_items;
+pub(crate) mod file_proposals;
 mod notifications;
 mod opencode;
 pub(crate) mod presentation;
@@ -93,6 +94,11 @@ pub enum Event {
         title: String,
         detail: String,
         status: crate::message_status::ToolStatus,
+    },
+    /// Ephemeral parameter previews; never persisted as authoritative tool input.
+    FileProposal {
+        key: String,
+        update: file_proposals::Update,
     },
     ToolInput {
         key: String,
@@ -212,6 +218,7 @@ pub struct Protocol {
     thread_id: Option<String>,
     turn_id: Option<String>,
     claude_message: String,
+    claude_file_proposals: file_proposals::Streams,
     claude_usage: std::collections::HashMap<String, ClaudeUsage>,
     claude_latest_usage: Option<String>,
     claude_usage_message: Option<String>,
@@ -304,6 +311,7 @@ impl Protocol {
             thread_id: None,
             turn_id: None,
             claude_message: String::new(),
+            claude_file_proposals: Default::default(),
             claude_usage: Default::default(),
             claude_latest_usage: None,
             claude_usage_message: None,
@@ -1090,6 +1098,9 @@ impl Protocol {
         }
         if self.claude_agent_event(&v) {
             return step;
+        }
+        if !self.text_only {
+            step.events.extend(self.claude_file_proposals.accept(&v));
         }
         match text(&v, "type") {
             "control_response" if text(&v["response"], "request_id") == "conduit-init" => {

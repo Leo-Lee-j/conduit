@@ -7,6 +7,8 @@ use std::ops::Range;
 
 mod observations;
 mod panes;
+mod proposals;
+mod watch;
 use super::file_preview::changes::ChangeSet;
 pub(super) use panes::Pane;
 
@@ -80,6 +82,7 @@ struct Document {
     updated: bool,
     matched_tool: Option<(u64, String)>,
     observations: Vec<observations::Observation>,
+    proposals: proposals::Pending,
     is_image: bool,
     text: SharedString,
     image: Option<Arc<RenderImage>>,
@@ -90,6 +93,7 @@ struct Document {
     loading: bool,
     dirty: bool,
     retry_at: Option<Instant>,
+    last_verified: Option<Instant>,
     failures: u32,
     error: Option<String>,
     revision: u64,
@@ -129,6 +133,7 @@ pub(super) struct FileBrowser {
     preview: Option<u64>,
     next_id: u64,
     last_poll: Option<Instant>,
+    watcher: watch::Watcher,
     polling: bool,
 }
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
@@ -1074,6 +1079,7 @@ impl ConduitApp {
                 updated: false,
                 matched_tool: None,
                 observations: Vec::new(),
+                proposals: Default::default(),
                 is_image,
                 text: "".into(),
                 image: None,
@@ -1084,6 +1090,7 @@ impl ConduitApp {
                 loading: false,
                 dirty: false,
                 retry_at: None,
+                last_verified: None,
                 failures: 0,
                 error: None,
                 revision: 0,
@@ -1197,6 +1204,7 @@ impl ConduitApp {
                 if result.is_ok() {
                     document.failures = 0;
                     document.retry_at = None;
+                    document.last_verified = Some(Instant::now());
                     if let Some(image) = document.image.take() {
                         cx.drop_image(image, None);
                     }
@@ -1207,6 +1215,14 @@ impl ConduitApp {
                         highlights,
                         changes,
                     }) => {
+                        if document.text.as_ref() != file.text
+                            || document
+                                .stamp
+                                .as_ref()
+                                .is_some_and(|old| old != &file.stamp)
+                        {
+                            proposals::invalidate(document, cx);
+                        }
                         if document.text.as_ref() != file.text {
                             document.revision += 1;
                             document.updated = document.stamp.is_some();
@@ -1238,6 +1254,7 @@ impl ConduitApp {
                         document.error = None;
                     }
                     Err(error) => {
+                        proposals::invalidate(document, cx);
                         document
                             .preview
                             .update(cx, |preview, cx| preview.stop_replay(cx));
@@ -1337,8 +1354,37 @@ impl ConduitApp {
         cx.notify();
     }
 
-    /// Poll only the visible document/expanded directories, without reading files on the UI thread.
+    fn sync_file_watch(&mut self) {
+        let targets = if self.closing {
+            Vec::new()
+        } else {
+            self.visible_file_documents()
+                .into_iter()
+                .filter_map(|id| {
+                    self.files
+                        .documents
+                        .get(&id)
+                        .map(|document| (id, document.key.workspace.join(&document.key.relative)))
+                })
+                .collect()
+        };
+        self.files.watcher.sync(targets);
+    }
+
+    /// Drain native notifications each UI tick; keep metadata polling and a
+    /// periodic content verification as fallbacks. All filesystem I/O is off UI.
     pub(super) fn poll_files(&mut self, cx: &mut Context<Self>) {
+        self.sync_file_watch();
+        if self.closing {
+            return;
+        }
+        for id in self.files.watcher.take_changes(Instant::now()) {
+            if let Some(document) = self.files.documents.get_mut(&id) {
+                // Native changes bypass error backoff, including recreation.
+                document.retry_at = None;
+                self.load_file(id, cx);
+            }
+        }
         if self.files.polling
             || self
                 .files
@@ -1361,7 +1407,10 @@ impl ConduitApp {
                             id,
                             d.key.clone(),
                             d.stamp.clone(),
-                            d.dirty || d.error.is_some(),
+                            d.dirty
+                                || d.error.is_some()
+                                || d.last_verified
+                                    .is_none_or(|at| at.elapsed() >= Duration::from_secs(10)),
                         )
                     })
             })
@@ -2063,7 +2112,7 @@ impl ConduitApp {
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(document) = this.files.documents.get(&id) {
                                     let text = document.preview.update(cx, |preview, cx| {
-                                        preview.pause_replay(cx);
+                                        preview.pause_review(cx);
                                         preview.visible_source()
                                     });
                                     cx.write_to_clipboard(ClipboardItem::new_string(
@@ -2132,7 +2181,9 @@ impl ConduitApp {
                     .justify_center()
                     .child(Spinner::new()),
             );
-        } else if text.is_empty() && (is_image || !document.updated) {
+        } else if text.is_empty()
+            && (is_image || (!document.updated && !document.preview.read(cx).has_proposal()))
+        {
             if let Some(image) = image {
                 page = page.child(
                     div()

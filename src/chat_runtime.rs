@@ -29,6 +29,8 @@ mod adapter_tests;
 #[cfg(test)]
 mod claude_subagent_tests;
 #[cfg(test)]
+mod claude_tests;
+#[cfg(test)]
 mod local_http;
 #[cfg(test)]
 mod opencode_tests;

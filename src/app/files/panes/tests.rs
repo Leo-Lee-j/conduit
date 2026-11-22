@@ -3,6 +3,9 @@ use crate::app::queue::tests::fixture;
 use gpui_kit::{Entity, TestAppContext, VisualTestContext, px, size};
 use std::path::{Path, PathBuf};
 
+mod layout;
+mod watch;
+
 fn settle(cx: &mut VisualTestContext) {
     for _ in 0..3 {
         cx.run_until_parked();
@@ -534,6 +537,204 @@ fn content_review_tool_matching_and_snapshot_replay_do_not_replace_current_file(
                 preview.stop_replay(cx);
                 assert!(preview.visible_source().is_empty());
             });
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn content_proposal_stream_routing_is_transient_and_cancels_on_conflict(cx: &mut TestAppContext) {
+    use crate::app::queue::tests::running;
+    use crate::protocol::{
+        Event,
+        file_proposals::{Input, Update},
+    };
+    use std::sync::Arc;
+    let _locale = crate::test_support::chinese();
+    let (app, cx, root) = fixture(cx, "content-proposal-routing");
+    prepare(&app, cx, &root);
+    let id = cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_workspace_file(reference(&root), true, window, cx);
+            app.files.panes.active.unwrap()
+        })
+    });
+    settle(cx);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let sender = running(app, 1);
+            let before = app.files.documents[&id].text.clone();
+            let count = app.session(1).unwrap().messages.len();
+            let content = Update::Content(Arc::new(Input {
+                path: "other/reference.txt".into(),
+                old: Some("needle".into()),
+                new: "proposed".into(),
+                complete: false,
+            }));
+            for update in [Update::Started, content.clone()] {
+                sender
+                    .send(Event::FileProposal {
+                        key: "edit".into(),
+                        update,
+                    })
+                    .unwrap();
+            }
+            app.poll_streams(window, cx);
+            let preview = app.files.documents[&id].preview.clone();
+            preview.update(cx, |preview, cx| {
+                assert_eq!(preview.visible_source(), before);
+                preview.start_proposal(cx);
+                assert!(preview.visible_source().contains("proposed"));
+            });
+            assert_eq!(app.files.documents[&id].text, before);
+            assert_eq!(app.session(1).unwrap().messages.len(), count);
+            assert_eq!(
+                std::fs::read_to_string(root.join("other/reference.txt")).unwrap(),
+                before.as_ref()
+            );
+            // A second live writer removes both offers, even after one writer ends.
+            for update in [Update::Started, content.clone()] {
+                sender
+                    .send(Event::FileProposal {
+                        key: "collision".into(),
+                        update,
+                    })
+                    .unwrap();
+            }
+            app.poll_streams(window, cx);
+            assert_eq!(preview.read(cx).visible_source(), before);
+            sender
+                .send(Event::FileProposal {
+                    key: "collision".into(),
+                    update: Update::Ended,
+                })
+                .unwrap();
+            sender
+                .send(Event::FileProposal {
+                    key: "edit".into(),
+                    update: content.clone(),
+                })
+                .unwrap();
+            app.poll_streams(window, cx);
+            preview.update(cx, |preview, cx| preview.start_proposal(cx));
+            assert_eq!(preview.read(cx).visible_source(), before);
+            app.end_file_proposals(1, None, cx);
+            // Another authoritative tool can conflict before this invocation's
+            // path/new_string has arrived. A late delta must not resurrect it.
+            sender.send(Event::FileProposal { key: "pending".into(), update: Update::Started }).unwrap();
+            sender.send(Event::Tool { key: "full".into(), title: "Write".into(), detail: String::new(), status: crate::message_status::ToolStatus::Running }).unwrap();
+            sender.send(Event::ToolInput { key: "full".into(), input: serde_json::json!({"file_path":"other/reference.txt", "content":"competing"}).to_string() }).unwrap();
+            app.poll_streams(window, cx);
+            sender.send(Event::FileProposal { key: "pending".into(), update: content.clone() }).unwrap();
+            app.poll_streams(window, cx);
+            assert!(!preview.read(cx).has_proposal());
+            app.end_file_proposals(1, None, cx);
+            // A queue reset is request-scoped, not a tool completion. It must
+            // restore the disk view and drop every candidate without history.
+            for update in [Update::Started, content.clone()] {
+                sender.send(Event::FileProposal { key: "backpressure".into(), update }).unwrap();
+            }
+            app.poll_streams(window, cx);
+            preview.update(cx, |preview, cx| preview.start_proposal(cx));
+            assert!(preview.read(cx).visible_source().contains("proposed"));
+            let before_reset = app.session(1).unwrap().messages.len();
+            sender.send(Event::FileProposal { key: String::new(), update: Update::Reset }).unwrap();
+            sender.send(Event::FileProposal { key: "backpressure".into(), update: content.clone() }).unwrap();
+            app.poll_streams(window, cx);
+            assert!(!preview.read(cx).has_proposal());
+            assert_eq!(preview.read(cx).visible_source(), before);
+            assert_eq!(app.session(1).unwrap().messages.len(), before_reset);
+            for update in [Update::Started, content.clone()] {
+                sender
+                    .send(Event::FileProposal {
+                        key: "cancel".into(),
+                        update,
+                    })
+                    .unwrap();
+            }
+            app.poll_streams(window, cx);
+            preview.update(cx, |preview, cx| preview.start_proposal(cx));
+            assert!(preview.read(cx).visible_source().contains("proposed"));
+            app.session_control.runs.get_mut(&1).unwrap().cancel();
+            app.poll_streams(window, cx);
+            assert_eq!(preview.read(cx).visible_source(), before);
+            sender
+                .send(Event::FileProposal {
+                    key: "cancel".into(),
+                    update: content,
+                })
+                .unwrap();
+            app.poll_streams(window, cx);
+            preview.update(cx, |preview, cx| preview.start_proposal(cx));
+            assert_eq!(preview.read(cx).visible_source(), before);
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn content_proposal_empty_file_mounts_and_external_version_ends_preview(cx: &mut TestAppContext) {
+    use crate::app::queue::tests::running;
+    use crate::protocol::{
+        Event,
+        file_proposals::{Input, Update},
+    };
+    use std::sync::Arc;
+    let _locale = crate::test_support::chinese();
+    let (app, cx, root) = fixture(cx, "content-proposal-empty");
+    prepare(&app, cx, &root);
+    std::fs::write(root.join("other/reference.txt"), "").unwrap();
+    let (id, sender) = cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_workspace_file(reference(&root), true, window, cx);
+            (app.files.panes.active.unwrap(), running(app, 1))
+        })
+    });
+    settle(cx);
+    let content = Update::Content(Arc::new(Input {
+        path: "other/reference.txt".into(),
+        old: None,
+        new: "proposed\n".into(),
+        complete: false,
+    }));
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            for update in [Update::Started, content.clone()] {
+                sender
+                    .send(Event::FileProposal {
+                        key: "write".into(),
+                        update,
+                    })
+                    .unwrap();
+            }
+            app.poll_streams(window, cx);
+        })
+    });
+    settle(cx);
+    assert!(cx.debug_bounds("file-proposal-bar").is_some());
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            let document = &app.files.documents[&id];
+            assert!(document.text.is_empty());
+            document.preview.update(cx, |preview, cx| {
+                preview.start_proposal(cx);
+                assert_eq!(preview.visible_source(), "proposed\n");
+            });
+        })
+    });
+    std::fs::write(root.join("other/reference.txt"), "external\n").unwrap();
+    cx.update(|_, cx| app.update(cx, |app, cx| app.load_file(id, cx)));
+    settle(cx);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            sender
+                .send(Event::FileProposal {
+                    key: "write".into(),
+                    update: content,
+                })
+                .unwrap();
+            app.poll_streams(window, cx);
+            let preview = &app.files.documents[&id].preview;
+            assert!(!preview.read(cx).has_proposal());
+            assert_eq!(preview.read(cx).visible_source(), "external\n");
         })
     });
 }

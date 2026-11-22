@@ -82,6 +82,9 @@ pub struct UiSettings {
     /// Open new read-only files beside Main. Missing preferences keep full-page navigation.
     #[serde(default)]
     pub files_open_beside: bool,
+    /// Preferred Main share of the two-column content area, saved after a drag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_split_ratio: Option<f32>,
     /// Collapse directory chains that contain only another directory in the file tree.
     #[serde(default = "default_compact_middle_packages")]
     pub compact_middle_packages: bool,
@@ -232,6 +235,13 @@ fn default_max_tabs() -> usize {
 }
 
 impl UiSettings {
+    /// Ignore invalid preferences without losing the rest of the saved settings.
+    pub fn content_split_ratio(&self) -> f32 {
+        self.content_split_ratio
+            .filter(|ratio| ratio.is_finite() && *ratio > 0. && *ratio < 1.)
+            .unwrap_or(0.5)
+    }
+
     fn legacy() -> Self {
         Self {
             language: conduit::i18n::Locale::legacy(),
@@ -263,6 +273,7 @@ impl Default for UiSettings {
             auto_sort_workspaces: true,
             full_width_content: default_full_width_content(),
             files_open_beside: false,
+            content_split_ratio: None,
             compact_middle_packages: default_compact_middle_packages(),
             group_tabs: default_group_tabs(),
             collapse_reasoning: default_collapse_reasoning(),
@@ -1300,6 +1311,7 @@ mod tests {
         assert_eq!(store.ui.max_tabs, 8);
         assert!(store.ui.full_width_content);
         assert!(!store.ui.files_open_beside);
+        assert_eq!(store.ui.content_split_ratio(), 0.5);
         assert!(store.ui.compact_middle_packages);
         assert!(store.ui.group_tabs);
         assert!(!store.ui.collapse_reasoning);
@@ -1345,6 +1357,7 @@ mod tests {
         store.ui.max_tabs = 12;
         store.ui.full_width_content = false;
         store.ui.files_open_beside = true;
+        store.ui.content_split_ratio = Some(0.65);
         store.ui.compact_middle_packages = false;
         store.ui.group_tabs = false;
         store.ui.collapse_reasoning = true;
@@ -1402,6 +1415,7 @@ mod tests {
         assert_eq!(reloaded.ui.max_tabs, 12);
         assert!(!reloaded.ui.full_width_content);
         assert!(reloaded.ui.files_open_beside);
+        assert_eq!(reloaded.ui.content_split_ratio, Some(0.65));
         assert!(!reloaded.ui.compact_middle_packages);
         assert!(!reloaded.ui.group_tabs);
         assert!(reloaded.ui.collapse_reasoning);
@@ -1507,6 +1521,35 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert_eq!(roundtrip.tag_step, 10);
     }
+    #[test]
+    fn content_split_ratio_defaults_and_rejects_invalid_preferences() {
+        let old: UiSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.content_split_ratio, None);
+        assert_eq!(old.content_split_ratio(), 0.5);
+        for value in [
+            serde_json::Value::Null,
+            (-0.5).into(),
+            0.into(),
+            1.into(),
+            2.into(),
+        ] {
+            let settings: UiSettings = serde_json::from_value(serde_json::json!({
+                "content_split_ratio": value,
+                "files_open_beside": true,
+            }))
+            .unwrap();
+            assert_eq!(settings.content_split_ratio(), 0.5);
+            assert!(settings.files_open_beside);
+        }
+        for ratio in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let settings = UiSettings {
+                content_split_ratio: Some(ratio),
+                ..Default::default()
+            };
+            assert_eq!(settings.content_split_ratio(), 0.5);
+        }
+    }
+
     #[test]
     fn default_session_permission_is_backward_compatible_and_persisted() {
         use crate::domain::PermissionLevel;

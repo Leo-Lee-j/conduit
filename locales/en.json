@@ -1,4 +1,8 @@
 {
+  "files.proposal.generating": "Proposed changes · generating · not saved",
+  "files.proposal.ready": "Proposed changes · awaiting tool execution · not saved",
+  "files.proposal.paused": "Proposed changes · preview paused · not saved",
+  "files.proposal.open": "View proposed changes",
   "files.changes.updated": "Recent file changes",
   "files.changes.matched": "Matches a session tool result",
   "files.changes.replaying": "Change replay · not live typing",

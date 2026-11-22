@@ -29,7 +29,9 @@ pub(super) struct State {
     visible: HashSet<u64>,
     pub(super) return_main: Option<DocumentTab>,
     pub(super) overlay: Option<(Option<DocumentTab>, bool, Pane)>,
-    resize: Option<Entity<ResizableState>>,
+    // Container width is part of the state identity: minimum-width clamping
+    // during a narrow layout must not replace the user's preferred ratio.
+    resize: Option<(f32, Entity<ResizableState>)>,
 }
 
 impl ConduitApp {
@@ -326,12 +328,16 @@ impl ConduitApp {
                 self.load_file(id, cx);
             }
         }
-        for (id, document) in &self.files.documents {
+        for (id, document) in &mut self.files.documents {
+            if !visible.contains(id) {
+                super::proposals::invalidate(document, cx);
+            }
             document.preview.update(cx, |preview, cx| {
                 preview.set_review_visibility(visible.contains(id), cx)
             });
         }
         self.files.panes.visible = visible;
+        self.sync_file_watch();
     }
 
     pub(in crate::app) fn focus_main_content(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -369,6 +375,44 @@ impl ConduitApp {
             self.focus_main_content(window, cx);
         }
         cx.notify();
+    }
+
+    fn remember_content_split_ratio(
+        &mut self,
+        state: &Entity<ResizableState>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.content_overlay_open()
+            || !self.files.panes.split
+            || self.files.panes.active.is_none()
+            || self.files.panes.width < 641.
+            || self
+                .files
+                .panes
+                .resize
+                .as_ref()
+                .is_none_or(|(width, current)| *width != self.files.panes.width || current != state)
+        {
+            return;
+        }
+        let [main, reference] = state.read(cx).sizes().as_slice() else {
+            return;
+        };
+        let (main, reference) = (f32::from(*main), f32::from(*reference));
+        let total = main + reference;
+        if !main.is_finite()
+            || !reference.is_finite()
+            || !total.is_finite()
+            || main < 320.
+            || reference < 320.
+        {
+            return;
+        }
+        let ratio = main / total;
+        if self.store.ui.content_split_ratio != Some(ratio) {
+            self.store.ui.content_split_ratio = Some(ratio);
+            self.dirty = true;
+        }
     }
 
     pub(in crate::app) fn render_content_panes(
@@ -417,24 +461,35 @@ impl ConduitApp {
         });
         let body = if let Some(reference) = reference {
             if main_visible {
-                let state = self
-                    .files
-                    .panes
-                    .resize
-                    .get_or_insert_with(|| cx.new(|_| ResizableState::default()))
-                    .clone();
+                let width = self.files.panes.width;
+                let state = match &self.files.panes.resize {
+                    Some((previous_width, state)) if *previous_width == width => state.clone(),
+                    _ => {
+                        let state = cx.new(|_| ResizableState::default());
+                        self.files.panes.resize = Some((width, state.clone()));
+                        state
+                    }
+                };
+                let main_width =
+                    (width * self.store.ui.content_split_ratio()).clamp(320., width - 320.);
+                let app = cx.entity();
                 h_resizable("content-split")
                     .with_state(&state)
                     .child(
                         resizable_panel()
+                            .size(px(main_width))
                             .size_range(px(320.)..px(10000.))
                             .child(main),
                     )
                     .child(
                         resizable_panel()
+                            .size(px(width - main_width))
                             .size_range(px(320.)..px(10000.))
                             .child(reference),
                     )
+                    .on_resize(move |state, _, cx| {
+                        app.update(cx, |app, cx| app.remember_content_split_ratio(state, cx));
+                    })
                     .into_any_element()
             } else {
                 reference

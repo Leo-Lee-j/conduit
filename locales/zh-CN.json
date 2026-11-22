@@ -1,4 +1,8 @@
 {
+  "files.proposal.generating": "拟议修改 · 生成中 · 未保存",
+  "files.proposal.ready": "拟议修改 · 等待工具执行 · 未保存",
+  "files.proposal.paused": "拟议修改 · 预览已暂停 · 未保存",
+  "files.proposal.open": "查看拟议修改",
   "files.changes.updated": "最近文件变化",
   "files.changes.matched": "与会话工具结果一致",
   "files.changes.replaying": "修改回放 · 非实时输入",
