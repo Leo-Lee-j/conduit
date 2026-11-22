@@ -494,6 +494,12 @@ impl ProviderEditor {
 impl Render for ProviderEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _ = &self.subscriptions;
+        let references = self
+            .id
+            .as_deref()
+            .map(|id| self.app.read(cx).provider_references(id))
+            .unwrap_or_default();
+        let shared = !references.is_empty();
         let name_label = conduit::i18n::text_static("settings.config_editor.service_name");
         let endpoint_label = conduit::i18n::text_static("settings.models.request_address");
         let initial = self.fields[0]
@@ -512,6 +518,33 @@ impl Render for ProviderEditor {
             .max_h((window.viewport_size().height - px(210.)).max(px(120.)))
             .overflow_y_scroll()
             .gap_4()
+            .when(shared, |form| {
+                form.child(
+                    v_flex()
+                        .id("provider-editor-shared-scope")
+                        .debug_selector(|| "provider-editor-shared-scope".into())
+                        .w_full()
+                        .gap_1()
+                        .pb_3()
+                        .border_b_1()
+                        .border_color(rgb(palette().border))
+                        .child(div().font_medium().text_size(ui_text_size(13.)).child(
+                            conduit::i18n::format(
+                                "settings.models.shared_configuration",
+                                &[("count", references.len().to_string())],
+                            ),
+                        ))
+                        .child(
+                            div()
+                                .text_size(ui_text_size(12.))
+                                .line_height(relative(1.5))
+                                .text_color(rgb(palette().muted))
+                                .child(conduit::i18n::text_static(
+                                    "settings.models.shared_configuration_scope",
+                                )),
+                        ),
+                )
+            })
             .child(
                 v_flex()
                     .debug_selector(|| "provider-editor-field-0".into())
@@ -622,7 +655,11 @@ impl Render for ProviderEditor {
                     Button::new("custom-provider-save")
                         .primary()
                         .small()
-                        .label(conduit::i18n::text_static("settings.models.save_service"))
+                        .label(conduit::i18n::text_static(if shared {
+                            "settings.models.save_shared_configuration"
+                        } else {
+                            "settings.models.save_service"
+                        }))
                         .disabled(self.probing)
                         .on_click(cx.listener(|this, _, w, cx| this.save(w, cx))),
                 ),
@@ -649,12 +686,13 @@ impl ConduitApp {
         // The app is already being updated, so the editor must not read it here.
         let engine = self.connection_settings.engine;
         let editor = cx.new(|cx| ProviderEditor::new(app, provider, engine, window, cx));
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_dialog(cx, move |dialog, window, cx| {
+            let width = (f32::from(window.viewport_size().width) - 48.).clamp(0., 860.);
             let editor = editor.clone();
             let dismiss = editor.clone();
             let probing = editor.read(cx).probing;
             dialog
-                .w(px(860.))
+                .w(px(width))
                 .centered()
                 .overlay_closable(false)
                 .keyboard(!probing)

@@ -73,39 +73,29 @@ pub(super) fn settings_content_inset() -> f32 {
 
 fn settings_actions_style() -> StyleRefinement {
     StyleRefinement::default()
-        .px(px(24.))
+        .px(px(settings_content_inset()))
         .py(px(8.))
         .border_0()
         .flex_shrink_0()
         .bg(chrome_background(palette().canvas))
 }
 
-/// Section headings live in the card. Leaving the library's group title unset
-/// keeps the sidebar flat instead of duplicating every section as a submenu.
+/// Section headings and aligned rows share the same quiet surface in every theme.
+/// The library's group title stays unset to avoid a duplicate navigation tree.
 pub(super) fn settings_section(title: impl Into<SharedString>) -> SettingGroup {
     let title = title.into();
     let keywords = [title.clone()];
-    let group = if is_dark_mode() {
-        SettingGroup::new().variant(GroupBoxVariant::Fill)
-    } else {
-        SettingGroup::new().variant(GroupBoxVariant::Normal)
-    };
-    group.item(
+    SettingGroup::new().variant(GroupBoxVariant::Normal).item(
         SettingItem::render(move |_, _, _| {
-            let dark = is_dark_mode();
             div()
                 .w_full()
-                .text_size(ui_text_size(if dark { 12. } else { 13. }))
-                .line_height(ui_text_size(if dark { 16. } else { 18. }))
-                .font_semibold()
-                .text_color(rgb(if dark {
-                    palette().muted
-                } else {
-                    palette().text
-                }))
-                .when(!dark, |this| {
-                    this.pb_2().border_b_1().border_color(rgb(palette().border))
-                })
+                .pb_2()
+                .border_b_1()
+                .border_color(rgb(palette().border))
+                .text_size(ui_text_size(13.))
+                .line_height(ui_text_size(20.))
+                .font_medium()
+                .text_color(rgb(palette().text))
                 .child(title.clone())
         })
         .keywords(keywords),
@@ -464,10 +454,15 @@ mod model_sync;
 pub(super) use connections::ConnectionsUi;
 #[path = "settings/extensions.rs"]
 mod extensions_view;
+#[cfg(all(test, feature = "ui-tests"))]
+mod focus_redesign_tests;
 #[path = "settings/navigation.rs"]
 mod navigation;
 mod plugins;
+#[cfg(all(test, feature = "ui-tests"))]
+pub(in crate::app) mod redesign_tests;
 mod search;
+mod sessions;
 #[path = "settings/shortcuts.rs"]
 mod shortcut_settings;
 mod workspace;
@@ -517,6 +512,7 @@ impl ConduitApp {
     pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let return_focus = self.settings_ui.focus_before_open.take();
         self.settings_ui.open = false;
+        self.settings_ui.restore_navigation_focus.set(false);
         self.open_tabs
             .retain(|tab| *tab != files::DocumentTab::Settings);
         self.extensions_ui.probe = None;

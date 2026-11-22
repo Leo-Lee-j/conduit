@@ -773,9 +773,9 @@ fn settings_services_inline_selection_resizes_without_changing_defaults(cx: &mut
     assert!(cx.debug_bounds("service-detail-back").is_some());
     let engines = cx.debug_bounds("management-engines").unwrap();
     let engine_bar = cx.debug_bounds("management-engine-bar").unwrap();
-    assert_eq!(engines.left() - engine_bar.left(), px(12.));
-    assert_eq!(engines.top() - engine_bar.top(), px(12.));
-    assert_eq!(engine_bar.bottom() - engines.bottom(), px(12.));
+    assert_eq!(engines.left() - engine_bar.left(), px(16.));
+    assert_eq!(engines.top() - engine_bar.top(), px(16.));
+    assert_eq!(engine_bar.bottom() - engines.bottom(), px(16.));
     click(cx, "service-detail-back");
     assert!(cx.debug_bounds("service-list").is_some());
     assert!(cx.debug_bounds("service-details").is_none());

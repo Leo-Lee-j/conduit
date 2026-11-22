@@ -5,6 +5,10 @@ use super::*;
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests;
 
+#[cfg(all(test, feature = "ui-tests"))]
+#[path = "appearance_redesign_tests.rs"]
+mod redesign_tests;
+
 fn theme_options(
     selected: AppearanceMode,
     view: Entity<ConduitApp>,
@@ -54,7 +58,8 @@ fn theme_options(
             .child(
                 Button::new(id)
                     .outline()
-                    .h(px(128.))
+                    .h_auto()
+                    .min_h(rems(8.))
                     .w_full()
                     .p_3()
                     .rounded(px(8.))
@@ -87,6 +92,8 @@ fn theme_options(
                     .child(
                         v_flex()
                             .w_full()
+                            .min_w_0()
+                            .whitespace_normal()
                             .gap_2()
                             .child(
                                 h_flex()
@@ -141,6 +148,7 @@ fn theme_options(
                                     .child(
                                         div()
                                             .flex_1()
+                                            .min_w_0()
                                             .text_size(ui_text_size(13.))
                                             .font_medium()
                                             .text_color(rgb(label_color))
@@ -166,28 +174,51 @@ fn theme_options(
     };
     h_flex()
         .w_full()
+        .min_w_0()
+        .flex_wrap()
+        .items_start()
         .gap_3()
-        .child(div().flex_1().min_w_0().child(theme_option(
-            AppearanceMode::System,
-            conduit::i18n::text_static("settings.appearance.system"),
-            conduit::i18n::text_static("settings.appearance.match_system_appearance_automatically"),
-            gpui_kit::assets::IconName::Monitor,
-            "appearance-theme-system",
-        )))
-        .child(div().flex_1().min_w_0().child(theme_option(
-            AppearanceMode::Light,
-            conduit::i18n::text_static("settings.appearance.light"),
-            conduit::i18n::text_static("settings.appearance.bright_and_clear"),
-            gpui_kit::assets::IconName::Sun,
-            "appearance-theme-light",
-        )))
-        .child(div().flex_1().min_w_0().child(theme_option(
-            AppearanceMode::Dark,
-            conduit::i18n::text_static("settings.appearance.dark"),
-            conduit::i18n::text_static("settings.appearance.soft_dark_background"),
-            gpui_kit::assets::IconName::Moon,
-            "appearance-theme-dark",
-        )))
+        .child(
+            div()
+                .flex_1()
+                .flex_basis(rems(10.))
+                .min_w_0()
+                .child(theme_option(
+                    AppearanceMode::System,
+                    conduit::i18n::text_static("settings.appearance.system"),
+                    conduit::i18n::text_static(
+                        "settings.appearance.match_system_appearance_automatically",
+                    ),
+                    gpui_kit::assets::IconName::Monitor,
+                    "appearance-theme-system",
+                )),
+        )
+        .child(
+            div()
+                .flex_1()
+                .flex_basis(rems(10.))
+                .min_w_0()
+                .child(theme_option(
+                    AppearanceMode::Light,
+                    conduit::i18n::text_static("settings.appearance.light"),
+                    conduit::i18n::text_static("settings.appearance.bright_and_clear"),
+                    gpui_kit::assets::IconName::Sun,
+                    "appearance-theme-light",
+                )),
+        )
+        .child(
+            div()
+                .flex_1()
+                .flex_basis(rems(10.))
+                .min_w_0()
+                .child(theme_option(
+                    AppearanceMode::Dark,
+                    conduit::i18n::text_static("settings.appearance.dark"),
+                    conduit::i18n::text_static("settings.appearance.soft_dark_background"),
+                    gpui_kit::assets::IconName::Moon,
+                    "appearance-theme-dark",
+                )),
+        )
         .into_any_element()
 }
 
@@ -220,7 +251,8 @@ fn theme_select_field(
         };
         div()
             .debug_selector(move || selector.into())
-            .w(px(224.))
+            .w(rems(14.))
+            .max_w(relative(1.))
             .min_w_0()
             .child(
                 Select::new(select)
@@ -237,12 +269,24 @@ fn theme_select_field(
     })
 }
 
-fn font_select_field(
-    view: Entity<ConduitApp>,
-    target: FontTarget,
-    disabled: bool,
-) -> SettingField<SharedString> {
-    SettingField::render(move |_, _, cx| {
+/// A font row wraps before its label and selector compete for the same space.
+/// The library's fixed 480px stacking breakpoint does not account for UI rems.
+fn font_select_item(view: Entity<ConduitApp>, target: FontTarget, disabled: bool) -> SettingItem {
+    let (title, description) = match target {
+        FontTarget::Interface => (
+            "settings.appearance.interface_font",
+            "settings.appearance.used_for_the_sidebar_tabs_menus_buttons",
+        ),
+        FontTarget::Chat => (
+            "settings.appearance.body_font",
+            "settings.appearance.used_for_messages_and_input_defaults_to",
+        ),
+        FontTarget::Code => (
+            "settings.appearance.code_font",
+            "settings.appearance.used_for_code_blocks_and_tool_output",
+        ),
+    };
+    SettingItem::render(move |_, _, cx| {
         let app = view.read(cx);
         let (select, selector, label) = match target {
             FontTarget::Interface => (
@@ -261,24 +305,239 @@ fn font_select_field(
                 conduit::i18n::text_static("settings.appearance.code_font"),
             ),
         };
-        div()
-            .debug_selector(move || selector.into())
-            .w(px(192.))
-            .flex_shrink_0()
+        h_flex()
+            .w_full()
+            .min_w_0()
+            .gap_3()
+            .flex_wrap()
+            .items_center()
             .child(
-                Select::new(select)
-                    .with_size(Size::Small)
+                v_flex()
+                    .flex_1()
+                    .flex_basis(rems(16.))
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_size(ui_text_size(14.))
+                            .child(conduit::i18n::text_static(title)),
+                    )
+                    .child(settings_description(conduit::i18n::text_static(description)).mt_0()),
+            )
+            .child(
+                div()
+                    .debug_selector(move || selector.into())
+                    .w(rems(12.))
+                    .max_w(relative(1.))
+                    .min_w_0()
+                    .child(
+                        Select::new(select)
+                            .with_size(Size::Small)
+                            .w_full()
+                            .menu_width(px(260.))
+                            .menu_max_h(px(320.))
+                            .search_placeholder(conduit::i18n::text_static(
+                                "settings.appearance.search_fonts",
+                            ))
+                            .accessibility_label(label)
+                            .disabled(disabled),
+                    ),
+            )
+    })
+    .keywords([
+        conduit::i18n::text_static(title),
+        conduit::i18n::text_static(description),
+        conduit::i18n::text_static("settings.appearance.application"),
+        conduit::i18n::text_static("settings.appearance.interface"),
+        conduit::i18n::text_static("settings.appearance.font"),
+        "UI",
+        "font",
+    ])
+    .disabled(disabled)
+}
+
+// These are subheadings inside the typography group, not new settings groups.
+// Keep font selectors and steppers on the shared SettingItem layout.
+fn font_settings_heading(
+    target: FontTarget,
+    disabled: bool,
+    view: Entity<ConduitApp>,
+) -> SettingItem {
+    let (id, title, scope) = match target {
+        FontTarget::Interface => (
+            "appearance-interface-heading",
+            conduit::i18n::text_static("settings.appearance.interface_typography"),
+            conduit::i18n::text_static("settings.appearance.interface_typography_scope"),
+        ),
+        FontTarget::Chat => (
+            "appearance-chat-heading",
+            conduit::i18n::text_static("settings.appearance.chat_text"),
+            conduit::i18n::text_static("settings.appearance.chat_typography_scope"),
+        ),
+        FontTarget::Code => (
+            "appearance-code-heading",
+            conduit::i18n::text_static("settings.appearance.code_blocks"),
+            conduit::i18n::text_static("settings.appearance.code_typography_scope"),
+        ),
+    };
+    SettingItem::render(move |_, _, _| {
+        h_flex()
+            .debug_selector(move || id.into())
+            .w_full()
+            .min_w_0()
+            .pt_3()
+            .gap_3()
+            .flex_wrap()
+            .items_start()
+            .child(
+                v_flex()
+                    .flex_1()
+                    .flex_basis(rems(16.))
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_size(ui_text_size(13.))
+                            .font_semibold()
+                            .text_color(rgb(palette().text))
+                            .child(title),
+                    )
+                    .child(settings_description(scope).mt_0()),
+            )
+            .when(matches!(target, FontTarget::Interface), |row| {
+                let view = view.clone();
+                row.child(
+                    Button::new("appearance-ui-reset")
+                        .debug_selector(|| "appearance-ui-reset".into())
+                        .label(conduit::i18n::text_static(
+                            "settings.appearance.restore_interface_defaults",
+                        ))
+                        .tooltip(conduit::i18n::text_static(
+                            "settings.appearance.reset_only_the_interface_font_and_size",
+                        ))
+                        .small()
+                        .ghost()
+                        .disabled(disabled)
+                        .when(!disabled, |button| button.cursor_pointer())
+                        .on_click(move |_, window, cx| {
+                            view.update(cx, |app, cx| app.reset_ui_typography(window, cx));
+                        }),
+                )
+            })
+    })
+    .keywords([title, scope])
+    .disabled(disabled)
+}
+
+// A local, inert source sample: rendering this never executes the JavaScript.
+const CODE_TYPOGRAPHY_SAMPLE: &str = r#"```javascript
+function previewTypography(settings) {
+  return {
+    fontFamily: settings.codeFont,
+    fontSize: settings.codeSize,
+  };
+}
+```"#;
+
+// The preview accepts only resolved typography, not sessions, input state or
+// services. Stable TextView IDs reuse the existing native Markdown renderer;
+// selectable=false leaves the editor's selection alone.
+fn typography_previews(typography: &ChatTypography) -> AnyElement {
+    let preview_panel = |id: &'static str, title: &'static str, body: AnyElement| {
+        v_flex()
+            .debug_selector(move || id.into())
+            .flex_1()
+            .flex_basis(rems(18.))
+            .min_w_0()
+            .max_w(relative(1.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(rgb(palette().border))
+            .bg(rgb(palette().surface))
+            .overflow_hidden()
+            .child(
+                div()
                     .w_full()
-                    .menu_width(px(260.))
-                    .menu_max_h(px(320.))
-                    .search_placeholder(conduit::i18n::text_static(
-                        "settings.appearance.search_fonts",
-                    ))
-                    .accessibility_label(label)
-                    .disabled(disabled),
+                    .min_w_0()
+                    .px_3()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(rgb(palette().border))
+                    .text_size(ui_text_size(12.))
+                    .font_medium()
+                    .text_color(rgb(palette().muted))
+                    .child(title),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .p_3()
+                    .text_color(rgb(palette().text))
+                    .child(body),
             )
             .into_any_element()
-    })
+    };
+    v_flex()
+        .debug_selector(|| "appearance-typography-previews".into())
+        .w_full()
+        .min_w_0()
+        .pt_4()
+        .border_t_1()
+        .border_color(rgb(palette().border))
+        .gap_3()
+        .child(
+            v_flex()
+                .gap_1()
+                .child(
+                    div()
+                        .text_size(ui_text_size(13.))
+                        .font_semibold()
+                        .text_color(rgb(palette().text))
+                        .child(conduit::i18n::text_static(
+                            "settings.appearance.typography_preview",
+                        )),
+                )
+                .child(
+                    settings_description(conduit::i18n::text_static(
+                        "settings.appearance.static_preview_description",
+                    ))
+                    .mt_0(),
+                ),
+        )
+        .child(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .flex_wrap()
+                .items_start()
+                .gap_3()
+                .child(preview_panel(
+                    "appearance-chat-preview-panel",
+                    conduit::i18n::text_static("settings.appearance.chat_preview"),
+                    chat_markdown_view(
+                        "appearance-chat-preview".into(),
+                        conduit::i18n::text_static("settings.appearance.chat_preview_sample"),
+                        typography,
+                        "appearance-preview-chat",
+                        false,
+                    )
+                    .into_any_element(),
+                ))
+                .child(preview_panel(
+                    "appearance-code-preview-panel",
+                    conduit::i18n::text_static("settings.appearance.code_preview"),
+                    chat_markdown_view(
+                        "appearance-code-preview".into(),
+                        CODE_TYPOGRAPHY_SAMPLE,
+                        typography,
+                        "appearance-preview-code",
+                        false,
+                    )
+                    .into_any_element(),
+                )),
+        )
+        .into_any_element()
 }
 
 impl ConduitApp {
@@ -486,7 +745,7 @@ impl ConduitApp {
         let selected = self.store.ui.appearance;
         let theme_view = view.clone();
         let chat = self.chat_typography();
-        let ui_font = font_select_field(view.clone(), FontTarget::Interface, disabled);
+        let ui_font = font_select_item(view.clone(), FontTarget::Interface, disabled);
         let ui_size = typography_field(
             "ui-font-size",
             self.store
@@ -497,23 +756,7 @@ impl ConduitApp {
             TypographyField::UiSize,
             view.clone(),
         );
-        let ui_reset_view = view.clone();
-        let ui_reset = SettingField::render(move |_, _, _| {
-            let view = ui_reset_view.clone();
-            Button::new("appearance-ui-reset")
-                .debug_selector(|| "appearance-ui-reset".into())
-                .label(conduit::i18n::text_static(
-                    "settings.appearance.restore_defaults",
-                ))
-                .small()
-                .ghost()
-                .disabled(disabled)
-                .when(!disabled, |button| button.cursor_pointer())
-                .on_click(move |_, window, cx| {
-                    view.update(cx, |app, cx| app.reset_ui_typography(window, cx));
-                })
-        });
-        let chat_font = font_select_field(view.clone(), FontTarget::Chat, disabled);
+        let chat_font = font_select_item(view.clone(), FontTarget::Chat, disabled);
         let chat_size = typography_field(
             "chat-font-size",
             chat.body_size,
@@ -528,33 +771,52 @@ impl ConduitApp {
             TypographyField::ChatLineHeight,
             view.clone(),
         );
-        let code = self.chat_typography();
-        let code_font = font_select_field(view.clone(), FontTarget::Code, disabled);
+        let code_font = font_select_item(view.clone(), FontTarget::Code, disabled);
         let code_size = typography_field(
             "code-font-size",
-            code.code_size,
+            chat.code_size,
             disabled,
             TypographyField::CodeSize,
             view.clone(),
         );
         let preview_view = view.clone();
         let reset_view = view.clone();
-        let reset = SettingField::render(move |_, _window, _| {
-            let reset_view = reset_view.clone();
-            Button::new("appearance-typography-reset")
-                .label(conduit::i18n::text_static(
-                    "settings.appearance.restore_defaults",
-                ))
-                .small()
-                .ghost()
-                .disabled(disabled)
-                .when(!disabled, |button| button.cursor_pointer())
-                .on_click(move |_, window, cx| {
-                    reset_view.update(cx, |this, cx| {
-                        this.reset_typography(window, cx);
-                    });
-                })
-        });
+        let reset = SettingItem::render(move |_, _, _| {
+            let view = reset_view.clone();
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .gap_3()
+                .flex_wrap()
+                .items_start()
+                .child(
+                    div().flex_1().flex_basis(rems(16.)).min_w_0().child(
+                        settings_description(conduit::i18n::text_static(
+                            "settings.appearance.reset_chat_code_scope",
+                        ))
+                        .mt_0(),
+                    ),
+                )
+                .child(
+                    Button::new("appearance-typography-reset")
+                        .debug_selector(|| "appearance-typography-reset".into())
+                        .label(conduit::i18n::text_static(
+                            "settings.appearance.restore_chat_code_defaults",
+                        ))
+                        .small()
+                        .ghost()
+                        .disabled(disabled)
+                        .when(!disabled, |button| button.cursor_pointer())
+                        .on_click(move |_, window, cx| {
+                            view.update(cx, |app, cx| app.reset_typography(window, cx));
+                        }),
+                )
+        })
+        .keywords([
+            conduit::i18n::text_static("settings.appearance.restore_chat_code_defaults"),
+            conduit::i18n::text_static("settings.appearance.reset_chat_code_scope"),
+        ])
+        .disabled(disabled);
         let code_copy = switch_field(
             view.clone(),
             |app| app.store.ui.code_copy_button,
@@ -580,94 +842,137 @@ impl ConduitApp {
             |app| app.store.ui.auto_collapse_inactive_workspaces,
             |app, value| app.store.ui.auto_collapse_inactive_workspaces = value,
         );
-        settings_page(conduit::i18n::text_static("settings.appearance.appearance"), FullIconName::Palette).groups(vec![
-            settings_section(conduit::i18n::text_static("settings.appearance.theme"))
+
+        // Search/navigation depend on these indices: 0 appearance, 1 typography,
+        // 2 background. Font subsections and previews must not add top-level groups.
+        settings_page(
+            conduit::i18n::text_static("settings.appearance.appearance"),
+            FullIconName::Palette,
+        )
+        .groups(vec![
+            settings_section(conduit::i18n::text_static("settings.appearance.appearance"))
                 .item(
                     SettingItem::render(move |_, _, cx| {
                         theme_options(selected, theme_view.clone(), disabled, cx)
                     })
-                    .keywords([conduit::i18n::text_static("settings.appearance.theme"), conduit::i18n::text_static("settings.appearance.light"), conduit::i18n::text_static("settings.appearance.dark"), conduit::i18n::text_static("settings.appearance.system")]),
-                )
-                .item(SettingItem::new(conduit::i18n::text_static("settings.appearance.light_theme"), theme_select_field(view.clone(), gpui_kit::component::ThemeMode::Light, disabled))
-                    .description(settings_description(conduit::i18n::text_static("settings.appearance.light_theme_description")))
-                    .disabled(disabled))
-                .item(SettingItem::new(conduit::i18n::text_static("settings.appearance.dark_theme"), theme_select_field(view.clone(), gpui_kit::component::ThemeMode::Dark, disabled))
-                    .description(settings_description(conduit::i18n::text_static("settings.appearance.dark_theme_description")))
-                    .disabled(disabled))
-                .footer(|_, _| settings_description(conduit::i18n::text_static("settings.appearance.applies_immediately_system_mode_follows_windows_appearance")).mt_0()),
-            settings_section(conduit::i18n::text_static("settings.appearance.application_interface"))
-                .item(
-                    SettingItem::new(conduit::i18n::text_static("settings.appearance.auto_sort_workspaces"), auto_sort)
-                        .description(settings_description(conduit::i18n::text_static("settings.appearance.auto_sort_workspaces_description")))
-                        .disabled(disabled),
+                    .keywords([
+                        conduit::i18n::text_static("settings.appearance.theme"),
+                        conduit::i18n::text_static("settings.appearance.light"),
+                        conduit::i18n::text_static("settings.appearance.dark"),
+                        conduit::i18n::text_static("settings.appearance.system"),
+                    ]),
                 )
                 .item(
-                    SettingItem::new(conduit::i18n::text_static("settings.appearance.auto_collapse_inactive_workspaces"), auto_collapse)
-                        .description(settings_description(conduit::i18n::text_static("settings.appearance.auto_collapse_inactive_workspaces_description")))
-                        .disabled(disabled),
+                    SettingItem::new(
+                        conduit::i18n::text_static("settings.appearance.light_theme"),
+                        theme_select_field(view.clone(), gpui_kit::component::ThemeMode::Light, disabled),
+                    )
+                    .description(settings_description(conduit::i18n::text_static(
+                        "settings.appearance.light_theme_description",
+                    )))
+                    .disabled(disabled),
                 )
                 .item(
-                    SettingItem::new(conduit::i18n::text_static("settings.appearance.interface_font"), ui_font)
-                        .description(settings_description(conduit::i18n::text_static("settings.appearance.used_for_the_sidebar_tabs_menus_buttons")))
-                        .keywords([conduit::i18n::text_static("settings.appearance.application"), conduit::i18n::text_static("settings.appearance.interface"), "UI", conduit::i18n::text_static("settings.appearance.font"), "font"])
-                        .disabled(disabled),
+                    SettingItem::new(
+                        conduit::i18n::text_static("settings.appearance.dark_theme"),
+                        theme_select_field(view.clone(), gpui_kit::component::ThemeMode::Dark, disabled),
+                    )
+                    .description(settings_description(conduit::i18n::text_static(
+                        "settings.appearance.dark_theme_description",
+                    )))
+                    .disabled(disabled),
                 )
                 .item(
+                    SettingItem::render(|_, _, _| {
+                        div()
+                            .pt_3()
+                            .text_size(ui_text_size(13.))
+                            .font_semibold()
+                            .text_color(rgb(palette().text))
+                            .child(conduit::i18n::text_static(
+                                "settings.appearance.application_interface",
+                            ))
+                    })
+                    .keywords([conduit::i18n::text_static(
+                        "settings.appearance.application_interface",
+                    )]),
+                )
+                .item(
+                    SettingItem::new(
+                        conduit::i18n::text_static("settings.appearance.auto_sort_workspaces"),
+                        auto_sort,
+                    )
+                    .description(settings_description(conduit::i18n::text_static(
+                        "settings.appearance.auto_sort_workspaces_description",
+                    )))
+                    .disabled(disabled),
+                )
+                .item(
+                    SettingItem::new(
+                        conduit::i18n::text_static("settings.appearance.auto_collapse_inactive_workspaces"),
+                        auto_collapse,
+                    )
+                    .description(settings_description(conduit::i18n::text_static(
+                        "settings.appearance.auto_collapse_inactive_workspaces_description",
+                    )))
+                    .disabled(disabled),
+                )
+                .footer(|_, _| {
+                    settings_description(conduit::i18n::text_static(
+                        "settings.appearance.applies_immediately_system_mode_follows_windows_appearance",
+                    ))
+                    .mt_0()
+                }),
+            settings_section(conduit::i18n::text_static("settings.appearance.typography"))
+                .items(vec![
+                    SettingItem::render(|_, _, _| {
+                        settings_description(conduit::i18n::text_static(
+                            "settings.appearance.changes_apply_immediately_and_are_saved_automatically",
+                        ))
+                        .mt_0()
+                    })
+                    .keywords([
+                        conduit::i18n::text_static("settings.appearance.typography"),
+                        conduit::i18n::text_static("settings.appearance.typography_preview"),
+                        conduit::i18n::text_static("settings.appearance.chat_preview"),
+                        conduit::i18n::text_static("settings.appearance.code_preview"),
+                        conduit::i18n::text_static("mermaid.preview"),
+                    ]),
+                    font_settings_heading(FontTarget::Interface, disabled, view.clone()),
+                    ui_font,
                     SettingItem::new(conduit::i18n::text_static("settings.appearance.interface_font_size"), ui_size)
                         .description(settings_description(conduit::i18n::text_static("settings.appearance.12_20_px_default_16_scales_interface")))
                         .keywords([conduit::i18n::text_static("settings.appearance.application"), conduit::i18n::text_static("settings.appearance.interface"), conduit::i18n::text_static("settings.appearance.font_size"), conduit::i18n::text_static("settings.appearance.size"), "font", "size"])
                         .disabled(disabled),
-                )
-                .item(
-                    SettingItem::new(conduit::i18n::text_static("settings.appearance.restore_defaults"), ui_reset)
-                        .description(settings_description(conduit::i18n::text_static("settings.appearance.reset_only_the_interface_font_and_size")))
+                    font_settings_heading(FontTarget::Chat, disabled, view.clone()),
+                    chat_font,
+                    SettingItem::new(conduit::i18n::text_static("settings.appearance.font_size"), chat_size)
+                        .description(settings_description(conduit::i18n::text_static("settings.appearance.12_20_px_default_15")))
                         .disabled(disabled),
-                )
-                .footer(|_, _| settings_description(conduit::i18n::text_static("settings.appearance.changes_apply_immediately_and_are_saved_automatically")).mt_0()),
-            settings_section(conduit::i18n::text_static("settings.appearance.chat_text")).items(vec![
-                SettingItem::new(conduit::i18n::text_static("settings.appearance.body_font"), chat_font)
-                    .description(settings_description(conduit::i18n::text_static("settings.appearance.used_for_messages_and_input_defaults_to")))
-                    .disabled(disabled),
-                SettingItem::new(conduit::i18n::text_static("settings.appearance.font_size"), chat_size)
-                    .description(settings_description(conduit::i18n::text_static("settings.appearance.12_20_px_default_15")))
-                    .disabled(disabled),
-                SettingItem::new(conduit::i18n::text_static("settings.appearance.line_height"), chat_line_height)
-                    .description(settings_description(conduit::i18n::text_static("settings.appearance.1_2_2_0_default_1_5")))
-                    .disabled(disabled),
-            ]),
-            settings_section(conduit::i18n::text_static("settings.appearance.code_blocks")).items(vec![
-                SettingItem::new(conduit::i18n::text_static("settings.appearance.code_font"), code_font)
-                    .description(settings_description(conduit::i18n::text_static("settings.appearance.used_for_code_blocks_and_tool_output")))
-                    .disabled(disabled),
-                SettingItem::new(conduit::i18n::text_static("settings.appearance.code_font_size"), code_size)
-                    .description(settings_description(conduit::i18n::text_static("settings.appearance.10_18_px_default_13")))
-                    .disabled(disabled),
-                SettingItem::new(conduit::i18n::text_static("settings.appearance.copy_button"), code_copy)
-                    .description(settings_description(conduit::i18n::text_static("settings.appearance.show_a_copy_button_in_the_upper")))
-                    .disabled(disabled),
-                SettingItem::new(conduit::i18n::text_static("settings.appearance.line_numbers"), code_line_numbers)
-                    .description(settings_description(conduit::i18n::text_static("settings.appearance.show_line_numbers_beside_code_blocks_excluded")))
-                    .disabled(disabled),
-                SettingItem::new(conduit::i18n::text_static("settings.appearance.syntax_highlighting"), code_syntax)
-                    .description(settings_description(conduit::i18n::text_static("settings.appearance.color_code_by_language_when_disabled_use")))
-                    .disabled(disabled),
-            ]),
-            settings_section(conduit::i18n::text_static("settings.appearance.chat_preview")).items(vec![
-                SettingItem::render(move |_, _, cx| {
-                    let app = preview_view.read(cx);
-                    chat_markdown_view(
-                        "appearance-chat-preview".into(),
-                        conduit::i18n::text_static("settings.appearance.change_the_options_above_to_preview_chat"),
-                        &app.chat_typography(),
-                        "appearance-preview-code",
-                        false,
-                    )
-                })
-                .keywords([conduit::i18n::text_static("mermaid.preview"), conduit::i18n::text_static("settings.appearance.chat_preview")]),
-                SettingItem::new(conduit::i18n::text_static("settings.appearance.restore_defaults"), reset)
-                    .description(settings_description(conduit::i18n::text_static("settings.appearance.reset_chat_font_size_line_height_and")))
-                    .disabled(disabled),
-            ]),
+                    SettingItem::new(conduit::i18n::text_static("settings.appearance.line_height"), chat_line_height)
+                        .description(settings_description(conduit::i18n::text_static("settings.appearance.1_2_2_0_default_1_5")))
+                        .disabled(disabled),
+                    font_settings_heading(FontTarget::Code, disabled, view.clone()),
+                    code_font,
+                    SettingItem::new(conduit::i18n::text_static("settings.appearance.code_font_size"), code_size)
+                        .description(settings_description(conduit::i18n::text_static("settings.appearance.10_18_px_default_13")))
+                        .disabled(disabled),
+                    SettingItem::new(conduit::i18n::text_static("settings.appearance.copy_button"), code_copy)
+                        .description(settings_description(conduit::i18n::text_static("settings.appearance.show_a_copy_button_in_the_upper")))
+                        .disabled(disabled),
+                    SettingItem::new(conduit::i18n::text_static("settings.appearance.line_numbers"), code_line_numbers)
+                        .description(settings_description(conduit::i18n::text_static("settings.appearance.show_line_numbers_beside_code_blocks_excluded")))
+                        .disabled(disabled),
+                    SettingItem::new(conduit::i18n::text_static("settings.appearance.syntax_highlighting"), code_syntax)
+                        .description(settings_description(conduit::i18n::text_static("settings.appearance.color_code_by_language_when_disabled_use")))
+                        .disabled(disabled),
+                    reset,
+                ])
+                // Previews sit outside the settings surface; they contain no
+                // preference actions and remain readable in read-only mode.
+                .footer(move |_, cx| {
+                    typography_previews(&preview_view.read(cx).chat_typography())
+                }),
             settings_section(conduit::i18n::text_static("wallpaper.title")).item(
                 SettingItem::render(move |_, _, cx| view.read(cx).background_controls(view.clone()))
                     .keywords([conduit::i18n::text_static("wallpaper.title"), "Wallhaven", "wallpaper", "background"]),

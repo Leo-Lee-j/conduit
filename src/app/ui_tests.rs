@@ -388,11 +388,16 @@ fn settings_connections_switch_engines_and_guard_service_editors(cx: &mut TestAp
         cx.update(|window, cx| {
             let _ = window.draw(cx);
         });
-        let navigation = cx
-            .debug_bounds("settings-nav-3")
-            .expect("connections navigation");
-        cx.simulate_mouse_down(navigation.center(), MouseButton::Left, Modifiers::default());
-        cx.simulate_mouse_up(navigation.center(), MouseButton::Left, Modifiers::default());
+        let compact = cx.debug_bounds("settings-category-selector").is_some();
+        if compact {
+            super::settings::redesign_tests::keyboard_category(cx, 3);
+        } else {
+            let navigation = cx
+                .debug_bounds("settings-nav-3")
+                .expect("connections navigation");
+            cx.simulate_mouse_down(navigation.center(), MouseButton::Left, Modifiers::default());
+            cx.simulate_mouse_up(navigation.center(), MouseButton::Left, Modifiers::default());
+        }
         cx.run_until_parked();
         cx.update(|window, cx| {
             let _ = window.draw(cx);
@@ -425,9 +430,13 @@ fn settings_connections_switch_engines_and_guard_service_editors(cx: &mut TestAp
             ("settings-nav-8", Provider::OpenCode),
             ("settings-engine-0", Provider::Claude),
         ] {
-            let bounds = cx.debug_bounds(selector).unwrap();
-            cx.simulate_mouse_down(bounds.center(), MouseButton::Left, Modifiers::default());
-            cx.simulate_mouse_up(bounds.center(), MouseButton::Left, Modifiers::default());
+            if selector == "settings-nav-8" && compact {
+                super::settings::redesign_tests::keyboard_category(cx, 8);
+            } else {
+                let bounds = cx.debug_bounds(selector).unwrap();
+                cx.simulate_mouse_down(bounds.center(), MouseButton::Left, Modifiers::default());
+                cx.simulate_mouse_up(bounds.center(), MouseButton::Left, Modifiers::default());
+            }
             cx.run_until_parked();
             cx.update(|window, cx| {
                 let _ = window.draw(cx);

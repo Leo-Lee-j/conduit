@@ -1,0 +1,1173 @@
+{
+  "startedAt": "2026-11-22T13:18:06.993Z",
+  "scope": "offline HTML demo only",
+  "mode": "matrix-and-previews",
+  "previewProvenance": "captured this run",
+  "tests": [
+    {
+      "name": "Three-page navigation, grouped search, Enter and Esc",
+      "status": "passed",
+      "durationMs": 621,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Compact category selector is keyboard-operable",
+      "status": "passed",
+      "durationMs": 309,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Responsive focus fallback: navigation and hidden service detail",
+      "status": "passed",
+      "durationMs": 474,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Appearance boundary keys and UI-only reset",
+      "status": "passed",
+      "durationMs": 372,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Service browsing/model preview does not default; explicit action writes defaults only",
+      "status": "passed",
+      "durationMs": 330,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Sessions service/model/native choices update defaults only",
+      "status": "passed",
+      "durationMs": 308,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Auto naming toggles preserve strategy; latest/first are real policy choices",
+      "status": "passed",
+      "durationMs": 471,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Same service name across engines resolves by ID/source, not label",
+      "status": "passed",
+      "durationMs": 403,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Unavailable default is preserved across browsing, without silent fallback",
+      "status": "passed",
+      "durationMs": 314,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Independent editor validation/save; password masking and no secret indexing",
+      "status": "passed",
+      "durationMs": 459,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Shared editor retains entity identity and routes; requires impact confirmation",
+      "status": "passed",
+      "durationMs": 520,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Dirty Esc: continue retains input/focus; explicit discard writes nothing",
+      "status": "passed",
+      "durationMs": 387,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Window/font reflow preserves modal draft and focused input",
+      "status": "passed",
+      "durationMs": 454,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Dirty cross-engine/page requests cannot silently discard or retarget edits",
+      "status": "passed",
+      "durationMs": 377,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Read-only keeps navigation/browsing enabled and blocks every demo write control",
+      "status": "passed",
+      "durationMs": 555,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Read-only transition rejects an already open editor submission",
+      "status": "passed",
+      "durationMs": 333,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Mock verification failure is visible, isolated and offline",
+      "status": "passed",
+      "durationMs": 341,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Late normal callback after engine change is ignored",
+      "status": "passed",
+      "durationMs": 396,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Late verification-failure callback after engine change is ignored",
+      "status": "passed",
+      "durationMs": 401,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Late normal callback after engine-roundtrip change is ignored",
+      "status": "passed",
+      "durationMs": 415,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Late verification-failure callback after engine-roundtrip change is ignored",
+      "status": "passed",
+      "durationMs": 413,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Late normal callback after page change is ignored",
+      "status": "passed",
+      "durationMs": 460,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Late verification-failure callback after page change is ignored",
+      "status": "passed",
+      "durationMs": 461,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 480px font16 light DPR1.25",
+      "status": "passed",
+      "durationMs": 293,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 480px font16 light DPR1.25",
+      "status": "passed",
+      "durationMs": 306,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 480px font16 light DPR1.25",
+      "status": "passed",
+      "durationMs": 341,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 480px font16 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 296,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 480px font16 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 301,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 480px font16 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 348,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 480px font20 light DPR1.25",
+      "status": "passed",
+      "durationMs": 314,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 480px font20 light DPR1.25",
+      "status": "passed",
+      "durationMs": 336,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 480px font20 light DPR1.25",
+      "status": "passed",
+      "durationMs": 376,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 480px font20 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 320,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 480px font20 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 326,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 480px font20 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 377,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 640px font16 light DPR1.25",
+      "status": "passed",
+      "durationMs": 288,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 640px font16 light DPR1.25",
+      "status": "passed",
+      "durationMs": 302,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 640px font16 light DPR1.25",
+      "status": "passed",
+      "durationMs": 348,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 640px font16 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 285,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 640px font16 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 300,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 640px font16 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 336,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 640px font20 light DPR1.25",
+      "status": "passed",
+      "durationMs": 325,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 640px font20 light DPR1.25",
+      "status": "passed",
+      "durationMs": 337,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 640px font20 light DPR1.25",
+      "status": "passed",
+      "durationMs": 377,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 640px font20 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 314,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 640px font20 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 336,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 640px font20 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 370,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 800px font16 light DPR1.25",
+      "status": "passed",
+      "durationMs": 296,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 800px font16 light DPR1.25",
+      "status": "passed",
+      "durationMs": 320,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 800px font16 light DPR1.25",
+      "status": "passed",
+      "durationMs": 353,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 800px font16 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 306,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 800px font16 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 321,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 800px font16 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 347,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 800px font20 light DPR1.25",
+      "status": "passed",
+      "durationMs": 320,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 800px font20 light DPR1.25",
+      "status": "passed",
+      "durationMs": 337,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 800px font20 light DPR1.25",
+      "status": "passed",
+      "durationMs": 372,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 800px font20 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 319,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 800px font20 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 336,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 800px font20 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 371,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 960px font16 light DPR1.25",
+      "status": "passed",
+      "durationMs": 302,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 960px font16 light DPR1.25",
+      "status": "passed",
+      "durationMs": 307,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 960px font16 light DPR1.25",
+      "status": "passed",
+      "durationMs": 342,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 960px font16 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 302,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 960px font16 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 313,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 960px font16 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 353,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 960px font20 light DPR1.25",
+      "status": "passed",
+      "durationMs": 332,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 960px font20 light DPR1.25",
+      "status": "passed",
+      "durationMs": 344,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 960px font20 light DPR1.25",
+      "status": "passed",
+      "durationMs": 388,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 960px font20 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 326,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 960px font20 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 348,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 960px font20 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 388,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 1200px font16 light DPR1.25",
+      "status": "passed",
+      "durationMs": 290,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 1200px font16 light DPR1.25",
+      "status": "passed",
+      "durationMs": 302,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 1200px font16 light DPR1.25",
+      "status": "passed",
+      "durationMs": 348,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 1200px font16 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 290,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 1200px font16 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 307,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 1200px font16 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 348,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 1200px font20 light DPR1.25",
+      "status": "passed",
+      "durationMs": 325,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 1200px font20 light DPR1.25",
+      "status": "passed",
+      "durationMs": 336,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 1200px font20 light DPR1.25",
+      "status": "passed",
+      "durationMs": 377,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 1200px font20 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 337,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 1200px font20 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 359,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 1200px font20 dark DPR1.25",
+      "status": "passed",
+      "durationMs": 383,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 480px font16 light DPR1.5",
+      "status": "passed",
+      "durationMs": 314,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 480px font16 light DPR1.5",
+      "status": "passed",
+      "durationMs": 300,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 480px font16 light DPR1.5",
+      "status": "passed",
+      "durationMs": 337,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 480px font16 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 289,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 480px font16 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 295,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 480px font16 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 341,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 480px font20 light DPR1.5",
+      "status": "passed",
+      "durationMs": 319,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 480px font20 light DPR1.5",
+      "status": "passed",
+      "durationMs": 337,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 480px font20 light DPR1.5",
+      "status": "passed",
+      "durationMs": 371,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 480px font20 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 314,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 480px font20 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 330,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 480px font20 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 366,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 640px font16 light DPR1.5",
+      "status": "passed",
+      "durationMs": 290,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 640px font16 light DPR1.5",
+      "status": "passed",
+      "durationMs": 296,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 640px font16 light DPR1.5",
+      "status": "passed",
+      "durationMs": 335,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 640px font16 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 296,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 640px font16 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 301,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 640px font16 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 336,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 640px font20 light DPR1.5",
+      "status": "passed",
+      "durationMs": 314,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 640px font20 light DPR1.5",
+      "status": "passed",
+      "durationMs": 325,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 640px font20 light DPR1.5",
+      "status": "passed",
+      "durationMs": 371,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 640px font20 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 314,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 640px font20 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 336,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 640px font20 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 377,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 800px font16 light DPR1.5",
+      "status": "passed",
+      "durationMs": 308,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 800px font16 light DPR1.5",
+      "status": "passed",
+      "durationMs": 307,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 800px font16 light DPR1.5",
+      "status": "passed",
+      "durationMs": 342,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 800px font16 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 303,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 800px font16 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 312,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 800px font16 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 354,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 800px font20 light DPR1.5",
+      "status": "passed",
+      "durationMs": 308,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 800px font20 light DPR1.5",
+      "status": "passed",
+      "durationMs": 325,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 800px font20 light DPR1.5",
+      "status": "passed",
+      "durationMs": 377,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 800px font20 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 327,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 800px font20 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 353,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 800px font20 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 366,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 960px font16 light DPR1.5",
+      "status": "passed",
+      "durationMs": 296,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 960px font16 light DPR1.5",
+      "status": "passed",
+      "durationMs": 313,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 960px font16 light DPR1.5",
+      "status": "passed",
+      "durationMs": 348,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 960px font16 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 290,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 960px font16 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 313,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 960px font16 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 359,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 960px font20 light DPR1.5",
+      "status": "passed",
+      "durationMs": 326,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 960px font20 light DPR1.5",
+      "status": "passed",
+      "durationMs": 353,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 960px font20 light DPR1.5",
+      "status": "passed",
+      "durationMs": 379,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 960px font20 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 337,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 960px font20 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 343,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 960px font20 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 390,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 1200px font16 light DPR1.5",
+      "status": "passed",
+      "durationMs": 290,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 1200px font16 light DPR1.5",
+      "status": "passed",
+      "durationMs": 313,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 1200px font16 light DPR1.5",
+      "status": "passed",
+      "durationMs": 342,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 1200px font16 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 290,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 1200px font16 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 314,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 1200px font16 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 341,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 1200px font20 light DPR1.5",
+      "status": "passed",
+      "durationMs": 313,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 1200px font20 light DPR1.5",
+      "status": "passed",
+      "durationMs": 343,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 1200px font20 light DPR1.5",
+      "status": "passed",
+      "durationMs": 373,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout appearance 1200px font20 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 325,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout sessions 1200px font20 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 349,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Layout services 1200px font20 dark DPR1.5",
+      "status": "passed",
+      "durationMs": 377,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Preview appearance normal",
+      "status": "passed",
+      "durationMs": 454,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Preview appearance narrow",
+      "status": "passed",
+      "durationMs": 357,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Preview appearance large",
+      "status": "passed",
+      "durationMs": 461,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Preview sessions normal",
+      "status": "passed",
+      "durationMs": 416,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Preview sessions narrow",
+      "status": "passed",
+      "durationMs": 382,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Preview sessions large",
+      "status": "passed",
+      "durationMs": 446,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Preview services normal",
+      "status": "passed",
+      "durationMs": 460,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Preview services narrow",
+      "status": "passed",
+      "durationMs": 414,
+      "browserErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "name": "Preview services large",
+      "status": "passed",
+      "durationMs": 476,
+      "browserErrors": [],
+      "consoleErrors": []
+    }
+  ],
+  "previews": [
+    {
+      "path": "previews/appearance-normal-1200.png",
+      "page": "appearance",
+      "width": 1200,
+      "uiSize": 16,
+      "theme": "light",
+      "deviceScaleFactor": 1.25,
+      "capturedThisRun": true
+    },
+    {
+      "path": "previews/appearance-narrow-640.png",
+      "page": "appearance",
+      "width": 640,
+      "uiSize": 16,
+      "theme": "light",
+      "deviceScaleFactor": 1.25,
+      "capturedThisRun": true
+    },
+    {
+      "path": "previews/appearance-large-960.png",
+      "page": "appearance",
+      "width": 960,
+      "uiSize": 20,
+      "theme": "dark",
+      "deviceScaleFactor": 1.25,
+      "capturedThisRun": true
+    },
+    {
+      "path": "previews/sessions-normal-1200.png",
+      "page": "sessions",
+      "width": 1200,
+      "uiSize": 16,
+      "theme": "light",
+      "deviceScaleFactor": 1.25,
+      "capturedThisRun": true
+    },
+    {
+      "path": "previews/sessions-narrow-640.png",
+      "page": "sessions",
+      "width": 640,
+      "uiSize": 16,
+      "theme": "light",
+      "deviceScaleFactor": 1.25,
+      "capturedThisRun": true
+    },
+    {
+      "path": "previews/sessions-large-960.png",
+      "page": "sessions",
+      "width": 960,
+      "uiSize": 20,
+      "theme": "dark",
+      "deviceScaleFactor": 1.25,
+      "capturedThisRun": true
+    },
+    {
+      "path": "previews/services-normal-1200.png",
+      "page": "services",
+      "width": 1200,
+      "uiSize": 16,
+      "theme": "light",
+      "deviceScaleFactor": 1.25,
+      "capturedThisRun": true
+    },
+    {
+      "path": "previews/services-narrow-640.png",
+      "page": "services",
+      "width": 640,
+      "uiSize": 16,
+      "theme": "light",
+      "deviceScaleFactor": 1.25,
+      "capturedThisRun": true
+    },
+    {
+      "path": "previews/services-large-960.png",
+      "page": "services",
+      "width": 960,
+      "uiSize": 20,
+      "theme": "dark",
+      "deviceScaleFactor": 1.25,
+      "capturedThisRun": true
+    }
+  ],
+  "blockedRequests": [],
+  "limits": [
+    "No native app/CLI is launched; existingSessions is checked as a complete immutable snapshot.",
+    "This demo has engine/page context probes, not MCP/workspace/CLI or asynchronous global catalog controls.",
+    "DPR 1.25/1.5 checks browser raster scaling, not native Windows DPI certification. Layout matrix uses UI sizes 16/20; UI 12 is a boundary interaction check. 200% zoom is not a release gate.",
+    "ctx is used only for fixture/guard controls, modal font reflow and delivery of intercepted mock callbacks. Primary user flows use real DOM controls."
+  ],
+  "executablePath": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserVersion": "157.0.8103.79",
+  "finishedAt": "2026-11-22T13:19:01.460Z",
+  "summary": {
+    "passed": 152,
+    "failed": 0,
+    "previews": 9,
+    "captured": 9,
+    "reused": 0
+  },
+  "status": "passed"
+}

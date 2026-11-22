@@ -15,15 +15,15 @@ pub(in crate::app) struct SettingsResult {
 // targets open the section, including controls hidden behind disclosures.
 const ENTRIES: &[(usize, usize, &str, &str, &str)] = &[
     (
-        0,
-        0,
+        10,
+        1,
         "默认会话权限",
         "新会话使用的默认权限",
-        "权限 默认 会话 工作区 permission default session workspace",
+        "权限 默认权限 默认会话权限 会话 工作区 permission default session workspace",
     ),
     (
         1,
-        1,
+        0,
         "自动将活跃工作空间排到前面",
         "优先显示有运行中会话的工作空间，再按最近会话活动时间排序。关闭后恢复手动顺序。",
         "工作区 侧栏 自动 排序 活跃 最近 workspace sidebar automatic sort active recent",
@@ -43,8 +43,8 @@ const ENTRIES: &[(usize, usize, &str, &str, &str)] = &[
         "内容铺满 布局 width",
     ),
     (
-        0,
-        0,
+        10,
+        2,
         "自动折叠问答记录",
         "开启后，已完成的问答记录默认折叠；关闭后默认展开。可逐条点击切换，已手动切换的状态不受影响。",
         "问答 问题 回答 选项 自动 折叠 question answer history automatic collapse",
@@ -79,30 +79,30 @@ const ENTRIES: &[(usize, usize, &str, &str, &str)] = &[
     ),
     (
         1,
-        2,
+        1,
         "聊天字体与字号",
         "调整正文字体、字号和行高",
         "文字 字体 字号 行高 font size",
     ),
     (
         1,
-        1,
+        0,
         "自动折叠非活跃工作空间",
         "自动折叠最近 3 天内没有会话活动的工作空间。当前工作空间和正在运行的会话保持可见，仍可手动展开任意工作空间。",
         "工作区 侧栏 自动 折叠 非活跃 3天 workspace sidebar automatic collapse inactive",
     ),
     (
         1,
-        3,
+        1,
         "代码块显示",
         "调整代码字体、字号、行号、语法高亮与复制按钮",
         "代码 字体 行号 高亮 复制 code",
     ),
     (
         1,
-        4,
+        1,
         "文字预览与恢复默认",
-        "预览聊天效果，恢复文字与代码的默认显示",
+        "预览界面、聊天和代码的文字效果",
         "重置 reset 预览",
     ),
     (
@@ -135,35 +135,21 @@ const ENTRIES: &[(usize, usize, &str, &str, &str)] = &[
     ),
     (
         10,
-        0,
-        "Claude Code 默认模型",
-        "为新的 Claude Code 会话指定服务与模型",
-        "新会话 默认 claude",
-    ),
-    (
-        10,
-        1,
-        "Codex 默认模型",
-        "为新的 Codex 会话指定服务与模型",
-        "新会话 默认 codex",
-    ),
-    (
-        10,
         2,
-        "OpenCode 默认模型",
-        "为新的 OpenCode 会话指定服务与模型",
-        "新会话 默认 opencode",
+        "聊天显示偏好",
+        "设置思考过程和已完成问答的默认折叠方式",
+        "思考 推理 reasoning thinking question answer history 折叠 显示 collapse display",
     ),
     (
-        5,
-        0,
+        10,
+        3,
         "自动命名与触发方式",
         "决定何时生成会话标题",
         "重命名 标题 自动 触发 rename",
     ),
     (
-        5,
-        0,
+        10,
+        3,
         "命名使用的模型",
         "为标题生成单独选择引擎、服务和模型",
         "命名 模型 引擎 服务",
@@ -297,13 +283,55 @@ impl ConduitApp {
         if matches_search(&background_search, query) {
             results.push(SettingsResult {
                 page: 1,
-                group: Some(5),
+                group: Some(2),
                 title: background_title.into(),
                 description: background_description.into(),
                 engine: None,
             });
         }
+        // Engine identity is explicit, independent of localized display labels.
+        for engine in Provider::ALL {
+            let title = conduit::i18n::format(
+                "settings.search.engine_session_defaults",
+                &[("engine", engine.label().into())],
+            );
+            let description = conduit::i18n::format(
+                "settings.search.engine_session_defaults_description",
+                &[("engine", engine.label().into())],
+            );
+            let mut aliases = format!(
+                "{} 默认模型 新会话默认 默认服务 模型 服务 default model session defaults",
+                engine.label()
+            );
+            for language in conduit::i18n::languages() {
+                let locale = language.id.clone().into();
+                for key in [
+                    "settings.search.engine_session_defaults",
+                    "settings.search.engine_session_defaults_description",
+                ] {
+                    aliases.push(' ');
+                    aliases.push_str(&conduit::i18n::format_for(
+                        &locale,
+                        key,
+                        &[("engine", engine.label().into())],
+                    ));
+                }
+            }
+            if matches_search(&aliases, query) {
+                results.push(SettingsResult {
+                    page: 10,
+                    group: Some(0),
+                    title,
+                    description,
+                    engine: Some(engine),
+                });
+            }
+        }
         for (page, (section, title, keywords)) in PAGES.iter().enumerate() {
+            // Naming is discoverable under Sessions; do not duplicate its legacy page.
+            if page == navigation::SettingsRoute::AutomaticNaming.index() {
+                continue;
+            }
             if !results.iter().any(|result| result.page == page)
                 && matches_search(&search_text(&[section, title, keywords]), query)
             {
@@ -384,21 +412,28 @@ impl ConduitApp {
         if let Some(engine) = result.engine {
             self.connection_settings.engine = engine;
         }
+        // Old naming search targets still resolve to the consolidated section.
+        let page = if result.page == 5 { 10 } else { result.page };
+        let target_group = if result.page == 5 {
+            Some(3)
+        } else {
+            result.group
+        };
         // OpenCode manages services in its native configuration; do not link
         // to a group that is absent in that engine's shorter page.
-        let group = if result.page == 8
-            && result.group.is_some()
+        let group = if page == 8
+            && target_group.is_some()
             && self.connection_settings.engine == Provider::OpenCode
         {
             Some(0)
         } else {
-            result.group
+            target_group
         };
-        self.settings_ui.naming_expanded |= result.page == 5;
+        self.settings_ui.naming_expanded |= page == 10 && group == Some(3);
         self.settings_ui.git_expanded |= result.page == 6;
         self.settings_ui.prompt_expanded |= result.page == 6 && group == Some(2);
         self.connection_settings.models_expanded |= result.page == 8;
-        self.select_settings_page(result.page, window, cx);
+        self.select_settings_page(page, window, cx);
         self.settings_ui.group = group;
         self.settings_ui.focus.focus(window, cx);
     }
@@ -452,6 +487,12 @@ impl ConduitApp {
             body = body.child(
                 Button::new(("settings-search-result", index))
                     .debug_selector(move || format!("settings-search-result-{index}"))
+                    .accessibility_label(format!(
+                        "{} / {}: {}",
+                        conduit::i18n::source(section),
+                        conduit::i18n::source(page),
+                        result.title
+                    ))
                     .outline()
                     .w_full()
                     .h_auto()

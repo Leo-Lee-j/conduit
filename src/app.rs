@@ -768,6 +768,8 @@ impl ConduitApp {
                 focus: cx.focus_handle(),
                 page: 0,
                 group: None,
+                layout_compact: Default::default(),
+                restore_navigation_focus: Default::default(),
                 search: settings_search,
                 naming_expanded: false,
                 git_expanded: false,

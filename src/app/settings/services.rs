@@ -94,7 +94,7 @@ impl ConduitApp {
         let supports_services = engine.descriptor().capabilities.model_services;
         let sources = view.clone();
         let native = view.clone();
-        let inset = if width < 540. { 12. } else { 16. };
+        let inset = settings_content_inset();
         let split =
             width - inset * 2. >= 720. * (self.store.ui.ui_font_size / DEFAULT_UI_FONT_SIZE);
         let selected = self.selected_service_channel(engine);

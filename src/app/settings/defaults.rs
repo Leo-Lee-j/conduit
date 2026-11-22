@@ -1,6 +1,27 @@
 //! Persistent defaults apply only when constructing a new conversation.
 use super::*;
 
+/// Resolve a legacy CCS alias only for display, and only to an existing
+/// registry entry for the same engine. Never migrate the persisted selection.
+fn default_channel_for_display(
+    engine: Provider,
+    channel: &ModelChannel,
+    providers: &[crate::providers::ModelProvider],
+) -> ModelChannel {
+    let ModelChannel::Ccs(source_id) = channel else {
+        return channel.clone();
+    };
+    let registry_id = crate::providers::ModelProvider::ccs_id(engine, source_id);
+    if providers
+        .iter()
+        .any(|provider| provider.engine == engine && provider.id == registry_id)
+    {
+        ModelChannel::Provider(registry_id)
+    } else {
+        channel.clone()
+    }
+}
+
 impl ConduitApp {
     pub(in crate::app) fn default_selection(&self, engine: Provider) -> ComposerSelection {
         let mut selection = ComposerSelection::new(engine);
@@ -11,130 +32,176 @@ impl ConduitApp {
         selection
     }
 
+    /// Compatibility entry point; defaults share the management browsing engine.
     pub(super) fn settings_defaults_page(&self, disabled: bool, view: Entity<Self>) -> SettingPage {
-        let groups = Provider::ALL
-            .into_iter()
-            .map(|engine| {
-                let selection = self.default_selection(engine);
-                let mut channels = vec![(
-                    ModelChannel::Cli,
-                    conduit::i18n::text_static("settings.defaults.native_cli_configuration")
-                        .to_string(),
-                )];
-                channels.extend(
-                    self.store
-                        .providers
-                        .iter()
-                        .filter(|p| p.engine == engine)
-                        .map(|p| (ModelChannel::Provider(p.id.clone()), p.name.clone())),
-                );
-                let label = channels
-                    .iter()
-                    .find(|(c, _)| *c == selection.channel)
-                    .map(|(_, label)| label.clone())
-                    .unwrap_or_else(|| {
-                        conduit::i18n::text_static(
-                            "settings.defaults.service_unavailable_select_another_service",
-                        )
-                        .into()
-                    });
-                let route_view = view.clone();
-                let route = SettingField::render(move |_, _, _| {
-                    let channels = channels.clone();
-                    let view = route_view.clone();
-                    Button::new(("default-channel", engine as usize))
-                        .outline()
-                        .small()
-                        .label(label.clone())
-                        .icon(FullIconName::ChevronDown)
-                        .disabled(disabled)
-                        .dropdown_menu(move |mut menu, _, _| {
-                            for (channel, label) in &channels {
-                                let channel = channel.clone();
-                                let view = view.clone();
-                                menu = menu.item(PopupMenuItem::new(label.clone()).on_click(
-                                    move |_, _, cx| {
-                                        view.update(cx, |app, cx| {
-                                            if !app.writable || app.closing {
-                                                return;
-                                            }
-                                            app.store.session_defaults.insert(
-                                                engine,
-                                                crate::store::SessionDefaults {
-                                                    channel: channel.clone(),
-                                                    model: None,
-                                                },
-                                            );
-                                            app.persist();
-                                            cx.notify();
-                                        });
-                                    },
-                                ));
-                            }
-                            menu
-                        })
-                });
-                let mut models = vec![(
-                    None,
-                    conduit::i18n::text_static("settings.defaults.use_service_default_model")
-                        .to_string(),
-                )];
-                let catalog = self.channel_models(engine, &selection.channel).1;
-                models.extend(catalog.into_iter().map(|m| (Some(m.id), m.label)));
-                let label = selection.model.unwrap_or_else(|| {
-                    conduit::i18n::text_static("settings.defaults.use_service_default_model").into()
-                });
-                let model_view = view.clone();
-                let model = SettingField::render(move |_, _, _| {
-                    let models = models.clone();
-                    let view = model_view.clone();
-                    Button::new(("default-model", engine as usize))
-                        .outline()
-                        .small()
-                        .label(label.clone())
-                        .icon(FullIconName::ChevronDown)
-                        .disabled(disabled)
-                        .dropdown_menu(move |mut menu, _, _| {
-                            for (model, label) in &models {
-                                let model = model.clone();
-                                let view = view.clone();
-                                menu = menu.item(PopupMenuItem::new(label.clone()).on_click(
-                                    move |_, _, cx| {
-                                        view.update(cx, |app, cx| {
-                                            if !app.writable || app.closing {
-                                                return;
-                                            }
-                                            app.store
-                                                .session_defaults
-                                                .entry(engine)
-                                                .or_default()
-                                                .model = model.clone();
-                                            app.persist();
-                                            cx.notify();
-                                        });
-                                    },
-                                ));
-                            }
-                            menu
-                        })
-                });
-                settings_section(engine.label()).items(vec![
-                    SettingItem::new(
-                        conduit::i18n::text_static("settings.defaults.model_services"),
-                        route,
-                    ),
-                    SettingItem::new(
-                        conduit::i18n::text_static("model_picker.model_98fd0c"),
-                        model,
-                    ),
-                ])
-            })
-            .collect::<Vec<_>>();
         settings_page(
             conduit::i18n::text_static("settings.defaults.new_session_defaults"),
             FullIconName::Settings,
         )
-        .groups(groups)
+        .group(self.settings_new_session_defaults_group(disabled, view))
+    }
+
+    /// Render one engine's defaults without changing the browsing engine or a session.
+    pub(super) fn settings_new_session_defaults_group(
+        &self,
+        disabled: bool,
+        view: Entity<Self>,
+    ) -> SettingGroup {
+        let engine = self.connection_settings.engine;
+        let selection = self.default_selection(engine);
+        let mut channels = vec![(
+            ModelChannel::Cli,
+            conduit::i18n::text_static("settings.defaults.native_cli_configuration").to_string(),
+        )];
+        channels.extend(
+            self.store
+                .providers
+                .iter()
+                .filter(|p| p.engine == engine)
+                .map(|p| (ModelChannel::Provider(p.id.clone()), p.name.clone())),
+        );
+        let display_channel =
+            default_channel_for_display(engine, &selection.channel, &self.store.providers);
+        let selected_channel = channels
+            .iter()
+            .find(|(channel, _)| *channel == display_channel);
+        let service_unavailable = selected_channel.is_none();
+        let label = selected_channel
+            .map(|(_, label)| label.clone())
+            .unwrap_or_else(|| {
+                let id = match &selection.channel {
+                    ModelChannel::Provider(id) | ModelChannel::Ccs(id) => id.as_str(),
+                    ModelChannel::Cli => "",
+                };
+                format!(
+                    "{} · {}",
+                    conduit::i18n::text_static(
+                        "settings.defaults.service_unavailable_select_another_service",
+                    ),
+                    id,
+                )
+            });
+        let route_view = view.clone();
+        let route = SettingField::render(move |_, _, _| {
+            let channels = channels.clone();
+            let view = route_view.clone();
+            Button::new(("default-channel", engine as usize))
+                .debug_selector(move || format!("default-channel-{}", engine as usize))
+                .outline()
+                .small()
+                .label(label.clone())
+                .tooltip(label.clone())
+                .icon(FullIconName::ChevronDown)
+                .disabled(disabled)
+                .dropdown_menu(move |mut menu, _, _| {
+                    for (channel, label) in &channels {
+                        let channel = channel.clone();
+                        let view = view.clone();
+                        menu = menu.item(PopupMenuItem::new(label.clone()).on_click(
+                            move |_, _, cx| {
+                                view.update(cx, |app, cx| {
+                                    if !app.writable || app.closing {
+                                        return;
+                                    }
+                                    app.store.session_defaults.insert(
+                                        engine,
+                                        crate::store::SessionDefaults {
+                                            channel: channel.clone(),
+                                            model: None,
+                                        },
+                                    );
+                                    app.persist();
+                                    cx.notify();
+                                });
+                            },
+                        ));
+                    }
+                    menu
+                })
+        });
+        let mut models = vec![(
+            None,
+            conduit::i18n::text_static("settings.defaults.use_service_default_model").to_string(),
+        )];
+        // Catalog absence is presentation state, never a reason to rewrite a saved ID.
+        let catalog = self.channel_models(engine, &selection.channel).1;
+        models.extend(
+            catalog
+                .into_iter()
+                .map(|model| (Some(model.id), model.label)),
+        );
+        let selected_model = models.iter().find(|(model, _)| *model == selection.model);
+        // Catalogs do not expose a uniform authoritative Loaded state; a
+        // missing entry can mean an unloaded, incomplete, or failed catalog.
+        let model_unconfirmed = selected_model.is_none();
+        let label = selected_model
+            .map(|(_, label)| label.clone())
+            .unwrap_or_else(|| selection.model.clone().unwrap_or_default());
+        let model_view = view.clone();
+        let model = SettingField::render(move |_, _, _| {
+            let models = models.clone();
+            let view = model_view.clone();
+            Button::new(("default-model", engine as usize))
+                .debug_selector(move || format!("default-model-{}", engine as usize))
+                .outline()
+                .small()
+                .label(label.clone())
+                .tooltip(label.clone())
+                .icon(FullIconName::ChevronDown)
+                .disabled(disabled || service_unavailable)
+                .dropdown_menu(move |mut menu, _, _| {
+                    for (model, label) in &models {
+                        let model = model.clone();
+                        let view = view.clone();
+                        menu = menu.item(PopupMenuItem::new(label.clone()).on_click(
+                            move |_, _, cx| {
+                                view.update(cx, |app, cx| {
+                                    if !app.writable || app.closing {
+                                        return;
+                                    }
+                                    app.store.session_defaults.entry(engine).or_default().model =
+                                        model.clone();
+                                    app.persist();
+                                    cx.notify();
+                                });
+                            },
+                        ));
+                    }
+                    menu
+                })
+        });
+        settings_section(format!(
+            "{} · {}",
+            conduit::i18n::text_static("settings.defaults.new_session_defaults"),
+            engine.label(),
+        ))
+        .items(vec![
+            SettingItem::new(
+                conduit::i18n::text_static("settings.sessions.default_service"),
+                route,
+            )
+            .description(settings_description(conduit::i18n::text_static(
+                if service_unavailable {
+                    "settings.sessions.service_unavailable_description"
+                } else {
+                    "settings.sessions.service_description"
+                },
+            )))
+            .disabled(disabled),
+            SettingItem::new(
+                conduit::i18n::text_static("settings.sessions.default_model"),
+                model,
+            )
+            .description(settings_description(conduit::i18n::text_static(
+                if model_unconfirmed {
+                    "settings.sessions.model_pending_confirmation_description"
+                } else {
+                    "settings.sessions.model_description"
+                },
+            )))
+            .disabled(disabled || service_unavailable),
+        ])
+        .footer(|_, _| conduit::i18n::text_static("settings.sessions.defaults_scope"))
     }
 
     pub(super) fn provider_configuration_references(&self, id: &str) -> Vec<String> {
@@ -176,8 +243,88 @@ impl ConduitApp {
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests {
-    use super::{ConduitApp, ModelChannel, Provider, Store, SystemTime, UNIX_EPOCH};
+    use super::{
+        ConduitApp, ModelChannel, Provider, Store, SystemTime, UNIX_EPOCH,
+        default_channel_for_display,
+    };
     use gpui_kit::{AppContext as _, TestAppContext};
+
+    #[test]
+    fn legacy_ccs_default_display_resolves_existing_engine_registry_without_migration() {
+        let _locale = crate::test_support::chinese();
+        let source_id = "shared-source-id";
+        let mut store = Store::default();
+        store.session_defaults.insert(
+            Provider::Codex,
+            crate::store::SessionDefaults {
+                channel: ModelChannel::Ccs(source_id.into()),
+                model: Some("saved-model-id".into()),
+            },
+        );
+        // Legacy defaults survive serialization and the real startup CCS sync.
+        let mut store: Store =
+            serde_json::from_value(serde_json::to_value(store).unwrap()).unwrap();
+        let saved_defaults = serde_json::to_value(&store.session_defaults).unwrap();
+        let catalog = crate::ccs::CcsCatalog {
+            providers: [Provider::Codex, Provider::Claude]
+                .into_iter()
+                .map(|engine| crate::ccs::CcsProvider {
+                    provider: engine,
+                    name: format!("{} legacy service", engine.label()),
+                    id: source_id.into(),
+                    current: false,
+                    models: vec![],
+                    base_url: "https://ccs-fixture.invalid/v1".into(),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        store.sync_ccs_providers(&catalog);
+        assert_eq!(
+            serde_json::to_value(&store.session_defaults).unwrap(),
+            saved_defaults,
+        );
+        let snapshot = serde_json::to_value(&store).unwrap();
+        let saved = &store.session_defaults[&Provider::Codex];
+        let display =
+            default_channel_for_display(Provider::Codex, &saved.channel, &store.providers);
+        let registry_id = crate::providers::ModelProvider::ccs_id(Provider::Codex, source_id);
+        assert_eq!(display, ModelChannel::Provider(registry_id.clone()));
+        let service = store
+            .providers
+            .iter()
+            .find(|provider| provider.engine == Provider::Codex && provider.id == registry_id)
+            .unwrap();
+        assert_eq!(service.name, "Codex legacy service");
+        assert_eq!(
+            default_channel_for_display(Provider::Codex, &display, &store.providers),
+            display,
+        );
+        assert_eq!(
+            default_channel_for_display(Provider::Codex, &ModelChannel::Cli, &store.providers),
+            ModelChannel::Cli,
+        );
+
+        // The same source ID from another engine cannot satisfy the saved route.
+        let other_engine_only: Vec<_> = store
+            .providers
+            .iter()
+            .filter(|provider| provider.engine == Provider::Claude)
+            .cloned()
+            .collect();
+        assert_eq!(other_engine_only.len(), 1);
+        assert_eq!(
+            default_channel_for_display(Provider::Codex, &saved.channel, &other_engine_only),
+            ModelChannel::Ccs(source_id.into()),
+        );
+        assert_eq!(
+            default_channel_for_display(Provider::Codex, &saved.channel, &[]),
+            ModelChannel::Ccs(source_id.into()),
+        );
+        assert_eq!(saved.channel, ModelChannel::Ccs(source_id.into()));
+        assert_eq!(saved.model.as_deref(), Some("saved-model-id"));
+        assert_eq!(serde_json::to_value(&store).unwrap(), snapshot);
+    }
 
     #[gpui_kit::test]
     fn new_session_defaults_persist_and_explicit_drafts_win_without_changing_history(

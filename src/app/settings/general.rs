@@ -64,16 +64,6 @@ impl ConduitApp {
             |app| app.store.ui.group_tabs,
             |app, value| app.store.ui.group_tabs = value,
         );
-        let collapse_reasoning = switch_field(
-            view.clone(),
-            |app| app.store.ui.collapse_reasoning,
-            ConduitApp::set_reasoning_collapsed,
-        );
-        let collapse_questions = switch_field(
-            view.clone(),
-            |app| app.store.ui.auto_collapse_question_history,
-            ConduitApp::set_question_history_collapsed,
-        );
         let language_view = view.clone();
         let language = self.store.ui.language.clone();
         let language_label = conduit::i18n::languages()
@@ -106,41 +96,6 @@ impl ConduitApp {
                     menu
                 })
         });
-        let permission_view = view.clone();
-        let permission = self.store.ui.default_session_permission;
-        let permission_field = SettingField::render(move |_, _, _| {
-            let view = permission_view.clone();
-            Button::new("default-session-permission")
-                .outline()
-                .w(px(160.))
-                .justify_between()
-                .label(permission.label())
-                .icon(FullIconName::ChevronDown)
-                .disabled(disabled)
-                .dropdown_menu(move |mut menu, _, _| {
-                    for option in [
-                        PermissionLevel::ReadOnly,
-                        PermissionLevel::WorkspaceWrite,
-                        PermissionLevel::FullAccess,
-                    ] {
-                        let view = view.clone();
-                        menu = menu.item(PopupMenuItem::new(option.label()).on_click(
-                            move |_, _, cx| {
-                                view.update(cx, |app, cx| {
-                                    if !app.writable || app.closing {
-                                        return;
-                                    }
-                                    app.store.ui.default_session_permission = option;
-                                    app.pending_permission = option;
-                                    app.persist();
-                                    cx.notify();
-                                });
-                            },
-                        ));
-                    }
-                    menu
-                })
-        });
         settings_page(
             conduit::i18n::text_static("settings.general.general"),
             FullIconName::Settings,
@@ -150,11 +105,6 @@ impl ConduitApp {
                 "settings.general.workbench_layout",
             ))
             .items(vec![
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.general.default_session_permission"),
-                    permission_field,
-                )
-                .disabled(disabled),
                 SettingItem::new(
                     conduit::i18n::text_static("settings.general.full_width_content"),
                     full_width,
@@ -191,22 +141,6 @@ impl ConduitApp {
                 )
                 .description(settings_description(conduit::i18n::text_static(
                     "settings.general.group_tabs_description",
-                )))
-                .disabled(disabled),
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.general.collapse_reasoning"),
-                    collapse_reasoning,
-                )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.general.collapse_reasoning_description",
-                )))
-                .disabled(disabled),
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.general.auto_collapse_question_history"),
-                    collapse_questions,
-                )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.general.auto_collapse_question_history_description",
                 )))
                 .disabled(disabled),
                 SettingItem::new(
@@ -345,110 +279,6 @@ impl ConduitApp {
                 .disabled(disabled),
             ),
         ])
-    }
-
-    pub(in crate::app) fn settings_session_page(
-        &self,
-        disabled: bool,
-        view: Entity<Self>,
-    ) -> SettingPage {
-        let rename_view = view.clone();
-        let rename_read = rename_view.clone();
-        let auto_rename = SettingField::switch(
-            move |cx: &App| rename_read.read(cx).store.ui.auto_rename,
-            move |value, cx| {
-                rename_view.update(cx, |this, cx| {
-                    if !this.writable || this.closing {
-                        return;
-                    }
-                    this.store.ui.auto_rename = value;
-                    if !value {
-                        this.session_control.namings.retain(|_, naming| {
-                            if naming.automatic {
-                                naming.runtime.cancel();
-                                false
-                            } else {
-                                true
-                            }
-                        });
-                    }
-                    this.persist();
-                    cx.notify();
-                });
-            },
-        );
-        let provider_view = view.clone();
-        let provider = SettingField::render(move |_, _, cx| {
-            provider_view
-                .read(cx)
-                .naming_provider_picker(provider_view.clone(), disabled)
-        });
-        let channel_view = view.clone();
-        let channel = SettingField::render(move |_, _, cx| {
-            channel_view
-                .read(cx)
-                .naming_channel_picker(channel_view.clone(), disabled)
-        });
-        let model_view = view.clone();
-        let model = SettingField::render(move |_, _, cx| {
-            model_view
-                .read(cx)
-                .naming_model_picker(model_view.clone(), disabled)
-        });
-        let mode_view = view.clone();
-        let mode = SettingField::render(move |_, _, cx| {
-            let auto_rename = mode_view.read(cx).store.ui.auto_rename;
-            mode_view
-                .read(cx)
-                .naming_mode_picker(mode_view.clone(), disabled || !auto_rename)
-        });
-        let mut items = vec![
-            SettingItem::new(
-                conduit::i18n::text_static("settings.defaults.automatic_naming"),
-                auto_rename,
-            )
-            .description(settings_description(conduit::i18n::text_static(
-                "settings.general.manual_ai_renaming_remains_available_when_disabled",
-            )))
-            .disabled(disabled),
-            SettingItem::new(conduit::i18n::text_static("settings.general.trigger"), mode)
-                .disabled(disabled),
-            self.generation_disclosure(true, view.clone()),
-        ];
-        if self.settings_ui.naming_expanded {
-            items.extend([
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.general.naming_engine"),
-                    provider,
-                )
-                .disabled(disabled),
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.general.naming_service"),
-                    channel,
-                )
-                .disabled(disabled),
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.general.naming_model"),
-                    model,
-                )
-                .disabled(disabled),
-            ]);
-        }
-        settings_page(
-            conduit::i18n::text_static("settings.defaults.automatic_naming"),
-            FullIconName::Pencil,
-        )
-        .group(
-            settings_section(conduit::i18n::text_static(
-                "settings.general.session_naming",
-            ))
-            .items(items)
-            .footer(|_, _| {
-                conduit::i18n::text_static(
-                    "settings.general.naming_runs_in_the_background_failures_keep",
-                )
-            }),
-        )
     }
 
     pub(in crate::app) fn settings_git_page(

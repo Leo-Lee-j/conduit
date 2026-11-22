@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Conduit · 设置 UI 交互原型</title>
+  <link rel="stylesheet" href="settings-ui/styles.css">
+  <script defer src="settings-ui/core.js"></script>
+  <script defer src="settings-ui/appearance.js"></script>
+  <script defer src="settings-ui/sessions.js"></script>
+  <script defer src="settings-ui/services.js"></script>
+  <script defer src="settings-ui/app.js"></script>
+</head>
+<body data-theme="light">
+  <main class="review-workspace">
+    <header class="review-toolbar">
+      <div class="review-title"><h1>Conduit 设置</h1><span>交互原型</span></div>
+      <div class="review-controls">
+        <label>主区宽度<select id="viewport-select"><option value="1200">正常 · 1200px</option><option value="960">中等 · 960px</option><option value="640">窄主区 · 640px</option><option value="480">最窄预览 · 480px</option><option value="1500">宽屏 · 1500px</option><option value="auto">自适应窗口</option></select></label>
+        <label>界面字号<select id="font-select"><option value="12">12px</option><option value="16" selected>正常 · 16px</option><option value="20">大字号 · 20px</option></select></label>
+        <label>配色<select id="theme-select"><option value="light">浅色</option><option value="dark">深色</option><option value="system">跟随系统</option></select></label>
+        <label>验证场景<select id="scenario-select"><option value="normal">正常结果</option><option value="verification-failure">模拟连接失败</option></select></label>
+        <label class="review-checkbox"><input type="checkbox" id="readonly-toggle">只读实例</label>
+        <button type="button" id="reset-demo" class="review-reset">重置演示</button>
+      </div>
+    </header>
+    <p class="prototype-notice">所有服务、模型、会话及验证均为演示数据。修改只保留在本次预览，不读取或写入 Conduit 配置，不发起网络请求。</p>
+    <section id="settings-frame" class="settings-frame" data-nav-mode="expanded" data-content-mode="columns" data-service-layout="single" data-detail-open="false" aria-label="Conduit 设置主区原型">
+      <div class="frame-caption"><div class="wordmark"><img src="../../assets/app-icons/32x32.png" width="20" height="20" alt=""><span>Conduit</span><span class="caption-divider">/</span><span>设置工作区</span></div><span class="caption-context">示例项目 · conduit</span></div>
+      <header class="settings-header" id="settings-header">
+        <div class="header-left"><button class="btn btn-quiet back-button" type="button" id="settings-back" aria-label="返回工作台预览"><span data-icon="arrow-left"></span><span>返回工作台</span></button></div>
+        <div class="header-main">
+          <div class="page-heading"><h1 id="page-title" tabindex="-1">外观与字体</h1><p id="page-summary"></p></div>
+          <div class="search-box"><span data-icon="search"></span><input id="settings-search" type="search" placeholder="搜索设置" aria-label="搜索本原型中的设置" autocomplete="off"><kbd>Enter</kbd></div>
+        </div>
+      </header>
+      <div id="settings-body" class="settings-body">
+        <nav id="settings-navigation" class="settings-navigation" aria-label="设置分类"></nav>
+        <div class="content-column">
+          <div id="context-toolbar" class="context-toolbar">
+            <label class="compact-category" id="compact-category-label">设置分类<select id="category-select" class="control"><option value="appearance">外观与字体</option><option value="services">模型与服务</option><option value="sessions">会话设置</option></select></label>
+            <label id="engine-label" class="engine-selector">当前引擎<select id="engine-select" class="control"><option>Codex</option><option>Claude Code</option><option>OpenCode</option></select></label>
+            <span class="context-hint" id="context-hint">设备级偏好 · 即时预览</span>
+          </div>
+          <div id="content-scroll" class="content-scroll"><div id="page-content" class="page-content"></div></div>
+        </div>
+      </div>
+      <section id="returned-view" class="returned-view" hidden aria-label="返回工作台演示"><div><span data-icon="terminal"></span><h2>已退出设置预览</h2><p>真实应用会回到原工作台标签页；本原型仅覆盖设置主区。</p><button type="button" class="btn btn-primary" id="reopen-settings">继续评审设置</button></div></section>
+      <footer id="settings-footer" class="settings-footer"><div id="save-status" role="status" aria-live="polite" aria-atomic="true"></div><span id="save-scope">本次预览 · 不写入应用</span></footer>
+    </section>
+    <div class="review-footer"><output id="layout-report" aria-live="polite"></output><span>仅展示扣除工作台侧面板后的设置主区 · <a href="settings-ui-prototype.md">原型说明</a></span></div>
+    <noscript>此原型需要启用 JavaScript，支持离线打开。</noscript>
+  </main>
+  <dialog id="editor-dialog" aria-labelledby="editor-title" aria-describedby="editor-description">
+    <form id="editor-form" novalidate><header class="dialog-heading"><h2 id="editor-title"></h2><p id="editor-description"></p></header><div class="dialog-body" id="editor-body"></div><p class="dialog-error" id="editor-error" role="alert" hidden></p><footer class="dialog-footer"><span>演示表单 · 不保存真实凭据</span><div><button type="button" class="btn" id="editor-cancel">取消</button><button type="submit" class="btn btn-primary" id="editor-submit">保存</button></div></footer></form>
+  </dialog>
+  <dialog id="discard-dialog" aria-labelledby="discard-title" aria-describedby="discard-description"><div class="discard-body"><h2 id="discard-title">放弃未保存的修改？</h2><p id="discard-description">继续编辑会保留当前输入。只有明确放弃，才会关闭表单。</p><div class="discard-actions"><button type="button" class="btn" id="continue-editing">继续编辑</button><button type="button" class="btn btn-danger" id="discard-changes">放弃修改</button></div></div></dialog>
+</body>
+</html>

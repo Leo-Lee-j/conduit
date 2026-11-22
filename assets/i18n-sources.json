@@ -1175,7 +1175,7 @@
   "工作区：{origin}": "shell.workspace",
   "复制完整请求": "shell.copy_full_request",
   "CLI 未提供「允许本次」选项，此请求只能拒绝。": "shell.the_cli_did_not_offer_allow_once",
-  "AI 引擎": "shell.ai_engines",
+  "AI 引擎": "settings.navigation.ai_engines",
   "打开 AI 引擎设置": "shell.open_ai_engine_settings",
   "设置（{}）": "shell.settings",
   "关于 Conduit": "shell.about_conduit",
@@ -2078,5 +2078,13 @@
   "等待响应": "session_data.api_quality_waiting",
   "已收到响应": "session_data.api_quality_responding",
   "根据近期请求的首响应时间和结果估算端到端体验。": "session_data.api_quality_note",
-  "最近请求失败": "session_data.api_quality_failed"
+  "最近请求失败": "session_data.api_quality_failed",
+  "外观与字体": "settings.navigation.appearance_typography",
+  "AI 与工作流": "settings.navigation.ai_workflows",
+  "Git 工作流": "settings.navigation.git_workflow",
+  "应用维护": "settings.navigation.application_maintenance",
+  "会话设置": "settings.navigation.session_settings",
+  "聊天显示偏好": "settings.search.chat_display",
+  "设置思考过程和已完成问答的默认折叠方式": "settings.search.chat_display_description",
+  "预览界面、聊天和代码的文字效果": "settings.search.typography_preview_description"
 }
