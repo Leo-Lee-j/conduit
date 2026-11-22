@@ -721,6 +721,9 @@ impl ConduitApp {
         let Some(item) = session.messages.get(index).cloned() else {
             return div().into_any_element();
         };
+        if !super::super::chat::should_render_message_item(&item, provider) {
+            return div().h(px(0.)).into_any_element();
+        }
         if item.kind == ItemKind::Reasoning {
             let text = super::super::chat::message_markdown(&item, provider);
             let state = window.use_keyed_state(

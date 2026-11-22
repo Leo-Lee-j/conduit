@@ -124,6 +124,10 @@ pub(super) fn message_markdown(item: &ChatItem, provider: Provider) -> Cow<'_, s
     }
 }
 
+pub(super) fn should_render_message_item(item: &ChatItem, provider: Provider) -> bool {
+    !is_empty_chat_placeholder(item) && !is_hidden_reasoning(item, provider)
+}
+
 fn reasoning_body(item: &ChatItem, provider: Provider) -> &str {
     let (_, body) = reasoning_parts(&item.text);
     // A summary's sections are peer updates, not a title followed by details.
@@ -1263,10 +1267,11 @@ impl ConduitApp {
             .and_then(|id| self.session(id))
             .and_then(|session| {
                 let item = session.messages.get(index)?;
-                (item.kind == ItemKind::Assistant
-                    || (item.kind == ItemKind::Reasoning
-                        && self.reasoning_expanded(session.id, item)
-                        && !reasoning_body(item, session.provider).trim().is_empty()))
+                (should_render_message_item(item, session.provider)
+                    && (item.kind == ItemKind::Assistant
+                        || (item.kind == ItemKind::Reasoning
+                            && self.reasoning_expanded(session.id, item)
+                            && !reasoning_body(item, session.provider).trim().is_empty())))
                 .then(|| {
                     let text = message_markdown(item, session.provider);
                     let state = window.use_keyed_state(
@@ -1313,7 +1318,7 @@ impl ConduitApp {
         let Some(item) = session.messages.get(index) else {
             return div().into_any_element();
         };
-        if is_empty_chat_placeholder(item) || is_hidden_reasoning(item, session.provider) {
+        if !should_render_message_item(item, session.provider) {
             return div()
                 .debug_selector(move || format!("empty-message-{index}"))
                 .h(px(0.))
