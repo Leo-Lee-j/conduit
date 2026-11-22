@@ -72,6 +72,19 @@ impl Navigation {
 }
 
 impl ConduitApp {
+    pub(in crate::app) fn remeasure_subagent_message(&self, id: u64, index: usize) {
+        if let Some(page) = self
+            .session_control
+            .agent_navigation
+            .pages
+            .values()
+            .find(|page| page.target == Target::SavedTranscript(id))
+            && index < page.count
+        {
+            page.messages.remeasure_items(index..index + 1);
+        }
+    }
+
     pub(in crate::app) fn finish_child_observation(&mut self, root: u64) {
         let keys: Vec<_> = self
             .session_control
@@ -667,14 +680,14 @@ impl ConduitApp {
         }
         let app = cx.weak_entity();
         let expected = key.clone();
-        let list = gpui_kit::list(page.messages.clone(), move |index, _, cx| {
+        let list = gpui_kit::list(page.messages.clone(), move |index, window, cx| {
             app.update(cx, |this, cx| {
                 if this.subagent_route() != Some(&expected)
                     || this.visible_subagent_transcript() != Some(id)
                 {
                     return div().into_any_element();
                 }
-                this.subagent_message(id, index, cx)
+                this.subagent_message(id, index, window, cx)
             })
             .unwrap_or_else(|_| div().into_any_element())
         })
@@ -694,7 +707,13 @@ impl ConduitApp {
             .into_any_element()
     }
 
-    fn subagent_message(&mut self, id: u64, index: usize, cx: &mut Context<Self>) -> AnyElement {
+    fn subagent_message(
+        &mut self,
+        id: u64,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(session) = self.session(id) else {
             return div().into_any_element();
         };
@@ -702,6 +721,22 @@ impl ConduitApp {
         let Some(item) = session.messages.get(index).cloned() else {
             return div().into_any_element();
         };
+        if item.kind == ItemKind::Reasoning {
+            let text = super::super::chat::message_markdown(&item, provider);
+            let state = window.use_keyed_state(
+                SharedString::from(format!("chat-markdown-{id}-{}", item.key)),
+                cx,
+                |_, cx| gpui_kit::base::text::TextViewState::markdown(text.as_ref(), cx),
+            );
+            state.update(cx, |state, cx| state.set_text(text.as_ref(), cx));
+            return v_flex()
+                .w_full()
+                .min_w_0()
+                .px_4()
+                .py_2()
+                .child(self.render_reasoning_item(id, index, &item, provider, Some(&state), cx))
+                .into_any_element();
+        }
         if item.kind == ItemKind::Tool {
             let expanded = self.expanded_tools.contains(&(id, item.key.clone()));
             let mut body = v_flex()

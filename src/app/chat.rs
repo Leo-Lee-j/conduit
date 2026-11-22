@@ -902,7 +902,7 @@ impl ConduitApp {
         }
     }
 
-    fn reasoning_header(
+    pub(in crate::app) fn reasoning_header(
         &self,
         session_id: u64,
         index: usize,
@@ -967,7 +967,11 @@ impl ConduitApp {
                 return;
             }
             this.reasoning_expansion.insert(key.clone(), !expanded);
-            this.remeasure_message(index);
+            if this.selected_session == Some(session_id) {
+                this.remeasure_message(index);
+            } else {
+                this.remeasure_subagent_message(session_id, index);
+            }
             cx.notify();
         }))
         .child(
@@ -1029,6 +1033,65 @@ impl ConduitApp {
                 }),
         )
         .into_any_element()
+    }
+
+    pub(in crate::app) fn render_reasoning_item(
+        &self,
+        session_id: u64,
+        index: usize,
+        item: &ChatItem,
+        provider: Provider,
+        markdown: Option<&Entity<gpui_kit::base::text::TextViewState>>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let expanded = self.reasoning_expanded(session_id, item);
+        let has_body = !reasoning_body(item, provider).trim().is_empty();
+        let typography = self.chat_typography();
+        let mut content = v_flex()
+            .debug_selector(move || format!("reasoning-quote-{session_id}-{index}"))
+            .w_full()
+            .min_w_0()
+            .when(has_body, |content| {
+                content
+                    .border_l_2()
+                    .border_color(rgb(palette().border))
+                    .rounded(px(6.))
+                    .bg(rgb(palette().surface))
+            })
+            .child(self.reasoning_header(session_id, index, item, provider, cx));
+        if expanded && has_body {
+            content = content.child(
+                div()
+                    .debug_selector(move || format!("reasoning-body-{session_id}-{index}"))
+                    .w_full()
+                    .min_w_0()
+                    .flex_shrink_0()
+                    .px_3()
+                    .pb_3()
+                    .text_color(rgb(palette().muted))
+                    .child(
+                        styled_markdown_view(
+                            TextView::new(markdown.expect("expanded reasoning Markdown state")),
+                            &typography,
+                            &format!("reasoning-copy-{session_id}-{}", item.key),
+                            true,
+                            None,
+                        )
+                        .on_link_click({
+                            let app = cx.entity().downgrade();
+                            move |url, event, window, cx| {
+                                if !activates_link(event) {
+                                    return;
+                                }
+                                let _ = app.update(cx, |this, cx| {
+                                    this.open_chat_link(session_id, url, window, cx);
+                                });
+                            }
+                        }),
+                    ),
+            );
+        }
+        content.into_any_element()
     }
 
     /// One-line tool activity inside "执行工具" groups.
@@ -1649,55 +1712,7 @@ impl ConduitApp {
                     .into_any_element()
             }
             ItemKind::Reasoning => {
-                let expanded = self.reasoning_expanded(session_id, item);
-                let has_body = !reasoning_body(item, session.provider).trim().is_empty();
-                let mut content = v_flex()
-                    .debug_selector(move || format!("reasoning-quote-{session_id}-{index}"))
-                    .w_full()
-                    .min_w_0()
-                    .when(has_body, |content| {
-                        content
-                            .border_l_2()
-                            .border_color(rgb(palette().border))
-                            .rounded(px(6.))
-                            .bg(rgb(palette().surface))
-                    })
-                    .child(self.reasoning_header(session_id, index, item, session.provider, cx));
-                if expanded && has_body {
-                    content = content.child(
-                        div()
-                            .debug_selector(move || format!("reasoning-body-{session_id}-{index}"))
-                            .w_full()
-                            .min_w_0()
-                            .flex_shrink_0()
-                            .px_3()
-                            .pb_3()
-                            .text_color(rgb(palette().muted))
-                            .child(
-                                styled_markdown_view(
-                                    TextView::new(
-                                        markdown.expect("expanded reasoning Markdown state"),
-                                    ),
-                                    &typography,
-                                    &format!("reasoning-copy-{session_id}-{}", item.key),
-                                    true,
-                                    None,
-                                )
-                                .on_link_click({
-                                    let app = cx.entity().downgrade();
-                                    move |url, event, window, cx| {
-                                        if !activates_link(event) {
-                                            return;
-                                        }
-                                        let _ = app.update(cx, |this, cx| {
-                                            this.open_chat_link(session_id, url, window, cx);
-                                        });
-                                    }
-                                }),
-                            ),
-                    );
-                }
-                content.into_any_element()
+                self.render_reasoning_item(session_id, index, item, session.provider, markdown, cx)
             }
             ItemKind::Tool if is_compact_tool(item) => {
                 let detail_key = (session_id, item.key.clone());
