@@ -96,6 +96,8 @@ impl ConduitApp {
             {
                 self.selected_workspace = Some(index);
                 self.selected_session = Some(session.id);
+                self.new_session_provider = session.provider;
+                self.pending_model_selection = None;
                 self.session_control.unread_completed.remove(&session.id);
                 self.push_tab(session.id);
                 return;
@@ -472,7 +474,21 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let provider = self.new_session_provider;
+        let explicit = self.selected_workspace == Some(index)
+            && (self
+                .pending_model_selection
+                .as_ref()
+                .is_some_and(|selection| selection.engine == self.new_session_provider)
+                || self
+                    .selected_session
+                    .and_then(|id| self.session(id))
+                    .is_some_and(|session| session.provider != self.new_session_provider));
+        let provider = if explicit {
+            self.new_session_provider
+        } else {
+            self.workspace_latest_selection(index, None)
+                .map_or(self.new_session_provider, |selection| selection.engine)
+        };
         self.new_session(index, provider, window, cx);
     }
 
@@ -895,6 +911,10 @@ impl ConduitApp {
             && let Some(provider) = session
                 .and_then(|id| self.session(id))
                 .map(|session| session.provider)
+                .or_else(|| {
+                    self.workspace_latest_selection(workspace, None)
+                        .map(|selection| selection.engine)
+                })
         {
             self.new_session_provider = provider;
             self.remember_provider(provider);
@@ -1351,7 +1371,7 @@ impl ConduitApp {
         if !self.writable || self.closing || index >= self.store.workspaces.len() {
             return None;
         }
-        let mut session = self.prepare_session(provider);
+        let mut session = self.prepare_workspace_session(index, provider, true);
         session.permission = self.store.ui.default_session_permission;
         let id = session.id;
         self.store.workspaces[index].sessions.insert(0, session);
@@ -1359,6 +1379,58 @@ impl ConduitApp {
         self.persist();
         cx.notify();
         Some(id)
+    }
+
+    /// Activity order, not pinning or vector order, determines workspace defaults.
+    /// Child conversations and archived records do not configure a new root task.
+    pub(super) fn workspace_latest_selection(
+        &self,
+        index: usize,
+        engine: Option<Provider>,
+    ) -> Option<ComposerSelection> {
+        self.store
+            .workspaces
+            .get(index)?
+            .visible_sessions()
+            .filter(|session| {
+                !session.archived && engine.is_none_or(|engine| session.provider == engine)
+            })
+            .max_by_key(|session| (session.last_activity_at(), session.id))
+            .map(ComposerSelection::from_session)
+    }
+
+    pub(super) fn workspace_default_selection(
+        &self,
+        index: usize,
+        engine: Provider,
+    ) -> ComposerSelection {
+        self.workspace_latest_selection(index, Some(engine))
+            .unwrap_or_else(|| self.default_selection(engine))
+    }
+
+    /// Inherit only model settings, never the old thread, transcript or permissions.
+    /// Explicit composer choices belong to their workspace and take precedence.
+    pub(super) fn prepare_workspace_session(
+        &mut self,
+        index: usize,
+        provider: Provider,
+        use_composer: bool,
+    ) -> SessionRecord {
+        let mut session = self.prepare_session_with_defaults(provider, false);
+        if let Some(selection) = self.workspace_latest_selection(index, Some(provider)) {
+            selection.apply(&mut session);
+        }
+        if use_composer && self.selected_workspace == Some(index) {
+            session.permission = self.pending_permission;
+            if let Some(selection) = self
+                .pending_model_selection
+                .as_ref()
+                .filter(|selection| selection.engine == provider)
+            {
+                selection.clone().apply(&mut session);
+            }
+        }
+        session
     }
 
     /// Build the exact selection for validation without creating an empty session

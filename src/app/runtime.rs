@@ -481,7 +481,9 @@ impl ConduitApp {
             .into());
         }
         let worktree = git::worktree_root(&cwd);
-        let prepared = target.is_none().then(|| self.prepare_session(provider));
+        let prepared = target
+            .is_none()
+            .then(|| self.prepare_workspace_session(index, provider, true));
         let selection = prepared.as_ref().map(ComposerSelection::from_session);
         let mut route = if let Some(session) = &prepared {
             let mut route = self

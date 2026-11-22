@@ -594,19 +594,18 @@ impl ConduitApp {
             .and_then(|w| w.visible_sessions().find(|session| !session.archived))
             .map(|s| s.id);
         let pending_permission = store.ui.default_session_permission;
-        let new_session_provider = store
-            .ui
-            .last_provider
-            .or_else(|| {
-                selected_session.and_then(|id| {
-                    store
-                        .workspaces
-                        .iter()
-                        .flat_map(|w| &w.sessions)
-                        .find(|s| s.id == id)
-                        .map(|s| s.provider)
-                })
+        // Opening history must restore its complete send target. The global
+        // engine preference only applies when there is no selected conversation.
+        let new_session_provider = selected_session
+            .and_then(|id| {
+                store
+                    .workspaces
+                    .iter()
+                    .flat_map(|w| &w.sessions)
+                    .find(|s| s.id == id)
+                    .map(|s| s.provider)
             })
+            .or(store.ui.last_provider)
             .unwrap_or(Provider::Claude);
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)

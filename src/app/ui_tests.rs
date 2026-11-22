@@ -2238,3 +2238,275 @@ fn subagent_panel_tracks_concurrent_tasks_and_disconnects_without_false_success(
         "finished task history remains visible"
     );
 }
+
+#[gpui_kit::test]
+fn restarted_history_restores_its_engine_provider_model_and_runtime_route(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    use crate::{
+        domain::{Provider, Workspace},
+        providers::{ModelChannel, ModelProvider, ReasoningEffort},
+        store::Store,
+    };
+    cx.update(gpui_kit::init);
+    cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut history = super::tests::session();
+            history.provider = Provider::Codex;
+            history.native_id = Some("restored-codex-thread".into());
+            history.channel = ModelChannel::Provider("restored-provider".into());
+            history.model = Some("restored-model".into());
+            history.reasoning_effort = ReasoningEffort::High;
+            let mut store = Store {
+                workspaces: vec![Workspace {
+                    path: std::env::temp_dir(),
+                    sessions: vec![history],
+                }],
+                providers: vec![ModelProvider {
+                    id: "restored-provider".into(),
+                    name: "Restored proxy".into(),
+                    engine: Provider::Codex,
+                    base_url: "https://restored.invalid/v1".into(),
+                    api_key_env: String::new(),
+                    protected_api_key: None,
+                    models: vec!["restored-model".into()],
+                    source: Default::default(),
+                    model_metadata: vec![],
+                    claude_models: None,
+                }],
+                ..Default::default()
+            };
+            store.ui.last_provider = Some(Provider::Claude);
+            let path = Store::path();
+            store.save_to(&path).unwrap();
+            let restored = Store::load_from(&path).unwrap();
+            let mut app = super::ConduitApp::with_store(window, cx, Ok(restored), false, false);
+            app.startup = None;
+            app.writable = false;
+            assert_eq!(app.selected_session, Some(1));
+            assert_eq!(app.new_session_provider, Provider::Codex);
+            assert_eq!(
+                app.send_target(true),
+                Some(1),
+                "continue the historical thread, not a new one"
+            );
+            let selection = app.composer_selection(1);
+            assert_eq!(
+                selection.channel,
+                ModelChannel::Provider("restored-provider".into())
+            );
+            assert_eq!(selection.model.as_deref(), Some("restored-model"));
+            assert_eq!(selection.effort, ReasoningEffort::High);
+            let route = app.session_route(1).unwrap();
+            let mut protocol = crate::protocol::Protocol::new(
+                Provider::Codex,
+                std::env::temp_dir().to_string_lossy().into_owned(),
+                "unused".into(),
+                app.session(1).unwrap().native_id.clone(),
+            )
+            .with_model(selection.model)
+            .with_options(selection.effort, route);
+            let args = protocol.args();
+            assert!(
+                args.iter()
+                    .any(|arg| arg.contains("https://restored.invalid/v1")),
+                "the temporary provider must be defined at process startup"
+            );
+            let initialized = protocol.accept(serde_json::json!({"id":1,"result":{}}));
+            let resume = &initialized.writes[1];
+            assert_eq!(resume["method"], "thread/resume");
+            assert_eq!(resume["params"]["threadId"], "restored-codex-thread");
+            assert_eq!(resume["params"]["model"], "restored-model");
+            assert_eq!(resume["params"]["modelProvider"], "conduit");
+            assert_eq!(
+                resume["params"]["config"]["model_providers"]["conduit"]["base_url"],
+                "https://restored.invalid/v1"
+            );
+            app.selected_session = None;
+            app.new_session_provider = Provider::Claude;
+            app.select_fallback_session();
+            assert_eq!(app.new_session_provider, Provider::Codex);
+            assert_eq!(app.send_target(true), Some(1));
+            assert_eq!(
+                app.composer_selection(1).model.as_deref(),
+                Some("restored-model")
+            );
+            app
+        });
+        gpui_kit::component::Root::new(app, window, cx)
+    });
+}
+
+#[gpui_kit::test]
+fn workspace_new_session_inherits_latest_root_route_model_and_effort(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    use crate::{
+        domain::{PermissionLevel, Provider},
+        providers::{ModelChannel, ReasoningEffort},
+    };
+    let (app, cx, _) = super::queue::tests::fixture(cx, "workspace-model-inheritance");
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.startup = None;
+            app.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
+            app.store.ui.default_session_permission = PermissionLevel::ReadOnly;
+            let mut older = super::tests::session();
+            older.id = 2;
+            older.provider = Provider::Codex;
+            older.created_at = 200;
+            older.pinned = true;
+            older.model = Some("older-model".into());
+            let mut latest = super::tests::session();
+            latest.id = 3;
+            latest.created_at = 100;
+            latest.channel = ModelChannel::Provider("workspace-service".into());
+            latest.model = Some("workspace-model".into());
+            latest.reasoning_effort = ReasoningEffort::Xhigh;
+            latest.permission = PermissionLevel::FullAccess;
+            latest.native_id = Some("do-not-resume-source".into());
+            latest.messages = vec![
+                serde_json::from_value(serde_json::json!({
+                    "key":"source", "kind":"User", "text":"latest activity", "created_at":400
+                }))
+                .unwrap(),
+            ];
+            let original = serde_json::to_value(&latest).unwrap();
+            let mut archived = older.clone();
+            archived.id = 4;
+            archived.created_at = 900;
+            archived.archived = true;
+            let mut child = older.clone();
+            child.id = 5;
+            child.created_at = 1_000;
+            child.is_subagent = true;
+            app.store.workspaces[1].sessions = vec![older, archived, child, latest];
+            app.next_id = 6;
+            app.new_session_provider = Provider::Codex;
+            let mut foreign = super::ComposerSelection::new(Provider::Codex);
+            foreign.model = Some("other-workspace-draft".into());
+            app.pending_model_selection = Some(foreign);
+            app.input.update(cx, |input, cx| {
+                input.set_value("keep original draft", window, cx)
+            });
+            app.new_session_here(1, window, cx);
+            let created = app.session(6).unwrap();
+            assert_eq!(
+                created.provider,
+                Provider::Claude,
+                "use the target workspace, not the global engine"
+            );
+            assert_eq!(
+                created.channel,
+                ModelChannel::Provider("workspace-service".into())
+            );
+            assert_eq!(created.model.as_deref(), Some("workspace-model"));
+            assert_eq!(created.reasoning_effort, ReasoningEffort::Xhigh);
+            assert_eq!(
+                created.permission,
+                PermissionLevel::ReadOnly,
+                "do not inherit full access"
+            );
+            assert!(created.native_id.is_none() && created.messages.is_empty());
+            assert_eq!(
+                serde_json::to_value(app.session(3).unwrap()).unwrap(),
+                original
+            );
+            assert_eq!(app.drafts[&1], "keep original draft");
+            app.persistence.flush();
+        });
+    });
+}
+
+#[gpui_kit::test]
+fn workspace_new_session_keeps_explicit_choices_and_empty_workspace_defaults(
+    cx: &mut TestAppContext,
+) {
+    let _locale = crate::test_support::chinese();
+    use crate::{
+        domain::Provider,
+        providers::{ModelChannel, ReasoningEffort},
+        store::SessionDefaults,
+    };
+    let (app, cx, _) = super::queue::tests::fixture(cx, "workspace-explicit-model");
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.startup = None;
+            app.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
+            app.store.workspaces[1].sessions.clear();
+            app.store.session_defaults.insert(
+                Provider::Codex,
+                SessionDefaults {
+                    channel: ModelChannel::Provider("global-service".into()),
+                    model: Some("global-model".into()),
+                },
+            );
+            app.new_session_provider = Provider::Codex;
+            let mut explicit = super::ComposerSelection::new(Provider::Codex);
+            explicit.channel = ModelChannel::Provider("explicit-service".into());
+            explicit.model = Some("explicit-model".into());
+            explicit.effort = ReasoningEffort::High;
+            app.pending_model_selection = Some(explicit);
+            app.new_session_here(0, window, cx);
+            let created = app.session(app.selected_session.unwrap()).unwrap();
+            assert_eq!(created.provider, Provider::Codex);
+            assert_eq!(
+                created.channel,
+                ModelChannel::Provider("explicit-service".into())
+            );
+            assert_eq!(created.model.as_deref(), Some("explicit-model"));
+            assert_eq!(created.reasoning_effort, ReasoningEffort::High);
+            assert!(app.pending_model_selection.is_none());
+            // A composer selection from workspace 0 must not replace workspace 1 defaults.
+            let mut foreign = super::ComposerSelection::new(Provider::Codex);
+            foreign.model = Some("foreign-model".into());
+            app.pending_model_selection = Some(foreign);
+            app.new_session_here(1, window, cx);
+            let created = app.session(app.selected_session.unwrap()).unwrap();
+            assert_eq!(
+                created.channel,
+                ModelChannel::Provider("global-service".into())
+            );
+            assert_eq!(created.model.as_deref(), Some("global-model"));
+            assert_eq!(created.reasoning_effort, ReasoningEffort::Medium);
+            app.persistence.flush();
+        });
+    });
+}
+
+#[gpui_kit::test]
+fn workspace_new_session_preview_matches_send_snapshot_and_inherits_native_effort(
+    cx: &mut TestAppContext,
+) {
+    let _locale = crate::test_support::chinese();
+    use crate::{
+        domain::Provider,
+        providers::{ModelChannel, ReasoningEffort},
+    };
+    let (app, cx, _) = super::queue::tests::fixture(cx, "workspace-native-effort");
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.startup = None;
+            let mut source = super::tests::session();
+            source.id = 3;
+            source.provider = Provider::OpenCode;
+            source.channel = ModelChannel::Cli;
+            source.model = Some("native/provider-model".into());
+            source.reasoning_effort = ReasoningEffort::Default;
+            source.opencode.variant = Some("max".into());
+            source.created_at = 10;
+            source.native_id = Some("source-thread".into());
+            app.store.workspaces[0].sessions.push(source);
+            app.switch(0, None, window, cx);
+            assert_eq!(app.new_session_provider, Provider::OpenCode);
+            let preview = app.composer_selection(0);
+            let prepared = app.prepare_workspace_session(0, Provider::OpenCode, true);
+            assert_eq!(preview.channel, prepared.channel);
+            assert_eq!(preview.model, prepared.model);
+            assert_eq!(preview.effort, prepared.reasoning_effort);
+            assert_eq!(preview.opencode, prepared.opencode);
+            assert_eq!(prepared.model.as_deref(), Some("native/provider-model"));
+            assert_eq!(prepared.opencode.variant.as_deref(), Some("max"));
+            assert_eq!(prepared.reasoning_effort, ReasoningEffort::Default);
+            assert!(prepared.native_id.is_none() && prepared.messages.is_empty());
+        });
+    });
+}

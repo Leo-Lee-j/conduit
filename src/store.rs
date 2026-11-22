@@ -524,6 +524,16 @@ impl Store {
     /// Merge imported providers by stable origin id and migrate the earlier
     /// CCS-only session selection to the shared provider registry.
     pub fn sync_ccs_providers(&mut self, catalog: &crate::ccs::CcsCatalog) {
+        self.merge_ccs_providers(catalog, true);
+    }
+
+    /// An explicit refresh adopts the current CCS catalog, including removals
+    /// and hidden models, instead of carrying forward a startup discovery cache.
+    pub fn refresh_ccs_providers(&mut self, catalog: &crate::ccs::CcsCatalog) {
+        self.merge_ccs_providers(catalog, false);
+    }
+
+    fn merge_ccs_providers(&mut self, catalog: &crate::ccs::CcsCatalog, keep_models: bool) {
         if catalog.error.is_none() && catalog.database_path.is_file() {
             self.providers.retain(|p| match &p.source {
                 crate::providers::ProviderSource::Local => true,
@@ -533,12 +543,47 @@ impl Store {
                     .any(|entry| entry.id == *id && entry.provider == p.engine),
             });
         }
-        for imported in catalog.imported_providers() {
+        for mut imported in catalog.imported_providers() {
             if let Some(provider) = self.providers.iter_mut().find(|p| p.id == imported.id) {
                 if matches!(
                     provider.source,
                     crate::providers::ProviderSource::Ccs { .. }
                 ) {
+                    // CCS may only contain a default model or a partial catalog.
+                    // Keep the durable discovery cache for the same endpoint,
+                    // while allowing current CCS metadata to refresh known IDs.
+                    if keep_models
+                        && provider.base_url.trim_end_matches('/')
+                            == imported.base_url.trim_end_matches('/')
+                    {
+                        for model in &provider.models {
+                            if !imported.models.contains(model) {
+                                imported.models.push(model.clone());
+                            }
+                        }
+                        for metadata in &provider.model_metadata {
+                            if !imported.models.contains(&metadata.id) {
+                                continue;
+                            }
+                            if let Some(current) = imported
+                                .model_metadata
+                                .iter_mut()
+                                .find(|model| model.id == metadata.id)
+                            {
+                                if current.context_window.is_none() {
+                                    current.context_window = metadata.context_window;
+                                }
+                                if current.label == current.id {
+                                    current.label = metadata.label.clone();
+                                }
+                                if current.note.is_empty() {
+                                    current.note = metadata.note.clone();
+                                }
+                            } else {
+                                imported.model_metadata.push(metadata.clone());
+                            }
+                        }
+                    }
                     *provider = imported;
                 }
             } else {
@@ -1021,6 +1066,62 @@ mod tests {
         session.channel = serde_json::from_value(serde_json::json!({"custom":"local"})).unwrap();
         assert_eq!(session.channel, ModelChannel::Provider("local".into()));
     }
+    #[test]
+    fn ccs_sync_preserves_saved_model_catalog_after_restart_and_refresh() {
+        let _locale = crate::test_support::chinese();
+        let mut catalog = crate::ccs::CcsCatalog {
+            providers: vec![crate::ccs::CcsProvider {
+                provider: Provider::Codex,
+                id: "cached-provider".into(),
+                name: "Proxy".into(),
+                current: true,
+                base_url: "https://proxy.invalid/v1".into(),
+                models: vec![crate::models::ModelOption {
+                    id: "default-model".into(),
+                    label: "Default model".into(),
+                    note: String::new(),
+                    context_window: Some(128_000),
+                }],
+            }],
+            ..Default::default()
+        };
+        let mut store = Store::default();
+        store.sync_ccs_providers(&catalog);
+        let provider = &mut store.providers[0];
+        provider.models.push("discovered-model".into());
+        provider.model_metadata.push(crate::models::ModelOption {
+            id: "discovered-model".into(),
+            label: "Discovered model".into(),
+            note: "Cached discovery".into(),
+            context_window: Some(1_000_000),
+        });
+        // The manifest contains the refreshed catalog, but CCS may only return
+        // its default model when the app next starts or reloads configuration.
+        let path = Store::path();
+        store.save_to(&path).unwrap();
+        let mut restored = Store::load_from(&path).unwrap();
+        catalog.providers[0].name = "Renamed proxy".into();
+        catalog.providers[0].models[0].context_window = Some(256_000);
+        restored.sync_ccs_providers(&catalog);
+        restored.sync_ccs_providers(&catalog);
+        let provider = &restored.providers[0];
+        assert_eq!(provider.name, "Renamed proxy");
+        assert_eq!(provider.models, ["default-model", "discovered-model"]);
+        let models = provider.catalog();
+        assert_eq!(models[0].context_window, Some(256_000));
+        assert_eq!(models[1].label, "Discovered model");
+        assert_eq!(models[1].note, "Cached discovery");
+        assert_eq!(models[1].context_window, Some(1_000_000));
+        // An intentional refresh must still honor CCS removals/hidden models.
+        let mut explicitly_refreshed = restored.clone();
+        explicitly_refreshed.refresh_ccs_providers(&catalog);
+        assert_eq!(explicitly_refreshed.providers[0].models, ["default-model"]);
+        // A different endpoint must not inherit the previous service's cache.
+        catalog.providers[0].base_url = "https://replacement.invalid/v1".into();
+        restored.sync_ccs_providers(&catalog);
+        assert_eq!(restored.providers[0].models, ["default-model"]);
+    }
+
     #[test]
     fn legacy_migration_preserves_identity_without_fabricating_context() {
         let _locale = crate::test_support::chinese();

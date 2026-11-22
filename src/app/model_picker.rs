@@ -774,7 +774,12 @@ impl ConduitApp {
             .as_ref()
             .filter(|s| s.engine == self.new_session_provider)
             .cloned()
-            .unwrap_or_else(|| self.default_selection(self.new_session_provider))
+            .unwrap_or_else(|| {
+                self.selected_workspace.map_or_else(
+                    || self.default_selection(self.new_session_provider),
+                    |index| self.workspace_default_selection(index, self.new_session_provider),
+                )
+            })
     }
 
     pub(super) fn update_composer_selection(

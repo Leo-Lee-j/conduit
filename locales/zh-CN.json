@@ -1,4 +1,6 @@
 {
+  "failure.conversation_provider_unavailable": "此会话原来使用的模型服务不可用",
+  "failure.restore_conversation_provider_guidance": "请在模型选择器中先选择原来的模型服务（提供商），再选择模型。仅选回同名模型不会恢复服务。如果服务不在列表中，请在设置中同步或恢复该服务；会话历史仍会保留。",
   "files.proposal.generating": "拟议修改 · 生成中 · 未保存",
   "files.proposal.ready": "拟议修改 · 等待工具执行 · 未保存",
   "files.proposal.paused": "拟议修改 · 预览已暂停 · 未保存",

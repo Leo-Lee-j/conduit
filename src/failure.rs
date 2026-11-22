@@ -54,8 +54,28 @@ impl std::ops::Deref for StreamFailure {
     }
 }
 
+/// Old native imports can retain Conduit's process-local provider alias
+/// without the app's saved service selection. Never guess a service by model ID.
+fn missing_conversation_provider(error: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(error) else {
+        return false;
+    };
+    let error = value.get("error").unwrap_or(&value);
+    error
+        .pointer("/data/type")
+        .and_then(serde_json::Value::as_str)
+        == Some("modelProviderNotConfigured")
+        && error
+            .pointer("/data/modelProvider")
+            .and_then(serde_json::Value::as_str)
+            == Some("conduit")
+}
+
 /// Extract the original cause from native JSON diagnostics.
 pub(crate) fn friendly_failure(error: &str) -> String {
+    if missing_conversation_provider(error) {
+        return conduit::i18n::text_static("failure.conversation_provider_unavailable").to_string();
+    }
     if codex_client_restricted(error) {
         return conduit::i18n::text_static("failure.codex_official_clients_only").to_string();
     }
@@ -92,7 +112,7 @@ pub(crate) fn failure_summary(error: &str) -> String {
         .trim()
         .strip_prefix("执行失败：")
         .unwrap_or(error.trim());
-    let friendly = if codex_client_restricted(error) {
+    let friendly = if missing_conversation_provider(error) || codex_client_restricted(error) {
         friendly_failure(error)
     } else {
         diagnostics::Cause::detect(error)
@@ -135,6 +155,9 @@ fn failure_category(error: &str) -> &'static str {
 
 pub(crate) fn failure_title(error: &str) -> &'static str {
     use diagnostics::Cause;
+    if missing_conversation_provider(error) {
+        return conduit::i18n::text_static("failure.conversation_provider_unavailable");
+    }
     let key = match Cause::detect(error) {
         Cause::RateLimit => "failure.title_rate_limited",
         Cause::Quota => "failure.title_quota_exhausted",
@@ -147,6 +170,9 @@ pub(crate) fn failure_title(error: &str) -> &'static str {
 }
 
 pub(crate) fn failure_guidance(error: &str) -> &'static str {
+    if missing_conversation_provider(error) {
+        return conduit::i18n::text_static("failure.restore_conversation_provider_guidance");
+    }
     if codex_client_restricted(error) {
         return conduit::i18n::text_static("failure.codex_client_restriction_guidance");
     }
@@ -295,6 +321,35 @@ mod tests {
         serde_json::from_str(r#"{"id":1,"provider":"Codex","created_at":0,"exit_code":null}"#)
             .unwrap()
     }
+    #[test]
+    fn missing_internal_provider_explains_service_reselection_and_preserves_native_details() {
+        let raw = serde_json::json!({
+            "code": -32600,
+            "data": {"type":"modelProviderNotConfigured", "modelProvider":"conduit"},
+            "message":"This chat uses model provider `conduit`, which is no longer configured."
+        })
+        .to_string();
+        for language in ["en", "zh-CN"] {
+            let _locale = crate::test_support::scoped(language);
+            let summary = conduit::i18n::text_static("failure.conversation_provider_unavailable");
+            assert_eq!(friendly_failure(&raw), summary);
+            assert_eq!(failure_summary(&raw), summary);
+            assert_eq!(failure_title(&raw), summary);
+            let guidance = failure_guidance(&raw);
+            assert_eq!(
+                guidance,
+                conduit::i18n::text_static("failure.restore_conversation_provider_guidance")
+            );
+            assert!(!summary.contains("conduit"));
+            let mut record = session();
+            record_failure(&mut record, "", &raw, true);
+            assert_eq!(record.messages.last().unwrap().text, raw);
+        }
+        let other = raw.replace("conduit", "user-configured-provider");
+        assert!(!missing_conversation_provider(&other));
+        assert!(friendly_failure(&other).contains("user-configured-provider"));
+    }
+
     #[test]
     fn native_retry_flags_are_structured_and_override_message_words() {
         let _locale = crate::test_support::chinese();

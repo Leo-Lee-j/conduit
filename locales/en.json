@@ -1,4 +1,6 @@
 {
+  "failure.conversation_provider_unavailable": "The model service used by this conversation is unavailable",
+  "failure.restore_conversation_provider_guidance": "In the model picker, select the original model service (provider) and then its model. Selecting the same model alone does not restore the service. If the service is missing, sync or restore it in Settings. Your conversation history is preserved.",
   "files.proposal.generating": "Proposed changes · generating · not saved",
   "files.proposal.ready": "Proposed changes · awaiting tool execution · not saved",
   "files.proposal.paused": "Proposed changes · preview paused · not saved",

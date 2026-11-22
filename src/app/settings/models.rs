@@ -696,7 +696,11 @@ impl ConduitApp {
                 this.catalogs.insert(Provider::Claude, loaded.0);
                 this.catalogs.insert(Provider::Codex, loaded.1);
                 this.ccs = loaded.2;
-                this.store.sync_ccs_providers(&this.ccs);
+                if refresh {
+                    this.store.refresh_ccs_providers(&this.ccs);
+                } else {
+                    this.store.sync_ccs_providers(&this.ccs);
+                }
                 cx.emit(crate::providers::ProviderCatalogChanged);
                 if this.writable {
                     this.dirty = true;
