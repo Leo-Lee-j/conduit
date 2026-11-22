@@ -694,35 +694,61 @@ impl ConduitApp {
             .into_any_element()
     }
 
-    fn subagent_message(&self, id: u64, index: usize, cx: &Context<Self>) -> AnyElement {
+    fn subagent_message(&mut self, id: u64, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(session) = self.session(id) else {
             return div().into_any_element();
         };
-        let Some(item) = session.messages.get(index) else {
+        let provider = session.provider;
+        let Some(item) = session.messages.get(index).cloned() else {
             return div().into_any_element();
         };
+        if item.kind == ItemKind::Tool {
+            let expanded = self.expanded_tools.contains(&(id, item.key.clone()));
+            let mut body = v_flex()
+                .w_full()
+                .min_w_0()
+                .px_4()
+                .py_2()
+                .child(self.activity_row(id, index, &item, cx));
+            if expanded {
+                let detail_key = (id, item.key.clone());
+                let scroll = self
+                    .tool_scrolls
+                    .entry(detail_key.clone())
+                    .or_default()
+                    .clone();
+                let typography = self.chat_typography();
+                let panel = tool_detail_panel(
+                    &detail_key,
+                    &item,
+                    &scroll,
+                    &typography,
+                    &mut self.tool_diffs,
+                    &mut self.tool_analysis,
+                    cx,
+                );
+                body = body.child(div().w_full().min_w_0().pl(px(27.)).child(panel));
+            }
+            return body.into_any_element();
+        }
         let kind = match item.kind {
             ItemKind::User => "user",
             ItemKind::Assistant => "assistant",
             ItemKind::Reasoning => "reasoning",
-            ItemKind::Tool => "tool",
+            ItemKind::Tool => unreachable!(),
             ItemKind::Notice => "notice",
             ItemKind::Error => "error",
         };
         let identity = format!("child-message-{id}-{}", item.key);
-        let mut body = v_flex().w_full().min_w_0().px_4().py_3().gap_2().child(
+        let body = v_flex().w_full().min_w_0().px_4().py_3().gap_2().child(
             div()
                 .font_semibold()
                 .text_color(rgb(palette().muted))
                 .child(conduit::i18n::text(&format!("subagents.message_{kind}"))),
         );
-        let text = if item.kind == ItemKind::Tool {
-            format!("{}\n\n{}\n\n{}", item.text, item.input, item.detail)
-        } else {
-            super::super::chat::message_markdown(item, session.provider).into_owned()
-        };
+        let text = super::super::chat::message_markdown(&item, provider).into_owned();
         let app = cx.weak_entity();
-        body = body.child(
+        body.child(
             chat_markdown_view(
                 identity.clone().into(),
                 text,
@@ -735,8 +761,8 @@ impl ConduitApp {
                     let _ = app.update(cx, |this, cx| this.open_chat_link(id, url, window, cx));
                 }
             }),
-        );
-        body.into_any_element()
+        )
+        .into_any_element()
     }
 }
 

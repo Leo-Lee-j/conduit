@@ -30,6 +30,7 @@ pub struct ImportedSession {
     pub created_at: u64,
     pub title: String,
     pub model: Option<String>,
+    pub subagents: Vec<crate::subagents::Agent>,
     pub messages: Vec<ChatItem>,
 }
 
@@ -82,6 +83,17 @@ pub(crate) fn prepare_imported(
                 && session.native_id.as_deref() == Some(imported.native_id.as_str())
         });
         if imported.is_subagent {
+            for patch in &imported.subagents {
+                for parent in workspace.sessions.iter().filter(|session| {
+                    !session.is_subagent
+                        && session.provider == imported.provider
+                        && session.native_id.as_deref() == Some(patch.parent_id.as_str())
+                }) {
+                    let mut record = parent.clone();
+                    merge_imported_subagents(&mut record.subagents, vec![patch.clone()]);
+                    prepared.push(record);
+                }
+            }
             // Reclassify earlier imports without loading or rewriting their bodies.
             for previous in workspace.sessions.iter().filter(|session| {
                 !session.is_subagent
@@ -143,6 +155,7 @@ fn merge_session(
         if existing.model.is_none() {
             existing.model = session.model;
         }
+        merge_imported_subagents(&mut existing.subagents, session.subagents);
         let mut messages = session.messages;
         preserve_reply_timings(&existing.messages, &mut messages);
         existing.messages = merge_transcript(&existing.messages, messages);
@@ -154,7 +167,7 @@ fn merge_session(
     let id = *next_id;
     *next_id += 1;
     workspace.sessions.push(crate::domain::SessionRecord {
-        subagents: Default::default(),
+        subagents: session.subagents,
         is_subagent: false,
         branching: Default::default(),
         transcript: Default::default(),
@@ -176,6 +189,47 @@ fn merge_session(
         usage: crate::domain::Usage::default(),
     });
     1
+}
+
+fn merge_imported_subagents(
+    existing: &mut Vec<crate::subagents::Agent>,
+    imported: Vec<crate::subagents::Agent>,
+) {
+    for agent in imported {
+        if let Some(previous) = existing
+            .iter_mut()
+            .find(|previous| previous.id == agent.id && previous.run == agent.run)
+        {
+            if previous.name.is_empty() {
+                previous.name = agent.name;
+            }
+            if previous.title.is_empty() {
+                previous.title = agent.title;
+            }
+            if previous.task.is_empty() {
+                previous.task = agent.task;
+            }
+            if previous.parent_id.is_empty() {
+                previous.parent_id = agent.parent_id;
+            }
+            if previous.started_at == 0 {
+                previous.started_at = agent.started_at;
+            }
+            if previous.status == crate::subagents::Status::Unknown
+                && agent.status != crate::subagents::Status::Unknown
+            {
+                previous.status = agent.status;
+                previous.updated_at = agent.updated_at;
+                previous.finished_at = agent.finished_at;
+                previous.elapsed_ms = agent.elapsed_ms;
+            }
+            continue;
+        }
+        if existing.len() >= 512 {
+            break;
+        }
+        existing.push(agent);
+    }
 }
 
 fn merge_transcript(previous: &[ChatItem], incoming: Vec<ChatItem>) -> Vec<ChatItem> {
@@ -541,6 +595,7 @@ impl ClaudeState {
                 created_at,
                 title,
                 model,
+                subagents: Vec::new(),
                 messages,
             },
         ))
@@ -598,6 +653,16 @@ struct CodexState {
     native_id: Option<String>,
     #[serde(default)]
     is_subagent: bool,
+    #[serde(default)]
+    parent_thread_id: Option<String>,
+    #[serde(default)]
+    subagent_run: Option<String>,
+    #[serde(default)]
+    subagent_status: crate::subagents::Status,
+    #[serde(default)]
+    subagent_finished_at: Option<u64>,
+    #[serde(default)]
+    subagents: Vec<crate::subagents::Agent>,
     created_at: u64,
     cwd: String,
     model: Option<String>,
@@ -642,6 +707,10 @@ fn extend_codex(
             if found {
                 let meta = value.get("payload").unwrap_or(&value);
                 state.is_subagent = codex_subagent_meta(meta);
+                state.parent_thread_id = meta
+                    .get("parent_thread_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
                 state.native_id = meta
                     .get("id")
                     .or_else(|| meta.get("session_id"))
@@ -668,22 +737,57 @@ fn extend_codex(
         }
     }
     if state.is_subagent {
-        // Retain only identity metadata for migration; child transcripts are not list entries.
-        for (index, _) in values {
+        // Child rollouts are not transcript entries, but their terminal turn
+        // events can restore the status shown on the parent session.
+        for (index, value) in state.pending.drain(..).chain(values) {
             state.next_index = index + 1;
+            let payload = value.get("payload").unwrap_or(&value);
+            if value.get("type").and_then(Value::as_str) != Some("event_msg") {
+                continue;
+            }
+            let event_at = value
+                .get("timestamp")
+                .or_else(|| payload.get("timestamp"))
+                .and_then(Value::as_str)
+                .and_then(rfc3339_to_unix_opt)
+                .unwrap_or(0);
+            match payload.get("type").and_then(Value::as_str) {
+                Some("task_started") => {
+                    if let Some(parent_turn) = payload
+                        .pointer("/turn_attribution/parent_turn_id")
+                        .and_then(Value::as_str)
+                        .filter(|turn| !turn.is_empty())
+                    {
+                        state.subagent_run = Some(parent_turn.to_owned());
+                    }
+                }
+                Some("task_complete") => {
+                    state.subagent_status = crate::subagents::Status::Completed;
+                    state.subagent_finished_at = Some(event_at);
+                }
+                Some("turn_aborted") => {
+                    state.subagent_status = crate::subagents::Status::Stopped;
+                    state.subagent_finished_at = Some(event_at);
+                }
+                _ => {}
+            }
         }
-        state.pending.clear();
         return state;
     }
     let CodexState {
         native_id,
         is_subagent,
+        parent_thread_id,
+        subagent_run,
+        subagent_status,
+        subagent_finished_at,
         created_at,
         cwd,
         mut model,
         mut current_model,
         mut event_rows,
         mut response_rows,
+        mut subagents,
         mut event_reasoning,
         mut response_reasoning,
         mut event_users,
@@ -886,6 +990,72 @@ fn extend_codex(
                 let item_id = item.get("id").and_then(Value::as_str).unwrap_or("item");
                 let key = format!("import-{index}-{item_id}");
                 match item_type {
+                    "CollabAgentToolCall"
+                        if item.get("tool").and_then(Value::as_str) == Some("spawn_agent") =>
+                    {
+                        let run = payload
+                            .get("turn_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        let started_at = item
+                            .get("started_at_ms")
+                            .and_then(Value::as_u64)
+                            .map(|millis| millis / 1000)
+                            .or_else(|| {
+                                payload
+                                    .get("started_at_ms")
+                                    .and_then(Value::as_u64)
+                                    .map(|millis| millis / 1000)
+                            })
+                            .unwrap_or(event_created_at);
+                        let updated_at = payload
+                            .get("completed_at_ms")
+                            .and_then(Value::as_u64)
+                            .map(|millis| millis / 1000)
+                            .unwrap_or(event_created_at);
+                        let child_ids = item
+                            .get("receiver_thread_ids")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str);
+                        for child_id in child_ids {
+                            let name = item
+                                .get("receiver_agents")
+                                .and_then(Value::as_array)
+                                .into_iter()
+                                .flatten()
+                                .find(|agent| {
+                                    agent.get("thread_id").and_then(Value::as_str) == Some(child_id)
+                                })
+                                .and_then(|agent| agent.get("agent_nickname"))
+                                .and_then(Value::as_str)
+                                .unwrap_or_default();
+                            let mut agent = crate::subagents::Agent {
+                                id: child_id.to_owned(),
+                                parent_id: native_id.as_deref().unwrap_or_default().to_owned(),
+                                name: name.to_owned(),
+                                task: item
+                                    .get("prompt")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_owned(),
+                                started_at,
+                                updated_at,
+                                run: run.to_owned(),
+                                task_id: item_id.to_owned(),
+                                ..Default::default()
+                            };
+                            agent.bounded();
+                            if let Some(previous) = subagents.iter_mut().find(|previous| {
+                                previous.id == agent.id && previous.run == agent.run
+                            }) {
+                                *previous = agent;
+                            } else if subagents.len() < 512 {
+                                subagents.push(agent);
+                            }
+                        }
+                    }
                     "UserMessage" => {
                         let Some(text) = codex_event_text(item) else {
                             continue;
@@ -1107,12 +1277,17 @@ fn extend_codex(
     CodexState {
         native_id,
         is_subagent,
+        parent_thread_id,
+        subagent_run,
+        subagent_status,
+        subagent_finished_at,
         created_at,
         cwd,
         model,
         current_model,
         event_rows,
         response_rows,
+        subagents,
         event_reasoning,
         response_reasoning,
         event_users,
@@ -1132,11 +1307,16 @@ impl CodexState {
         let Self {
             native_id,
             is_subagent,
+            parent_thread_id,
+            subagent_run,
+            subagent_status,
+            subagent_finished_at,
             created_at,
             cwd,
             mut model,
             event_rows,
             response_rows,
+            subagents,
             event_reasoning,
             response_reasoning,
             event_users,
@@ -1148,6 +1328,20 @@ impl CodexState {
         } = self;
         let native_id = native_id?;
         if is_subagent {
+            let subagents = if subagent_status != crate::subagents::Status::Unknown {
+                let finished_at = subagent_finished_at.unwrap_or(created_at);
+                vec![crate::subagents::Agent {
+                    id: native_id.clone(),
+                    parent_id: parent_thread_id.clone().unwrap_or_default(),
+                    run: subagent_run.unwrap_or_default(),
+                    status: subagent_status,
+                    updated_at: finished_at,
+                    finished_at: Some(finished_at),
+                    ..Default::default()
+                }]
+            } else {
+                Vec::new()
+            };
             return Some((
                 cwd,
                 ImportedSession {
@@ -1157,6 +1351,7 @@ impl CodexState {
                     created_at,
                     title: String::new(),
                     model,
+                    subagents,
                     messages: Vec::new(),
                 },
             ));
@@ -1251,6 +1446,7 @@ impl CodexState {
                 created_at,
                 title,
                 model,
+                subagents,
                 messages,
             },
         ))
@@ -1520,6 +1716,182 @@ mod tests {
             let (_, session) = parse_codex_any(&text, None).unwrap();
             assert_eq!(session.is_subagent, expected, "{meta}");
             assert_eq!(session.messages.is_empty(), expected, "{meta}");
+        }
+    }
+
+    #[test]
+    fn codex_history_imports_spawned_agents_from_collaboration_events() {
+        let text = [
+            serde_json::json!({
+                "type":"session_meta",
+                "payload":{"id":"parent-thread", "cwd":"D:/workspace"}
+            }),
+            serde_json::json!({
+                "type":"response_item",
+                "payload":{
+                    "type":"message",
+                    "role":"user",
+                    "content":[{"type":"input_text", "text":"Review this change"}]
+                }
+            }),
+            serde_json::json!({
+                "type":"event_msg",
+                "timestamp":"2026-11-22T10:00:00Z",
+                "payload":{
+                    "type":"item_completed",
+                    "turn_id":"parent-turn",
+                    "started_at_ms":1795341600000u64,
+                    "completed_at_ms":1795341601000u64,
+                    "item":{
+                        "type":"CollabAgentToolCall",
+                        "id":"call-1",
+                        "tool":"spawn_agent",
+                        "status":"completed",
+                        "prompt":"Inspect the history import path",
+                        "receiver_thread_ids":["child-thread"],
+                        "receiver_agents":[{"thread_id":"child-thread", "agent_nickname":"Reviewer"}]
+                    }
+                }
+            }),
+        ]
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+        let (_, session) = parse_codex_any(&text, None).unwrap();
+        assert_eq!(session.subagents.len(), 1);
+        let agent = &session.subagents[0];
+        assert_eq!(agent.id, "child-thread");
+        assert_eq!(agent.parent_id, "parent-thread");
+        assert_eq!(agent.name, "Reviewer");
+        assert_eq!(agent.task, "Inspect the history import path");
+        assert_eq!(agent.run, "parent-turn");
+        assert_eq!(agent.task_id, "call-1");
+        assert_eq!(agent.status, crate::subagents::Status::Unknown);
+        assert_eq!(agent.started_at, 1795341600);
+        assert_eq!(agent.updated_at, 1795341601);
+    }
+
+    #[test]
+    fn imported_agent_metadata_does_not_replace_runtime_status() {
+        let mut existing = vec![crate::subagents::Agent {
+            id: "child-thread".into(),
+            run: "parent-turn".into(),
+            status: crate::subagents::Status::Completed,
+            result: "review complete".into(),
+            ..Default::default()
+        }];
+        merge_imported_subagents(
+            &mut existing,
+            vec![crate::subagents::Agent {
+                id: "child-thread".into(),
+                parent_id: "parent-thread".into(),
+                name: "Reviewer".into(),
+                task: "Inspect the history import path".into(),
+                run: "parent-turn".into(),
+                ..Default::default()
+            }],
+        );
+        assert_eq!(existing.len(), 1);
+        assert_eq!(existing[0].status, crate::subagents::Status::Completed);
+        assert_eq!(existing[0].result, "review complete");
+        assert_eq!(existing[0].name, "Reviewer");
+        assert_eq!(existing[0].task, "Inspect the history import path");
+    }
+
+    #[test]
+    fn later_child_status_updates_an_already_imported_parent() {
+        let parent: crate::domain::SessionRecord = serde_json::from_value(serde_json::json!({
+            "id": 1,
+            "provider": "Codex",
+            "created_at": 1,
+            "exit_code": null,
+            "native_id": "parent-thread",
+            "subagents": [{"id":"child-thread", "parent_id":"parent-thread", "run":"parent-turn"}]
+        }))
+        .unwrap();
+        let workspace = crate::domain::Workspace {
+            path: PathBuf::from("D:/workspace"),
+            sessions: vec![parent],
+        };
+        let imported = ImportedSession {
+            is_subagent: true,
+            provider: Provider::Codex,
+            native_id: "child-thread".into(),
+            created_at: 0,
+            title: String::new(),
+            model: None,
+            subagents: vec![crate::subagents::Agent {
+                id: "child-thread".into(),
+                parent_id: "parent-thread".into(),
+                run: "parent-turn".into(),
+                status: crate::subagents::Status::Completed,
+                updated_at: 42,
+                finished_at: Some(42),
+                ..Default::default()
+            }],
+            messages: Vec::new(),
+        };
+
+        let (records, warnings) =
+            prepare_imported(&workspace, vec![imported], Path::new("D:/unused"));
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].native_id.as_deref(), Some("parent-thread"));
+        assert_eq!(
+            records[0].subagents[0].status,
+            crate::subagents::Status::Completed
+        );
+        assert_eq!(records[0].subagents[0].finished_at, Some(42));
+    }
+
+    #[test]
+    fn codex_child_terminal_events_restore_parent_agent_status() {
+        for (event, expected) in [
+            ("task_complete", crate::subagents::Status::Completed),
+            ("turn_aborted", crate::subagents::Status::Stopped),
+        ] {
+            let lines = [
+                serde_json::json!({
+                    "type":"session_meta",
+                    "payload":{
+                        "id":"child-thread",
+                        "cwd":"D:/workspace",
+                        "parent_thread_id":"parent-thread",
+                        "thread_source":"subagent"
+                    }
+                }),
+                serde_json::json!({
+                    "type":"event_msg",
+                    "timestamp":"2026-11-22T10:00:00Z",
+                    "payload":{
+                        "type":"task_started",
+                        "turn_id":"child-turn",
+                        "turn_attribution":{"parent_turn_id":"parent-turn"}
+                    }
+                }),
+                serde_json::json!({
+                    "type":"event_msg",
+                    "timestamp":"2026-11-22T10:02:00Z",
+                    "payload":{"type":event,"turn_id":"child-turn"}
+                }),
+            ];
+            let text = lines
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let (_, imported) = parse_codex_any(&text, None).unwrap();
+            assert!(imported.is_subagent);
+            assert_eq!(imported.subagents.len(), 1);
+            let agent = &imported.subagents[0];
+            assert_eq!(agent.id, "child-thread");
+            assert_eq!(agent.parent_id, "parent-thread");
+            assert_eq!(agent.run, "parent-turn");
+            assert_eq!(agent.status, expected);
+            assert_eq!(agent.finished_at, Some(1795341720));
         }
     }
 
@@ -1934,6 +2306,7 @@ mod tests {
                 created_at: 100,
                 title: "新标题".into(),
                 model: Some("m1".into()),
+                subagents: Vec::new(),
                 messages: vec![ChatItem::from(crate::domain::ChatItemData {
                     reasoning_summary: None,
                     elapsed_ms: None,
@@ -1951,6 +2324,14 @@ mod tests {
             ImportedSession {
                 is_subagent: false,
                 provider: Provider::Codex,
+                subagents: vec![crate::subagents::Agent {
+                    id: "child-thread".into(),
+                    parent_id: "fresh".into(),
+                    name: "Reviewer".into(),
+                    task: "Inspect this session".into(),
+                    run: "turn-1".into(),
+                    ..Default::default()
+                }],
                 native_id: "fresh".into(),
                 created_at: 200,
                 title: "终端会话".into(),
@@ -1992,6 +2373,8 @@ mod tests {
             .find(|s| s.native_id.as_deref() == Some("fresh"))
             .unwrap();
         assert_eq!(fresh.id, 8);
+        assert_eq!(fresh.subagents.len(), 1);
+        assert_eq!(fresh.subagents[0].name, "Reviewer");
         assert_eq!(next_id, 9);
         // Newest first ordering.
         assert!(workspace.sessions[0].created_at >= workspace.sessions[1].created_at);

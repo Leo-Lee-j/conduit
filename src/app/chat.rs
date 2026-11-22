@@ -1068,7 +1068,9 @@ impl ConduitApp {
             category
         ))
         .on_click(cx.listener(move |this, _, _, cx| {
-            this.remeasure_message(index);
+            if this.selected_session == Some(session_id) {
+                this.remeasure_message(index);
+            }
             if !this.expanded_tools.remove(&toggle_key) {
                 this.expanded_tools.insert(toggle_key.clone());
             }

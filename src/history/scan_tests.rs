@@ -400,15 +400,35 @@ fn codex_subagents_stay_excluded_across_cache_rebuilds_and_appends() {
         "{}\n",
         serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"user", "content":[{"type":"input_text", "text":"question"}]}})
     );
+    let parent_agent = format!(
+        "{}\n",
+        serde_json::json!({
+            "type":"event_msg",
+            "payload":{
+                "type":"item_completed",
+                "turn_id":"parent-turn",
+                "item":{
+                    "type":"CollabAgentToolCall",
+                    "id":"spawn-1",
+                    "tool":"spawn_agent",
+                    "prompt":"Review this change",
+                    "receiver_thread_ids":["child"],
+                    "receiver_agents":[{"thread_id":"child","agent_nickname":"Reviewer"}]
+                }
+            }
+        })
+    );
     std::fs::write(
         fixture.file(Provider::Codex, "main"),
-        fixture.codex_meta() + &prompt,
+        fixture.codex_meta() + &parent_agent + &prompt,
     )
     .unwrap();
     let child = fixture.file(Provider::Codex, "child");
     let text = format!(
-        "{}\n{prompt}",
-        serde_json::json!({"type":"session_meta", "payload":{"id":"child", "cwd":fixture.workspace, "thread_source":"subagent", "parent_thread_id":"native-codex"}})
+        "{}\n{}\n{}\n{prompt}",
+        serde_json::json!({"type":"session_meta", "payload":{"id":"child", "cwd":fixture.workspace, "thread_source":"subagent", "parent_thread_id":"native-codex"}}),
+        serde_json::json!({"type":"event_msg", "timestamp":"2026-11-04T00:00:01Z", "payload":{"type":"task_started", "turn_id":"child-turn", "turn_attribution":{"parent_turn_id":"parent-turn"}}}),
+        serde_json::json!({"type":"event_msg", "timestamp":"2026-11-04T00:00:05Z", "payload":{"type":"task_complete", "turn_id":"child-turn"}})
     );
     std::fs::write(&child, &text).unwrap();
     let mut workspace = crate::domain::Workspace {
@@ -433,6 +453,11 @@ fn codex_subagents_stay_excluded_across_cache_rebuilds_and_appends() {
         assert_eq!(
             workspace.sessions[0].native_id.as_deref(),
             Some("native-codex")
+        );
+        assert_eq!(workspace.sessions[0].subagents.len(), 1);
+        assert_eq!(
+            workspace.sessions[0].subagents[0].status,
+            crate::subagents::Status::Completed
         );
     }
     let mut index = Index::open(&fixture.index).unwrap();
@@ -485,6 +510,7 @@ fn reclassifying_an_existing_subagent_preserves_metadata_and_cold_body_without_i
         created_at: 0,
         title: String::new(),
         model: None,
+        subagents: Vec::new(),
         messages: vec![],
     };
     let directory = fixture.root.join("must-not-be-created");

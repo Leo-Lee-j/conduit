@@ -382,6 +382,7 @@ fn cold_history_merge_preserves_local_messages_and_remains_cold() {
         created_at: 1,
         title: "native title".into(),
         model: None,
+        subagents: Vec::new(),
         messages: vec![
             message("user", "original prompt", 10),
             message("import-reply", "original reply", 20),

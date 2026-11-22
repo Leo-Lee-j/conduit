@@ -1076,10 +1076,16 @@ impl ConduitApp {
                         .iter()
                         .zip(&batch.sessions)
                         .map(|(path, incoming)| {
-                            let keys: HashSet<_> = incoming
+                            let mut keys: HashSet<_> = incoming
                                 .iter()
                                 .map(|session| (session.provider, session.native_id.as_str()))
                                 .collect();
+                            keys.extend(incoming.iter().flat_map(|session| {
+                                session
+                                    .subagents
+                                    .iter()
+                                    .map(move |agent| (session.provider, agent.parent_id.as_str()))
+                            }));
                             let sessions = this
                                 .store
                                 .workspaces

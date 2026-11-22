@@ -14,8 +14,9 @@ pub(super) struct PanelState {
 
 impl PanelState {
     fn sync(&mut self, scope: String, all_completed: bool) {
-        if self.scope != scope || self.all_completed != all_completed {
-            self.expanded = !all_completed;
+        let new_scope = self.scope != scope;
+        if new_scope || self.all_completed != all_completed {
+            self.expanded = new_scope || !all_completed;
             self.scope = scope;
             self.all_completed = all_completed;
         }
@@ -502,6 +503,14 @@ mod ui_tests;
 #[cfg(test)]
 mod tests {
     use super::PanelState;
+
+    #[test]
+    fn completed_history_scope_starts_expanded() {
+        let mut state = PanelState::default();
+        let scope: String = ['h', 'i', 's', 't', 'o', 'r', 'y'].into_iter().collect();
+        state.sync(scope, true);
+        assert!(state.expanded);
+    }
 
     // Completion may shrink the panel once, but must not undo an explicit
     // request to inspect results, or carry a collapsed batch into a new run.

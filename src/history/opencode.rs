@@ -69,6 +69,7 @@ impl Scanner {
                         title: row.get(2)?,
                         created_at: created_at.max(0) as u64 / 1000,
                         model: None,
+                        subagents: Vec::new(),
                         messages: Vec::new(),
                     },
                 });

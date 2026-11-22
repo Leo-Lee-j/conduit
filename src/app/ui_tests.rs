@@ -1018,6 +1018,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
                     created_at: 0,
                     title: "stale history".into(),
                     model: None,
+                    subagents: Vec::new(),
                     messages: vec![],
                 }],
                 true,
@@ -1823,6 +1824,7 @@ mod history_and_search {
             created_at: 0,
             title: "原生标题".into(),
             model: None,
+            subagents: Vec::new(),
             messages,
         }
     }
@@ -1853,6 +1855,33 @@ mod history_and_search {
                 assert_eq!(app.session(1).unwrap().messages[1].text, "completed turn");
                 assert_eq!(app.session(1).unwrap().title, "手动命名");
             })
+        });
+    }
+
+    #[gpui_kit::test]
+    fn history_import_restores_agents_on_an_unchanged_parent_session(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
+        let (app, cx, path) = fixture(cx);
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.session_mut(1).unwrap().messages = vec![item("local-user", "parent prompt")];
+                app.session_control.begin_import(&app.store.workspaces[0]);
+                let mut incoming = imported(vec![item("import-user", "parent prompt")]);
+                incoming.subagents.push(crate::subagents::Agent {
+                    id: "child-native".into(),
+                    parent_id: "review-native".into(),
+                    name: "Reviewer".into(),
+                    task: "Inspect the imported session".into(),
+                    run: "parent-turn".into(),
+                    ..Default::default()
+                });
+                app.finish_history_import(&path, vec![incoming], false, true, window, cx);
+
+                let session = app.session(1).unwrap();
+                assert_eq!(session.subagents.len(), 1);
+                assert_eq!(session.subagents[0].id, "child-native");
+                assert_eq!(session.messages[0].text, "parent prompt");
+            });
         });
     }
 

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 
 // Reparse native metadata so earlier child imports can be hidden without losing history.
-const PARSER_VERSION: u32 = 5;
+const PARSER_VERSION: u32 = 7;
 const MAX_ENTRY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_INDEX_BYTES: i64 = 256 * 1024 * 1024;
 

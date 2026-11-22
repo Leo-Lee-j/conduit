@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 #[path = "scan_tests.rs"]
 mod tests;
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     fs::File,
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     sync::atomic::{AtomicBool, Ordering},
@@ -167,6 +167,7 @@ pub(crate) struct Scanner {
     total: usize,
     completed: usize,
     pending: Option<Pending>,
+    subagent_statuses: HashMap<String, Vec<crate::subagents::Agent>>,
     opencode: Option<super::opencode::Scanner>,
 }
 impl Scanner {
@@ -295,6 +296,7 @@ impl Scanner {
             total,
             completed: 0,
             pending: None,
+            subagent_statuses: HashMap::new(),
             opencode,
         }
     }
@@ -333,7 +335,17 @@ impl Scanner {
                         ));
                     }
                 }
-                Ok(Loaded::Complete(Some((cwds, session)))) => {
+                Ok(Loaded::Complete(Some((cwds, mut session)))) => {
+                    if session.is_subagent {
+                        for agent in &session.subagents {
+                            self.subagent_statuses
+                                .entry(agent.parent_id.clone())
+                                .or_default()
+                                .push(agent.clone());
+                        }
+                    } else if let Some(agents) = self.subagent_statuses.remove(&session.native_id) {
+                        super::merge_imported_subagents(&mut session.subagents, agents);
+                    }
                     for (workspace, sessions) in self.workspaces.iter().zip(&mut batch.sessions) {
                         if cwds.iter().any(|cwd| same_dir(cwd, workspace)) {
                             sessions.push(session.clone());
@@ -375,6 +387,22 @@ impl Scanner {
                 .is_none_or(|scanner| scanner.remaining() == 0))
             || cancel.load(Ordering::Acquire);
         for sessions in &mut batch.sessions {
+            let patches: Vec<_> = sessions
+                .iter()
+                .filter(|session| session.is_subagent)
+                .flat_map(|session| session.subagents.iter().cloned())
+                .collect();
+            for session in sessions.iter_mut().filter(|session| !session.is_subagent) {
+                let parent_id = &session.native_id;
+                super::merge_imported_subagents(
+                    &mut session.subagents,
+                    patches
+                        .iter()
+                        .filter(|agent| &agent.parent_id == parent_id)
+                        .cloned()
+                        .collect(),
+                );
+            }
             sessions.sort_by_key(|session| std::cmp::Reverse(session.created_at));
         }
         batch
