@@ -1,47 +1,20 @@
+use super::list::{service_avatar, service_badge};
 use super::*;
 
-pub(super) struct ServiceDetails {
-    app: WeakEntity<ConduitApp>,
-    engine: Provider,
-    channel: ModelChannel,
-    tab: DetailTab,
-    _subscription: Subscription,
-}
-
-impl ServiceDetails {
-    pub(super) fn new(
-        app: Entity<ConduitApp>,
+impl ConduitApp {
+    pub(super) fn service_details(
+        &self,
         engine: Provider,
-        channel: ModelChannel,
+        channel: &ModelChannel,
         tab: DetailTab,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let subscription = cx.observe(&app, |_, _, cx| cx.notify());
-        Self {
-            app: app.downgrade(),
-            engine,
-            channel,
-            tab,
-            _subscription: subscription,
-        }
-    }
-}
-
-impl Render for ServiceDetails {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(view) = self.app.upgrade() else {
-            return div().into_any_element();
-        };
-        let app = view.read(cx);
-        let engine = self.engine;
-        let channel = self.channel.clone();
-        let provider = match &channel {
-            ModelChannel::Provider(id) => app
+        view: Entity<Self>,
+    ) -> AnyElement {
+        let provider = match channel {
+            ModelChannel::Provider(id) => self
                 .store
                 .providers
                 .iter()
-                .find(|p| p.id == *id && p.engine == engine)
-                .cloned(),
+                .find(|p| p.id == *id && p.engine == engine),
             _ => None,
         };
         if matches!(channel, ModelChannel::Provider(_)) && provider.is_none() {
@@ -52,299 +25,361 @@ impl Render for ServiceDetails {
                 ))
                 .into_any_element();
         }
-        let native = channel == ModelChannel::Cli;
-        let imported = provider
-            .as_ref()
-            .is_some_and(|p| matches!(p.source, ProviderSource::Ccs { .. }));
-        let disabled = !app.writable || app.closing;
+        let native = *channel == ModelChannel::Cli;
+        let imported = provider.is_some_and(|p| matches!(p.source, ProviderSource::Ccs { .. }));
+        let current = self.default_selection(engine).channel == *channel;
         let label = if native {
             service_text("settings.defaults.native_cli_configuration").to_string()
         } else {
-            app.channel_label(engine, &channel)
+            self.channel_label(engine, channel)
         };
-        let models = if native {
-            app.managed_native_models(engine, true)
+        let model_count = if native {
+            self.managed_native_models(engine, true).len()
         } else {
-            provider.as_ref().map(|p| p.catalog()).unwrap_or_default()
+            provider.map(|p| p.catalog().len()).unwrap_or_default()
         };
-        let session_count = app.service_session_count(engine, &channel);
-        let mut tabs = h_flex()
+        let mut header = h_flex()
+            .debug_selector(|| "service-detail-header".into())
             .w_full()
-            .gap_2()
-            .pb_2()
-            .border_b_1()
-            .border_color(rgb(palette().border));
-        for (index, (tab, title)) in [
-            (
-                DetailTab::Models,
-                format!(
-                    "{} · {}",
-                    service_text("settings.models.model_list"),
-                    models.len()
-                ),
-            ),
-            (
-                DetailTab::Sessions,
-                format!(
-                    "{} · {}",
-                    service_text("settings.services.sessions"),
-                    session_count
-                ),
-            ),
-            (
-                DetailTab::Sources,
-                service_text("settings.models.configuration_sources").to_string(),
-            ),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            if tab == DetailTab::Sources
-                && (!native || !engine.descriptor().capabilities.model_services)
-            {
-                continue;
-            }
-            tabs = tabs.child(
-                Button::new(("service-detail-tab", index))
-                    .debug_selector(move || format!("service-detail-tab-{index}"))
-                    .small()
-                    .ghost()
-                    .selected(self.tab == tab)
-                    .label(title)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.tab = tab;
-                        cx.notify();
-                    })),
-            );
-        }
-        let mut header = v_flex()
-            .w_full()
-            .gap_2()
-            .pb_3()
+            .items_start()
+            .justify_between()
+            .flex_wrap()
+            .gap_3()
+            .p_3()
             .child(
-                div()
-                    .text_size(ui_text_size(18.))
-                    .font_semibold()
-                    .child(label),
-            )
-            .child(
-                div()
-                    .text_size(ui_text_size(12.))
-                    .text_color(rgb(palette().muted))
-                    .child(if imported {
-                        "cc-switch"
-                    } else if native {
-                        engine.label()
-                    } else {
-                        service_text("settings.services.local")
-                    }),
-            );
-        if let Some(provider) = &provider {
-            header = header.child(
-                div()
-                    .text_size(ui_text_size(12.))
-                    .text_color(rgb(palette().muted))
-                    .child(provider.base_url.clone()),
-            );
-        }
-        let body = match self.tab {
-            DetailTab::Sources => {
-                let group = app.models_source_group(engine, view.clone());
-                detail_settings("service-source-settings", group)
-            }
-            DetailTab::Models if native => detail_settings(
-                "service-native-model-settings",
-                app.models_provider_group(engine, view.clone()),
-            ),
-            DetailTab::Models => {
-                let defaults = app.default_selection(engine);
-                let mut list = v_flex().w_full().gap_2().child(
-                    div()
-                        .text_size(ui_text_size(12.))
-                        .text_color(rgb(palette().muted))
-                        .child(service_text("settings.services.choose_model_hint")),
-                );
-                for (index, model) in models.into_iter().enumerate() {
-                    let selected =
-                        defaults.channel == channel && defaults.model.as_ref() == Some(&model.id);
-                    let use_view = view.clone();
-                    let use_channel = channel.clone();
-                    let model_id = model.id.clone();
-                    list = list.child(
-                        h_flex()
-                            .w_full()
-                            .justify_between()
-                            .gap_2()
-                            .flex_wrap()
-                            .py_3()
-                            .border_b_1()
-                            .border_color(rgb(palette().border))
+                h_flex()
+                    .flex_1()
+                    .min_w(px(160.))
+                    .items_start()
+                    .gap_3()
+                    .child(service_avatar(&label, true))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1()
                             .child(
-                                v_flex()
-                                    .flex_1()
-                                    .min_w(px(120.))
-                                    .gap_1()
+                                h_flex()
+                                    .w_full()
+                                    .gap_2()
+                                    .flex_wrap()
                                     .child(
                                         div()
-                                            .font_medium()
-                                            .text_size(ui_text_size(13.))
-                                            .child(model.label.clone()),
+                                            .font_semibold()
+                                            .text_size(ui_text_size(16.))
+                                            .child(label),
                                     )
-                                    .when(model.label != model.id, |row| {
-                                        row.child(
-                                            div()
-                                                .text_size(ui_text_size(11.))
-                                                .text_color(rgb(palette().muted))
-                                                .child(model.id),
-                                        )
-                                    })
-                                    .when(!model.note.is_empty(), |row| {
-                                        row.child(
-                                            div()
-                                                .text_size(ui_text_size(11.))
-                                                .text_color(rgb(palette().muted))
-                                                .child(model.note),
-                                        )
+                                    .when(current, |row| {
+                                        row.child(service_badge(service_text(
+                                            "settings.services.current_default",
+                                        )))
                                     }),
                             )
-                            .child(
-                                Button::new(("service-model-default", index))
-                                    .small()
-                                    .ghost()
-                                    .label(service_text(if selected {
-                                        "settings.services.current_default"
-                                    } else {
-                                        "settings.services.set_default"
-                                    }))
-                                    .disabled(disabled || selected)
-                                    .on_click(move |_, window, cx| {
-                                        use_view.update(cx, |app, cx| {
-                                            if app.set_service_default(
-                                                engine,
-                                                use_channel.clone(),
-                                                Some(model_id.clone()),
-                                                cx,
-                                            ) {
-                                                window.push_notification(
-                                                    Notification::success(service_text(
-                                                        "settings.services.default_saved",
-                                                    )),
-                                                    cx,
-                                                );
-                                            }
-                                        })
-                                    }),
-                            ),
-                    );
-                }
-                if provider.as_ref().is_none_or(|p| p.catalog().is_empty()) {
-                    list = list.child(
-                        div()
-                            .py_4()
-                            .child(service_text("settings.services.no_models")),
-                    );
-                }
-                list.into_any_element()
-            }
-            DetailTab::Sessions => {
-                let mut list = v_flex().w_full().gap_2().child(
-                    div()
-                        .text_size(ui_text_size(12.))
-                        .text_color(rgb(palette().muted))
-                        .child(service_text("settings.services.new_sessions_only")),
-                );
-                if session_count == 0 {
-                    list = list.child(
-                        div()
-                            .py_4()
-                            .text_size(ui_text_size(13.))
-                            .child(service_text("settings.services.no_sessions")),
-                    );
-                }
-                for workspace in &app.store.workspaces {
-                    for session in workspace
-                        .sessions
-                        .iter()
-                        .filter(|s| s.provider == engine && s.channel == channel)
-                    {
-                        list = list.child(
-                            v_flex()
-                                .w_full()
-                                .py_3()
-                                .gap_1()
-                                .border_b_1()
-                                .border_color(rgb(palette().border))
-                                .child(
+                            .when_some(provider, |description, provider| {
+                                description.child(
                                     div()
-                                        .text_size(ui_text_size(13.))
-                                        .child(session.title.clone()),
-                                )
-                                .child(
-                                    div()
+                                        .w_full()
+                                        .truncate()
                                         .text_size(ui_text_size(11.))
                                         .text_color(rgb(palette().muted))
-                                        .child(workspace.name()),
-                                ),
-                        );
-                    }
-                }
-                if let Some(provider) = &provider {
-                    let uses = app.provider_configuration_references(&provider.id);
-                    if !uses.is_empty() {
-                        list = list
+                                        .child(provider.base_url.clone()),
+                                )
+                            })
                             .child(
                                 div()
-                                    .pt_4()
-                                    .font_medium()
-                                    .text_size(ui_text_size(13.))
-                                    .child(service_text("settings.services.other_uses")),
-                            )
-                            .children(uses.into_iter().map(|label| {
-                                div()
-                                    .py_2()
-                                    .text_size(ui_text_size(12.))
+                                    .text_size(ui_text_size(11.))
                                     .text_color(rgb(palette().muted))
-                                    .child(label)
-                            }));
-                    }
-                }
-                list.into_any_element()
-            }
-        };
-        v_flex()
+                                    .child(service_text(if imported {
+                                        "settings.services.imported_readonly"
+                                    } else if native {
+                                        "settings.services.native_catalog"
+                                    } else {
+                                        "settings.services.edit_here"
+                                    })),
+                            ),
+                    ),
+            );
+        header = header.child(self.service_detail_actions(engine, channel, view.clone()));
+        let mut detail = v_flex()
             .id("service-details")
             .test_support()
             .debug_selector(|| "service-details".into())
-            .size_full()
-            .min_h_0()
-            .gap_3()
-            .px_3()
-            .pb_3()
-            .child(header)
-            .child(tabs)
+            .w_full()
+            .min_w_0()
+            .rounded_lg()
+            .overflow_hidden()
+            .border_1()
+            .border_color(rgb(palette().border))
+            .bg(rgb(palette().surface))
+            .child(header);
+        if native && engine.descriptor().capabilities.model_services {
+            let mut tabs = h_flex().w_full().px_3().pb_2().gap_2().flex_wrap();
+            for (index, (candidate, title)) in [
+                (
+                    DetailTab::Models,
+                    service_text("settings.services.native_catalog"),
+                ),
+                (
+                    DetailTab::Sources,
+                    service_text("settings.models.configuration_sources"),
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let select = view.clone();
+                tabs = tabs.child(
+                    Button::new(("service-detail-tab", index))
+                        .debug_selector(move || format!("service-detail-tab-{index}"))
+                        .ghost()
+                        .small()
+                        .label(title)
+                        .selected(tab == candidate)
+                        .on_click(move |_, _, cx| {
+                            select.update(cx, |app, cx| {
+                                app.connection_settings.service_tab = candidate;
+                                cx.notify();
+                            })
+                        }),
+                );
+            }
+            detail = detail.child(tabs);
+        }
+        let models = if native && tab == DetailTab::Sources {
+            detail_settings(
+                "service-source-settings",
+                self.models_source_group(engine, view.clone()),
+            )
+        } else if native {
+            detail_settings(
+                "service-native-model-settings",
+                self.models_provider_group(engine, view.clone()),
+            )
+        } else {
+            self.service_models_detail(engine, channel, provider, view.clone())
+        };
+        detail
             .child(
-                div()
-                    .id("service-detail-body")
-                    .flex_1()
-                    .min_h_0()
+                v_flex()
+                    .debug_selector(|| "service-models-section".into())
                     .w_full()
-                    .overflow_y_scroll()
-                    .child(body),
+                    .gap_2()
+                    .p_3()
+                    .border_t_1()
+                    .border_color(rgb(palette().border))
+                    .child(
+                        service_section_heading(
+                            service_text(if native && tab == DetailTab::Sources {
+                                "settings.models.configuration_sources"
+                            } else {
+                                "settings.models.model_list"
+                            }),
+                            (!(native && tab == DetailTab::Sources)).then_some(model_count),
+                        )
+                        .debug_selector(|| "service-models-heading".into()),
+                    )
+                    .child(models),
+            )
+            .child(
+                v_flex()
+                    .id("service-sessions-section")
+                    .debug_selector(|| "service-sessions-section".into())
+                    .w_full()
+                    .gap_2()
+                    .p_3()
+                    .border_t_1()
+                    .border_color(rgb(palette().border))
+                    .child(
+                        service_section_heading(
+                            service_text("settings.services.sessions"),
+                            Some(self.service_session_count(engine, channel)),
+                        )
+                        .debug_selector(|| "service-sessions-heading".into()),
+                    )
+                    .child(self.service_sessions_detail(engine, channel, provider)),
             )
             .into_any_element()
     }
-}
 
-impl ServiceDetails {
-    pub(super) fn footer(&self, cx: &App) -> AnyElement {
-        let Some(view) = self.app.upgrade() else {
-            return div().into_any_element();
-        };
-        let app = view.read(cx);
-        let engine = self.engine;
-        let channel = self.channel.clone();
+    fn service_models_detail(
+        &self,
+        engine: Provider,
+        channel: &ModelChannel,
+        provider: Option<&ModelProvider>,
+        view: Entity<Self>,
+    ) -> AnyElement {
+        let disabled = !self.writable || self.closing;
+        let models = provider.map(|p| p.catalog()).unwrap_or_default();
+        let defaults = self.default_selection(engine);
+        let mut list = v_flex().w_full().gap_2();
+        for (index, model) in models.into_iter().enumerate() {
+            let selected =
+                defaults.channel == *channel && defaults.model.as_ref() == Some(&model.id);
+            let use_view = view.clone();
+            let use_channel = channel.clone();
+            let model_id = model.id.clone();
+            list = list.child(
+                h_flex()
+                    .debug_selector(move || format!("service-model-row-{index}"))
+                    .w_full()
+                    .justify_between()
+                    .gap_2()
+                    .flex_wrap()
+                    .py_2()
+                    .px_3()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(palette().border))
+                    .when(selected, |row| {
+                        row.bg(gpui_kit::rgba((palette().activity_running << 8) | 0x08))
+                            .border_color(gpui_kit::rgba((palette().activity_running << 8) | 0x55))
+                    })
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w(px(120.))
+                            .gap_1()
+                            .child(
+                                div()
+                                    .font_medium()
+                                    .text_size(ui_text_size(13.))
+                                    .child(model.label.clone()),
+                            )
+                            .when(model.label != model.id, |row| {
+                                row.child(
+                                    div()
+                                        .text_size(ui_text_size(11.))
+                                        .text_color(rgb(palette().muted))
+                                        .child(model.id),
+                                )
+                            })
+                            .when(!model.note.is_empty(), |row| {
+                                row.child(
+                                    div()
+                                        .text_size(ui_text_size(11.))
+                                        .text_color(rgb(palette().muted))
+                                        .child(model.note),
+                                )
+                            }),
+                    )
+                    .child(
+                        Button::new(("service-model-default", index))
+                            .debug_selector(move || format!("service-model-default-{index}"))
+                            .small()
+                            .ghost()
+                            .label(service_text(if selected {
+                                "settings.services.current_default"
+                            } else {
+                                "settings.services.set_new_default"
+                            }))
+                            .disabled(disabled || selected)
+                            .tooltip(service_text("settings.services.choose_model_hint"))
+                            .on_click(move |_, window, cx| {
+                                use_view.update(cx, |app, cx| {
+                                    if app.set_service_default(
+                                        engine,
+                                        use_channel.clone(),
+                                        Some(model_id.clone()),
+                                        cx,
+                                    ) {
+                                        window.push_notification(
+                                            Notification::success(service_text(
+                                                "settings.services.default_saved",
+                                            )),
+                                            cx,
+                                        );
+                                    }
+                                })
+                            }),
+                    ),
+            );
+        }
+        if provider.as_ref().is_none_or(|p| p.catalog().is_empty()) {
+            list = list.child(
+                div()
+                    .py_4()
+                    .child(service_text("settings.services.no_models")),
+            );
+        }
+        list.into_any_element()
+    }
+
+    fn service_sessions_detail(
+        &self,
+        engine: Provider,
+        channel: &ModelChannel,
+        provider: Option<&ModelProvider>,
+    ) -> AnyElement {
+        let session_count = self.service_session_count(engine, channel);
+        let mut list = v_flex().w_full().gap_1();
+        if session_count == 0 {
+            list = list.child(
+                div()
+                    .py_1()
+                    .text_size(ui_text_size(12.))
+                    .text_color(rgb(palette().muted))
+                    .child(service_text("settings.services.no_sessions")),
+            );
+        }
+        for workspace in &self.store.workspaces {
+            for session in workspace
+                .sessions
+                .iter()
+                .filter(|s| s.provider == engine && s.channel == *channel)
+            {
+                list = list.child(
+                    v_flex()
+                        .w_full()
+                        .py_2()
+                        .gap_1()
+                        .border_b_1()
+                        .border_color(rgb(palette().border))
+                        .child(
+                            div()
+                                .text_size(ui_text_size(13.))
+                                .child(session.title.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_size(ui_text_size(11.))
+                                .text_color(rgb(palette().muted))
+                                .child(workspace.name()),
+                        ),
+                );
+            }
+        }
+        if let Some(provider) = &provider {
+            let uses = self.provider_configuration_references(&provider.id);
+            if !uses.is_empty() {
+                list = list
+                    .child(
+                        div()
+                            .pt_2()
+                            .font_medium()
+                            .text_size(ui_text_size(13.))
+                            .child(service_text("settings.services.other_uses")),
+                    )
+                    .children(uses.into_iter().map(|label| {
+                        div()
+                            .py_2()
+                            .text_size(ui_text_size(12.))
+                            .text_color(rgb(palette().muted))
+                            .child(label)
+                    }));
+            }
+        }
+        list.into_any_element()
+    }
+
+    fn service_detail_actions(
+        &self,
+        engine: Provider,
+        channel: &ModelChannel,
+        view: Entity<Self>,
+    ) -> AnyElement {
+        let channel = channel.clone();
         let provider = match &channel {
-            ModelChannel::Provider(id) => app
+            ModelChannel::Provider(id) => self
                 .store
                 .providers
                 .iter()
@@ -355,19 +390,17 @@ impl ServiceDetails {
         let imported = provider
             .as_ref()
             .is_some_and(|p| matches!(p.source, ProviderSource::Ccs { .. }));
-        let disabled = !app.writable || app.closing;
-        let defaults = app.default_selection(engine);
-        let current = defaults.channel == channel && defaults.model.is_none();
+        let disabled = !self.writable || self.closing;
+        let defaults = self.default_selection(engine);
+        let current = defaults.channel == channel;
         let use_view = view.clone();
         let use_channel = channel;
         let mut footer = h_flex()
-            .w_full()
-            .justify_between()
+            .flex_shrink_0()
+            .justify_end()
             .gap_2()
             .flex_wrap()
-            .pt_3()
-            .border_t_1()
-            .border_color(rgb(palette().border));
+            .items_start();
         if let Some(provider) = provider {
             if imported {
                 footer = footer.child(
@@ -375,8 +408,8 @@ impl ServiceDetails {
                         .small()
                         .outline()
                         .icon(FullIconName::ExternalLink)
-                        .label(service_text("settings.services.open_cc_switch"))
-                        .disabled(app.closing)
+                        .label(service_text("settings.services.edit_cc_switch"))
+                        .disabled(self.closing)
                         .tooltip(service_text("settings.services.cc_switch_hint"))
                         .on_click(|_, window, cx| {
                             if !launch_cc_switch() {
@@ -395,7 +428,7 @@ impl ServiceDetails {
                 let delete_id = id.clone();
                 let edit_id = id;
                 let delete_view = view.clone();
-                let in_use = !app.provider_references(&provider.id).is_empty();
+                let in_use = !self.provider_references(&provider.id).is_empty();
                 footer = footer.child(
                     h_flex()
                         .gap_1()
@@ -449,57 +482,74 @@ impl ServiceDetails {
                 );
             }
         }
-        footer = footer.child(
-            Button::new("service-detail-default")
-                .debug_selector(|| "service-detail-default".into())
-                .small()
-                .primary()
-                .label(service_text(if current {
-                    "settings.services.current_default"
-                } else {
-                    "settings.services.set_new_default"
-                }))
-                .disabled(disabled || current)
-                .on_click(move |_, window, cx| {
-                    use_view.update(cx, |app, cx| {
-                        if app.set_service_default(engine, use_channel.clone(), None, cx) {
-                            window.push_notification(
-                                Notification::success(service_text(
-                                    "settings.services.default_saved",
-                                )),
-                                cx,
-                            );
-                        }
-                    })
-                }),
-        );
+        footer = footer.when(!current, |footer| {
+            footer.child(
+                Button::new("service-detail-default")
+                    .debug_selector(|| "service-detail-default".into())
+                    .small()
+                    .primary()
+                    .label(service_text(if current {
+                        "settings.services.current_default"
+                    } else {
+                        "settings.services.set_new_default"
+                    }))
+                    .disabled(disabled || current)
+                    .tooltip(service_text("settings.services.new_sessions_only"))
+                    .on_click(move |_, window, cx| {
+                        use_view.update(cx, |app, cx| {
+                            if app.set_service_default(engine, use_channel.clone(), None, cx) {
+                                window.push_notification(
+                                    Notification::success(service_text(
+                                        "settings.services.default_saved",
+                                    )),
+                                    cx,
+                                );
+                            }
+                        })
+                    }),
+            )
+        });
 
-        v_flex()
-            .w_full()
-            .gap_2()
-            .when(imported, |body| {
-                body.child(
-                    div()
-                        .text_size(ui_text_size(11.))
-                        .text_color(rgb(palette().muted))
-                        .child(service_text("settings.services.cc_switch_hint")),
-                )
-            })
-            .child(footer)
-            .into_any_element()
+        footer.into_any_element()
     }
 }
 
+fn service_section_heading(label: &'static str, count: Option<usize>) -> Div {
+    h_flex()
+        .gap_2()
+        .child(
+            div()
+                .font_semibold()
+                .text_size(ui_text_size(12.))
+                .child(label),
+        )
+        .when_some(count, |heading, count| {
+            heading.child(
+                div()
+                    .text_size(ui_text_size(11.))
+                    .text_color(rgb(palette().muted))
+                    .child(count.to_string()),
+            )
+        })
+}
+
 fn detail_settings(id: &'static str, group: SettingGroup) -> AnyElement {
-    Settings::new(id)
-        .sidebar_width(px(0.))
-        .sidebar_size_range(px(0.)..px(0.))
-        .sidebar_style(&StyleRefinement::default().hidden())
-        .page(
-            gpui_kit::component::setting::SettingPage::new("")
-                .resettable(false)
-                .header_style(&StyleRefinement::default().hidden())
-                .group(group),
+    // Settings uses a virtual list, which needs a bounded viewport inside this
+    // otherwise content-sized card. Keep native model/source scrolling local.
+    div()
+        .w_full()
+        .h(px(400.))
+        .child(
+            Settings::new(id)
+                .sidebar_width(px(0.))
+                .sidebar_size_range(px(0.)..px(0.))
+                .sidebar_style(&StyleRefinement::default().hidden())
+                .page(
+                    gpui_kit::component::setting::SettingPage::new("")
+                        .resettable(false)
+                        .header_style(&StyleRefinement::default().hidden())
+                        .group(group),
+                ),
         )
         .into_any_element()
 }
@@ -537,9 +587,7 @@ fn confirm_delete(view: Entity<ConduitApp>, id: String, window: &mut Window, cx:
                                                 app.delete_model_service(&id, cx)
                                             });
                                             window.close_dialog(cx);
-                                            if deleted {
-                                                window.close_sheet(cx);
-                                            } else {
+                                            if !deleted {
                                                 window.push_notification(
                                                     Notification::error(service_text(
                                                         "settings.services.delete_blocked",

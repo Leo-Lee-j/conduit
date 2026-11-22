@@ -3089,7 +3089,7 @@
   "settings.services.count": "%{count} 个",
   "settings.services.new_sessions_only": "默认设置仅用于新会话，已有会话保持原配置",
   "settings.services.default_for_engine": "%{engine} 新会话默认使用",
-  "settings.services.source_hint": "cc-switch 服务在原应用中编辑。点击模型或会话数量查看详情。",
+  "settings.services.source_hint": "点击服务查看模型和关联会话；查看不会改变新会话默认设置。",
   "settings.services.native_catalog": "CLI 原生模型目录",
   "settings.services.native_only": "此引擎使用原生认证与模型配置，可通过模型目录管理应用内的显示偏好。",
   "settings.services.service": "服务",
@@ -3301,5 +3301,10 @@
   "settings.general.system_notifications_unavailable": "Windows 系统通知当前不可用，Conduit 已回退到应用内弹窗。",
   "subagents.identity_changed": "主会话身份或数据来源已变化，草稿已保留；请恢复原来源后再发送",
   "subagents.submitting": "正在等待子会话确认操作…",
-  "subagents.child_draft_pending": "子会话还有草稿或待确认操作，请先处理后再删除主会话"
+  "subagents.child_draft_pending": "子会话还有草稿或待确认操作，请先处理后再删除主会话",
+  "settings.services.back_to_list": "返回服务列表",
+  "settings.services.edit_at_source": "在 cc-switch 中编辑",
+  "settings.services.edit_here": "可在此编辑",
+  "settings.services.edit_cc_switch": "在 cc-switch 中编辑",
+  "settings.services.imported_readonly": "来自 cc-switch · 只读"
 }

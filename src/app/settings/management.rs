@@ -89,6 +89,10 @@ fn engine_tabs(
                             app.ensure_extensions(window, cx, false);
                         } else {
                             app.connection_settings.engine = candidate;
+                            app.connection_settings.service_selection = None;
+                            app.connection_settings.service_detail_open = false;
+                            app.connection_settings.service_tab =
+                                super::services::DetailTab::Models;
                             app.connection_settings.models_expanded = false;
                             app.connection_settings.sources_expanded = false;
                             app.connection_settings.model_limit = 50;
@@ -115,9 +119,50 @@ pub(super) fn management_toolbar(
     font_size: f32,
     view: Entity<ConduitApp>,
 ) -> AnyElement {
+    management_toolbar_padding(
+        engine,
+        extensions,
+        actions,
+        available_width,
+        font_size,
+        view,
+        (12., 8.),
+    )
+}
+
+/// Let content-dense pages align the engine tabs with their own page inset.
+pub(super) fn management_toolbar_inset(
+    engine: Provider,
+    extensions: bool,
+    actions: Option<AnyElement>,
+    available_width: f32,
+    font_size: f32,
+    view: Entity<ConduitApp>,
+    inset: f32,
+) -> AnyElement {
+    management_toolbar_padding(
+        engine,
+        extensions,
+        actions,
+        available_width,
+        font_size,
+        view,
+        (inset, inset),
+    )
+}
+
+fn management_toolbar_padding(
+    engine: Provider,
+    extensions: bool,
+    actions: Option<AnyElement>,
+    available_width: f32,
+    font_size: f32,
+    view: Entity<ConduitApp>,
+    (horizontal_inset, vertical_inset): (f32, f32),
+) -> AnyElement {
     // Budget for complete labels, icons, button padding and grid gaps. Change
     // the column count with the pane width and UI font, never clip a label.
-    let inner_width = (available_width - 24.).max(0.);
+    let inner_width = (available_width - horizontal_inset * 2.).max(0.);
     let scale = font_size / DEFAULT_UI_FONT_SIZE;
     let columns = if inner_width >= 548. * scale {
         4
@@ -131,7 +176,14 @@ pub(super) fn management_toolbar(
     v_flex()
         .w_full()
         .flex_shrink_0()
-        .child(div().w_full().px_3().py_2().child(tabs))
+        .child(
+            div()
+                .debug_selector(|| "management-engine-bar".into())
+                .w_full()
+                .px(px(horizontal_inset))
+                .py(px(vertical_inset))
+                .child(tabs),
+        )
         .when_some(actions, |bar, actions| {
             bar.child(management_actions(actions, narrow))
         })

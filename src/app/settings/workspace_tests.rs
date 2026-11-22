@@ -507,7 +507,7 @@ fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppC
         providers::{ModelChannel, ModelProvider, ProviderSource},
     };
     let (app, cx) = fixture(cx);
-    cx.simulate_resize(size(px(1200.), px(800.)));
+    cx.simulate_resize(size(px(1500.), px(850.)));
     let provider = ModelProvider {
         id: "ui-service".into(),
         name: "UI service".into(),
@@ -543,9 +543,16 @@ fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppC
         })
     });
     draw(cx);
+    let row = cx
+        .debug_bounds("service-row-0")
+        .expect("service row")
+        .center();
+    cx.simulate_mouse_down(row, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(row, MouseButton::Left, Modifiers::default());
+    draw(cx);
     let control = cx
-        .debug_bounds("service-default-0")
-        .expect("live default action")
+        .debug_bounds("service-detail-default")
+        .expect("explicit new-session default action")
         .center();
     cx.simulate_mouse_down(control, MouseButton::Left, Modifiers::default());
     cx.simulate_mouse_up(control, MouseButton::Left, Modifiers::default());
@@ -562,14 +569,10 @@ fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppC
             assert_eq!(app.provider_references(&provider.id).len(), 2);
         })
     });
-    let control = cx.debug_bounds("service-models-0").unwrap().center();
-    cx.simulate_mouse_down(control, MouseButton::Left, Modifiers::default());
-    cx.simulate_mouse_up(control, MouseButton::Left, Modifiers::default());
-    draw(cx);
     assert!(cx.debug_bounds("service-details").is_some());
     cx.update(|window, cx| {
         use gpui_kit::component::WindowExt as _;
-        window.close_sheet(cx);
+        assert!(!window.has_active_sheet(cx), "service details are inline");
         app.update(cx, |app, cx| {
             let history = serde_json::to_value(&app.store.workspaces).unwrap();
             assert!(!app.set_service_default(Provider::Claude, route.clone(), None, cx));
@@ -630,6 +633,13 @@ fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppC
         });
     });
     draw(cx);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.connection_settings.service_detail_open = false;
+            cx.notify();
+        })
+    });
+    draw(cx);
     let control = cx
         .debug_bounds("services-default-catalog")
         .unwrap()
@@ -641,4 +651,176 @@ fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppC
         cx.debug_bounds("service-details").is_some(),
         "native catalog remains reachable"
     );
+}
+
+#[gpui_kit::test]
+fn settings_services_inline_selection_resizes_without_changing_defaults(cx: &mut TestAppContext) {
+    use crate::domain::Provider;
+    use crate::providers::{ModelChannel, ModelProvider, ProviderSource};
+    let _locale = crate::test_support::chinese();
+    let (app, cx) = fixture(cx);
+    let first: ModelProvider = serde_json::from_value(serde_json::json!({
+        "id":"inline-local", "name":"Local service", "engine":"Codex",
+        "base_url":"https://example.invalid/v1", "api_key_env":"",
+        "models":["model-a", "model-b"]
+    }))
+    .unwrap();
+    let mut second = first.clone();
+    second.id = "inline-imported".into();
+    second.name = "Imported service".into();
+    second.source = ProviderSource::Ccs {
+        id: "external".into(),
+    };
+    let route = ModelChannel::Provider(first.id.clone());
+    cx.simulate_resize(size(px(1500.), px(850.)));
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.connection_settings.engine = Provider::Codex;
+            app.store.providers = vec![first.clone(), second.clone()];
+            app.writable = true;
+            app.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
+            assert!(app.set_service_default(
+                Provider::Codex,
+                route.clone(),
+                Some("model-a".into()),
+                cx
+            ));
+            app.select_settings_page(8, window, cx);
+        })
+    });
+    draw(cx);
+    let list = cx.debug_bounds("service-list").expect("inline list");
+    let detail = cx.debug_bounds("service-details").expect("inline detail");
+    assert!(
+        list.right() <= detail.left(),
+        "details are beside, not over the list"
+    );
+    assert!(cx.debug_bounds("service-sessions-section").is_some());
+    assert!(cx.debug_bounds("service-detail-back").is_none());
+    let engines = cx.debug_bounds("management-engines").unwrap();
+    let engine_bar = cx.debug_bounds("management-engine-bar").unwrap();
+    let summary = cx.debug_bounds("service-default-summary").unwrap();
+    assert_eq!(engines.left() - engine_bar.left(), px(16.));
+    assert_eq!(
+        engines.top() - engine_bar.top(),
+        engines.left() - engine_bar.left(),
+        "engine tabs have matching top and left padding"
+    );
+    assert_eq!(engine_bar.bottom() - engines.bottom(), px(16.));
+    assert_eq!(
+        summary.top() - engines.bottom(),
+        px(16.),
+        "content does not add another top inset"
+    );
+    assert_eq!(
+        engines.left(),
+        list.left(),
+        "engine tabs align with page cards"
+    );
+    assert_eq!(
+        summary.left(),
+        list.left(),
+        "default summary shares the page inset"
+    );
+    assert_eq!(detail.left() - list.right(), px(12.), "compact column gap");
+    let models_heading = cx.debug_bounds("service-models-heading").unwrap();
+    let sessions_heading = cx.debug_bounds("service-sessions-heading").unwrap();
+    assert_eq!(
+        models_heading.left(),
+        sessions_heading.left(),
+        "section titles share one inset"
+    );
+    assert_eq!(
+        models_heading.left() - detail.left(),
+        px(13.),
+        "12px content inset plus card border"
+    );
+    let before = cx.update(|_, cx| {
+        app.read_with(cx, |app, _| {
+            serde_json::to_value(&app.store.session_defaults).unwrap()
+        })
+    });
+    let click = |cx: &mut VisualTestContext, selector: &'static str| {
+        let center = cx.debug_bounds(selector).expect(selector).center();
+        cx.simulate_mouse_down(center, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(center, MouseButton::Left, Modifiers::default());
+        draw(cx);
+    };
+    click(cx, "service-row-1");
+    cx.update(|_, cx| {
+        app.read_with(cx, |app, _| {
+            assert_eq!(
+                serde_json::to_value(&app.store.session_defaults).unwrap(),
+                before
+            );
+            assert_eq!(
+                app.connection_settings
+                    .service_selection
+                    .as_ref()
+                    .unwrap()
+                    .1,
+                ModelChannel::Provider(second.id.clone())
+            );
+        })
+    });
+    assert!(
+        cx.debug_bounds("service-edit-local").is_none(),
+        "imported services stay read-only"
+    );
+    cx.simulate_resize(size(px(850.), px(700.)));
+    draw(cx);
+    assert!(cx.debug_bounds("service-list").is_none());
+    assert!(cx.debug_bounds("service-detail-back").is_some());
+    let engines = cx.debug_bounds("management-engines").unwrap();
+    let engine_bar = cx.debug_bounds("management-engine-bar").unwrap();
+    assert_eq!(engines.left() - engine_bar.left(), px(12.));
+    assert_eq!(engines.top() - engine_bar.top(), px(12.));
+    assert_eq!(engine_bar.bottom() - engines.bottom(), px(12.));
+    click(cx, "service-detail-back");
+    assert!(cx.debug_bounds("service-list").is_some());
+    assert!(cx.debug_bounds("service-details").is_none());
+    click(cx, "service-row-0");
+    assert!(cx.debug_bounds("service-edit-local").is_some());
+    click(cx, "service-model-default-1");
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            assert_eq!(app.store.session_defaults[&Provider::Codex].channel, route);
+            assert_eq!(
+                app.store.session_defaults[&Provider::Codex]
+                    .model
+                    .as_deref(),
+                Some("model-b")
+            );
+            app.writable = false;
+            cx.notify();
+        })
+    });
+    draw(cx);
+    click(cx, "service-model-default-0");
+    cx.update(|_, cx| {
+        app.read_with(cx, |app, _| {
+            assert_eq!(
+                app.store.session_defaults[&Provider::Codex]
+                    .model
+                    .as_deref(),
+                Some("model-b")
+            )
+        })
+    });
+    // Esc backs out of the inline detail before leaving the settings workspace.
+    cx.update(|window, cx| app.update(cx, |app, cx| app.settings_ui.focus.focus(window, cx)));
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+    assert!(cx.debug_bounds("service-list").is_some());
+    cx.update(|_, cx| app.read_with(cx, |app, _| assert!(app.settings_ui.open)));
+    // Engine changes must not leave another engine's service in the detail pane.
+    click(cx, "settings-engine-0");
+    cx.update(|_, cx| {
+        app.read_with(cx, |app, _| {
+            assert!(app.connection_settings.service_selection.is_none());
+            assert!(!app.connection_settings.service_detail_open);
+        })
+    });
+    assert!(cx.debug_bounds("service-list").is_some());
+    assert!(cx.debug_bounds("service-details").is_none());
 }

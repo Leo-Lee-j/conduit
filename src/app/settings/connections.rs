@@ -10,6 +10,11 @@ pub(in crate::app) struct ConnectionsUi {
     pub syncing: bool,
     pub model_search: Entity<InputState>,
     pub model_limit: usize,
+    pub(super) service_selection: Option<(Provider, ModelChannel)>,
+    pub(super) service_detail_open: bool,
+    pub(super) service_scroll: ScrollHandle,
+    pub(super) service_detail_scroll: ScrollHandle,
+    pub(super) service_tab: super::services::DetailTab,
     pub(super) cli_updates: HashMap<Provider, super::cli_settings::CliUpdateAction>,
 }
 
@@ -23,6 +28,11 @@ impl ConnectionsUi {
             syncing: false,
             model_search,
             model_limit: 50,
+            service_selection: None,
+            service_detail_open: false,
+            service_scroll: ScrollHandle::new(),
+            service_detail_scroll: ScrollHandle::new(),
+            service_tab: super::services::DetailTab::Models,
             cli_updates: HashMap::new(),
         }
     }

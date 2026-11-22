@@ -2,9 +2,10 @@
 use super::*;
 use gpui_kit::component::notification::Notification;
 mod details;
+mod list;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum DetailTab {
+pub(super) enum DetailTab {
     Models,
     Sessions,
     Sources,
@@ -93,6 +94,11 @@ impl ConduitApp {
         let supports_services = engine.descriptor().capabilities.model_services;
         let sources = view.clone();
         let native = view.clone();
+        let inset = if width < 540. { 12. } else { 16. };
+        let split =
+            width - inset * 2. >= 720. * (self.store.ui.ui_font_size / DEFAULT_UI_FONT_SIZE);
+        let selected = self.selected_service_channel(engine);
+        let detail_only = !split && self.connection_settings.service_detail_open;
         let count = self
             .store
             .providers
@@ -107,9 +113,17 @@ impl ConduitApp {
             .min_h_0()
             .w_full()
             .overflow_y_scroll()
-            .p(px(if width < 540. { 12. } else { 24. }))
-            .gap_5()
-            .child(self.service_default_summary(engine, view.clone()))
+            .track_scroll(if detail_only {
+                &self.connection_settings.service_detail_scroll
+            } else {
+                &self.connection_settings.service_scroll
+            })
+            .px(px(inset))
+            .pb_3()
+            .gap_3()
+            .when(!detail_only, |body| {
+                body.child(self.service_default_summary(engine, view.clone()))
+            })
             .child(
                 h_flex()
                     .w_full()
@@ -146,7 +160,61 @@ impl ConduitApp {
                     .child(actions),
             )
             .when(supports_services, |body| {
-                body.child(self.service_table(engine, width, view.clone()))
+                body.child(
+                    h_flex()
+                        .id("service-workbench")
+                        .debug_selector(|| "service-workbench".into())
+                        .w_full()
+                        .items_start()
+                        .gap_3()
+                        .when(!detail_only, |row| {
+                            row.child(
+                                div()
+                                    .min_w_0()
+                                    .when(split, |list| {
+                                        list.w(px(280.
+                                            * (self.store.ui.ui_font_size / DEFAULT_UI_FONT_SIZE)))
+                                    })
+                                    .when(!split, |list| list.w_full())
+                                    .flex_shrink_0()
+                                    .child(self.service_list(engine, &selected, view.clone())),
+                            )
+                        })
+                        .when(split || detail_only, |row| {
+                            let back = view.clone();
+                            row.child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap_3()
+                                    .when(detail_only, |detail| {
+                                        detail.child(
+                                            Button::new("service-detail-back")
+                                                .debug_selector(|| "service-detail-back".into())
+                                                .ghost()
+                                                .small()
+                                                .icon(FullIconName::ArrowLeft)
+                                                .label(service_text(
+                                                    "settings.services.back_to_list",
+                                                ))
+                                                .on_click(move |_, _, cx| {
+                                                    back.update(cx, |app, cx| {
+                                                        app.connection_settings
+                                                            .service_detail_open = false;
+                                                        cx.notify();
+                                                    })
+                                                }),
+                                        )
+                                    })
+                                    .child(self.service_details(
+                                        engine,
+                                        &selected,
+                                        self.connection_settings.service_tab,
+                                        view.clone(),
+                                    )),
+                            )
+                        }),
+                )
             })
             .when(!supports_services, |body| {
                 body.child(
@@ -160,21 +228,21 @@ impl ConduitApp {
                         .child(service_text("settings.services.native_only")),
                 )
             })
-            .when(supports_services, |body| {
+            .when(!supports_services, |body| {
+                body.child(self.service_details(
+                    engine,
+                    &ModelChannel::Cli,
+                    DetailTab::Models,
+                    view.clone(),
+                ))
+            })
+            .when(supports_services && !detail_only, |body| {
                 body.child(
                     h_flex()
                         .w_full()
-                        .justify_between()
+                        .justify_end()
                         .flex_wrap()
                         .gap_2()
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(160.))
-                                .text_size(ui_text_size(11.))
-                                .text_color(rgb(palette().muted))
-                                .child(service_text("settings.services.source_hint")),
-                        )
                         .child(
                             Button::new("services-native-catalog")
                                 .small()
@@ -236,13 +304,14 @@ impl ConduitApp {
         v_flex()
             .size_full()
             .min_w_0()
-            .child(management_toolbar(
+            .child(super::management::management_toolbar_inset(
                 engine,
                 false,
                 None,
                 width,
                 self.store.ui.ui_font_size,
                 view,
+                inset,
             ))
             .child(body)
             .into_any_element()
@@ -266,27 +335,17 @@ impl ConduitApp {
             })
             .unwrap_or_else(|| service_text("settings.defaults.use_service_default_model").into());
         h_flex()
+            .debug_selector(|| "service-default-summary".into())
             .w_full()
             .flex_shrink_0()
             .flex_wrap()
             .gap_3()
             .justify_between()
-            .px_4()
-            .py_3()
+            .px_3()
+            .py_2()
             .rounded_lg()
             .border_1()
             .border_color(rgb(palette().border))
-            .relative()
-            .overflow_hidden()
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top_0()
-                    .bottom_0()
-                    .w(px(3.))
-                    .bg(rgb(palette().activity_running)),
-            )
             .bg(rgb(palette().surface))
             .child(
                 v_flex()
@@ -665,17 +724,19 @@ impl ConduitApp {
     ) {
         self.connection_settings.models_expanded = true;
         self.connection_settings.sources_expanded = true;
-        let app = cx.entity();
-        let details = cx.new(|cx| details::ServiceDetails::new(app, engine, channel, tab, cx));
-        window.open_sheet(cx, move |sheet, window, cx| {
-            sheet
-                .size(px(
-                    (f32::from(window.viewport_size().width) - 32.).clamp(0., 560.)
-                ))
-                .title(service_text("settings.services.details"))
-                .resizable(false)
-                .footer(details.read(cx).footer(cx))
-                .child(details.clone())
-        });
+        self.connection_settings.engine = engine;
+        if self.connection_settings.service_selection.as_ref() != Some(&(engine, channel.clone())) {
+            self.connection_settings
+                .service_detail_scroll
+                .set_offset(point(px(0.), px(0.)));
+        }
+        self.connection_settings.service_selection = Some((engine, channel));
+        self.connection_settings.service_detail_open = true;
+        self.connection_settings.service_tab = tab;
+        self.settings_ui.group = None;
+        if self.settings_ui.page != 8 {
+            self.select_settings_page(8, window, cx);
+        }
+        cx.notify();
     }
 }

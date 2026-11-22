@@ -188,7 +188,13 @@ impl ConduitApp {
 
     fn settings_escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings_ui.search.read(cx).value().is_empty() {
-            self.close_settings(window, cx);
+            if self.settings_ui.page == 8 && self.connection_settings.service_detail_open {
+                self.connection_settings.service_detail_open = false;
+                self.settings_ui.focus.focus(window, cx);
+                cx.notify();
+            } else {
+                self.close_settings(window, cx);
+            }
         } else {
             self.settings_ui
                 .search

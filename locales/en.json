@@ -3089,7 +3089,7 @@
   "settings.services.count": "%{count}",
   "settings.services.new_sessions_only": "Defaults apply to new sessions only. Existing sessions keep their configuration.",
   "settings.services.default_for_engine": "Default for new %{engine} sessions",
-  "settings.services.source_hint": "Edit cc-switch services in cc-switch. Select a model or session count to view details.",
+  "settings.services.source_hint": "Select a service to view its models and sessions. Viewing does not change new-session defaults.",
   "settings.services.native_catalog": "Native CLI model catalog",
   "settings.services.native_only": "This engine uses native authentication and model configuration. Manage display preferences in its model catalog.",
   "settings.services.service": "Service",
@@ -3301,5 +3301,10 @@
   "settings.general.system_notifications_unavailable": "Windows notifications are currently unavailable. Conduit has fallen back to in-app pop-ups.",
   "subagents.identity_changed": "The main conversation identity or data source changed. This draft has been kept; restore the original source before sending.",
   "subagents.submitting": "Waiting for confirmation from the child conversation…",
-  "subagents.child_draft_pending": "A child conversation has a draft or an unconfirmed action. Resolve it before deleting the main conversation."
+  "subagents.child_draft_pending": "A child conversation has a draft or an unconfirmed action. Resolve it before deleting the main conversation.",
+  "settings.services.back_to_list": "Back to services",
+  "settings.services.edit_at_source": "Edit in cc-switch",
+  "settings.services.edit_here": "Editable here",
+  "settings.services.edit_cc_switch": "Edit in cc-switch",
+  "settings.services.imported_readonly": "From cc-switch · Read-only"
 }
