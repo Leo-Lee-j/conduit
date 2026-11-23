@@ -20,6 +20,8 @@ impl Pane {
 pub(super) struct State {
     pub(super) files: HashSet<u64>,
     pub(super) active: Option<u64>,
+    pub(super) chat: Option<u64>,
+    pub(super) chat_views: HashMap<u64, Entity<chat::ReferenceChatView>>,
     pub(super) preview: Option<u64>,
     pub(super) tab_scroll: ScrollHandle,
     pub(super) tab_layout: TabLayout,
@@ -51,8 +53,12 @@ impl ConduitApp {
 
     pub(in crate::app) fn leave_content_overlay(&mut self) {
         if let Some((_, split, last)) = self.files.panes.overlay.take() {
-            self.files.panes.split = split && self.files.panes.active.is_some();
-            self.files.panes.last = last;
+            self.files.panes.split = split && self.pane_document(Pane::Reference).is_some();
+            self.files.panes.last = if self.files.panes.split {
+                last
+            } else {
+                Pane::Main
+            };
         }
     }
 
@@ -65,7 +71,9 @@ impl ConduitApp {
     }
 
     pub(in crate::app) fn document_pane(&self, tab: DocumentTab) -> Pane {
-        if matches!(tab, DocumentTab::File(id) if self.files.panes.files.contains(&id)) {
+        if matches!(tab, DocumentTab::File(id) if self.files.panes.files.contains(&id))
+            || matches!(tab, DocumentTab::Chat(id) if self.files.panes.chat_views.contains_key(&id))
+        {
             Pane::Reference
         } else {
             Pane::Main
@@ -74,8 +82,18 @@ impl ConduitApp {
 
     pub(in crate::app) fn pane_document(&self, pane: Pane) -> Option<DocumentTab> {
         match pane {
-            Pane::Main => self.active_document(),
-            Pane::Reference => self.files.panes.active.map(DocumentTab::File),
+            Pane::Main => self
+                .active_document()
+                .filter(|tab| self.document_pane(*tab) == Pane::Main),
+            Pane::Reference => self
+                .files
+                .panes
+                .chat
+                .map(DocumentTab::Chat)
+                .or_else(|| self.files.panes.active.map(DocumentTab::File))
+                .filter(|tab| {
+                    self.open_tabs.contains(tab) && self.document_pane(*tab) == Pane::Reference
+                }),
         }
     }
 
@@ -122,16 +140,17 @@ impl ConduitApp {
     }
 
     pub(in crate::app) fn main_pane_visible(&self) -> bool {
-        !self.files.panes.split
-            || self.files.panes.active.is_none()
+        self.content_overlay_open()
+            || !self.files.panes.split
+            || self.pane_document(Pane::Reference).is_none()
             || self.files.panes.width >= 641.
             || self.files.panes.last == Pane::Main
     }
 
-    pub(super) fn reference_pane_visible(&self) -> bool {
+    pub(in crate::app) fn reference_pane_visible(&self) -> bool {
         !self.content_overlay_open()
             && self.files.panes.split
-            && self.files.panes.active.is_some()
+            && self.pane_document(Pane::Reference).is_some()
             && (self.files.panes.width >= 641. || self.files.panes.last == Pane::Reference)
     }
 
@@ -154,21 +173,29 @@ impl ConduitApp {
     }
 
     pub(super) fn repair_reference_pane(&mut self) {
-        self.files
-            .panes
-            .files
-            .retain(|id| self.files.documents.contains_key(id));
-        if !self
-            .files
-            .panes
-            .active
-            .is_some_and(|id| self.files.panes.files.contains(&id))
-        {
-            self.files.panes.active = self.open_tabs.iter().rev().find_map(|tab| match tab {
-                DocumentTab::File(id) if self.files.panes.files.contains(id) => Some(*id),
-                _ => None,
+        self.files.panes.files.retain(|id| {
+            self.files.documents.contains_key(id)
+                && self.open_tabs.contains(&DocumentTab::File(*id))
+        });
+        let active = self
+            .pane_document(Pane::Reference)
+            .filter(|tab| match tab {
+                DocumentTab::File(id) => self.files.panes.files.contains(id),
+                DocumentTab::Chat(id) => self.files.panes.chat_views.contains_key(id),
+                _ => false,
+            })
+            .or_else(|| {
+                self.open_tabs
+                    .iter()
+                    .rev()
+                    .copied()
+                    .find(|tab| self.document_pane(*tab) == Pane::Reference)
             });
-        }
+        self.files.panes.chat = active.and_then(DocumentTab::chat);
+        self.files.panes.active = match active {
+            Some(DocumentTab::File(id)) => Some(id),
+            _ => None,
+        };
         if !self
             .files
             .panes
@@ -177,18 +204,161 @@ impl ConduitApp {
         {
             self.files.panes.preview = None;
         }
-        if self.files.panes.active.is_none() {
+        if self.files.panes.active.is_none() && self.files.panes.chat.is_none() {
             self.files.panes.split = false;
             self.files.panes.last = Pane::Main;
         }
-        if self
-            .files
-            .panes
-            .return_main
-            .is_some_and(|tab| !self.open_tabs.contains(&tab))
-        {
+        if self.files.panes.return_main.is_some_and(|tab| {
+            !self.open_tabs.contains(&tab) || self.document_pane(tab) != Pane::Main
+        }) {
             self.files.panes.return_main = None;
         }
+    }
+
+    pub(in crate::app) fn show_chat_beside(
+        &mut self,
+        id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((workspace_index, _)) = self.session_control.locate(&self.store.workspaces, id)
+        else {
+            return;
+        };
+        if self
+            .session(id)
+            .is_none_or(|session| session.archived || session.is_subagent)
+            || self.pending_new_session(id)
+        {
+            return;
+        }
+        let previous_main = if self.content_overlay_open() {
+            self.content_overlay_return()
+        } else {
+            self.pane_document(Pane::Main)
+        }
+        .filter(|tab| *tab != DocumentTab::Chat(id));
+        if self.selected_session == Some(id) {
+            let eligible = |other: u64| {
+                other != id
+                    && self.document_pane(DocumentTab::Chat(other)) == Pane::Main
+                    && !self.pending_new_session(other)
+                    && self
+                        .session(other)
+                        .is_some_and(|s| !s.is_subagent && !s.archived)
+            };
+            let main = self
+                .open_tabs
+                .iter()
+                .rev()
+                .filter_map(|tab| tab.chat())
+                .find(|other| {
+                    eligible(*other)
+                        && self
+                            .session_control
+                            .locate(&self.store.workspaces, *other)
+                            .is_some_and(|(workspace, _)| workspace == workspace_index)
+                })
+                .or_else(|| {
+                    self.store.workspaces[workspace_index]
+                        .sessions
+                        .iter()
+                        .find(|session| eligible(session.id))
+                        .map(|session| session.id)
+                });
+            self.switch_context(workspace_index, main, false, window, cx);
+            if let Some(main) = main {
+                self.push_tab(main);
+            }
+            // Switching the composer also clears file/diff selection. Moving
+            // its background chat must not replace the visible Main document.
+            if let Some(previous) = previous_main {
+                self.select_document(previous, window, cx);
+            }
+        }
+        if !self.open_tabs.contains(&DocumentTab::Chat(id)) {
+            self.open_tabs.push(DocumentTab::Chat(id));
+        }
+        if !self.files.panes.chat_views.contains_key(&id) {
+            let host = cx.entity().downgrade();
+            let draft = self.drafts.remove(&id).unwrap_or_default();
+            let view = cx.new(|cx| chat::ReferenceChatView::new(host, id, draft, window, cx));
+            let input = view.read(cx).input.clone();
+            self.files.panes.chat_views.insert(id, view);
+            self.register_reference_composer(id, input, cx);
+        }
+        self.select_document(DocumentTab::Chat(id), window, cx);
+    }
+
+    pub(in crate::app) fn select_reference_chat(
+        &mut self,
+        id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.open_tabs.contains(&DocumentTab::Chat(id)) {
+            return;
+        }
+        let Some(view) = self.files.panes.chat_views.get(&id).cloned() else {
+            return;
+        };
+        // Session/sidebar navigation also enters here without select_document.
+        // Route through it once so overlays restore Main and release focus.
+        if self.content_overlay_open() {
+            self.select_document(DocumentTab::Chat(id), window, cx);
+            return;
+        }
+        self.files.panes.chat = Some(id);
+        self.files.panes.active = None;
+        self.files.panes.split = true;
+        self.files.panes.last = Pane::Reference;
+        self.session_control.unread_completed.remove(&id);
+        self.request_transcript(id, cx);
+        view.update(cx, |view, cx| view.focus(window, cx));
+        cx.notify();
+    }
+
+    pub(in crate::app) fn reference_chat(&self) -> Option<u64> {
+        self.files.panes.chat
+    }
+
+    pub(in crate::app) fn reference_chat_view(
+        &self,
+        id: u64,
+    ) -> Option<Entity<chat::ReferenceChatView>> {
+        self.files.panes.chat_views.get(&id).cloned()
+    }
+
+    pub(in crate::app) fn reference_chat_views(
+        &self,
+    ) -> Vec<(u64, Entity<chat::ReferenceChatView>)> {
+        self.files
+            .panes
+            .chat_views
+            .iter()
+            .map(|(id, view)| (*id, view.clone()))
+            .collect()
+    }
+
+    pub(in crate::app) fn detach_reference_chat(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.release_composer_editor(id);
+        if let Some(view) = self.files.panes.chat_views.remove(&id) {
+            self.drafts
+                .insert(id, view.read(cx).input.read(cx).value().to_string());
+            self.repair_reference_pane();
+        }
+    }
+
+    pub(super) fn move_chat_to_main(
+        &mut self,
+        id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.detach_reference_chat(id, cx);
+        self.select_document(DocumentTab::Chat(id), window, cx);
+        self.files.panes.last = Pane::Main;
+        self.files.panes.split = self.pane_document(Pane::Reference).is_some();
     }
 
     pub(super) fn select_reference_file(
@@ -201,6 +371,7 @@ impl ConduitApp {
             return;
         }
         self.files.panes.active = Some(id);
+        self.files.panes.chat = None;
         self.files.panes.split = true;
         self.files.panes.last = Pane::Reference;
         self.files.documents[&id]
@@ -304,6 +475,21 @@ impl ConduitApp {
                 }
             }
             if self
+                .files
+                .panes
+                .chat
+                .and_then(|id| self.files.panes.chat_views.get(&id))
+                .is_some_and(|view| {
+                    let view = view.read(cx);
+                    view.input
+                        .read(cx)
+                        .focus_handle(cx)
+                        .contains_focused(window, cx)
+                        || view.chat_focus.contains_focused(window, cx)
+                })
+            {
+                self.files.panes.last = Pane::Reference;
+            } else if self
                 .input
                 .read(cx)
                 .focus_handle(cx)
@@ -364,9 +550,14 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.files.panes.split = self.files.panes.active.is_some();
+        self.files.panes.split = self.pane_document(Pane::Reference).is_some();
         self.files.panes.last = pane;
-        if let Some(id) = self.pane_file(pane)
+        if pane == Pane::Reference
+            && let Some(id) = self.files.panes.chat
+            && let Some(view) = self.files.panes.chat_views.get(&id)
+        {
+            view.update(cx, |view, cx| view.focus(window, cx));
+        } else if let Some(id) = self.pane_file(pane)
             && let Some(document) = self.files.documents.get(&id)
         {
             document.preview.read(cx).focus_handle(cx).focus(window, cx);
@@ -384,7 +575,7 @@ impl ConduitApp {
     ) {
         if self.content_overlay_open()
             || !self.files.panes.split
-            || self.files.panes.active.is_none()
+            || self.pane_document(Pane::Reference).is_none()
             || self.files.panes.width < 641.
             || self
                 .files
@@ -423,7 +614,7 @@ impl ConduitApp {
         if self.content_overlay_open() {
             return main;
         }
-        let has_reference = self.files.panes.active.is_some();
+        let has_reference = self.pane_document(Pane::Reference).is_some();
         let main_visible = self.main_pane_visible();
         let reference_visible = self.reference_pane_visible();
         let main = div()
@@ -439,6 +630,19 @@ impl ConduitApp {
             )
             .child(main)
             .into_any_element();
+        let reference_content = if let Some(view) = self
+            .files
+            .panes
+            .chat
+            .and_then(|id| self.files.panes.chat_views.get(&id))
+        {
+            view.clone().into_any_element()
+        } else {
+            self.reference_file_view
+                .clone()
+                .cached(StyleRefinement::default().w_full().flex_1().min_h_0())
+                .into_any_element()
+        };
         let reference = reference_visible.then(|| {
             v_flex()
                 .id("content-reference")
@@ -452,11 +656,7 @@ impl ConduitApp {
                     cx.listener(|this, _, _, _| this.files.panes.last = Pane::Reference),
                 )
                 .child(self.document_tab_bar_for(Pane::Reference, cx))
-                .child(
-                    self.reference_file_view
-                        .clone()
-                        .cached(StyleRefinement::default().w_full().flex_1().min_h_0()),
-                )
+                .child(reference_content)
                 .into_any_element()
         });
         let body = if let Some(reference) = reference {

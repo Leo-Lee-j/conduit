@@ -202,13 +202,14 @@ impl ConduitApp {
         })
     }
     pub(super) fn session_is_visible(&self, id: u64) -> bool {
-        self.selected_session == Some(id)
-            && !self.viewing_subagent()
-            && self.active_file.is_none()
-            && self.active_diff.is_none()
-            && self.main_pane_visible()
-            && !self.content_overlay_open()
-            && !self.branch_navigation_open()
+        (self.reference_chat() == Some(id) && self.reference_pane_visible())
+            || (self.selected_session == Some(id)
+                && !self.viewing_subagent()
+                && self.active_file.is_none()
+                && self.active_diff.is_none()
+                && self.main_pane_visible()
+                && !self.content_overlay_open()
+                && !self.branch_navigation_open())
     }
     pub(super) fn session_is_notification_visible(&self, id: u64) -> bool {
         self.session_is_visible(id) && (!self.store.ui.system_notifications || self.window_active)

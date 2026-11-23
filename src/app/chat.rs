@@ -22,8 +22,10 @@ fn reveal_message_action(button: Button, group: SharedString) -> Button {
 
 #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
 pub(in crate::app) mod profiling;
+mod reference;
 pub(super) mod rows;
 mod turn_diff;
+pub(in crate::app) use reference::ReferenceChatView;
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod reasoning_tests;
@@ -777,7 +779,9 @@ impl ConduitApp {
         expanded: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let group = self.chat_rows.group(start).unwrap_or_default();
+        let group = self
+            .session_message_group(session_id, start, cx)
+            .unwrap_or_default();
         let count = group.count;
         let failures = group.failures;
         let running = group.running;
@@ -832,8 +836,10 @@ impl ConduitApp {
             generation.1 = Instant::now();
             this.tool_group_expansion
                 .insert((session_id, toggle_key.clone()), !expanded);
-            this.sync_chat_rows();
-            this.remeasure_message(start);
+            if this.selected_session == Some(session_id) {
+                this.sync_chat_rows();
+                this.remeasure_message(start);
+            }
             cx.notify();
         }))
         .child(
@@ -984,11 +990,7 @@ impl ConduitApp {
                 return;
             }
             this.reasoning_expansion.insert(key.clone(), !expanded);
-            if this.selected_session == Some(session_id) {
-                this.remeasure_message(index);
-            } else {
-                this.remeasure_subagent_message(session_id, index);
-            }
+            this.remeasure_session_message(session_id, index, cx);
             cx.notify();
         }))
         .child(
@@ -1153,9 +1155,7 @@ impl ConduitApp {
             category
         ))
         .on_click(cx.listener(move |this, _, _, cx| {
-            if this.selected_session == Some(session_id) {
-                this.remeasure_message(index);
-            }
+            this.remeasure_session_message(session_id, index, cx);
             if !this.expanded_tools.remove(&toggle_key) {
                 this.expanded_tools.insert(toggle_key.clone());
             }
@@ -1278,37 +1278,12 @@ impl ConduitApp {
     ) {
         let started = Instant::now();
         let index = self.chat_rows.message(row);
-        // Keep the Markdown state in the row's namespace even when it is only
-        // measured as overdraw. Scroll layout can then wait for the parser
-        // instead of treating a long reply's empty first frame as its height.
-        let markdown = self
-            .selected_session
-            .and_then(|id| self.session(id))
-            .and_then(|session| {
-                let item = session.messages.get(index)?;
-                (should_render_message_item(item, session.provider)
-                    && (item.kind == ItemKind::Assistant
-                        || (item.kind == ItemKind::Reasoning
-                            && self.reasoning_expanded(session.id, item)
-                            && !reasoning_body(item, session.provider).trim().is_empty())))
-                .then(|| {
-                    let text = message_markdown(item, session.provider);
-                    let state = window.use_keyed_state(
-                        SharedString::from(format!("chat-markdown-{}-{}", session.id, item.key)),
-                        cx,
-                        |_, cx| {
-                            gpui_kit::base::text::TextViewState::markdown(text.as_ref(), cx).motion(
-                                gpui_kit::base::TextViewMotion::default()
-                                    .with_stream_fade(Duration::from_millis(180))
-                                    .with_stream_fade_stagger(Duration::from_millis(8)),
-                            )
-                        },
-                    );
-                    state.update(cx, |state, cx| state.set_text(text.as_ref(), cx));
-                    state
-                })
-            });
-        let element = self.render_message_content(index, markdown.as_ref(), cx);
+        let (element, markdown) = self.selected_session.map_or_else(
+            || (div().into_any_element(), None),
+            |session| {
+                self.render_session_message(session, index, self.chat_rows.group(index), window, cx)
+            },
+        );
         #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
         profiling::record("row_build", started.elapsed());
         if self.store.ui.performance_monitor {
@@ -1319,9 +1294,53 @@ impl ConduitApp {
         (element, markdown)
     }
 
+    pub(in crate::app) fn render_session_message(
+        &mut self,
+        session_id: u64,
+        index: usize,
+        group: Option<rows::Group>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (
+        AnyElement,
+        Option<Entity<gpui_kit::base::text::TextViewState>>,
+    ) {
+        // Keep the Markdown state in the row's namespace even when it is only
+        // measured as overdraw. Scroll layout can then wait for the parser
+        // instead of treating a long reply's empty first frame as its height.
+        let markdown = self.session(session_id).and_then(|session| {
+            let item = session.messages.get(index)?;
+            (should_render_message_item(item, session.provider)
+                && (item.kind == ItemKind::Assistant
+                    || (item.kind == ItemKind::Reasoning
+                        && self.reasoning_expanded(session.id, item)
+                        && !reasoning_body(item, session.provider).trim().is_empty())))
+            .then(|| {
+                let text = message_markdown(item, session.provider);
+                let state = window.use_keyed_state(
+                    SharedString::from(format!("chat-markdown-{}-{}", session.id, item.key)),
+                    cx,
+                    |_, cx| {
+                        gpui_kit::base::text::TextViewState::markdown(text.as_ref(), cx).motion(
+                            gpui_kit::base::TextViewMotion::default()
+                                .with_stream_fade(Duration::from_millis(180))
+                                .with_stream_fade_stagger(Duration::from_millis(8)),
+                        )
+                    },
+                );
+                state.update(cx, |state, cx| state.set_text(text.as_ref(), cx));
+                state
+            })
+        });
+        let element = self.render_message_content(session_id, index, group, markdown.as_ref(), cx);
+        (element, markdown)
+    }
+
     fn render_message_content(
         &mut self,
+        session_id: u64,
         index: usize,
+        group: Option<rows::Group>,
         markdown: Option<&Entity<gpui_kit::base::text::TextViewState>>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -1330,7 +1349,7 @@ impl ConduitApp {
             .workspaces
             .iter()
             .flat_map(|w| &w.sessions)
-            .find(|session| Some(session.id) == self.selected_session)
+            .find(|session| session.id == session_id)
         else {
             return div().into_any_element();
         };
@@ -1345,7 +1364,6 @@ impl ConduitApp {
         }
         let session_id = session.id;
         let provider = session.provider;
-        let group = self.chat_rows.group(index);
         let tool_group = group.map(|group| (group.start, group.end));
         let tool_group_expanded = group.is_some_and(|group| group.expanded);
         if let Some((start, end)) = tool_group
@@ -1364,7 +1382,9 @@ impl ConduitApp {
         }
         let typography = self.chat_typography();
         let timestamp = message_timestamp(item.created_at.max(session.created_at));
-        let regenerable = item.kind == ItemKind::Assistant
+        let composer_binding = self.chat_composer_binding(session_id);
+        let regenerable = composer_binding.is_some()
+            && item.kind == ItemKind::Assistant
             && self.writable
             && !self.closing
             && !self.session_control.runs.contains_key(&session_id)
@@ -1635,9 +1655,16 @@ impl ConduitApp {
                         )
                         .map(|button| reveal_message_action(button, message_group.clone()))
                         .debug_selector(move || format!("reply-retry-button-{index}"))
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| this.regenerate(index, window, cx),
-                        )),
+                        .on_click(cx.listener({
+                            let binding = composer_binding.clone();
+                            move |this, _, window, cx| {
+                                if let Some(binding) = &binding {
+                                    this.with_composer(binding.clone(), cx, |this, cx| {
+                                        this.regenerate(index, window, cx)
+                                    });
+                                }
+                            }
+                        })),
                     );
                 }
                 let model_meta = h_flex()
@@ -1937,7 +1964,7 @@ impl ConduitApp {
                     .on_click(cx.listener({
                         let detail_key = detail_key.clone();
                         move |this, _, _, cx| {
-                            this.remeasure_message(index);
+                            this.remeasure_session_message(session_id, index, cx);
                             if question_history {
                                 this.question_expansion
                                     .insert(detail_key.clone(), !expanded);
@@ -2028,7 +2055,8 @@ impl ConduitApp {
                 let copy_text = raw_error.clone();
                 let copy_id = SharedString::from(format!("error-copy-{}-{}", session_id, item.key));
                 let copied = self.copied_action.as_ref() == Some(&copy_id);
-                let can_retry = self.writable
+                let can_retry = composer_binding.is_some()
+                    && self.writable
                     && !self.closing
                     && !self.session_busy(session_id)
                     && super::runtime::error_retry_prompt(session, index).is_some();
@@ -2064,9 +2092,16 @@ impl ConduitApp {
                         .compact()
                         .cursor_pointer()
                         .child(conduit::i18n::text_static("chat.retry"))
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| this.retry_error(index, window, cx),
-                        )),
+                        .on_click(cx.listener({
+                            let binding = composer_binding.clone();
+                            move |this, _, window, cx| {
+                                if let Some(binding) = &binding {
+                                    this.with_composer(binding.clone(), cx, |this, cx| {
+                                        this.retry_error(index, window, cx)
+                                    });
+                                }
+                            }
+                        })),
                     );
                 }
                 v_flex()
@@ -2162,7 +2197,7 @@ impl ConduitApp {
                                     if !this.expanded_errors.insert(error_key.clone()) {
                                         this.expanded_errors.remove(&error_key);
                                     }
-                                    this.scroll.remeasure();
+                                    this.remeasure_session_message(session_id, index, cx);
                                     cx.notify();
                                 },
                             )),

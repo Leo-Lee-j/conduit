@@ -90,7 +90,11 @@ impl ConduitApp {
             id,
             runtime::PendingQueueSave {
                 receipt,
-                composer: self.sent_composer(cx),
+                // Background callers may enqueue by session id without an editor.
+                // They must never capture an unrelated pane's current draft.
+                composer: (self.send_target(true) == Some(id))
+                    .then(|| self.sent_composer(cx))
+                    .flatten(),
             },
         );
         self.message = None;
@@ -221,13 +225,13 @@ impl ConduitApp {
     ) {
         if self.closing
             || !self.writable
-            || self.selected_session != Some(id)
+            || self.composer_session() != Some(id)
             || self.session_control.queue_saves.contains_key(&id)
         {
             return;
         }
         // Never overwrite typed text or attachments, including a pending engine switch.
-        if !self.input.read(cx).value().is_empty()
+        if !self.composer_input().read(cx).value().is_empty()
             || self
                 .current_files()
                 .is_some_and(|files| !files.references.is_empty())
@@ -246,7 +250,7 @@ impl ConduitApp {
             self.queued_messages.insert(id, message);
             return;
         };
-        self.new_session_provider = self.session(id).unwrap().provider;
+        self.set_composer_provider(self.session(id).unwrap().provider);
         self.drafts.insert(id, message.text.clone());
         self.composer_files.insert(
             target,
@@ -255,11 +259,14 @@ impl ConduitApp {
                 feedback: None,
             },
         );
-        self.input
+        self.composer_input()
             .update(cx, |input, cx| input.set_value(message.text, window, cx));
         self.prompt_history = None;
         self.persist();
-        self.input.read(cx).focus_handle(cx).focus(window, cx);
+        self.composer_input()
+            .read(cx)
+            .focus_handle(cx)
+            .focus(window, cx);
         cx.notify();
     }
 
@@ -268,7 +275,7 @@ impl ConduitApp {
         enabled: bool,
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
-        let id = self.selected_session?;
+        let id = self.composer_session()?;
         let message = self.queued_messages.get(&id)?;
         let paused = message.paused.is_some();
         let summary = if message.text.trim().is_empty() {
@@ -286,7 +293,7 @@ impl ConduitApp {
         let saving = self.session_control.queue_saves.contains_key(&id);
         let can_take_back = enabled
             && !saving
-            && self.input.read(cx).value().is_empty()
+            && self.composer_input().read(cx).value().is_empty()
             && self
                 .current_files()
                 .is_none_or(|files| files.references.is_empty());
@@ -350,7 +357,7 @@ impl ConduitApp {
                                     .compact()
                                     .label(conduit::i18n::text_static("queue.send"))
                                     .disabled(!can_send)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                    .on_click(self.composer_listener(cx, move |this, _, _, cx| {
                                         cx.stop_propagation();
                                         this.send_queued_message(id, cx);
                                     })),
@@ -376,10 +383,13 @@ impl ConduitApp {
                                         "queue.handle_the_current_draft_first",
                                     )
                                 })
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    cx.stop_propagation();
-                                    this.take_back_queued_message(id, window, cx);
-                                })),
+                                .on_click(self.composer_listener(
+                                    cx,
+                                    move |this, _, window, cx| {
+                                        cx.stop_propagation();
+                                        this.take_back_queued_message(id, window, cx);
+                                    },
+                                )),
                         )
                         .child(
                             Button::new("remove-queued-message")
@@ -393,7 +403,7 @@ impl ConduitApp {
                                     "queue.remove_queued_message",
                                 ))
                                 .disabled(!enabled || saving)
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                                .on_click(self.composer_listener(cx, move |this, _, _, cx| {
                                     cx.stop_propagation();
                                     this.queued_messages.remove(&id);
                                     this.persist_and_cleanup_attachments();

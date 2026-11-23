@@ -89,11 +89,11 @@ impl ConduitApp {
             return;
         }
         for (index, workspace) in self.store.workspaces.iter().enumerate() {
-            if let Some(session) = workspace
-                .sessions
-                .iter()
-                .find(|s| !s.archived && !s.is_subagent)
-            {
+            if let Some(session) = workspace.sessions.iter().find(|s| {
+                !s.archived
+                    && !s.is_subagent
+                    && self.document_pane(DocumentTab::Chat(s.id)) == super::files::Pane::Main
+            }) {
                 self.selected_workspace = Some(index);
                 self.selected_session = Some(session.id);
                 self.new_session_provider = session.provider;
@@ -127,7 +127,10 @@ impl ConduitApp {
         while self.open_tabs.iter().filter(|t| t.chat().is_some()).count() > limit {
             if let Some(position) = self.open_tabs.iter().position(|tab| {
                 tab.chat().is_some_and(|other| {
-                    other != id && !self.session_control.runs.contains_key(&other)
+                    other != id
+                        && Some(other) != self.selected_session
+                        && self.document_pane(*tab) == super::files::Pane::Main
+                        && !self.session_control.runs.contains_key(&other)
                 })
             }) {
                 self.open_tabs.remove(position);
@@ -168,6 +171,9 @@ impl ConduitApp {
             .collect();
         self.open_tabs
             .retain(|tab| tab.chat().is_none_or(|id| !archived_tabs.contains(&id)));
+        for id in archived_tabs {
+            self.detach_reference_chat(id, cx);
+        }
         self.select_fallback_session();
         self.persist();
         self.sync_git_workspace(cx);
@@ -442,7 +448,6 @@ impl ConduitApp {
         self.store
             .child_commands
             .retain(|command| command.root != id);
-        self.drafts.remove(&id);
         self.queued_messages.remove(&id);
         self.session_control.unread_completed.remove(&id);
         self.expanded_errors.retain(|(session, _)| *session != id);
@@ -461,6 +466,8 @@ impl ConduitApp {
         self.tool_details.forget_session(id);
         self.tool_diffs.forget_session(id);
         self.remove_tab(id);
+        self.detach_reference_chat(id, cx);
+        self.drafts.remove(&id);
         self.select_fallback_session();
         self.delete_target = None;
         self.persist_and_cleanup_attachments();
@@ -490,51 +497,6 @@ impl ConduitApp {
                 .map_or(self.new_session_provider, |selection| selection.engine)
         };
         self.new_session(index, provider, window, cx);
-    }
-
-    pub(super) fn select_engine(
-        &mut self,
-        provider: Provider,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.writable || self.closing || !self.store.cli.enabled(provider) {
-            return;
-        }
-        if self.new_session_provider != provider {
-            self.pending_model_selection = None;
-            // An unsent conversation already owns its tab, draft and attachments.
-            // Change its route in place while there is no engine context to resume.
-            let target = self.selected_session.filter(|id| {
-                !self.session_busy(*id)
-                    && !self.session_control.queue_saves.contains_key(id)
-                    && !self.session_draft_save_pending(*id)
-                    && self.session(*id).is_some_and(|session| {
-                        session.transcript.loaded
-                            && session.messages.is_empty()
-                            && session.native_id.is_none()
-                            && session.exit_code.is_none()
-                            && !session.interrupted
-                    })
-            });
-            if let Some(id) = target {
-                let selection = self.default_selection(provider);
-                if let Some(session) = self.session_mut(id) {
-                    session.provider = provider;
-                    selection.apply(session);
-                }
-                self.persist();
-            }
-        }
-        self.new_session_provider = provider;
-        self.remember_provider(provider);
-        if provider == Provider::OpenCode {
-            self.ensure_opencode_models(false, cx);
-        }
-        // Conversations with history keep their engine and context. Switching
-        // away from one configures the next new conversation without navigating.
-        let _ = window;
-        cx.notify();
     }
 
     /// Resolve the fallback against the model/channel that generated usage,
@@ -835,6 +797,15 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) {
         let session = session.filter(|id| self.session(*id).is_none_or(|s| !s.is_subagent));
+        if activate_chat
+            && let Some(id) = session
+            && self.document_pane(DocumentTab::Chat(id)) == super::files::Pane::Reference
+        {
+            self.select_reference_chat(id, window, cx);
+            return;
+        }
+        let session = session
+            .filter(|id| self.document_pane(DocumentTab::Chat(*id)) == super::files::Pane::Main);
         if session.is_some_and(|id| self.pending_new_session(id)) {
             self.message = Some(
                 conduit::i18n::text_static("sessions.saving_new_session_please_wait_your_draft")

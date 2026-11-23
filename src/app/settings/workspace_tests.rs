@@ -67,12 +67,12 @@ fn settings_engine_management_is_readonly_and_disabled_launches_preserve_history
     });
     draw(cx);
     assert!(cx.debug_bounds("engine-enabled-1").is_some());
-    cx.update(|window, cx| {
+    cx.update(|_, cx| {
         app.update(cx, |app, cx| {
             app.writable = true;
             app.store.cli.set_enabled(Provider::Codex, false);
             app.new_session_provider = Provider::Claude;
-            app.select_engine(Provider::Codex, window, cx);
+            app.select_composer_engine(Provider::Codex, cx);
             assert_eq!(app.new_session_provider, Provider::Claude);
             app.store.workspaces.push(crate::domain::Workspace {
                 path: std::env::temp_dir(),

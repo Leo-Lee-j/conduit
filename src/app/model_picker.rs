@@ -8,19 +8,31 @@ use super::*;
 struct SessionModelPicker {
     app: Entity<ConduitApp>,
     session_id: u64,
+    binding: composer::ComposerBinding,
     search: Entity<InputState>,
     slider: Entity<SliderState>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl SessionModelPicker {
+    fn update_app<R>(
+        &self,
+        cx: &mut App,
+        action: impl FnOnce(&mut ConduitApp, &mut Context<ConduitApp>) -> R,
+    ) -> Option<R> {
+        self.app.update(cx, |app, cx| {
+            app.with_composer(self.binding.clone(), cx, action)
+        })
+    }
+
     fn new(
         app: Entity<ConduitApp>,
         session_id: u64,
+        binding: composer::ComposerBinding,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let effort = app.read(cx).composer_selection(session_id).effort;
+        let effort = app.read(cx).composer_selection_for(&binding).effort;
         let slider = cx.new(|_| {
             SliderState::new()
                 .min(0.)
@@ -51,7 +63,7 @@ impl SessionModelPicker {
                         this.slider.update(cx, |slider, cx| {
                             slider.set_value(effort.index() as f32, window, cx)
                         });
-                        this.app.update(cx, |app, cx| {
+                        this.update_app(cx, |app, cx| {
                             app.update_composer_selection(this.session_id, cx, |s| {
                                 s.effort = effort
                             });
@@ -64,6 +76,7 @@ impl SessionModelPicker {
         Self {
             app,
             session_id,
+            binding,
             search,
             slider,
             _subscriptions: subscriptions,
@@ -74,13 +87,15 @@ impl SessionModelPicker {
 impl Render for SessionModelPicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let app = self.app.read(cx);
-        let selection = app.composer_selection(self.session_id);
+        let selection = app.composer_selection_for(&self.binding);
         let engine = selection.engine;
         let channel = selection.channel;
         let selected = selection.model;
         let effort = selection.effort;
         let native_models = if matches!(engine, Provider::OpenCode | Provider::Qoder) {
-            let catalog_models = app.channel_models(engine, &ModelChannel::Cli).1;
+            let catalog_models = app
+                .composer_channel_models(&self.binding, engine, &ModelChannel::Cli)
+                .1;
             if !catalog_models.is_empty() {
                 catalog_models
             } else {
@@ -97,12 +112,13 @@ impl Render for SessionModelPicker {
                 if engine == Provider::Qoder && !native_models.is_empty() {
                     None
                 } else {
-                    app.channel_models(engine, &ModelChannel::Cli).0
+                    app.composer_channel_models(&self.binding, engine, &ModelChannel::Cli)
+                        .0
                 },
                 native_models.clone(),
             )
         } else {
-            app.channel_models(engine, &channel)
+            app.composer_channel_models(&self.binding, engine, &channel)
         };
         let variants = selection.opencode.variants();
         let variant = selection.opencode.effective_variant().map(str::to_owned);
@@ -134,11 +150,11 @@ impl Render for SessionModelPicker {
         let channel_label = native_provider
             .clone()
             .unwrap_or_else(|| app.channel_label(engine, &channel));
-        let pending = app.model_picker_session_id(self.session_id).is_none();
+        let pending = app.composer_session_for(&self.binding).is_none();
         let disabled = !app.writable
             || app.closing
             || app
-                .model_picker_session_id(self.session_id)
+                .composer_session_for(&self.binding)
                 .is_some_and(|id| app.session_busy(id));
         let mut channels = vec![(
             ModelChannel::Cli,
@@ -268,7 +284,7 @@ impl Render for SessionModelPicker {
                             )
                             .on_click(move |_, window, cx| {
                                 picker.update(cx, |this, cx| {
-                                    this.app.update(cx, |app, cx| {
+                                    this.update_app(cx, |app, cx| {
                                         app.update_composer_selection(this.session_id, cx, |s| {
                                             if active {
                                                 return;
@@ -285,7 +301,7 @@ impl Render for SessionModelPicker {
                                     let effort = this
                                         .app
                                         .read(cx)
-                                        .composer_selection(this.session_id)
+                                        .composer_selection_for(&this.binding)
                                         .effort;
                                     this.slider.update(cx, |s, cx| {
                                         s.set_value(effort.index() as f32, window, cx)
@@ -356,12 +372,16 @@ impl Render for SessionModelPicker {
                             .when(active, |r| r.child(Icon::new(IconName::Check).small())),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.app.update(cx, |app, cx| {
+                        this.update_app(cx, |app, cx| {
                             app.update_composer_selection(this.session_id, cx, |s| {
                                 s.set_model(model.clone())
                             });
                         });
-                        let effort = this.app.read(cx).composer_selection(this.session_id).effort;
+                        let effort = this
+                            .app
+                            .read(cx)
+                            .composer_selection_for(&this.binding)
+                            .effort;
                         this.slider.update(cx, |slider, cx| {
                             slider.set_value(effort.index() as f32, window, cx)
                         });
@@ -498,7 +518,7 @@ impl Render for SessionModelPicker {
                                                 })
                                                 .on_click(move |_, _, cx| {
                                                     picker.update(cx, |this, cx| {
-                                                        this.app.update(cx, |app, cx| {
+                                                        this.update_app(cx, |app, cx| {
                                                             app.update_composer_selection(
                                                                 this.session_id,
                                                                 cx,
@@ -628,8 +648,12 @@ impl Render for SessionModelPicker {
                             .cursor_pointer()
                             .disabled(disabled)
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.app.update(cx, |app, cx| {
-                                    app.reload_all_models_async(true, window, cx)
+                                this.update_app(cx, |app, cx| {
+                                    if app.composer_provider() == Provider::OpenCode {
+                                        app.ensure_composer_opencode_models(true, cx);
+                                    } else {
+                                        app.reload_all_models_async(true, window, cx);
+                                    }
                                 });
                                 cx.notify();
                             })),
@@ -641,7 +665,7 @@ impl Render for SessionModelPicker {
 impl SessionModelPicker {
     fn engine_picker(&self, cx: &Context<Self>) -> AnyElement {
         let app = self.app.read(cx);
-        let provider = app.new_session_provider;
+        let provider = app.composer_provider_for(&self.binding);
         let disabled = !app.writable || app.closing;
         let view = cx.entity();
         let trigger = Button::new("engine-picker-trigger")
@@ -729,11 +753,15 @@ impl SessionModelPicker {
                         .when(active, |button| button.bg(rgb(palette().surface_hover)))
                         .on_click(move |_, window, cx| {
                             picker.update(cx, |this, cx| {
-                                this.app
-                                    .update(cx, |app, cx| app.select_engine(option, window, cx));
+                                this.update_app(cx, |app, cx| {
+                                    app.select_composer_engine(option, cx)
+                                });
                                 this.search.update(cx, |s, cx| s.set_value("", window, cx));
-                                let effort =
-                                    this.app.read(cx).composer_selection(this.session_id).effort;
+                                let effort = this
+                                    .app
+                                    .read(cx)
+                                    .composer_selection_for(&this.binding)
+                                    .effort;
                                 this.slider.update(cx, |slider, cx| {
                                     slider.set_value(effort.index() as f32, window, cx)
                                 });
@@ -752,14 +780,93 @@ impl SessionModelPicker {
 }
 
 impl ConduitApp {
+    fn composer_channel_models(
+        &self,
+        binding: &composer::ComposerBinding,
+        engine: Provider,
+        channel: &ModelChannel,
+    ) -> (Option<String>, Vec<models::ModelOption>) {
+        if engine != Provider::OpenCode {
+            return self.channel_models(engine, channel);
+        }
+        let catalog = binding
+            .target
+            .as_ref()
+            .and_then(|target| self.opencode_catalogs.get(&target.workspace));
+        let native = catalog
+            .map(|catalog| catalog.models.as_slice())
+            .unwrap_or_default();
+        let preferences = self.native_model_preferences(engine);
+        let mut models = preferences.merge(native, false);
+        if let Some(defaults) = self.store.session_defaults.get(&engine)
+            && defaults.channel == ModelChannel::Cli
+            && let Some(id) = &defaults.model
+            && !models.iter().any(|model| model.id == *id)
+        {
+            let model = preferences
+                .merge(native, true)
+                .into_iter()
+                .find(|model| model.id == *id)
+                .unwrap_or_else(|| models::ModelOption {
+                    id: id.clone(),
+                    label: id.clone(),
+                    context_window: None,
+                    note: conduit::i18n::text(
+                        "settings.model_management.new_session_default_not_found_in_catalog",
+                    ),
+                });
+            models.push(model);
+        }
+        let note = catalog
+            .map(|catalog| catalog.error.clone().or_else(|| catalog.note.clone()))
+            .unwrap_or_else(|| {
+                Some(conduit::i18n::text(
+                    "model_picker.loading_the_native_model_catalog_from_opencode",
+                ))
+            });
+        (note, models)
+    }
+
+    pub(in crate::app) fn ensure_composer_opencode_models(
+        &mut self,
+        refresh: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.closing || self.cli_installing() {
+            return;
+        }
+        let Some(target) = self.composer_target() else {
+            return;
+        };
+        let cwd = target.workspace;
+        if self.opencode_model_probes.contains_key(&cwd)
+            || (!refresh
+                && self.opencode_catalogs.get(&cwd).is_some_and(|catalog| {
+                    catalog.error.is_some()
+                        || catalog.fetched_at.is_some_and(|time| {
+                            time.elapsed()
+                                .is_ok_and(|age| age < models::OPENCODE_CACHE_TTL)
+                        })
+                }))
+        {
+            return;
+        }
+        self.opencode_model_probes.insert(
+            cwd.clone(),
+            models::OpenCodeModelsProbe::start(self.store.cli.clone(), cwd, refresh),
+        );
+        cx.emit(crate::providers::ProviderCatalogChanged);
+        cx.notify();
+    }
+
     /// Resolve the same destination used by sending: a selected conversation
     /// for this engine, or the configuration for the next new conversation.
     pub(super) fn model_picker_session_id(&self, session_id: u64) -> Option<u64> {
-        self.selected_session
+        self.composer_session()
             .filter(|id| *id == session_id)
             .filter(|id| {
                 self.session(*id)
-                    .is_some_and(|s| s.provider == self.new_session_provider)
+                    .is_some_and(|s| s.provider == self.composer_provider())
             })
     }
 
@@ -770,14 +877,13 @@ impl ConduitApp {
         {
             return ComposerSelection::from_session(session);
         }
-        self.pending_model_selection
-            .as_ref()
-            .filter(|s| s.engine == self.new_session_provider)
+        self.composer_pending_selection()
+            .filter(|s| s.engine == self.composer_provider())
             .cloned()
             .unwrap_or_else(|| {
-                self.selected_workspace.map_or_else(
-                    || self.default_selection(self.new_session_provider),
-                    |index| self.workspace_default_selection(index, self.new_session_provider),
+                self.composer_workspace().map_or_else(
+                    || self.default_selection(self.composer_provider()),
+                    |index| self.workspace_default_selection(index, self.composer_provider()),
                 )
             })
     }
@@ -798,7 +904,7 @@ impl ConduitApp {
             selection.apply(session);
             self.persist();
         } else {
-            self.pending_model_selection = Some(selection);
+            self.set_composer_pending_selection(Some(selection));
         }
         cx.notify();
     }
@@ -807,11 +913,12 @@ impl ConduitApp {
     /// visually flagged (warning colors + alert icon) because it removes the
     /// CLI's own safety gates for this session.
     pub(super) fn permission_picker(&self, view: Entity<Self>) -> AnyElement {
+        let binding = self.composer_binding();
         let permission = self
             .send_target(true)
             .and_then(|id| self.session(id))
             .map(|session| session.permission)
-            .unwrap_or(self.pending_permission);
+            .unwrap_or(self.composer_permission());
         let warning = permission == PermissionLevel::FullAccess;
         let trigger = Button::new("permission-picker-trigger")
             .ghost()
@@ -877,6 +984,7 @@ impl ConduitApp {
                     PermissionLevel::FullAccess,
                 ] {
                     let app = view.clone();
+                    let binding = binding.clone();
                     let popover = popover.clone();
                     let active = option == permission;
                     list = list.child(
@@ -899,7 +1007,9 @@ impl ConduitApp {
                         .when(active, |button| button.bg(rgb(palette().surface_hover)))
                         .on_click(move |_, window, cx| {
                             app.update(cx, |this, cx| {
-                                this.set_session_permission(option, window, cx)
+                                this.with_composer(binding.clone(), cx, |this, cx| {
+                                    this.set_session_permission(option, window, cx)
+                                });
                             });
                             if let Some(popover) = popover.clone().upgrade() {
                                 popover.update(cx, |popover, cx| popover.dismiss(window, cx));
@@ -967,7 +1077,7 @@ impl ConduitApp {
             session.permission = permission;
             self.persist();
         } else if target.is_none() {
-            self.pending_permission = permission;
+            self.set_composer_permission(permission);
         }
         if permission == PermissionLevel::FullAccess
             && let Some(run) = target.and_then(|id| self.session_control.runs.get(&id))
@@ -977,10 +1087,13 @@ impl ConduitApp {
         // Sandbox changes apply to the next turn. Explicit full access also
         // resolves the active turn's approval gates, without restarting it.
         if self
-            .selected_session
+            .composer_session()
             .is_none_or(|id| !self.session_control.runs.contains_key(&id))
         {
-            self.input.read(cx).focus_handle(cx).focus(window, cx);
+            self.composer_input()
+                .read(cx)
+                .focus_handle(cx)
+                .focus(window, cx);
         }
         cx.notify();
     }
@@ -991,10 +1104,11 @@ impl ConduitApp {
         session_id: u64,
         disabled: bool,
     ) -> AnyElement {
+        let binding = self.composer_binding();
         let selection = self.composer_selection(session_id);
         let provider = selection.engine;
         let selected_model = selection.model;
-        let (_, mut models) = self.channel_models(provider, &selection.channel);
+        let (_, mut models) = self.composer_channel_models(&binding, provider, &selection.channel);
         if matches!(provider, Provider::OpenCode | Provider::Qoder) && models.is_empty() {
             models = self
                 .native_model_preferences(provider)
@@ -1101,15 +1215,33 @@ impl ConduitApp {
             .trigger(trigger)
             .content(move |_, window, cx| {
                 view.update(cx, |app, cx| {
-                    if app.new_session_provider == Provider::OpenCode {
-                        app.ensure_opencode_models(false, cx);
-                    }
+                    app.with_composer(binding.clone(), cx, |app, cx| {
+                        if app.composer_provider() == Provider::OpenCode {
+                            app.ensure_composer_opencode_models(false, cx);
+                        }
+                    });
                 });
                 let picker = window.use_keyed_state(
-                    ("session-model-picker", session_id),
+                    (
+                        if binding.pane == files::Pane::Main {
+                            "session-model-picker"
+                        } else {
+                            "reference-session-model-picker"
+                        },
+                        session_id,
+                    ),
                     cx,
-                    |window, cx| SessionModelPicker::new(view.clone(), session_id, window, cx),
+                    |window, cx| {
+                        SessionModelPicker::new(
+                            view.clone(),
+                            session_id,
+                            binding.clone(),
+                            window,
+                            cx,
+                        )
+                    },
                 );
+                picker.update(cx, |picker, _| picker.binding = binding.clone());
                 div().child(picker)
             })
             .into_any_element()

@@ -3,7 +3,9 @@ use crate::app::queue::tests::fixture;
 use gpui_kit::{Entity, TestAppContext, VisualTestContext, px, size};
 use std::path::{Path, PathBuf};
 
+mod composer_ui;
 mod layout;
+mod tabs;
 mod watch;
 
 fn settle(cx: &mut VisualTestContext) {
@@ -109,6 +111,141 @@ fn content_panes_cross_workspace_reference_preserves_send_target(cx: &mut TestAp
         })
     });
     settle(cx);
+}
+
+#[gpui_kit::test]
+fn content_panes_two_chats_keep_independent_sessions_drafts_and_send_targets(
+    cx: &mut TestAppContext,
+) {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    };
+    use std::time::{Duration, Instant};
+
+    let _locale = crate::test_support::chinese();
+    let (app, cx, root) = fixture(cx, "content-panes-two-chats");
+    prepare(&app, cx, &root);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            // The fixture already has session 2 in its second workspace.
+            let second = app.session_mut(2).unwrap();
+            second.title = "右侧会话".into();
+            second.native_id = None;
+            app.input
+                .update(cx, |input, cx| input.set_value("左侧草稿保留", window, cx));
+            app.show_chat_beside(2, window, cx);
+            let target = app.composer_target();
+            assert_eq!(app.selected_session, Some(1));
+            assert_eq!(target.and_then(|target| target.session), Some(1));
+            assert_eq!(app.files.panes.chat, Some(2));
+            assert!(app.reference_pane_visible());
+            assert_eq!(app.document_pane(DocumentTab::Chat(2)), Pane::Reference);
+            assert_eq!(app.input.read(cx).value(), "左侧草稿保留");
+
+            let view = app.reference_chat_view(2).unwrap();
+            let input = view.read(cx).input.clone();
+            input.update(cx, |input, cx| input.set_value("右侧独立发送", window, cx));
+            let binding = app.composer_binding_for_session(2, input.clone()).unwrap();
+            assert_eq!(binding.pane, Pane::Reference);
+            assert_eq!(binding.target.as_ref().unwrap().session, Some(2));
+            assert_eq!(
+                binding.target.as_ref().unwrap().workspace,
+                root.join("other")
+            );
+            let main_input = app.input.clone();
+            let main_target = app.composer_target();
+            app.writable = true;
+            app.persistence.flush();
+            let (release, wait) = mpsc::channel();
+            let (entered, snapshots) = mpsc::channel();
+            let first = AtomicBool::new(true);
+            app.persistence = crate::persistence::Persistence::with_writer(move |store| {
+                if first.swap(false, Ordering::AcqRel) {
+                    entered.send(store).map_err(|_| "test receiver dropped")?;
+                    wait.recv_timeout(Duration::from_secs(5))
+                        .map_err(|_| "test save timed out")?
+                } else {
+                    Ok(())
+                }
+            });
+            app.send_prompt_for(binding, window, cx);
+            let saved = snapshots.recv_timeout(Duration::from_secs(3)).unwrap();
+            assert_eq!(app.selected_session, Some(1));
+            assert_eq!(app.selected_workspace, Some(0));
+            assert!(app.input == main_input);
+            assert_eq!(app.composer_target(), main_target);
+            assert_eq!(app.session_control.runs.len(), 1);
+            assert!(app.session_control.runs.contains_key(&2));
+            assert!(!app.session_control.runs.contains_key(&1));
+            assert_eq!(app.session_control.runs[&2].worktree, root.join("other"));
+            assert!(app.session_control.runs[&2].pending_save.is_some());
+            assert!(app.session_control.runs[&2].api_request_started.is_none());
+            assert!(saved.workspaces[0].sessions[0].messages.is_empty());
+            assert!(
+                saved.workspaces[1].sessions[0].messages.iter().any(|item| {
+                    item.kind == ItemKind::User && item.text == "右侧独立发送"
+                })
+            );
+            assert!(
+                app.session(2).unwrap().messages.iter().any(|item| {
+                    item.kind == ItemKind::User && item.text == "右侧独立发送"
+                })
+            );
+            assert_eq!(input.read(cx).value(), "右侧独立发送");
+            assert_eq!(app.input.read(cx).value(), "左侧草稿保留");
+
+            // Only a successful save receipt may release the send and clear
+            // the bound input. Main remains selected throughout this flow.
+            release.send(Ok(())).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while app.persistence.busy() {
+                assert!(Instant::now() < deadline, "send save did not finish");
+                app.poll_persistence(cx);
+                std::thread::yield_now();
+            }
+            app.poll_pending_sends(window, cx);
+            app.persistence.flush();
+            assert!(app.session_control.runs[&2].pending_save.is_none());
+            assert!(app.session_control.runs[&2].api_request_started.is_some());
+            assert!(input.read(cx).value().is_empty());
+            assert_eq!(app.input.read(cx).value(), "左侧草稿保留");
+            assert_eq!(app.selected_session, Some(1));
+            assert_eq!(app.selected_workspace, Some(0));
+            assert_eq!(app.composer_target(), main_target);
+
+            input.update(cx, |input, cx| {
+                input.set_value("右侧切换后草稿", window, cx)
+            });
+            let mut third = app.session(2).unwrap().clone();
+            third.id = 3;
+            third.title = "右侧第三会话".into();
+            third.native_id = None;
+            app.store.workspaces[0].sessions.push(third);
+            app.show_chat_beside(3, window, cx);
+            assert_eq!(app.document_pane(DocumentTab::Chat(2)), Pane::Reference);
+            assert_eq!(app.document_pane(DocumentTab::Chat(3)), Pane::Reference);
+            assert_eq!(
+                app.pane_document(Pane::Reference),
+                Some(DocumentTab::Chat(3))
+            );
+            app.select_reference_chat(2, window, cx);
+            assert_eq!(input.read(cx).value(), "右侧切换后草稿");
+            app.move_chat_to_main(2, window, cx);
+            assert_eq!(app.selected_session, Some(2));
+            assert_eq!(
+                app.drafts.get(&2).map(String::as_str),
+                Some("右侧切换后草稿")
+            );
+            assert_eq!(app.files.panes.chat, Some(3));
+            app.close_documents(&[DocumentTab::Chat(3)], window, cx);
+            assert_eq!(app.selected_session, Some(2));
+            assert!(app.files.panes.chat.is_none());
+            assert!(!app.files.panes.split);
+        })
+    });
+    settle(cx);
+    assert!(cx.debug_bounds("content-main").is_some());
 }
 
 #[gpui_kit::test]

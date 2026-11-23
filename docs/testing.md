@@ -35,6 +35,7 @@ cargo run --locked
 | 取消、异常退出、子进程与终端清理 | `child::`、`chat_runtime::`、`terminal::` |
 | 跨会话隔离、审批失效、插件权限与路径边界 | `app::ui_tests`、`app::notifications::tests::approvals`、`plugins::`、`plugin_packages::` |
 | 内容分栏的发送目标、预览归属、异步刷新、引用定位、比例持久化及事件驱动预览刷新 | `app::files::panes::tests`（含 `layout` 的真实拖动/窄窗/新视图恢复、`watch` 的磁盘通知/内容校验/隐藏与关闭隔离）、`app::files::watch::tests`、`app::github::tests`、`app::usage::tests`、`store::tests::ui_settings_default_to_five_sessions_and_roundtrip`、`store::tests::content_split_ratio_defaults_and_rejects_invalid_preferences` |
+| 双聊天共用组件、发送绑定、独立导航和草稿恢复 | `app::files::panes::tests::composer_ui`、`app::files::panes::tests::tabs`、`app::composer::tests`、`app::shell::tests::split`、`app::outline::tests`、`app::user_input::focus_tests`、`app::update::tests` |
 | 文件变化、工具证据核对、Unicode 回放及新版本取消 | `content_review_`，覆盖不明确替换/截断 patch/竞争工具拒绝关联、可见快照语义、Markdown 恢复、减少动态效果与跟随暂停 |
 | Git 写操作、更新验签、安装回滚、重启恢复 | `git::`、`update::`、`app::update::tests` |
 
@@ -63,7 +64,7 @@ cargo test --locked --lib update:: -- --test-threads=1
 | 工作区长列表 | 100 条会话展开后从中间精简；标题吸顶与跨组替换、标题上的滚轮、置顶保留、当前聊天与草稿不变；标题右侧浅底列表图标和底部“精简列表”均可点击，鼠标精简无边框，键盘圆角焦点不改变行尺寸与位置 |
 | 队列与恢复 | 排队、撤回编辑、保存失败、取消、普通退出及更新后恢复正文与附件，不重复发送 |
 | 阅读与文件 | 长回复、代码、Mermaid、文本选择复制、冷正文加载/重试、精确/模糊查找和独立滚动；Markdown 悬浮大纲的层级、折叠、重复标题跳转、窄视口和内容刷新 |
-| 内容分栏 | 跨工作区参考文件不改变发送目标；全区/并排搬移、组内批量关闭、窄窗切组与比例恢复；拖动比例后重启，重新打开并排时恢复比例且不自动重开文件；双文件刷新、旧快照保留及删除重建恢复；同大小同时间戳覆盖、原子替换、重命名和目录替换后继续刷新；隐藏/关闭后旧通知隔离 |
+| 内容分栏 | 两聊天并排独立显示流式消息、草稿和发送目标；切换/搬回/关闭不串会话；跨工作区参考文件不改变发送目标；全区/并排搬移、组内批量关闭、窄窗切组与比例恢复；拖动比例后重启，重新打开并排时恢复比例且不自动重开文件；双文件刷新、旧快照保留及删除重建恢复；同大小同时间戳覆盖、原子替换、重命名和目录替换后继续刷新；隐藏/关闭后旧通知隔离 |
 | 文件变化与回放 | 普通刷新不滚动或切文件；修改块与删除边界；主动回放、暂停/继续/重播、返回当前 Markdown；中文/组合字符/emoji、查找和复制当前可见内容；滚动/换会话/隐藏暂停跟随，新版本结束旧回放 |
 | Git | 部分暂存与未选中文件、按钮状态、分支鼠标菜单、冲突恢复、标签推送失败重试、统一通知 |
 | 终端 | 实际 cwd、中文/空格路径、TUI/鼠标、Ctrl+C 与复制区别、多行粘贴、切换/收起/关闭及子进程清理 |

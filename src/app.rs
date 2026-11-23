@@ -226,6 +226,8 @@ pub struct ConduitApp {
     /// (0). None means the composer holds typed text, not a recalled prompt.
     prompt_history: Option<usize>,
     composer_files: HashMap<ComposerTarget, ComposerFiles>,
+    composer_scope: Option<composer::ComposerBinding>,
+    composer_editors: HashMap<EntityId, composer::EditorState>,
     file_mentions: mentions::FileMentions,
     chat_commands: commands::ChatCommands,
     queued_messages: HashMap<u64, queue::QueuedMessage>,
@@ -607,13 +609,7 @@ impl ConduitApp {
             })
             .or(store.ui.last_provider)
             .unwrap_or(Provider::Claude);
-        let input = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .placeholder(conduit::i18n::text_static(
-                    "localization.describe_a_task_type_to_reference_files",
-                ))
-                .auto_grow(3, 8)
-        });
+        let input = cx.new(|cx| composer::composer_input_state(String::new(), window, cx));
         let input_subscription = cx.subscribe(&input, |_, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 cx.notify();
@@ -811,6 +807,8 @@ impl ConduitApp {
             workspace_drafts: HashMap::new(),
             prompt_history: None,
             composer_files: HashMap::new(),
+            composer_scope: None,
+            composer_editors: HashMap::new(),
             file_mentions: mentions::FileMentions::default(),
             chat_commands: commands::ChatCommands::default(),
             queued_messages: HashMap::new(),

@@ -494,6 +494,7 @@ impl ConduitApp {
             tab,
             DocumentTab::Settings | DocumentTab::Usage(_) | DocumentTab::PullRequest(_)
         );
+        let overlay_return = self.content_overlay_return();
         if overlay {
             self.remember_content_overlay();
         } else {
@@ -522,10 +523,23 @@ impl ConduitApp {
                 .search
                 .update(cx, |input, cx| input.set_value("", window, cx));
         }
+        // A reference tab may be selected directly from the sidebar while a
+        // full-page document covers Main. Restore Main before revealing it.
+        if self.document_pane(tab) == Pane::Reference
+            && let Some(previous) = overlay_return
+        {
+            self.select_document(previous, window, cx);
+        }
         if let DocumentTab::File(id) = tab
             && self.document_pane(tab) == Pane::Reference
         {
             self.select_reference_file(id, window, cx);
+            return;
+        }
+        if let DocumentTab::Chat(id) = tab
+            && self.document_pane(tab) == Pane::Reference
+        {
+            self.select_reference_chat(id, window, cx);
             return;
         }
         if !overlay {
@@ -724,7 +738,12 @@ impl ConduitApp {
             .files
             .panes
             .active
-            .is_some_and(|id| tabs.contains(&DocumentTab::File(id)));
+            .is_some_and(|id| tabs.contains(&DocumentTab::File(id)))
+            || self
+                .files
+                .panes
+                .chat
+                .is_some_and(|id| tabs.contains(&DocumentTab::Chat(id)));
         let reference_focused = self.files.panes.last == Pane::Reference;
         let active = self.active_document();
         let closing_active = active.is_some_and(|tab| tabs.contains(&tab));
@@ -788,6 +807,9 @@ impl ConduitApp {
                     self.files.preview = None;
                 }
             }
+            if let DocumentTab::Chat(id) = tab {
+                self.detach_reference_chat(*id, cx);
+            }
         }
         self.repair_reference_pane();
         // Settings can cover another full-page document. Preserve that page's
@@ -821,6 +843,7 @@ impl ConduitApp {
             let sessions = &self.store.workspaces[workspace].sessions;
             let available = |id: &u64| {
                 !tabs.contains(&DocumentTab::Chat(*id))
+                    && self.document_pane(DocumentTab::Chat(*id)) == Pane::Main
                     && sessions
                         .iter()
                         .any(|s| s.id == *id && !s.archived && !s.is_subagent)
@@ -890,13 +913,20 @@ impl ConduitApp {
                 self.input.read(cx).focus_handle(cx).focus(window, cx);
             }
         }
-        if closing_reference && reference_focused && !closing_active {
-            if let Some(id) = self.files.panes.active {
-                self.files.documents[&id]
-                    .preview
-                    .read(cx)
-                    .focus_handle(cx)
-                    .focus(window, cx);
+        if closing_active
+            && overlay_pane == Some(Pane::Reference)
+            && !self.content_overlay_open()
+            && self.pane_document(Pane::Reference).is_some()
+        {
+            self.leave_content_overlay();
+            self.show_content_pane(Pane::Reference, window, cx);
+        } else if closing_reference
+            && reference_focused
+            && !closing_active
+            && !self.content_overlay_open()
+        {
+            if self.pane_document(Pane::Reference).is_some() {
+                self.show_content_pane(Pane::Reference, window, cx);
             } else {
                 self.focus_main_content(window, cx);
             }
@@ -2312,6 +2342,8 @@ impl ConduitApp {
             .track_scroll(self.pane_tab_scroll(pane))
             .with_size(Size::Medium)
             .h(px(TAB_BAR_HEIGHT))
+            .min_h(px(TAB_BAR_HEIGHT))
+            .flex_shrink_0()
             .pr(px(8.))
             .when_some(selected, |bar, i| bar.selected_index(i));
         let mut previous_workspace = None;
@@ -2361,7 +2393,7 @@ impl ConduitApp {
                     let Some(s) = self.session(id) else {
                         continue;
                     };
-                    let title = single_line_title(if s.title.is_empty() {
+                    let title = single_line_title(if s.title.trim().is_empty() {
                         conduit::i18n::text_static("files.new_session")
                     } else {
                         &s.title
@@ -2448,6 +2480,10 @@ impl ConduitApp {
                     )
                 }
             };
+            // Session titles can be pasted SQL, including tabs and Unicode
+            // line separators. Keep the label and overflow-menu entry on one
+            // line; TabBar's max_width applies the label's ellipsis.
+            let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
             let selector_close = match tab {
                 DocumentTab::Settings => "settings-tab-close".to_owned(),
                 DocumentTab::Usage(id) => format!("usage-tab-close-{id}"),
@@ -2573,6 +2609,7 @@ impl ConduitApp {
             })
             .relative()
             .h(px(TAB_BAR_HEIGHT))
+            .min_h(px(TAB_BAR_HEIGHT))
             .min_w_0()
             .flex_shrink_0()
             .on_prepaint(move |bounds, window, cx| {
@@ -2611,6 +2648,7 @@ impl ConduitApp {
                 let all = app.clone();
                 let pin = app.clone();
                 let move_view = app.clone();
+                let move_chat = app.clone();
                 menu.when(matches!(target, DocumentTab::File(_)), |menu| {
                     menu.item(
                         PopupMenuItem::new(conduit::i18n::text_static("files.pin_file_tab"))
@@ -2644,6 +2682,26 @@ impl ConduitApp {
                                         window,
                                         cx,
                                     )
+                                });
+                            }
+                        }),
+                    )
+                })
+                .when(matches!(target, DocumentTab::Chat(_)), |menu| {
+                    menu.item(
+                        PopupMenuItem::new(conduit::i18n::text_static(if pane == Pane::Main {
+                            "files.show_beside"
+                        } else {
+                            "files.show_full"
+                        }))
+                        .on_click(move |_, window, cx| {
+                            if let DocumentTab::Chat(id) = target {
+                                move_chat.update(cx, |this, cx| {
+                                    if pane == Pane::Main {
+                                        this.show_chat_beside(id, window, cx);
+                                    } else {
+                                        this.move_chat_to_main(id, window, cx);
+                                    }
                                 });
                             }
                         }),

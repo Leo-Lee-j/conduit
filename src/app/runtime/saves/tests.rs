@@ -378,7 +378,7 @@ fn unsent_session_engine_switch_preserves_identity_draft_and_attachments(cx: &mu
                 input.set_value("send from the same conversation", window, cx)
             });
 
-            this.select_engine(Provider::Codex, window, cx);
+            this.select_composer_engine(Provider::Codex, cx);
             assert_eq!(this.selected_session, Some(1));
             assert_eq!(this.send_target(true), Some(1));
             assert_eq!(this.model_picker_session_id(1), Some(1));

@@ -27,9 +27,18 @@ pub(super) struct State {
 }
 
 impl State {
-    fn capture(app: &ConduitApp) -> Self {
-        let session = app.selected_session.and_then(|id| app.session(id));
-        let top = app.scroll.logical_scroll_top();
+    fn capture(app: &ConduitApp, source: &TimelineSource) -> Self {
+        let session = source.id(app).and_then(|id| app.session(id));
+        let (top, revision) = match source {
+            TimelineSource::Main => (
+                app.scroll.logical_scroll_top(),
+                app.chat_rows.revision.get(),
+            ),
+            TimelineSource::Session(state) => {
+                let state = state.borrow();
+                (state.scroll.logical_scroll_top(), state.rows.revision.get())
+            }
+        };
         Self {
             session: session.map(|s| {
                 (
@@ -48,7 +57,7 @@ impl State {
                         .find(|w| w.sessions.iter().any(|candidate| candidate.id == s.id))
                 })
                 .map(|w| w.path.clone()),
-            revision: app.chat_rows.revision.get(),
+            revision,
             typography: app.chat_typography(),
             palette: palette(),
             full_width: app.store.ui.full_width_content,
@@ -70,7 +79,7 @@ impl State {
             expanded: [app.expanded_tools.clone(), app.expanded_errors.clone()],
             reasoning_expansion: app.reasoning_expansion.clone(),
             question_expansion: app.question_expansion.clone(),
-            scroll: (!app.at_bottom || app.pending_message_jump.is_some())
+            scroll: (!source.following(app) || source.navigating(app))
                 .then_some((top.item_ix, top.offset_in_item)),
         }
     }
@@ -78,13 +87,31 @@ impl State {
 
 impl ConduitApp {
     pub(super) fn sync_timeline(&self, cx: &mut Context<Self>) {
-        let state = State::capture(self);
+        self.sync_chat_timeline(&self.timeline, &TimelineSource::Main, cx);
+    }
+
+    pub(in crate::app) fn sync_chat_timeline(
+        &self,
+        timeline: &Entity<ChatTimeline>,
+        source: &TimelineSource,
+        cx: &mut Context<Self>,
+    ) {
+        let state = State::capture(self, source);
         // Keep the existing refresh behavior during live runs. Completed transcripts
         // reuse their layout/paint until a render input changes. GPUI additionally
         // invalidates cached views on bounds, inherited text style, and refresh.
         let live = state.live;
-        self.timeline.update(cx, |timeline, cx| {
+        timeline.update(cx, |timeline, cx| {
             if live || timeline.render_state.as_ref() != Some(&state) {
+                if timeline.render_state.as_ref().is_some_and(|previous| {
+                    previous.typography != state.typography
+                        || previous.collapse_reasoning != state.collapse_reasoning
+                        || previous.auto_collapse_question_history
+                            != state.auto_collapse_question_history
+                        || previous.full_width != state.full_width
+                }) {
+                    timeline.scroll.remeasure();
+                }
                 timeline.render_state = Some(state);
                 cx.notify();
             }

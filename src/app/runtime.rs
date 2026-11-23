@@ -105,17 +105,17 @@ impl ConduitApp {
 
     /// Resolve the destination before checking concurrency or changing drafts.
     pub(super) fn send_target(&self, append_user: bool) -> Option<u64> {
-        self.selected_session.filter(|id| {
+        self.composer_session().filter(|id| {
             !append_user
                 || self
                     .session(*id)
-                    .is_some_and(|session| session.provider == self.new_session_provider)
+                    .is_some_and(|session| session.provider == self.composer_provider())
         })
     }
 
     /// Shared by keyboard sends and the composer button.
     pub(super) fn send_blocked(&self, append_user: bool) -> Option<&'static str> {
-        if self.viewing_subagent() {
+        if self.composer_read_only() {
             return Some(conduit::i18n::text_static("subagents.read_only"));
         }
         if self
@@ -152,9 +152,11 @@ impl ConduitApp {
             ));
         }
         if self.git.operation.as_ref().is_some_and(|operation| {
-            self.selected_workspace_path().is_some_and(|path| {
-                git::repository_scope(&operation.worktree) == git::repository_scope(&path)
-            })
+            self.composer_target()
+                .map(|target| target.workspace)
+                .is_some_and(|path| {
+                    git::repository_scope(&operation.worktree) == git::repository_scope(&path)
+                })
         }) {
             return Some(conduit::i18n::text_static(
                 "runtime.a_git_operation_is_running_in_this",
@@ -169,11 +171,11 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.send_prompt(window, cx);
+        self.send_prompt_for(self.composer_binding(), window, cx);
     }
 
     pub(super) fn send_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.viewing_subagent() {
+        if self.composer_read_only() {
             return;
         }
         if self.composer_is_composing(window, cx) {
@@ -189,7 +191,7 @@ impl ConduitApp {
     }
 
     pub(super) fn send_ordinary_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.viewing_subagent() {
+        if self.composer_read_only() {
             return;
         }
         if self
@@ -201,7 +203,7 @@ impl ConduitApp {
             return;
         }
         let target = self.composer_target();
-        let text = self.input.read(cx).value().to_string();
+        let text = self.composer_input().read(cx).value().to_string();
         let references = self
             .current_files()
             .map(|files| files.references.as_slice())
@@ -237,11 +239,7 @@ impl ConduitApp {
         } else {
             self.send_text(prompt, true, window, cx)
         };
-        if !accepted && let Some(target) = target {
-            // A failed send may have attempted to create or retarget a session.
-            // Keep the draft and its files visible in their original conversation.
-            self.selected_session = target.session;
-        }
+        let _ = accepted; // The durable barrier owns draft clearing on success.
     }
 
     /// Starts one engine turn. `append_user` is false when regenerating: the
@@ -267,7 +265,7 @@ impl ConduitApp {
         if self.closing || !self.writable {
             return false;
         }
-        let Some(index) = self.selected_workspace else {
+        let Some(index) = self.composer_workspace() else {
             self.message = Some(
                 conduit::i18n::text_static("composer.select_a_workspace_in_the_upper_left").into(),
             );
@@ -294,7 +292,7 @@ impl ConduitApp {
         // A pending engine switch (composer engine differs from the selected
         // session's) retargets the message to a fresh session instead of
         // jumping to history. Regeneration always stays on its own session.
-        if !append_user && self.selected_session.is_none() {
+        if !append_user && self.composer_session().is_none() {
             return false;
         }
         let target = self.send_target(append_user);
@@ -307,7 +305,7 @@ impl ConduitApp {
         match self.start_turn(
             index,
             target,
-            self.new_session_provider,
+            self.composer_provider(),
             input,
             append_user,
             cx,
@@ -326,10 +324,15 @@ impl ConduitApp {
                 {
                     pending.composer = composer;
                 }
-                self.input.read(cx).focus_handle(cx).focus(window, cx);
+                self.composer_input()
+                    .read(cx)
+                    .focus_handle(cx)
+                    .focus(window, cx);
                 // Save progress belongs to the run activity, not the error banner.
                 self.message = None;
-                self.scroll_to_end();
+                if self.composer_is_main() {
+                    self.scroll_to_end();
+                }
                 cx.notify();
                 true
             }
@@ -481,9 +484,16 @@ impl ConduitApp {
             .into());
         }
         let worktree = git::worktree_root(&cwd);
-        let prepared = target
-            .is_none()
-            .then(|| self.prepare_workspace_session(index, provider, true));
+        let prepared = target.is_none().then(|| {
+            let mut session =
+                self.prepare_workspace_session(index, provider, self.composer_is_main());
+            if !self.composer_is_main() {
+                self.composer_selection_for(&self.composer_binding())
+                    .apply(&mut session);
+                session.permission = self.composer_permission();
+            }
+            session
+        });
         let selection = prepared.as_ref().map(ComposerSelection::from_session);
         let mut route = if let Some(session) = &prepared {
             let mut route = self
@@ -670,10 +680,10 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.viewing_subagent() || self.closing || !self.writable {
+        if self.composer_read_only() || self.closing || !self.writable {
             return;
         }
-        let Some(id) = self.selected_session else {
+        let Some(id) = self.composer_session() else {
             return;
         };
         let Some(session) = self.session(id) else {
@@ -710,13 +720,13 @@ impl ConduitApp {
     /// Re-runs the latest exchange: keeps its user message, drops everything
     /// after it, and starts a fresh engine turn with the same prompt.
     pub(super) fn regenerate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.viewing_subagent() {
+        if self.composer_read_only() {
             return;
         }
         if self.closing || !self.writable {
             return;
         }
-        let Some(id) = self.selected_session else {
+        let Some(id) = self.composer_session() else {
             return;
         };
         let Some(session) = self.session(id) else {
@@ -775,6 +785,7 @@ impl ConduitApp {
     }
 
     pub(super) fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.prune_composer_editors();
         self.poll_terminals(window, cx);
         self.poll_persistence(cx);
         self.poll_pending_sends(window, cx);

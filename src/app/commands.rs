@@ -10,12 +10,30 @@ use std::hash::{Hash, Hasher};
 pub(super) struct ChatCommands {
     pub catalog: Catalog,
     executables: HashMap<Provider, (Option<PathBuf>, u64)>,
+    pub(super) editor: CommandEditor,
+}
+
+#[derive(Default)]
+pub(super) struct CommandEditor {
     active: Option<(CommandContext, Query)>,
     dismissed: Option<(CommandContext, Query)>,
     results: Vec<Descriptor>,
     selected: Option<CommandId>,
     accepted: Option<(CommandContext, Descriptor)>,
     scroll: ScrollHandle,
+}
+
+impl std::ops::Deref for ChatCommands {
+    type Target = CommandEditor;
+    fn deref(&self) -> &Self::Target {
+        &self.editor
+    }
+}
+
+impl std::ops::DerefMut for ChatCommands {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.editor
+    }
 }
 
 impl ConduitApp {
@@ -57,8 +75,10 @@ impl ConduitApp {
         let provider = session.map_or(provider, |s| s.provider);
         let selection = session
             .map(ComposerSelection::from_session)
-            .unwrap_or_else(|| self.composer_selection(self.selected_session.unwrap_or_default()));
-        let permission = session.map_or(self.pending_permission, |s| s.permission);
+            .unwrap_or_else(|| {
+                self.composer_selection(self.composer_session().unwrap_or_default())
+            });
+        let permission = session.map_or(self.composer_permission(), |s| s.permission);
         // Only hash in-memory configuration here: typing and repainting do no I/O.
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         serde_json::to_vec(&(
@@ -92,13 +112,13 @@ impl ConduitApp {
     }
 
     fn chat_command_context(&self) -> Option<CommandContext> {
-        if self.viewing_subagent() {
+        if self.composer_read_only() {
             return None;
         }
         self.command_context_for(
-            self.selected_workspace?,
+            self.composer_workspace()?,
             self.send_target(true),
-            self.new_session_provider,
+            self.composer_provider(),
         )
     }
 
@@ -115,7 +135,7 @@ impl ConduitApp {
         if self.closing || !self.writable {
             return None;
         }
-        let input = self.input.read(cx);
+        let input = self.composer_input().read(cx);
         Some((
             self.chat_command_context()?,
             core::query_at(&input.value(), input.selected_range())?,
@@ -156,7 +176,7 @@ impl ConduitApp {
                 .map(|item| item.id.clone());
         }
         if let Some((_, accepted)) = &self.chat_commands.accepted
-            && core::parse(&self.input.read(cx).value())
+            && core::parse(&self.composer_input().read(cx).value())
                 .is_none_or(|query| !accepted.matches_name(&query.name))
         {
             self.chat_commands.accepted = None;
@@ -170,7 +190,11 @@ impl ConduitApp {
         self.chat_commands.active.is_some()
             && !self.chat_commands.results.is_empty()
             && self.chat_commands.active == self.chat_command_query(cx)
-            && self.input.read(cx).focus_handle(cx).is_focused(window)
+            && self
+                .composer_input()
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
     }
 
     pub(super) fn dismiss_chat_commands(&mut self, cx: &mut Context<Self>) {
@@ -224,10 +248,10 @@ impl ConduitApp {
         else {
             return false;
         };
-        let (text, caret) = core::complete(&self.input.read(cx).value(), &query, &item);
+        let (text, caret) = core::complete(&self.composer_input().read(cx).value(), &query, &item);
         self.chat_commands.accepted = Some((context, item));
         self.dismiss_chat_commands(cx);
-        self.input.update(cx, |input, cx| {
+        self.composer_input().update(cx, |input, cx| {
             input.set_value(text, window, cx);
             input.set_selected_range(caret..caret, cx);
         });
@@ -241,10 +265,10 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.viewing_subagent() {
+        if self.composer_read_only() {
             return true;
         }
-        let text = self.input.read(cx).value().to_string();
+        let text = self.composer_input().read(cx).value().to_string();
         let Some(query) = core::parse(&text) else {
             return false;
         };
@@ -268,10 +292,12 @@ impl ConduitApp {
                             match action {
                                 HostAction::Settings => self.open_settings(window, cx),
                                 HostAction::NewChat => {
-                                    if let Some(index) = self.selected_workspace {
-                                        // Opening a draft is navigation; the existing send
-                                        // gate creates and persists its session on first use.
-                                        self.switch(index, None, window, cx);
+                                    if self.composer_is_main() {
+                                        if let Some(index) = self.composer_workspace() {
+                                            self.switch(index, None, window, cx);
+                                        }
+                                    } else {
+                                        self.new_composer_session(window, cx);
                                     }
                                 }
                             }
@@ -344,7 +370,7 @@ impl ConduitApp {
 
     fn connect_commands(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.composer_is_composing(window, cx)
-            || self.new_session_provider.descriptor().commands.is_none()
+            || self.composer_provider().descriptor().commands.is_none()
         {
             return;
         }
@@ -366,7 +392,7 @@ impl ConduitApp {
     ) -> AnyElement {
         let context = &self.chat_commands.active.as_ref().unwrap().0;
         let snapshot = self.chat_commands.catalog.get(context);
-        let engine = self.new_session_provider.descriptor();
+        let engine = self.composer_provider().descriptor();
         let busy = self.send_blocked(true);
         let state = if engine.commands.is_none() {
             conduit::i18n::text("commands.unsupported")
@@ -427,7 +453,7 @@ impl ConduitApp {
                     .tooltip(move |window, cx| {
                         gpui_kit::component::tooltip::Tooltip::new(detail.clone()).build(window, cx)
                     })
-                    .on_click(cx.listener(move |this, _, window, cx| {
+                    .on_click(self.composer_listener(cx, move |this, _, window, cx| {
                         cx.stop_propagation();
                         this.chat_commands.selected = Some(id.clone());
                         this.accept_chat_command(window, cx);
@@ -452,7 +478,9 @@ impl ConduitApp {
                 window.prevent_default();
                 cx.stop_propagation();
             })
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.dismiss_chat_commands(cx)))
+            .on_mouse_down_out(
+                self.composer_listener(cx, |this, _, _, cx| this.dismiss_chat_commands(cx)),
+            )
             .child(
                 div()
                     .px_2()
@@ -481,7 +509,7 @@ impl ConduitApp {
                         .small()
                         .label(conduit::i18n::text_static("commands.connect"))
                         .disabled(busy.is_some())
-                        .on_click(cx.listener(|this, _, window, cx| {
+                        .on_click(self.composer_listener(cx, |this, _, window, cx| {
                             cx.stop_propagation();
                             this.connect_commands(window, cx);
                         })),
@@ -489,11 +517,11 @@ impl ConduitApp {
             });
         deferred(
             gpui_kit::base::Positioner::side(
-                self.input
+                self.composer_input()
                     .read(cx)
                     .cursor_layout()
                     .map(|(mut bounds, _)| {
-                        bounds.origin.y += self.input.read(cx).scroll_offset().y;
+                        bounds.origin.y += self.composer_input().read(cx).scroll_offset().y;
                         bounds
                     })
                     .unwrap_or_default(),

@@ -405,6 +405,10 @@ impl ConduitApp {
             self.workspace_drafts
                 .insert(target.workspace, self.input.read(cx).value().to_string());
         }
+        for (id, view) in self.reference_chat_views() {
+            self.drafts
+                .insert(id, view.read(cx).input.read(cx).value().to_string());
+        }
         anyhow::ensure!(
             !self.dirty && !self.persistence.busy() && self.persistence.error.is_none(),
             conduit::i18n::text("update.waiting_for_application_data_to_finish_saving")
@@ -921,11 +925,13 @@ mod tests {
         std::fs::write(&attachment, b"reference").unwrap();
         let mut second = super::super::tests::session();
         second.id = 2;
+        let mut third = second.clone();
+        third.id = 3;
         let store = Store {
             version: 2,
             workspaces: vec![Workspace {
                 path: workspace.clone(),
-                sessions: vec![super::super::tests::session(), second],
+                sessions: vec![super::super::tests::session(), second, third],
             }],
             ..Default::default()
         };
@@ -934,6 +940,16 @@ mod tests {
             original.update(cx, |app, cx| {
                 app.switch(0, Some(1), window, cx);
                 app.drafts.insert(2, "另一会话的草稿".into());
+                app.show_chat_beside(2, window, cx);
+                let right = app.reference_chat_view(2).unwrap().read(cx).input.clone();
+                right.update(cx, |input, cx| {
+                    input.set_value("后台右侧标签草稿", window, cx)
+                });
+                app.show_chat_beside(3, window, cx);
+                let right = app.reference_chat_view(3).unwrap().read(cx).input.clone();
+                right.update(cx, |input, cx| {
+                    input.set_value("当前右侧标签草稿", window, cx)
+                });
                 app.workspace_drafts
                     .insert(workspace.clone(), "新会话草稿".into());
                 app.queued_messages.insert(
@@ -988,7 +1004,8 @@ mod tests {
                 let workspace = workspace.canonicalize().unwrap();
                 assert_eq!(app.input.read(cx).value().as_str(), "未发送的草稿");
                 assert_eq!(app.selected_session, Some(1));
-                assert_eq!(app.drafts[&2], "另一会话的草稿");
+                assert_eq!(app.drafts[&2], "后台右侧标签草稿");
+                assert_eq!(app.drafts[&3], "当前右侧标签草稿");
                 assert_eq!(app.workspace_drafts[&workspace], "新会话草稿");
                 assert_eq!(app.queued_messages[&2].text, "确认后才发送");
                 assert!(app.queued_messages[&2].paused.is_some());

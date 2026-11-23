@@ -295,6 +295,16 @@ impl Cache {
                     {
                         this.remeasure_message(index);
                     }
+                    for (id, _) in this.reference_chat_views() {
+                        if let Some(index) = this.session(id).and_then(|session| {
+                            session
+                                .messages
+                                .iter()
+                                .position(|m| m.identity().ptr_eq(&identity))
+                        }) {
+                            this.remeasure_session_message(id, index, cx);
+                        }
+                    }
                 }
                 this.tool_analysis.trim();
                 this.tool_analysis.pump(cx);

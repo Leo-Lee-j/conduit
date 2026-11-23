@@ -732,9 +732,19 @@ impl ConduitApp {
                             run.runtime.answer(submit_id.clone(), answers);
                             run.status =
                                 conduit::i18n::text_static("user_input.submitting_answer").into();
-                            if this.viewing_subagent() {
+                            if this.reference_chat() == Some(session)
+                                && this.reference_pane_visible()
+                            {
+                                if let Some(view) = this.reference_chat_view(session) {
+                                    view.read(cx)
+                                        .input
+                                        .read(cx)
+                                        .focus_handle(cx)
+                                        .focus(window, cx);
+                                }
+                            } else if this.viewing_subagent() {
                                 this.focus_subagent_page(window, cx);
-                            } else {
+                            } else if this.selected_session == Some(session) {
                                 this.input.read(cx).focus_handle(cx).focus(window, cx);
                             }
                             cx.notify();
@@ -751,6 +761,9 @@ impl ConduitApp {
             .into_any_element()
     }
 }
+
+#[cfg(all(test, feature = "ui-tests"))]
+mod focus_tests;
 
 #[cfg(test)]
 mod history_tests {
