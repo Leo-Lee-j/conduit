@@ -1,4 +1,5 @@
 use super::{ConduitApp, Store};
+use gpui_kit::Focusable as _;
 use gpui_kit::{
     AppContext as _, Entity, Modifiers, MouseButton, ScrollDelta, ScrollWheelEvent, TestAppContext,
     VisualTestContext, point, px, size,
@@ -31,6 +32,19 @@ fn draw(cx: &mut VisualTestContext) {
     cx.update(|window, cx| {
         let _ = window.draw(cx);
     });
+}
+
+fn settle_ai_save(app: &Entity<ConduitApp>, cx: &mut VisualTestContext) {
+    for _ in 0..200 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(20));
+        draw(cx);
+        if !app.read_with(cx, |app, _| app.connection_settings.saving) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    panic!("AI settings save did not complete");
 }
 
 #[gpui_kit::test]
@@ -538,7 +552,7 @@ fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppC
             app.store.providers = vec![provider.clone()];
             app.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
             app.select_settings_page(8, window, cx);
-            assert!(!app.set_service_default(Provider::Codex, route.clone(), None, cx));
+            assert!(!app.set_service_default(Provider::Codex, route.clone(), None, window, cx));
             assert!(!app.delete_model_service(&provider.id, cx));
             app.writable = true;
             let mut session = crate::app::tests::session();
@@ -568,6 +582,7 @@ fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppC
     cx.simulate_mouse_down(control, MouseButton::Left, Modifiers::default());
     cx.simulate_mouse_up(control, MouseButton::Left, Modifiers::default());
     draw(cx);
+    settle_ai_save(&app, cx);
     cx.update(|_, cx| {
         app.read_with(cx, |app, _| {
             assert_eq!(app.store.session_defaults[&Provider::Codex].channel, route);
@@ -586,23 +601,26 @@ fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppC
         assert!(!window.has_active_sheet(cx), "service details are inline");
         app.update(cx, |app, cx| {
             let history = serde_json::to_value(&app.store.workspaces).unwrap();
-            assert!(!app.set_service_default(Provider::Claude, route.clone(), None, cx));
+            assert!(!app.set_service_default(Provider::Claude, route.clone(), None, window, cx));
             assert!(!app.set_service_default(
                 Provider::Codex,
                 ModelChannel::Provider("missing".into()),
                 None,
+                window,
                 cx
             ));
             assert!(!app.set_service_default(
                 Provider::Codex,
                 route.clone(),
                 Some("missing-model".into()),
+                window,
                 cx
             ));
             assert!(app.set_service_default(
                 Provider::Codex,
                 route.clone(),
                 Some("model-a".into()),
+                window,
                 cx
             ));
             assert_eq!(
@@ -610,7 +628,21 @@ fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppC
                 history
             );
             assert!(!app.delete_model_service(&provider.id, cx));
-            assert!(app.set_service_default(Provider::Codex, ModelChannel::Cli, None, cx));
+            assert!(
+                !app.set_service_default(Provider::Codex, ModelChannel::Cli, None, window, cx),
+                "overlapping saves are blocked"
+            );
+        })
+    });
+    settle_ai_save(&app, cx);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            assert!(app.set_service_default(Provider::Codex, ModelChannel::Cli, None, window, cx));
+        })
+    });
+    settle_ai_save(&app, cx);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
             assert!(
                 !app.delete_model_service(&provider.id, cx),
                 "history still references the service"
@@ -631,12 +663,12 @@ fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppC
             );
             app.store.providers[0].source = ProviderSource::Local;
             app.writable = false;
-            assert!(!app.set_service_default(Provider::Codex, route.clone(), None, cx));
+            assert!(!app.set_service_default(Provider::Codex, route.clone(), None, window, cx));
             assert!(!app.delete_model_service(&provider.id, cx));
             app.writable = true;
             assert!(app.delete_model_service(&provider.id, cx));
             assert!(
-                !app.set_service_default(Provider::Codex, route.clone(), None, cx),
+                !app.set_service_default(Provider::Codex, route.clone(), None, window, cx),
                 "stale controls cannot restore a removed route"
             );
             app.persistence.flush();
@@ -659,8 +691,8 @@ fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppC
     cx.simulate_mouse_up(control, MouseButton::Left, Modifiers::default());
     draw(cx);
     assert!(
-        cx.debug_bounds("service-details").is_some(),
-        "native catalog remains reachable"
+        cx.debug_bounds("default-channel-1").is_some(),
+        "default controls remain reachable"
     );
 }
 
@@ -694,12 +726,14 @@ fn settings_services_inline_selection_resizes_without_changing_defaults(cx: &mut
                 Provider::Codex,
                 route.clone(),
                 Some("model-a".into()),
+                window,
                 cx
             ));
             app.select_settings_page(8, window, cx);
         })
     });
     draw(cx);
+    settle_ai_save(&app, cx);
     let list = cx.debug_bounds("service-list").expect("inline list");
     let detail = cx.debug_bounds("service-details").expect("inline detail");
     assert!(
@@ -791,6 +825,7 @@ fn settings_services_inline_selection_resizes_without_changing_defaults(cx: &mut
     click(cx, "service-row-0");
     assert!(cx.debug_bounds("service-edit-local").is_some());
     click(cx, "service-model-default-1");
+    settle_ai_save(&app, cx);
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
             assert_eq!(app.store.session_defaults[&Provider::Codex].channel, route);
@@ -832,4 +867,245 @@ fn settings_services_inline_selection_resizes_without_changing_defaults(cx: &mut
     });
     assert!(cx.debug_bounds("service-list").is_some());
     assert!(cx.debug_bounds("service-details").is_none());
+}
+
+fn ai_service(id: &str) -> crate::providers::ModelProvider {
+    crate::providers::ModelProvider {
+        id: id.into(),
+        name: id.into(),
+        engine: crate::domain::Provider::Codex,
+        base_url: "https://example.invalid/v1".into(),
+        api_key_env: String::new(),
+        protected_api_key: None,
+        models: vec!["exact-model".into(), "other-model".into()],
+        source: Default::default(),
+        model_metadata: vec![],
+        claude_models: None,
+    }
+}
+
+#[gpui_kit::test]
+fn settings_reselecting_default_service_preserves_model_and_does_not_write(
+    cx: &mut TestAppContext,
+) {
+    let _locale = crate::test_support::chinese();
+    use crate::{domain::Provider, providers::ModelChannel, store::SessionDefaults};
+    let (app, cx) = fixture(cx);
+    let writes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let recorded = writes.clone();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.writable = true;
+            app.persistence = crate::persistence::Persistence::with_writer(move |_| {
+                recorded.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            });
+            app.store.providers.push(ai_service("retain-default"));
+            let channel = ModelChannel::Provider("retain-default".into());
+            app.store.session_defaults.insert(
+                Provider::Codex,
+                SessionDefaults {
+                    channel: channel.clone(),
+                    model: Some("exact-model".into()),
+                },
+            );
+            assert!(!app.set_default_channel(Provider::Codex, channel, window, cx));
+            assert_eq!(
+                app.store.session_defaults[&Provider::Codex]
+                    .model
+                    .as_deref(),
+                Some("exact-model")
+            );
+            assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 0);
+            assert!(app.set_default_channel(Provider::Codex, ModelChannel::Cli, window, cx));
+            assert!(app.connection_settings.saving);
+        })
+    });
+    settle_ai_save(&app, cx);
+    app.read_with(cx, |app, _| {
+        let default = &app.store.session_defaults[&Provider::Codex];
+        assert_eq!(default.channel, ModelChannel::Cli);
+        assert!(default.model.is_none());
+    });
+    assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[gpui_kit::test]
+fn settings_failed_default_save_restores_prior_selection_and_allows_retry(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    use crate::{domain::Provider, providers::ModelChannel, store::SessionDefaults};
+    let (app, cx) = fixture(cx);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.writable = true;
+            app.store.providers.push(ai_service("failed-default"));
+            app.store.session_defaults.insert(
+                Provider::Codex,
+                SessionDefaults {
+                    channel: ModelChannel::Cli,
+                    model: Some("original-model".into()),
+                },
+            );
+            app.persistence = crate::persistence::Persistence::with_writer(|_| {
+                Err("synthetic disk failure".into())
+            });
+            assert!(app.set_service_default(
+                Provider::Codex,
+                ModelChannel::Provider("failed-default".into()),
+                Some("exact-model".into()),
+                window,
+                cx
+            ));
+            assert!(app.connection_settings.saving);
+            // Independent settings must survive the rollback.
+            app.store.ui.default_session_permission = crate::domain::PermissionLevel::ReadOnly;
+        })
+    });
+    settle_ai_save(&app, cx);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            assert_eq!(
+                app.store.session_defaults[&Provider::Codex].channel,
+                ModelChannel::Cli
+            );
+            assert_eq!(
+                app.store.session_defaults[&Provider::Codex]
+                    .model
+                    .as_deref(),
+                Some("original-model")
+            );
+            assert_eq!(
+                app.store.ui.default_session_permission,
+                crate::domain::PermissionLevel::ReadOnly
+            );
+            app.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
+            assert!(app.set_service_default(
+                Provider::Codex,
+                ModelChannel::Provider("failed-default".into()),
+                Some("exact-model".into()),
+                window,
+                cx
+            ));
+        })
+    });
+    settle_ai_save(&app, cx);
+    assert_eq!(
+        app.read_with(cx, |app, _| app.store.session_defaults[&Provider::Codex]
+            .model
+            .clone()),
+        Some("exact-model".into())
+    );
+}
+
+#[gpui_kit::test]
+fn settings_search_opens_exact_service_and_model_with_keyboard_focus(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    use crate::{domain::Provider, providers::ModelChannel};
+    let (app, cx) = fixture(cx);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.store.providers = vec![ai_service("search-first"), ai_service("search-second")];
+            let before = serde_json::to_value(&app.store.session_defaults).unwrap();
+            let qualified = app.settings_search_matches("search-second exact-model");
+            assert_eq!(
+                qualified.len(),
+                1,
+                "service-qualified model search remains supported"
+            );
+            let matches = app.settings_search_matches("exact-model");
+            let result = matches
+                .into_iter()
+                .find(|r| {
+                    r.target.as_ref().is_some_and(|target| {
+                        target.channel == ModelChannel::Provider("search-second".into())
+                    })
+                })
+                .unwrap();
+            app.open_settings_result(result, window, cx);
+            assert_eq!(
+                app.connection_settings.service_selection,
+                Some((
+                    Provider::Codex,
+                    ModelChannel::Provider("search-second".into())
+                ))
+            );
+            assert_eq!(
+                app.connection_settings
+                    .model_search
+                    .read(cx)
+                    .value()
+                    .as_str(),
+                "exact-model"
+            );
+            assert!(
+                app.connection_settings
+                    .model_search
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window)
+            );
+            assert_eq!(
+                serde_json::to_value(&app.store.session_defaults).unwrap(),
+                before
+            );
+        })
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("service-model-search").is_some());
+    assert!(cx.debug_bounds("service-model-row-0").is_some());
+    assert!(cx.debug_bounds("service-model-row-1").is_none());
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.settings_ui
+                .search
+                .update(cx, |input, cx| input.set_value("search-first", window, cx));
+            app.settings_ui
+                .search
+                .read(cx)
+                .focus_handle(cx)
+                .focus(window, cx);
+        })
+    });
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    app.read_with(cx, |app, cx| {
+        assert_eq!(
+            app.connection_settings.service_selection,
+            Some((
+                Provider::Codex,
+                ModelChannel::Provider("search-first".into())
+            ))
+        );
+        assert_eq!(
+            app.connection_settings
+                .model_search
+                .read(cx)
+                .value()
+                .as_str(),
+            ""
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn settings_change_defaults_opens_new_session_controls(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx) = fixture(cx);
+    cx.update(|window, cx| app.update(cx, |app, cx| app.select_settings_page(8, window, cx)));
+    draw(cx);
+    let button = cx
+        .debug_bounds("services-default-catalog")
+        .unwrap()
+        .center();
+    cx.simulate_mouse_down(button, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(button, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    app.read_with(cx, |app, _| {
+        assert_eq!((app.settings_ui.page, app.settings_ui.group), (10, Some(0)))
+    });
+    assert!(cx.debug_bounds("management-engines").is_some());
+    assert!(
+        cx.debug_bounds("default-channel-0").is_some()
+            || cx.debug_bounds("default-channel-1").is_some()
+    );
 }

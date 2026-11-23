@@ -1,6 +1,7 @@
 //! Cli settings.
 
 use super::*;
+use gpui_kit::component::switch::Switch;
 
 const LATEST_FEEDBACK_DURATION: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -500,13 +501,14 @@ impl ConduitApp {
         let closing = self.closing;
         let expanded = self.connection_settings.path_help;
         let descriptor = provider.descriptor();
-        let card = SettingItem::render(move |_, _, _| {
-            let toggle = view.clone();
-            let choose = view.clone();
-            let clear = view.clone();
-            let update = view.clone();
-            let help = view.clone();
-            v_flex()
+        let card =
+            SettingItem::render(move |_, _, _| {
+                let toggle = view.clone();
+                let choose = view.clone();
+                let clear = view.clone();
+                let update = view.clone();
+                let help = view.clone();
+                v_flex()
                 .w_full()
                 .gap_2()
                 .child(
@@ -558,21 +560,21 @@ impl ConduitApp {
                                 ),
                         )
                         .child(
-                            Button::new(("engine-enabled", index))
-                                .debug_selector(move || format!("engine-enabled-{index}"))
-                                .small()
-                                .outline()
-                                .label(if enabled {
-                                    conduit::i18n::text_static("settings.cli.enabled_disable")
-                                } else {
-                                    conduit::i18n::text_static("settings.cli.disabled_enable")
-                                })
+                            div().debug_selector(move || format!("engine-enabled-{index}"))
+                            .child(Switch::new(("engine-enabled", index))
+                                .checked(enabled)
+                                .label(conduit::i18n::text_static("settings.cli.enable_engine"))
+                                .accessibility_label(format!(
+                                    "{} · {}",
+                                    provider.label(),
+                                    conduit::i18n::text_static("settings.cli.enable_engine")
+                                ))
                                 .disabled(disabled)
-                                .on_click(move |_, _, cx| {
+                                .on_click(move |value, _, cx| {
                                     toggle.update(cx, |app, cx| {
-                                        app.set_engine_enabled(provider, !enabled, cx)
+                                        app.set_engine_enabled(provider, *value, cx)
                                     })
-                                }),
+                                })),
                         ),
                 )
                 .child(
@@ -806,7 +808,7 @@ impl ConduitApp {
                         })
                     },
                 ))
-        });
+            });
         SettingGroup::new()
             .variant(GroupBoxVariant::Normal)
             .item(card)

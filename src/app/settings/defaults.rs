@@ -32,6 +32,21 @@ impl ConduitApp {
         selection
     }
 
+    /// Re-selecting the displayed service preserves the saved model and legacy route.
+    pub(super) fn set_default_channel(
+        &mut self,
+        engine: Provider,
+        channel: ModelChannel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let current = self.default_selection(engine);
+        if default_channel_for_display(engine, &current.channel, &self.store.providers) == channel {
+            return false;
+        }
+        self.set_service_default(engine, channel, None, window, cx)
+    }
+
     /// Compatibility entry point; defaults share the management browsing engine.
     pub(super) fn settings_defaults_page(&self, disabled: bool, view: Entity<Self>) -> SettingPage {
         settings_page(
@@ -48,6 +63,7 @@ impl ConduitApp {
         view: Entity<Self>,
     ) -> SettingGroup {
         let engine = self.connection_settings.engine;
+        let disabled = disabled || self.connection_settings.saving;
         let selection = self.default_selection(engine);
         let mut channels = vec![(
             ModelChannel::Cli,
@@ -87,6 +103,7 @@ impl ConduitApp {
         let route_view = view.clone();
         let route = SettingField::render(move |_, _, _| {
             let channels = channels.clone();
+            let display_channel = display_channel.clone();
             let view = route_view.clone();
             Button::new(("default-channel", engine as usize))
                 .debug_selector(move || format!("default-channel-{}", engine as usize))
@@ -101,24 +118,20 @@ impl ConduitApp {
                     for (channel, label) in &channels {
                         let channel = channel.clone();
                         let view = view.clone();
-                        menu = menu.item(PopupMenuItem::new(label.clone()).on_click(
-                            move |_, _, cx| {
-                                view.update(cx, |app, cx| {
-                                    if !app.writable || app.closing {
-                                        return;
-                                    }
-                                    app.store.session_defaults.insert(
-                                        engine,
-                                        crate::store::SessionDefaults {
-                                            channel: channel.clone(),
-                                            model: None,
-                                        },
-                                    );
-                                    app.persist();
-                                    cx.notify();
-                                });
-                            },
-                        ));
+                        menu = menu.item(
+                            PopupMenuItem::new(label.clone())
+                                .checked(channel == display_channel)
+                                .on_click(move |_, window, cx| {
+                                    view.update(cx, |app, cx| {
+                                        app.set_default_channel(
+                                            engine,
+                                            channel.clone(),
+                                            window,
+                                            cx,
+                                        );
+                                    });
+                                }),
+                        );
                     }
                     menu
                 })
@@ -141,9 +154,11 @@ impl ConduitApp {
         let label = selected_model
             .map(|(_, label)| label.clone())
             .unwrap_or_else(|| selection.model.clone().unwrap_or_default());
+        let selected_model_id = selection.model.clone();
         let model_view = view.clone();
         let model = SettingField::render(move |_, _, _| {
             let models = models.clone();
+            let selected_model_id = selected_model_id.clone();
             let view = model_view.clone();
             Button::new(("default-model", engine as usize))
                 .debug_selector(move || format!("default-model-{}", engine as usize))
@@ -158,29 +173,52 @@ impl ConduitApp {
                     for (model, label) in &models {
                         let model = model.clone();
                         let view = view.clone();
-                        menu = menu.item(PopupMenuItem::new(label.clone()).on_click(
-                            move |_, _, cx| {
-                                view.update(cx, |app, cx| {
-                                    if !app.writable || app.closing {
-                                        return;
-                                    }
-                                    app.store.session_defaults.entry(engine).or_default().model =
-                                        model.clone();
-                                    app.persist();
-                                    cx.notify();
-                                });
-                            },
-                        ));
+                        menu = menu.item(
+                            PopupMenuItem::new(label.clone())
+                                .checked(model == selected_model_id)
+                                .on_click(move |_, window, cx| {
+                                    view.update(cx, |app, cx| {
+                                        let channel = default_channel_for_display(
+                                            engine,
+                                            &app.default_selection(engine).channel,
+                                            &app.store.providers,
+                                        );
+                                        app.set_service_default(
+                                            engine,
+                                            channel,
+                                            model.clone(),
+                                            window,
+                                            cx,
+                                        );
+                                    });
+                                }),
+                        );
                     }
                     menu
                 })
         });
+        let font_scale = self.store.ui.ui_font_size / DEFAULT_UI_FONT_SIZE;
         settings_section(format!(
             "{} · {}",
             conduit::i18n::text_static("settings.defaults.new_session_defaults"),
             engine.label(),
         ))
         .items(vec![
+            SettingItem::new(
+                conduit::i18n::text_static("settings.models.service_engine"),
+                SettingField::render(move |_, window, _| {
+                    let available = (f32::from(window.viewport_size().width) - 320.).max(0.);
+                    let columns = if available >= 548. * font_scale {
+                        4
+                    } else if available >= 272. * font_scale {
+                        2
+                    } else {
+                        1
+                    };
+                    super::management::engine_tabs(engine, false, columns, view.clone())
+                }),
+            )
+            .layout(Axis::Vertical),
             SettingItem::new(
                 conduit::i18n::text_static("settings.sessions.default_service"),
                 route,

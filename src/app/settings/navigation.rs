@@ -324,20 +324,7 @@ impl ConduitApp {
                         ),
                         page.into_page(self.settings_ui.group, view.clone()),
                     );
-                    let content = SettingsContent::new(controls);
-                    if route == SettingsRoute::Sessions {
-                        content.with_toolbar(management_toolbar(
-                            self.connection_settings.engine,
-                            false,
-                            None,
-                            None,
-                            content_width,
-                            self.store.ui.ui_font_size,
-                            view.clone(),
-                        ))
-                    } else {
-                        content
-                    }
+                    SettingsContent::new(controls)
                 }
             }
         };

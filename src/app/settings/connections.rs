@@ -8,6 +8,7 @@ pub(in crate::app) struct ConnectionsUi {
     pub sources_expanded: bool,
     pub path_help: bool,
     pub syncing: bool,
+    pub saving: bool,
     pub model_search: Entity<InputState>,
     pub model_limit: usize,
     pub(super) service_selection: Option<(Provider, ModelChannel)>,
@@ -26,6 +27,7 @@ impl ConnectionsUi {
             sources_expanded: false,
             path_help: false,
             syncing: false,
+            saving: false,
             model_search,
             model_limit: 50,
             service_selection: None,
@@ -46,7 +48,7 @@ impl ConduitApp {
     ) -> SettingsContent {
         let engine = self.connection_settings.engine;
         let services = self.settings_ui.page == 8;
-        let disabled = !self.writable || self.closing;
+        let disabled = !self.writable || self.closing || self.connection_settings.saving;
         let narrow = available_width < 540.;
         let mut actions = h_flex().gap_2().flex_wrap();
         if self.settings_ui.group.is_some() {
@@ -88,7 +90,11 @@ impl ConduitApp {
                             conduit::i18n::text_static("settings.connections.reload_configuration")
                         })
                     })
-                    .disabled(self.closing || self.connection_settings.syncing)
+                    .disabled(
+                        self.closing
+                            || self.connection_settings.syncing
+                            || self.connection_settings.saving,
+                    )
                     .on_click(move |_, window, cx| {
                         refresh.update(cx, |app, cx| app.reload_all_models_async(true, window, cx))
                     }),

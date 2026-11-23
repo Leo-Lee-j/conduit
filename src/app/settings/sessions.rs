@@ -4,7 +4,7 @@ use super::*;
 
 impl ConduitApp {
     /// Stable route 10 groups: defaults, permission, chat display, automatic naming.
-    /// The host renders the shared management engine selector above this page.
+    /// The defaults group owns its engine selector; permission and display are global.
     pub(in crate::app) fn settings_conversation_page(
         &self,
         disabled: bool,

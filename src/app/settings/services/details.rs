@@ -208,100 +208,16 @@ impl ConduitApp {
         provider: Option<&ModelProvider>,
         view: Entity<Self>,
     ) -> AnyElement {
-        let disabled = !self.writable || self.closing;
-        let models = provider.map(|p| p.catalog()).unwrap_or_default();
-        let defaults = self.default_selection(engine);
-        let mut list = v_flex().w_full().gap_2();
-        for (index, model) in models.into_iter().enumerate() {
-            let selected =
-                defaults.channel == *channel && defaults.model.as_ref() == Some(&model.id);
-            let use_view = view.clone();
-            let use_channel = channel.clone();
-            let model_id = model.id.clone();
-            list = list.child(
-                h_flex()
-                    .debug_selector(move || format!("service-model-row-{index}"))
-                    .w_full()
-                    .justify_between()
-                    .gap_2()
-                    .flex_wrap()
-                    .py_2()
-                    .px_3()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(rgb(palette().border))
-                    .when(selected, |row| {
-                        row.bg(gpui_kit::rgba((palette().activity_running << 8) | 0x08))
-                            .border_color(gpui_kit::rgba((palette().activity_running << 8) | 0x55))
-                    })
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w(px(120.))
-                            .gap_1()
-                            .child(
-                                div()
-                                    .font_medium()
-                                    .text_size(ui_text_size(13.))
-                                    .child(model.label.clone()),
-                            )
-                            .when(model.label != model.id, |row| {
-                                row.child(
-                                    div()
-                                        .text_size(ui_text_size(11.))
-                                        .text_color(rgb(palette().muted))
-                                        .child(model.id),
-                                )
-                            })
-                            .when(!model.note.is_empty(), |row| {
-                                row.child(
-                                    div()
-                                        .text_size(ui_text_size(11.))
-                                        .text_color(rgb(palette().muted))
-                                        .child(model.note),
-                                )
-                            }),
-                    )
-                    .child(
-                        Button::new(("service-model-default", index))
-                            .debug_selector(move || format!("service-model-default-{index}"))
-                            .small()
-                            .ghost()
-                            .label(service_text(if selected {
-                                "settings.services.current_default"
-                            } else {
-                                "settings.services.set_new_default"
-                            }))
-                            .disabled(disabled || selected)
-                            .tooltip(service_text("settings.services.choose_model_hint"))
-                            .on_click(move |_, window, cx| {
-                                use_view.update(cx, |app, cx| {
-                                    if app.set_service_default(
-                                        engine,
-                                        use_channel.clone(),
-                                        Some(model_id.clone()),
-                                        cx,
-                                    ) {
-                                        window.push_notification(
-                                            Notification::success(service_text(
-                                                "settings.services.default_saved",
-                                            )),
-                                            cx,
-                                        );
-                                    }
-                                })
-                            }),
-                    ),
-            );
+        ServiceModels {
+            engine,
+            channel: channel.clone(),
+            models: provider.map(|p| p.catalog()).unwrap_or_default(),
+            disabled: !self.writable || self.closing || self.connection_settings.saving,
+            defaults: self.default_selection(engine),
+            search: self.connection_settings.model_search.clone(),
+            view,
         }
-        if provider.as_ref().is_none_or(|p| p.catalog().is_empty()) {
-            list = list.child(
-                div()
-                    .py_4()
-                    .child(service_text("settings.services.no_models")),
-            );
-        }
-        list.into_any_element()
+        .into_any_element()
     }
 
     fn service_sessions_detail(
@@ -390,7 +306,7 @@ impl ConduitApp {
         let imported = provider
             .as_ref()
             .is_some_and(|p| matches!(p.source, ProviderSource::Ccs { .. }));
-        let disabled = !self.writable || self.closing;
+        let disabled = !self.writable || self.closing || self.connection_settings.saving;
         let defaults = self.default_selection(engine);
         let current = defaults.channel == channel;
         let use_view = view.clone();
@@ -494,17 +410,10 @@ impl ConduitApp {
                         "settings.services.set_new_default"
                     }))
                     .disabled(disabled || current)
-                    .tooltip(service_text("settings.services.new_sessions_only"))
+                    .tooltip(service_text("settings.services.switch_default_hint"))
                     .on_click(move |_, window, cx| {
                         use_view.update(cx, |app, cx| {
-                            if app.set_service_default(engine, use_channel.clone(), None, cx) {
-                                window.push_notification(
-                                    Notification::success(service_text(
-                                        "settings.services.default_saved",
-                                    )),
-                                    cx,
-                                );
-                            }
+                            app.set_service_default(engine, use_channel.clone(), None, window, cx);
                         })
                     }),
             )
@@ -638,4 +547,145 @@ fn launch_cc_switch() -> bool {
         }
     }
     false
+}
+
+/// A shared, searchable catalog list. Render-time input reads keep it in sync with deep links.
+#[derive(IntoElement)]
+struct ServiceModels {
+    engine: Provider,
+    channel: ModelChannel,
+    models: Vec<crate::models::ModelOption>,
+    disabled: bool,
+    defaults: ComposerSelection,
+    search: Entity<InputState>,
+    view: Entity<ConduitApp>,
+}
+impl RenderOnce for ServiceModels {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let Self {
+            engine,
+            channel,
+            models,
+            disabled,
+            defaults,
+            search,
+            view,
+        } = self;
+        let query = search.read(cx).value().to_lowercase();
+        let mut list = v_flex().w_full().gap_0().child(
+            div()
+                .w_full()
+                .debug_selector(|| "service-model-search".into())
+                .child(
+                    Input::new(&search)
+                        .small()
+                        .aria_label(service_text("settings.services.search_models")),
+                ),
+        );
+        let total = models.len();
+        let mut models: Vec<_> = models
+            .iter()
+            .filter(|model| {
+                let text = format!("{} {} {}", model.id, model.label, model.note).to_lowercase();
+                query.split_whitespace().all(|word| text.contains(word))
+            })
+            .cloned()
+            .collect();
+        // A model deep link uses its stable ID as the query. Put that exact row first.
+        models.sort_by_key(|model| model.id.to_lowercase() != query.trim());
+        let matches = models.len();
+        for (index, model) in models.into_iter().enumerate() {
+            let selected =
+                defaults.channel == channel && defaults.model.as_ref() == Some(&model.id);
+            let use_view = view.clone();
+            let use_channel = channel.clone();
+            let model_id = model.id.clone();
+            list = list.child(
+                h_flex()
+                    .debug_selector(move || format!("service-model-row-{index}"))
+                    .w_full()
+                    .justify_between()
+                    .gap_2()
+                    .flex_wrap()
+                    .py_2()
+                    .px_3()
+                    .when(index + 1 < matches, |row| row.border_b_1())
+                    .border_color(settings_group_border())
+                    .when(model.id.to_lowercase() == query.trim(), |row| {
+                        row.bg(rgb(palette().surface_strong))
+                    })
+                    .when(selected, |row| {
+                        row.bg(gpui_kit::rgba((palette().activity_running << 8) | 0x08))
+                            .border_color(gpui_kit::rgba((palette().activity_running << 8) | 0x55))
+                    })
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w(px(120.))
+                            .gap_1()
+                            .child(
+                                div()
+                                    .font_medium()
+                                    .text_size(ui_text_size(13.))
+                                    .child(model.label.clone()),
+                            )
+                            .when(model.label != model.id, |row| {
+                                row.child(
+                                    div()
+                                        .text_size(ui_text_size(11.))
+                                        .text_color(rgb(palette().muted))
+                                        .child(model.id),
+                                )
+                            })
+                            .when(!model.note.is_empty(), |row| {
+                                row.child(
+                                    div()
+                                        .text_size(ui_text_size(11.))
+                                        .text_color(rgb(palette().muted))
+                                        .child(model.note),
+                                )
+                            }),
+                    )
+                    .child(
+                        Button::new(("service-model-default", index))
+                            .debug_selector(move || format!("service-model-default-{index}"))
+                            .small()
+                            .ghost()
+                            .label(service_text(if selected {
+                                "settings.services.current_default"
+                            } else {
+                                "settings.services.set_new_default"
+                            }))
+                            .disabled(disabled || selected)
+                            .tooltip(service_text("settings.services.choose_model_hint"))
+                            .on_click(move |_, window, cx| {
+                                use_view.update(cx, |app, cx| {
+                                    app.set_service_default(
+                                        engine,
+                                        use_channel.clone(),
+                                        Some(model_id.clone()),
+                                        window,
+                                        cx,
+                                    );
+                                })
+                            }),
+                    ),
+            );
+        }
+        if total == 0 {
+            list = list.child(
+                div()
+                    .py_4()
+                    .child(service_text("settings.services.no_models")),
+            );
+        }
+        if total > 0 && matches == 0 {
+            list = list.child(div().py_3().text_color(rgb(palette().muted)).child(
+                conduit::i18n::text_static(
+                    "settings.model_management.no_matching_models_adjust_the_search",
+                ),
+            ));
+        }
+        list
+    }
 }

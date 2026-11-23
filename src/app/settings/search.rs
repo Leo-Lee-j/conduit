@@ -2,6 +2,12 @@
 use super::navigation::{PAGES, matches_search};
 use super::*;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::app) struct SettingsServiceTarget {
+    pub channel: ModelChannel,
+    pub model: Option<String>,
+}
+
 #[derive(Clone)]
 pub(in crate::app) struct SettingsResult {
     pub page: usize,
@@ -9,6 +15,7 @@ pub(in crate::app) struct SettingsResult {
     pub title: String,
     pub description: String,
     pub engine: Option<Provider>,
+    pub target: Option<SettingsServiceTarget>,
 }
 
 // Group indexes follow each page's visible information architecture. These
@@ -217,6 +224,7 @@ impl ConduitApp {
                 title: conduit::i18n::source(title).into(),
                 description: conduit::i18n::source(description).into(),
                 engine: None,
+                target: None,
             })
             .collect();
         let notification_title =
@@ -243,6 +251,7 @@ impl ConduitApp {
                 title: notification_title.into(),
                 description: notification_description.into(),
                 engine: None,
+                target: None,
             });
         }
         let fetch_title = conduit::i18n::text_static("settings.general.auto_fetch_incoming");
@@ -258,6 +267,7 @@ impl ConduitApp {
                 title: fetch_title.into(),
                 description: fetch_description.into(),
                 engine: None,
+                target: None,
             });
         }
         let background_title = conduit::i18n::text_static("wallpaper.title");
@@ -287,6 +297,7 @@ impl ConduitApp {
                 title: background_title.into(),
                 description: background_description.into(),
                 engine: None,
+                target: None,
             });
         }
         // Engine identity is explicit, independent of localized display labels.
@@ -324,6 +335,7 @@ impl ConduitApp {
                     title,
                     description,
                     engine: Some(engine),
+                    target: None,
                 });
             }
         }
@@ -344,19 +356,12 @@ impl ConduitApp {
                         &[("title", conduit::i18n::source(title).to_string())],
                     ),
                     engine: None,
+                    target: None,
                 });
             }
         }
         for provider in &self.store.providers {
-            if matches_search(
-                &format!(
-                    "{} {} {}",
-                    provider.name,
-                    provider.base_url,
-                    provider.models.join(" ")
-                ),
-                query,
-            ) {
+            if matches_search(&format!("{} {}", provider.name, provider.base_url), query) {
                 results.push(SettingsResult {
                     page: 8,
                     group: Some(0),
@@ -366,6 +371,45 @@ impl ConduitApp {
                         &[("arg0", provider.engine.label().to_string())],
                     ),
                     engine: Some(provider.engine),
+                    target: Some(SettingsServiceTarget {
+                        channel: ModelChannel::Provider(provider.id.clone()),
+                        model: None,
+                    }),
+                });
+            }
+            for model in provider
+                .catalog()
+                .into_iter()
+                .filter(|model| {
+                    matches_search(
+                        &format!(
+                            "{} {} {} {} {}",
+                            provider.name,
+                            provider.engine.label(),
+                            model.id,
+                            model.label,
+                            model.note
+                        ),
+                        query,
+                    )
+                })
+                .take(20)
+            {
+                results.push(SettingsResult {
+                    page: 8,
+                    group: None,
+                    title: model.label,
+                    description: format!(
+                        "{} · {} · {}",
+                        provider.engine.label(),
+                        provider.name,
+                        model.id
+                    ),
+                    engine: Some(provider.engine),
+                    target: Some(SettingsServiceTarget {
+                        channel: ModelChannel::Provider(provider.id.clone()),
+                        model: Some(model.id),
+                    }),
                 });
             }
         }
@@ -375,7 +419,13 @@ impl ConduitApp {
                 .into_iter()
                 .filter(|model| {
                     matches_search(
-                        &format!("{} {} {}", model.id, model.label, model.note),
+                        &format!(
+                            "{} {} {} {}",
+                            engine.label(),
+                            model.id,
+                            model.label,
+                            model.note
+                        ),
                         query,
                     )
                 })
@@ -397,9 +447,24 @@ impl ConduitApp {
                         ],
                     ),
                     engine: Some(engine),
+                    target: Some(SettingsServiceTarget {
+                        channel: ModelChannel::Cli,
+                        model: Some(model.id),
+                    }),
                 });
             }
         }
+        // Prefer exact named targets when Enter otherwise competes with a generic topic.
+        let exact = query.trim().to_lowercase();
+        results.sort_by_key(|result| {
+            !result.target.as_ref().is_some_and(|target| {
+                result.title.to_lowercase() == exact
+                    || target
+                        .model
+                        .as_ref()
+                        .is_some_and(|id| id.to_lowercase() == exact)
+            })
+        });
         results
     }
 
@@ -454,7 +519,27 @@ impl ConduitApp {
         self.connection_settings.models_expanded |= result.page == 8;
         self.select_settings_page(page, window, cx);
         self.settings_ui.group = group;
-        self.settings_ui.focus.focus(window, cx);
+        if let (Some(engine), Some(target)) = (result.engine, result.target) {
+            self.open_service_details(
+                engine,
+                target.channel,
+                super::services::DetailTab::Models,
+                window,
+                cx,
+            );
+            self.connection_settings
+                .model_search
+                .update(cx, |input, cx| {
+                    input.set_value(target.model.unwrap_or_default(), window, cx);
+                });
+            self.connection_settings
+                .model_search
+                .read(cx)
+                .focus_handle(cx)
+                .focus(window, cx);
+        } else {
+            self.settings_ui.focus.focus(window, cx);
+        }
     }
 
     pub(super) fn settings_search_results(&self, query: &str, view: Entity<Self>) -> AnyElement {

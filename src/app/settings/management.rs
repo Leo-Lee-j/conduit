@@ -21,7 +21,7 @@ pub(super) fn management_badge(label: impl Into<SharedString>, active: bool) -> 
         .child(label.into())
 }
 
-fn engine_tabs(
+pub(super) fn engine_tabs(
     engine: Provider,
     extensions: bool,
     columns: u16,

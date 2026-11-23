@@ -15,6 +15,15 @@ struct Snapshot {
 /// A receipt belongs to one immutable snapshot, never a later coalesced save.
 pub(crate) struct SaveReceipt(mpsc::Receiver<Result<(), String>>);
 impl SaveReceipt {
+    /// Wait without blocking the UI or occupying a worker while disk I/O finishes.
+    pub(crate) async fn wait(self, executor: &gpui_kit::BackgroundExecutor) -> Result<(), String> {
+        loop {
+            if let Some(result) = self.poll() {
+                return result;
+            }
+            executor.timer(std::time::Duration::from_millis(16)).await;
+        }
+    }
     pub(crate) fn poll(&self) -> Option<Result<(), String>> {
         match self.0.try_recv() {
             Ok(result) => Some(result),

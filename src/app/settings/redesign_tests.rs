@@ -337,6 +337,7 @@ fn settings_redesign_legacy_naming_route_and_migrated_search_reveal_real_targets
                     title: "legacy naming model link".into(),
                     description: String::new(),
                     engine: None,
+                    target: None,
                 },
                 window,
                 cx,

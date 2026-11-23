@@ -151,13 +151,10 @@ impl ConduitApp {
                         .px_1()
                         .py_2()
                         .rounded_md()
-                        .border_1()
+                        .border_b_1()
                         .border_color(settings_group_border())
                         .when(active, |row| {
                             row.bg(gpui_kit::rgba((palette().activity_running << 8) | 0x0c))
-                                .border_color(gpui_kit::rgba(
-                                    (palette().activity_running << 8) | 0x55,
-                                ))
                         })
                         .child(
                             h_flex()
