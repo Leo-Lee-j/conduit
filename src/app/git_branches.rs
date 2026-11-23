@@ -173,7 +173,6 @@ pub(super) enum FormKind {
     Rename,
     Push,
     Worktree,
-    Update(bool),
     Confirm(git::BranchAction),
 }
 
@@ -321,7 +320,7 @@ pub(super) fn branch_menu(
     if !current && !occupied_elsewhere {
         entries.push((
             "Checkout and Update".into(),
-            MenuAction::Form(FormKind::Update(true)),
+            MenuAction::Run(git::BranchAction::CheckoutUpdate { rebase: false }),
             false,
         ));
     }
@@ -357,7 +356,7 @@ pub(super) fn branch_menu(
     if local {
         entries.push((
             "Update".into(),
-            MenuAction::Form(FormKind::Update(false)),
+            MenuAction::Run(git::BranchAction::Update { rebase: false }),
             selected.upstream.is_none() || occupied_elsewhere,
         ));
         entries.push((
@@ -1040,30 +1039,6 @@ fn make_form(
                 false,
             )
         }
-        FormKind::Update(checkout) => (
-            if *checkout {
-                conduit::i18n::text_static("git_branches.switch_and_update_branch")
-            } else {
-                conduit::i18n::text_static("git_branches.update_branch")
-            },
-            conduit::i18n::format(
-                "git_branches.update_the_upstream_of_only_fast_forward",
-                &[
-                    (
-                        "arg0",
-                        (if *checkout {
-                            conduit::i18n::text_static("git_branches.switch_first_then")
-                        } else {
-                            ""
-                        })
-                        .to_string(),
-                    ),
-                    ("selected", selected.to_string()),
-                ],
-            ),
-            vec![],
-            false,
-        ),
         FormKind::Confirm(action) => {
             let (title, helper) = match action {
                 git::BranchAction::Delete => (
@@ -1197,17 +1172,6 @@ impl BranchForm {
                 path: PathBuf::from(&values[0]),
                 new_branch: (!values[1].is_empty()).then(|| values[1].clone()),
             },
-            FormKind::Update(checkout) => {
-                if *checkout {
-                    git::BranchAction::CheckoutUpdate {
-                        rebase: self.toggle,
-                    }
-                } else {
-                    git::BranchAction::Update {
-                        rebase: self.toggle,
-                    }
-                }
-            }
             FormKind::Confirm(action) => action.clone(),
         };
         if values.first().is_some_and(|s| s.is_empty())
@@ -1354,11 +1318,6 @@ impl Render for BranchForm {
                 conduit::i18n::text_static("git_branches.set_upstream")
             } else {
                 conduit::i18n::text_static("git_branches.set_upstream_7cb6a8")
-            }),
-            FormKind::Update(_) => Some(if self.toggle {
-                conduit::i18n::text_static("git_branches.update_method_rebase_click_to_use_merge")
-            } else {
-                conduit::i18n::text_static("git_branches.update_method_merge_click_to_use_rebase")
             }),
             _ => None,
         };

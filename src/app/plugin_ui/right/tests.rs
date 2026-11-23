@@ -101,6 +101,17 @@ fn session_data_opens_on_session_entry_and_respects_manual_changes(cx: &mut Test
         cx.labeled_bounds(Role::Group, "API 连接质量 · 连接顺畅")
             .is_some()
     );
+    let quality_card = cx.element_bounds("session-data-api-quality-card").unwrap();
+    let quality_chart = cx.element_bounds("session-data-api-quality-chart").unwrap();
+    assert!(quality_chart.size.height >= quality_card.size.height - px(2.));
+    let quality_bar = cx.element_bounds("session-data-api-quality-bar-0").unwrap();
+    assert!(quality_bar.size.height > px(30.));
+    assert!(quality_bar.origin.y >= quality_card.origin.y);
+    assert!(quality_bar.bottom() <= quality_card.bottom());
+    assert!(
+        cx.labeled_bounds(Role::Group, "连接顺畅 · 首响应：1.0s")
+            .is_some()
+    );
     assert!(cx.element_bounds("session-data-usage-summary").is_some());
     assert!(cx.element_bounds("session-data-token-details").is_some());
     click_labeled(cx, Role::Button, "Token 明细");
@@ -157,6 +168,10 @@ fn session_data_opens_on_session_entry_and_respects_manual_changes(cx: &mut Test
             .is_some()
     );
     assert!(cx.element_bounds("session-data-usage-summary").is_none());
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-0")
+            .is_none()
+    );
     cx.update(|window, cx| app.update(cx, |app, cx| app.switch(0, Some(1), window, cx)));
     draw(cx);
     assert!(cx.element_bounds("session-data-panel").is_some());

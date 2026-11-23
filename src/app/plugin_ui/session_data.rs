@@ -163,7 +163,8 @@ fn duration(value: Option<u64>) -> String {
         None => "—".into(),
     }
 }
-const API_QUALITY_WINDOW: usize = 10;
+const API_QUALITY_WINDOW: usize = 5;
+const API_QUALITY_BAR_HEIGHT: f32 = 34.;
 const API_QUALITY_EMOJI_DURATION: Duration = Duration::from_millis(300);
 
 struct ApiQualityEmoji {
@@ -277,18 +278,9 @@ impl ApiQualityLevel {
             Self::Failed => "session_data.api_quality_failed",
         })
     }
-
-    fn color(self) -> u32 {
-        match self {
-            Self::Preparing | Self::Waiting | Self::Unknown => palette().muted,
-            Self::Responding | Self::Smooth | Self::Good => palette().activity_completed,
-            Self::Slow => palette().warning_text,
-            Self::Unstable | Self::Failed => palette().error_text,
-        }
-    }
 }
 
-fn api_quality<'a>(records: impl Iterator<Item = &'a Observation>) -> ApiQualityLevel {
+fn api_quality_samples<'a>(records: impl Iterator<Item = &'a Observation>) -> Vec<&'a Observation> {
     let mut samples = records
         .filter(|record| {
             record
@@ -297,15 +289,16 @@ fn api_quality<'a>(records: impl Iterator<Item = &'a Observation>) -> ApiQuality
         })
         .collect::<Vec<_>>();
     samples.sort_by_key(|record| record.finished_at);
-    let recent = samples
-        .into_iter()
-        .rev()
-        .take(API_QUALITY_WINDOW)
-        .collect::<Vec<_>>();
+    samples.drain(..samples.len().saturating_sub(API_QUALITY_WINDOW));
+    samples
+}
+
+fn api_quality<'a>(records: impl Iterator<Item = &'a Observation>) -> ApiQualityLevel {
+    let recent = api_quality_samples(records);
     if recent.is_empty() {
         return ApiQualityLevel::Unknown;
     }
-    if recent[0].api_request_outcome == Some(ApiRequestOutcome::Failed) {
+    if recent.last().unwrap().api_request_outcome == Some(ApiRequestOutcome::Failed) {
         return ApiQualityLevel::Failed;
     }
     if recent
@@ -329,6 +322,98 @@ fn api_quality<'a>(records: impl Iterator<Item = &'a Observation>) -> ApiQuality
         ms if ms <= 10_000 => ApiQualityLevel::Slow,
         _ => ApiQualityLevel::Unstable,
     }
+}
+
+// Normalize first response latency to quality: <= 2s is best, >= 20s is worst.
+// Missing measurements stay unknown; failed requests always have zero quality.
+fn api_quality_score(record: &Observation) -> Option<f32> {
+    match record.api_request_outcome {
+        Some(ApiRequestOutcome::Failed) => Some(0.),
+        Some(ApiRequestOutcome::Succeeded) => record
+            .api_first_response_ms
+            .map(|ms| 1. - (ms.saturating_sub(2_000).min(18_000) as f32 / 18_000.)),
+        _ => None,
+    }
+}
+
+fn api_quality_bar_color(score: Option<f32>) -> u32 {
+    let colors = palette();
+    let Some(score) = score else {
+        return colors.muted;
+    };
+    let (from, to, weight) = if score >= 0.5 {
+        (
+            colors.warning_text,
+            colors.activity_completed,
+            (score - 0.5) * 2.,
+        )
+    } else {
+        (colors.error_text, colors.warning_text, score * 2.)
+    };
+    [16, 8, 0].into_iter().fold(0, |color, shift| {
+        let a = ((from >> shift) & 0xff) as f32;
+        let b = ((to >> shift) & 0xff) as f32;
+        color | (((a + (b - a) * weight).round() as u32) << shift)
+    })
+}
+
+fn api_quality_chart(samples: &[&Observation], status: ApiQualityLevel) -> impl IntoElement {
+    let mut chart = h_flex()
+        .id("session-data-api-quality-chart")
+        .test_support()
+        .role(Role::Group)
+        .aria_label(text("session_data.api_quality_note"))
+        .flex_shrink_0()
+        .w(px(52.))
+        .h_full()
+        .py(px(4.))
+        .gap(px(3.))
+        .justify_end()
+        .items_end();
+    if samples.is_empty() {
+        return chart
+            .items_center()
+            .justify_center()
+            .aria_label(status.label())
+            .child(caption("—"));
+    }
+    for (index, record) in samples.iter().enumerate() {
+        let score = api_quality_score(record);
+        let quality = api_quality(std::iter::once(*record));
+        let detail = SharedString::from(format!(
+            "{} · {}",
+            quality.label(),
+            conduit::i18n::format(
+                "session_data.api_quality_first_response",
+                &[("duration", duration(record.api_first_response_ms))],
+            ),
+        ));
+        chart = chart.child(
+            div()
+                .id(("session-data-api-quality-sample", index))
+                .test_support()
+                .role(Role::Group)
+                .aria_label(detail.clone())
+                .w(px(8.))
+                .h_full()
+                .flex_shrink_0()
+                .flex()
+                .items_end()
+                .tooltip(move |window, cx| Tooltip::new(detail.clone()).build(window, cx))
+                .child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "session-data-api-quality-bar-{index}"
+                        )))
+                        .test_support()
+                        .w_full()
+                        .h(px(4. + score.unwrap_or(0.) * (API_QUALITY_BAR_HEIGHT - 4.)))
+                        .rounded(px(2.))
+                        .bg(rgb(api_quality_bar_color(score))),
+                ),
+        );
+    }
+    chart
 }
 
 fn caption(value: impl Into<SharedString>) -> Div {
@@ -691,25 +776,43 @@ impl ConduitApp {
         let variant = run
             .and_then(|run| run.acp_variant.as_deref())
             .or_else(|| session.opencode.effective_variant());
-        let status = if let Some(run) = run {
+        let (status, running) = if let Some(run) = run {
             if run.runtime.is_cancelled() {
-                text("session_data.stopping")
+                (text("session_data.stopping"), false)
             } else if !run.approvals.is_empty() {
-                run.waiting_status()
+                (run.waiting_status(), false)
             } else {
-                text("session_data.running")
+                (text("session_data.running"), true)
             }
         } else if session.interrupted {
-            text("session_data.interrupted")
+            (text("session_data.interrupted"), false)
         } else {
-            text("session_data.idle")
+            (text("session_data.idle"), false)
         };
-        let color = if status == text("session_data.running") {
+        let color = if running {
             palette().activity_completed
         } else if run.is_some() || session.interrupted {
             palette().warning_text
         } else {
             palette().muted
+        };
+        let status_dot = div()
+            .size(px(6.))
+            .flex_shrink_0()
+            .rounded_full()
+            .bg(rgb(color));
+        let status_dot = if running && !cx.reduce_motion() {
+            status_dot
+                .with_animation(
+                    ("session-data-status-pulse", *id),
+                    Animation::new(Duration::from_millis(1600)).repeat(),
+                    |dot, delta| {
+                        dot.opacity(0.4 + 0.6 * (0.5 + 0.5 * (delta * std::f32::consts::TAU).cos()))
+                    },
+                )
+                .into_any_element()
+        } else {
+            status_dot.into_any_element()
         };
         let mut content = v_flex()
             .w_full()
@@ -737,13 +840,7 @@ impl ConduitApp {
                         h_flex()
                             .min_w_0()
                             .gap_1p5()
-                            .child(
-                                div()
-                                    .size(px(6.))
-                                    .flex_shrink_0()
-                                    .rounded_full()
-                                    .bg(rgb(color)),
-                            )
+                            .child(status_dot)
                             .child(caption(status).text_color(rgb(color)).truncate()),
                     ),
             )
@@ -796,6 +893,7 @@ impl ConduitApp {
                 ],
             )));
         }
+        let context_ratio = usage.context_ratio();
         let mut context = card()
             .id("session-data-context-card")
             .test_support()
@@ -803,13 +901,23 @@ impl ConduitApp {
             .p_3()
             .gap_2()
             .child(
-                h_flex().w_full().justify_between().child(heading(
-                    "session_data.context",
-                    (usage.context_ratio().is_some() && usage.context_window_estimated)
-                        .then(|| text("session_data.estimated").into()),
-                )),
+                h_flex()
+                    .w_full()
+                    .justify_between()
+                    .child(heading(
+                        "session_data.context",
+                        (context_ratio.is_some() && usage.context_window_estimated)
+                            .then(|| text("session_data.estimated").into()),
+                    ))
+                    .when_some(context_ratio, |header, _| {
+                        header.child(
+                            h_flex()
+                                .gap_2()
+                                .child(caption(text("session_data.tokens_unit"))),
+                        )
+                    }),
             );
-        if let Some(ratio) = usage.context_ratio() {
+        if let Some(ratio) = context_ratio {
             let color = if ratio >= 0.9 {
                 palette().error_text
             } else if ratio >= 0.75 {
@@ -841,21 +949,15 @@ impl ConduitApp {
                                 )),
                         )
                         .child(
-                            v_flex()
-                                .items_end()
-                                .gap_0()
-                                .child(
-                                    div()
-                                        .text_size(ui_text_size(13.))
-                                        .font_semibold()
-                                        .font_family(Theme::global(cx).mono_font_family.clone())
-                                        .child(format!(
-                                            "{} / {}",
-                                            tokens(usage.context_tokens),
-                                            tokens(Some(usage.context_window))
-                                        )),
-                                )
-                                .child(caption(text("session_data.tokens_unit"))),
+                            div()
+                                .text_size(ui_text_size(13.))
+                                .font_semibold()
+                                .font_family(Theme::global(cx).mono_font_family.clone())
+                                .child(format!(
+                                    "{} / {}",
+                                    tokens(usage.context_tokens),
+                                    tokens(Some(usage.context_window))
+                                )),
                         ),
                 )
                 .child(
@@ -915,6 +1017,7 @@ impl ConduitApp {
             );
         }
         content = content.child(context);
+        let quality_samples = api_quality_samples(records);
         let request_quality = if let Some(run) = run.filter(|run| {
             matches!(run.intent, crate::commands::RequestIntent::Message)
                 && !run.runtime.is_cancelled()
@@ -927,7 +1030,7 @@ impl ConduitApp {
                 ApiQualityLevel::Responding
             }
         } else {
-            api_quality(records)
+            api_quality(quality_samples.iter().copied())
         };
         let turn = latest.as_ref();
         let cache_hit = total.cache_hit();
@@ -1071,27 +1174,26 @@ impl ConduitApp {
                     request_quality.label(),
                 ))
                 .px_3()
-                .py_2()
+                .h(px(44.))
                 .child(
                     h_flex()
                         .w_full()
+                        .h_full()
                         .items_center()
                         .gap_2()
-                        .child(api_quality_emoji(request_quality, state.read(cx), cx))
                         .child(
-                            heading(
-                                "session_data.api_quality",
-                                Some(text("session_data.api_quality_note").into()),
-                            )
-                            .flex_1(),
+                            h_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .py_2()
+                                .gap_2()
+                                .child(api_quality_emoji(request_quality, state.read(cx), cx))
+                                .child(heading(
+                                    "session_data.api_quality",
+                                    Some(text("session_data.api_quality_note").into()),
+                                )),
                         )
-                        .child(
-                            div()
-                                .text_size(ui_text_size(12.))
-                                .font_semibold()
-                                .text_color(rgb(request_quality.color()))
-                                .child(request_quality.label()),
-                        ),
+                        .child(api_quality_chart(&quality_samples, request_quality)),
                 ),
         );
         let token_summary = conduit::i18n::format(
@@ -1375,7 +1477,10 @@ impl ConduitApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{ApiQualityLevel, ApiRequestOutcome, Observation, api_quality, consumption};
+    use super::{
+        ApiQualityLevel, ApiRequestOutcome, Observation, api_quality, api_quality_samples,
+        api_quality_score, consumption,
+    };
     use crate::domain::Provider;
     use std::path::PathBuf;
     fn turn(
@@ -1436,9 +1541,9 @@ mod tests {
     }
 
     #[test]
-    fn api_quality_ignores_cancelled_requests_and_uses_only_the_latest_ten() {
+    fn api_quality_ignores_cancelled_requests_and_uses_only_the_latest_five() {
         let mut records = vec![api_turn("old-failure", ApiRequestOutcome::Failed, None)];
-        records.extend((0..10).map(|index| {
+        records.extend((0..5).map(|index| {
             api_turn(
                 &format!("success-{index}"),
                 ApiRequestOutcome::Succeeded,
@@ -1448,6 +1553,49 @@ mod tests {
         records.push(api_turn("cancelled", ApiRequestOutcome::Cancelled, None));
         let quality = api_quality(records.iter());
         assert_eq!(quality, ApiQualityLevel::Smooth);
+    }
+
+    #[test]
+    fn api_quality_history_orders_completed_samples_and_preserves_individual_quality() {
+        let mut records = (0..7)
+            .map(|index| {
+                let mut record = api_turn(
+                    &format!("request-{index}"),
+                    ApiRequestOutcome::Succeeded,
+                    Some(index * 4_000),
+                );
+                record.finished_at = index;
+                record
+            })
+            .collect::<Vec<_>>();
+        records[4].api_request_outcome = Some(ApiRequestOutcome::Failed);
+        let mut cancelled = api_turn("cancelled", ApiRequestOutcome::Cancelled, None);
+        cancelled.finished_at = 10;
+        records.push(cancelled);
+        records.push(turn("unmeasured", None, None, None));
+        records.reverse();
+        let samples = api_quality_samples(records.iter());
+        assert_eq!(
+            samples
+                .iter()
+                .map(|sample| sample.key.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "request-2",
+                "request-3",
+                "request-4",
+                "request-5",
+                "request-6"
+            ],
+        );
+        assert!(api_quality_score(samples[0]) > api_quality_score(samples[1]));
+        assert_eq!(api_quality_score(samples[2]), Some(0.));
+        assert_eq!(api_quality_score(samples[4]), Some(0.));
+        assert_eq!(
+            api_quality_score(&api_turn("unknown", ApiRequestOutcome::Succeeded, None)),
+            None,
+        );
+        assert!(api_quality_samples(std::iter::empty()).is_empty());
     }
 
     #[test]
