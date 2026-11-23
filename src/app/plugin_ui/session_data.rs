@@ -20,6 +20,7 @@ pub(super) struct Sections {
     timing: bool,
     scroll: ScrollHandle,
     tool_stats: RefCell<Option<(ToolStatsKey, Rc<ToolStats>)>>,
+    api_emoji: RefCell<Option<ApiQualityEmoji>>,
 }
 
 #[derive(PartialEq, Eq)]
@@ -163,6 +164,79 @@ fn duration(value: Option<u64>) -> String {
     }
 }
 const API_QUALITY_WINDOW: usize = 10;
+const API_QUALITY_EMOJI_DURATION: Duration = Duration::from_millis(300);
+
+struct ApiQualityEmoji {
+    current: &'static str,
+    previous: &'static str,
+    changed_at: Instant,
+    revision: u64,
+}
+
+fn api_quality_emoji(status: ApiQualityLevel, state: &Sections, cx: &App) -> AnyElement {
+    let emoji = status.emoji();
+    let now = Instant::now();
+    let mut stored = state.api_emoji.borrow_mut();
+    let animation = stored.get_or_insert(ApiQualityEmoji {
+        current: emoji,
+        previous: emoji,
+        changed_at: now,
+        revision: 0,
+    });
+    if animation.current != emoji {
+        animation.previous = animation.current;
+        animation.current = emoji;
+        animation.changed_at = now;
+        animation.revision += 1;
+    }
+    let slot = div()
+        .id("session-data-api-quality-emoji")
+        .test_support()
+        .relative()
+        .size(px(24.))
+        .flex_shrink_0();
+    let glyph = |emoji, scale, offset, opacity| {
+        div()
+            .absolute()
+            .size_full()
+            .left_0()
+            .top(px(offset))
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_size(ui_text_size(18. * scale))
+            .line_height(relative(1.))
+            .opacity(opacity)
+            .child(emoji)
+    };
+    if cx.reduce_motion()
+        || animation.previous == emoji
+        || now.duration_since(animation.changed_at) >= API_QUALITY_EMOJI_DURATION
+    {
+        return slot.child(glyph(emoji, 1., 0., 1.)).into_any_element();
+    }
+    let previous = animation.previous;
+    slot.with_animation(
+        ("session-data-api-quality-emoji-change", animation.revision),
+        Animation::new(API_QUALITY_EMOJI_DURATION),
+        move |slot, progress| {
+            let exit = (progress / 0.4).min(1.);
+            let enter = ((progress - 0.25) / 0.75).clamp(0., 1.);
+            // A small overshoot gives the incoming face a soft, single bounce.
+            let pop = 1. + 3.4 * (enter - 1.).powi(3) + 2.4 * (enter - 1.).powi(2);
+            slot.when(exit < 1., |slot| {
+                slot.child(glyph(previous, 1. - 0.2 * exit, -4. * exit, 1. - exit))
+            })
+            .child(glyph(
+                emoji,
+                0.7 + 0.3 * pop,
+                4. * (1. - pop),
+                (enter * 4.).min(1.),
+            ))
+        },
+    )
+    .into_any_element()
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ApiQualityLevel {
@@ -954,12 +1028,7 @@ impl ConduitApp {
                         .w_full()
                         .items_center()
                         .gap_2()
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .text_size(ui_text_size(18.))
-                                .child(request_quality.emoji()),
-                        )
+                        .child(api_quality_emoji(request_quality, state.read(cx), cx))
                         .child(caption(text("session_data.api_quality")).flex_1())
                         .child(
                             div()
