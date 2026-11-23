@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -102,6 +103,37 @@ def conversation(session_id: int, provider: str, title: str, prompt: str, reply:
     }
 
 
+def make_usage(root: Path, timestamp: int) -> dict:
+    """Synthetic records for the usage UI; never inferred from real CLI history."""
+    today = datetime.fromtimestamp(timestamp)
+    first = today.replace(day=1, hour=12, minute=0, second=0, microsecond=0)
+    previous = (first - timedelta(days=1)).replace(day=1)
+    workspace = str(root / "workspaces" / "orbit-web")
+    models = ("claude-sonnet-4-5", "gpt-5.1-codex", "opencode/demo-model", "qoder-demo")
+    records = []
+    for month_index, start in enumerate((previous, first)):
+        for day in range(1, today.day + 1):
+            finished = start + timedelta(days=day - 1)
+            if finished.month != start.month:
+                break
+            for index, engine in enumerate(ENGINES):
+                tokens = (1200 + (day * 173 + index * 389) % 2800) * (10 + month_index) // 10
+                records.append({
+                    "key": f"demo-usage-{finished:%Y-%m-%d}-{engine}",
+                    "session": 101 + index, "workspace": workspace,
+                    "provider": engine, "service": "cli", "model": models[index],
+                    "finished_at": int((finished + timedelta(minutes=index * 20)).timestamp()),
+                    "input": tokens, "cached": tokens * 3 // 5,
+                    "output": 350 + (day * 47 + index * 113) % 900,
+                    "elapsed_ms": 12000 + (day * 971 + index * 1313) % 24000,
+                    "incomplete": False, "api_first_response_ms": 500 + index * 140,
+                    "api_request_outcome": "succeeded",
+                })
+    return {"observations": records, "truncated": False,
+            "budgets": [{"workspace": workspace, "monthly_tokens": 500000,
+                         "notified_month": None, "near_notified_month": None}]}
+
+
 def make_state(root: Path, timestamp: int, diff_stat: str) -> dict:
     web = root / "workspaces" / "orbit-web"
     activities = [
@@ -171,6 +203,7 @@ def make_state(root: Path, timestamp: int, diff_stat: str) -> dict:
         "cli": {"engines": {engine: {"path": str(root / "preview-only" / f"{engine.lower()}.exe")}
                             for engine in ENGINES}},
         "providers": [],
+        "usage_ledger": make_usage(root, timestamp),
     }
 
 
