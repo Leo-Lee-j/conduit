@@ -373,6 +373,7 @@ fn qoder_fixture(script: &str, gate: Option<Receiver<()>>) -> ChatRuntime {
         native_id: Some("qoder-original".into()),
         model: None,
         permission: crate::domain::PermissionLevel::WorkspaceWrite,
+        tool_policy: Default::default(),
         effort: crate::providers::ReasoningEffort::Default,
         route: Default::default(),
         text_only: false,

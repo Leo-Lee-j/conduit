@@ -17,9 +17,99 @@ fn request() -> AdapterRequest {
         native_id: None,
         model: Some("test/model".into()),
         permission: PermissionLevel::WorkspaceWrite,
+        tool_policy: Default::default(),
         effort: Default::default(),
         route,
         text_only: false,
+    }
+}
+
+#[test]
+fn automation_policy_keeps_local_reads_and_denies_mcp_even_after_elevation() {
+    let _locale = crate::test_support::chinese();
+    for provider in [
+        Provider::Claude,
+        Provider::Codex,
+        Provider::OpenCode,
+        Provider::Qoder,
+    ] {
+        let mut request = request();
+        request.tool_policy = ToolPolicy::Automation;
+        request.permission = PermissionLevel::FullAccess;
+        request.route.env.insert(
+            "OPENCODE_CONFIG_CONTENT".into(),
+            json!({
+                "mcp":{"write-server":{"type":"local","command":["never-run"],"enabled":true}},
+                "permission":{"*":"allow", "write-server_*":"allow"}
+            })
+            .to_string(),
+        );
+        let mut adapter = (provider.descriptor().adapter)(request);
+        let launch = adapter.launch().unwrap();
+        match provider {
+            Provider::Claude | Provider::Qoder => {
+                assert!(launch.args.iter().any(|arg| arg == "--strict-mcp-config"));
+                assert!(launch.args.windows(2).any(|args| args[0] == "--tools"
+                    && args[1].contains("Read")
+                    && !args[1].contains("Write")));
+                assert!(
+                    !launch
+                        .args
+                        .iter()
+                        .any(|arg| arg == "--dangerously-skip-permissions"
+                            || arg == "bypass_permissions")
+                );
+            }
+            Provider::Codex => {
+                assert!(launch.args.iter().any(|arg| arg == "features.apps=false"));
+                assert!(
+                    launch
+                        .args
+                        .iter()
+                        .any(|arg| arg == "features.plugins=false")
+                );
+                assert!(
+                    !launch
+                        .args
+                        .iter()
+                        .any(|arg| arg == "features.shell_tool=false")
+                );
+            }
+            Provider::OpenCode => {
+                let config: Value =
+                    serde_json::from_str(&launch.environment["OPENCODE_CONFIG_CONTENT"]).unwrap();
+                assert_eq!(config["mcp"]["write-server"]["enabled"], false);
+                let agents = config["agent"].as_object().unwrap();
+                for agent in agents.values() {
+                    assert_eq!(agent["permission"]["read"], "allow");
+                    assert_eq!(agent["permission"]["*"], "deny");
+                    assert_eq!(agent["permission"]["write-server_*"], "deny");
+                }
+            }
+        }
+        adapter.enable_full_access();
+        let approval = crate::protocol::Approval {
+            id: "mcp-write".into(),
+            title: "MCP write".into(),
+            detail: String::new(),
+            wire_id: json!(42),
+            input: json!({"options":[
+                {"kind":"allow_once","optionId":"yes"},
+                {"kind":"allow_always","optionId":"always"},
+                {"kind":"reject_once","optionId":"no"}
+            ]}),
+            allow_once: true,
+            kind: ApprovalKind::McpTool,
+        };
+        assert_eq!(adapter.automatic_approval(&approval), Some(false));
+        let response = adapter.approval_response(&approval, true);
+        match provider {
+            Provider::Codex => assert_eq!(response["result"]["action"], "decline"),
+            Provider::Claude => assert_eq!(response["response"]["response"]["behavior"], "deny"),
+            Provider::OpenCode | Provider::Qoder => {
+                assert_eq!(response["result"]["outcome"]["optionId"], "no")
+            }
+        }
     }
 }
 

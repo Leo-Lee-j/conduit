@@ -92,6 +92,7 @@ pub struct StartRequest {
     pub native_id: Option<String>,
     pub model: Option<String>,
     pub permission: PermissionLevel,
+    pub tool_policy: crate::cli_adapter::ToolPolicy,
     pub effort: crate::providers::ReasoningEffort,
     pub route: crate::providers::RuntimeRoute,
 }
@@ -231,6 +232,7 @@ impl ChatRuntime {
             native_id: None,
             model,
             permission: PermissionLevel::ReadOnly,
+            tool_policy: Default::default(),
             effort: Default::default(),
             route,
             text_only: true,
@@ -256,6 +258,7 @@ impl ChatRuntime {
             native_id,
             model,
             permission,
+            tool_policy: Default::default(),
             effort: Default::default(),
             route: Default::default(),
         })
@@ -278,6 +281,7 @@ impl ChatRuntime {
             native_id,
             model,
             permission,
+            tool_policy,
             effort,
             route,
         } = request;
@@ -288,6 +292,7 @@ impl ChatRuntime {
             native_id,
             model,
             permission,
+            tool_policy,
             effort,
             route,
             text_only: false,

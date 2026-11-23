@@ -5,6 +5,58 @@ use super::{
 use gpui_kit::{AppContext as _, TestAppContext};
 
 #[gpui_kit::test]
+fn handoff_drafts_follow_the_selected_session_and_restore_on_return(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx, root) = crate::app::queue::tests::fixture(cx, "workflow-handoff-sources");
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.startup = None;
+            app.writable = false;
+            // Opening the workspace before selecting a session must not pin None.
+            app.selected_session = None;
+            app.activate_workflow(window, cx);
+            let panel = app.workflow_panels[&root].clone();
+            assert_eq!(panel.read(cx).source_session, None);
+            app.selected_session = Some(1);
+            app.activate_workflow(window, cx);
+            assert_eq!(panel.read(cx).source_session, Some(1));
+            panel.update(cx, |panel, cx| {
+                panel
+                    .through
+                    .update(cx, |input, cx| input.set_value("1", window, cx));
+                panel.context.update(cx, |input, cx| {
+                    input.set_value("edited handoff A", window, cx)
+                });
+            });
+            let mut second = app.session(1).unwrap().clone();
+            second.id = 3;
+            app.store.workspaces[0].sessions.push(second);
+            app.selected_session = Some(3);
+            app.activate_workflow(window, cx);
+            assert_eq!(panel.read(cx).source_session, Some(3));
+            assert!(panel.read(cx).context.read(cx).value().is_empty());
+            panel.read(cx).context.clone().update(cx, |input, cx| {
+                input.set_value("edited handoff B", window, cx)
+            });
+            app.selected_session = Some(1);
+            app.activate_workflow(window, cx);
+            assert_eq!(panel.read(cx).source_session, Some(1));
+            assert_eq!(
+                panel.read(cx).context.read(cx).value().as_ref(),
+                "edited handoff A"
+            );
+            assert_eq!(panel.read(cx).through.read(cx).value().as_ref(), "1");
+            app.selected_session = Some(3);
+            app.activate_workflow(window, cx);
+            assert_eq!(
+                panel.read(cx).context.read(cx).value().as_ref(),
+                "edited handoff B"
+            );
+        })
+    });
+}
+
+#[gpui_kit::test]
 fn sidebar_drafts_survive_close_and_workspace_switches(cx: &mut TestAppContext) {
     use conduit::plugins::{builtins, ids::ViewId};
     let _locale = crate::test_support::chinese();
@@ -265,5 +317,98 @@ fn preset_sessions_preserve_the_source_draft_and_never_reuse_native_context(
             app
         });
         gpui_kit::component::Root::new(view, window, cx)
+    });
+}
+
+#[gpui_kit::test]
+fn reopened_panel_saves_current_session_configuration(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx, root) = crate::app::queue::tests::fixture(cx, "review-preset-source");
+    let panel = cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            this.persistence.flush();
+            this.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
+            this.startup = None;
+            this.session_mut(1).unwrap().model = Some("model-A".into());
+            let mut second = this.session(1).unwrap().clone();
+            second.id = 3;
+            second.model = Some("model-B".into());
+            this.store.workspaces[0].sessions.push(second);
+            this.next_id = 4;
+            this.activate_workflow(window, cx);
+            this.close_right_view(window, cx);
+            this.switch(0, Some(3), window, cx);
+            this.open_right_view(
+                &conduit::plugins::ids::ViewId::new(conduit::plugins::builtins::WORKFLOW).unwrap(),
+                window,
+                cx,
+            );
+            this.workflow_panels[&root].clone()
+        })
+    });
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.preset_name.update(cx, |input, cx| {
+                input.set_value("current configuration", window, cx)
+            });
+            panel
+                .preset_prompt
+                .update(cx, |input, cx| input.set_value("review", window, cx));
+            panel.save_preset(cx);
+            assert!(panel.error.is_none(), "{:?}", panel.error);
+        })
+    });
+    cx.update(|_, cx| {
+        app.update(cx, |this, _| {
+            this.persistence.flush();
+            this.writable = false;
+            assert_eq!(
+                this.store.workflow.presets.last().unwrap().model.as_deref(),
+                Some("model-B")
+            );
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn message_handoff_preserves_task_and_preset_drafts(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx, root) = crate::app::queue::tests::fixture(cx, "review-draft-loss");
+    let panel = cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            this.persistence.flush();
+            this.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
+            this.startup = None;
+            this.session_mut(1).unwrap().messages = serde_json::from_value(serde_json::json!([
+                {"key":"user","kind":"User","text":"question"},
+                {"key":"assistant","kind":"Assistant","text":"answer"}
+            ]))
+            .unwrap();
+            this.activate_workflow(window, cx);
+            this.workflow_panels[&root].clone()
+        })
+    });
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel
+                .title
+                .update(cx, |input, cx| input.set_value("unsaved task", window, cx));
+            panel.preset_prompt.update(cx, |input, cx| {
+                input.set_value("unsaved template", window, cx)
+            });
+        })
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            this.open_handoff_at(1, 1, window, cx);
+            this.persistence.flush();
+            this.writable = false;
+            let panel = this.workflow_panels[&root].read(cx);
+            assert_eq!(panel.title.read(cx).value().as_ref(), "unsaved task");
+            assert_eq!(
+                panel.preset_prompt.read(cx).value().as_ref(),
+                "unsaved template"
+            );
+        })
     });
 }

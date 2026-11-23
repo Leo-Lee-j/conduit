@@ -420,13 +420,13 @@ impl ConduitApp {
                         );
                     }
                     if let Some(run) = &finished_run
-                        && !matches!(run.intent, crate::commands::RequestIntent::Fork(_))
+                        && matches!(run.intent, crate::commands::RequestIntent::Message)
                     {
                         self.completion_automations(
                             id,
                             &run.usage_key,
                             error.is_some(),
-                            cancelled,
+                            cancelled || run.runtime.is_cancelled(),
                             cx,
                         );
                     }

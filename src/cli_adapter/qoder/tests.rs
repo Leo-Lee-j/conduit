@@ -8,6 +8,7 @@ fn request() -> AdapterRequest {
         native_id: None,
         model: None,
         permission: PermissionLevel::WorkspaceWrite,
+        tool_policy: Default::default(),
         effort: ReasoningEffort::Default,
         route: RuntimeRoute::default(),
         text_only: false,

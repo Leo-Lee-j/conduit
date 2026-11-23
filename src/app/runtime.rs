@@ -620,6 +620,13 @@ impl ConduitApp {
             native_id,
             model: model.clone(),
             permission,
+            tool_policy: if self.store.scheduler.runs.iter().any(|run| {
+                run.session == Some(id) && run.status == crate::automation::Status::Running
+            }) {
+                crate::cli_adapter::ToolPolicy::Automation
+            } else {
+                crate::cli_adapter::ToolPolicy::Chat
+            },
             effort,
             route: std::mem::take(&mut route),
         });

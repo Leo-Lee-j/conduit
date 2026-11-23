@@ -42,7 +42,8 @@ struct QoderAdapter {
 }
 
 impl QoderAdapter {
-    fn new(request: AdapterRequest) -> Self {
+    fn new(mut request: AdapterRequest) -> Self {
+        request.permission = request.tool_policy.permission(request.permission);
         Self {
             request,
             stage: Stage::Initialize,
@@ -310,14 +311,15 @@ impl CliAdapter for QoderAdapter {
                     "Read,Grep,Glob".into()
                 },
             ]);
-            if self.request.text_only {
+            if self.request.text_only || self.request.tool_policy == ToolPolicy::Automation {
                 args.extend([
                     "--strict-mcp-config".into(),
                     "--mcp-config".into(),
                     "{\"mcpServers\":{}}".into(),
-                    "--disallowed-tools".into(),
-                    "*".into(),
                 ]);
+            }
+            if self.request.text_only {
+                args.extend(["--disallowed-tools".into(), "*".into()]);
             }
         }
         Ok(LaunchSpec {
@@ -542,6 +544,9 @@ impl CliAdapter for QoderAdapter {
         if approval.is_user_input() {
             return None;
         }
+        if self.request.tool_policy == ToolPolicy::Automation {
+            return Some(false);
+        }
         if approval.kind == ApprovalKind::McpTool {
             return Some(
                 option(&approval.input, "allow_once").is_some()
@@ -563,6 +568,7 @@ impl CliAdapter for QoderAdapter {
         }
         let allow = allow
             && !self.request.text_only
+            && self.request.tool_policy != ToolPolicy::Automation
             && (self.request.permission != PermissionLevel::ReadOnly
                 || approval.kind == ApprovalKind::McpTool);
         let choice = option(
@@ -595,7 +601,7 @@ impl CliAdapter for QoderAdapter {
         questions::response(approval, answers)
     }
     fn enable_full_access(&mut self) {
-        if !self.request.text_only {
+        if !self.request.text_only && self.request.tool_policy != ToolPolicy::Automation {
             self.request.permission = PermissionLevel::FullAccess;
         }
     }

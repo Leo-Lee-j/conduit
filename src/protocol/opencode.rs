@@ -176,6 +176,11 @@ impl Protocol {
             serde_json::from_str(&inherited).context(conduit::i18n::text_static(
                 "protocol.opencode.opencode_config_content_is_not_valid_json",
             ))?;
+        let mcp_names = if self.text_only {
+            Default::default()
+        } else {
+            crate::extensions::opencode_mcp_names(std::path::Path::new(&self.cwd), &self.route.env)
+        };
         let object = config.as_object_mut().context(conduit::i18n::text_static(
             "protocol.opencode.opencode_config_content_must_be_an_object",
         ))?;
@@ -206,28 +211,30 @@ impl Protocol {
             permission["plan_enter"] = json!("deny");
             permission["plan_exit"] = json!("deny");
             permission["doom_loop"] = permission["*"].clone();
-            self.acp.mcp_prefixes = crate::extensions::opencode_mcp_names(
-                std::path::Path::new(&self.cwd),
-                &self.route.env,
-            )
-            .into_iter()
-            .filter(|name| !name.is_empty())
-            .map(|name| {
-                let name: String = name
-                    .chars()
-                    .map(|c| {
-                        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                            c
-                        } else {
-                            '_'
-                        }
-                    })
-                    .collect();
-                format!("{name}_")
-            })
-            .collect();
+            self.acp.mcp_prefixes = mcp_names
+                .iter()
+                .filter(|name| !name.is_empty())
+                .map(|name| {
+                    let name: String = name
+                        .chars()
+                        .map(|c| {
+                            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                                c
+                            } else {
+                                '_'
+                            }
+                        })
+                        .collect();
+                    format!("{name}_")
+                })
+                .collect();
             for prefix in &self.acp.mcp_prefixes {
-                permission[format!("{prefix}*")] = json!("allow");
+                permission[format!("{prefix}*")] =
+                    json!(if self.tool_policy == ToolPolicy::Automation {
+                        "deny"
+                    } else {
+                        "allow"
+                    });
             }
         }
         if !self.text_only {
@@ -244,6 +251,18 @@ impl Protocol {
             agents.insert(worker, json!({"mode":"subagent","description":"Delegate a focused task using the current Conduit permissions", "permission":permission.clone()}));
         }
         agents.insert(self.acp.agent.clone(), json!({"mode":"primary","description":"Conduit managed permissions","permission":permission}));
+        if self.tool_policy == ToolPolicy::Automation {
+            let servers = object
+                .entry("mcp")
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+                .context(conduit::i18n::text_static(
+                    "automation.invalid_engine_config",
+                ))?;
+            for name in mcp_names {
+                servers.insert(name, json!({"enabled":false}));
+            }
+        }
         if self.text_only {
             // `run --format json` reports session.error immediately, whereas
             // ACP 1.19 can wait indefinitely for an idle event after API errors.
