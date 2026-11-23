@@ -360,7 +360,13 @@ impl ConduitApp {
         if files.references.is_empty() && files.feedback.is_none() {
             return None;
         }
-        let mut tray = v_flex().id("composer-files").px(px(3.)).pt(px(3.)).gap_2();
+        let mut tray = v_flex()
+            .id("composer-files")
+            .w_full()
+            .min_w_0()
+            .px(px(chat::CHAT_CARD_INSET_X))
+            .pt(px(chat::CHAT_BLOCK_GAP))
+            .gap_2();
         if !files.references.is_empty() {
             let cards = files
                 .references
@@ -589,7 +595,8 @@ impl ConduitApp {
         let subagents = self
             .selected_session
             .and_then(|id| self.subagent_panel(id, cx));
-        let has_subagents = subagents.is_some();
+        let composer_files = self.render_composer_files(composer_enabled, cx);
+        let has_files = composer_files.is_some();
         let mut composer = v_flex()
             .id("composer")
             .debug_selector(|| "composer".into())
@@ -662,9 +669,7 @@ impl ConduitApp {
                 cx.notify();
             }))
             .w_full()
-            .when(!has_subagents, |composer| {
-                composer.px(px(3.)).py(px(3.)).gap_1()
-            })
+            .gap_1()
             .rounded(px(11.))
             .bg(rgb(palette().surface))
             .border_1()
@@ -697,10 +702,7 @@ impl ConduitApp {
                     .border_color(rgb(palette().focus))
             })
             .when_some(subagents, |composer, panel| composer.child(panel))
-            .when_some(
-                self.render_composer_files(composer_enabled, cx),
-                |composer, files| composer.child(files),
-            )
+            .when_some(composer_files, |composer, files| composer.child(files))
             .child(
                 div()
                     // Input shortcuts must not shadow Enter/Space activation
@@ -712,10 +714,13 @@ impl ConduitApp {
                     } else {
                         "ConduitComposer"
                     })
-                    .px(px(if has_subagents { 9. } else { 3. }))
-                    .pt(px(if has_subagents { 9. } else { 3. }))
+                    // Textarea adds its own editor padding; account for it once
+                    // so typed text and attachment chips share the same inset.
+                    .px(px(chat::CHAT_CARD_INSET_X) - Size::Medium.input_px())
+                    .pt(px(if has_files { 0. } else { 4. }))
                     .child({
                         let mut composer_input = Textarea::new(&self.input)
+                            .with_size(Size::Medium)
                             .appearance(false)
                             .bordered(false)
                             .text_size(px(typography.body_size))
@@ -740,9 +745,8 @@ impl ConduitApp {
                 h_flex()
                     .id("composer-actions")
                     .debug_selector(|| "composer-actions".into())
-                    .px(px(if has_subagents { 6. } else { 3. }))
-                    .pb(px(if has_subagents { 6. } else { 3. }))
-                    .pt(px(if has_subagents { 6. } else { 3. }))
+                    .px(px(chat::CHAT_CARD_INSET_Y))
+                    .pb(px(chat::CHAT_CARD_INSET_Y))
                     .gap_2()
                     .items_center()
                     .child(
@@ -852,7 +856,7 @@ impl ConduitApp {
                     }),
             );
         if !self.store.ui.full_width_content {
-            composer = composer.max_w(px(840.)).mx_auto();
+            composer = composer.max_w(px(chat::CHAT_CONTENT_MAX_WIDTH)).mx_auto();
         }
         let composer: AnyElement = composer.into_any_element();
         // Engine activity and step/file tags reserve their own status row.
@@ -865,17 +869,15 @@ impl ConduitApp {
             .selected_session
             .and_then(|id| self.turn_stats_tags(id, cx));
         let has_status_row = turn_activity.is_some() || turn_stats.is_some();
-        // Live engine activity and the step/file tags share the transcription's
-        // content width: the same 24px gutter message rows add inside the 8px
-        // list padding, so the hint never looks wider than the chat content.
-        let status_row = div().w_full().px_6().child(
+        // Status, queued prompts, and the composer share the transcript column.
+        let status_row = div().w_full().px(px(chat::CHAT_CONTENT_GUTTER)).child(
             h_flex()
                 .id("turn-status-row")
                 .debug_selector(|| "turn-status-row".into())
                 .w_full()
                 .min_w_0()
                 .when(!self.store.ui.full_width_content, |row| {
-                    row.max_w(px(840.)).mx_auto()
+                    row.max_w(px(chat::CHAT_CONTENT_MAX_WIDTH)).mx_auto()
                 })
                 .items_center()
                 .justify_end()
@@ -884,43 +886,50 @@ impl ConduitApp {
                 .when_some(turn_activity, |row, activity| row.child(activity))
                 .when_some(turn_stats, |row, tags| row.child(tags)),
         );
-        let area = div().px_2().pt(px(12.)).pb_4().child(
-            v_flex()
-                .w_full()
-                .items_center()
-                .when(has_status_row, |column| column.child(status_row))
-                .when_some(
-                    self.render_queued_message(composer_enabled, cx),
-                    |column, bubble| {
-                        column.child(
-                            div()
-                                .w_full()
-                                .px_2()
-                                .pb_2()
-                                .when(!self.store.ui.full_width_content, |row| row.max_w(px(856.)))
-                                .child(bubble),
-                        )
-                    },
-                )
-                .child(
-                    div()
-                        .relative()
-                        .w_full()
-                        .px_2()
-                        // The extra 16px cap compensates for the doubled side
-                        // gap so the composer keeps the messages' 840px column.
-                        .when(!self.store.ui.full_width_content, |card| {
-                            card.max_w(px(856.)).mx_auto()
-                        })
-                        .child(composer)
-                        .when(mentions_open, |area| {
-                            area.child(self.render_file_mentions(window, cx))
-                        })
-                        .when(commands_open, |area| {
-                            area.child(self.render_chat_commands(window, cx))
-                        }),
-                ),
-        );
+        let area = div()
+            .pt(px(chat::CHAT_BLOCK_GAP))
+            .pb(px(chat::CHAT_BLOCK_GAP))
+            .child(
+                v_flex()
+                    .w_full()
+                    .items_center()
+                    .when(has_status_row, |column| column.child(status_row))
+                    .when_some(
+                        self.render_queued_message(composer_enabled, cx),
+                        |column, bubble| {
+                            column.child(
+                                div()
+                                    .w_full()
+                                    .px(px(chat::CHAT_CONTENT_GUTTER))
+                                    .pb_2()
+                                    .when(!self.store.ui.full_width_content, |row| {
+                                        row.max_w(px(chat::CHAT_CONTENT_MAX_WIDTH
+                                            + 2. * chat::CHAT_CONTENT_GUTTER))
+                                    })
+                                    .child(bubble),
+                            )
+                        },
+                    )
+                    .child(
+                        div()
+                            .relative()
+                            .w_full()
+                            .px(px(chat::CHAT_CONTENT_GUTTER))
+                            .when(!self.store.ui.full_width_content, |card| {
+                                card.max_w(px(
+                                    chat::CHAT_CONTENT_MAX_WIDTH + 2. * chat::CHAT_CONTENT_GUTTER
+                                ))
+                                .mx_auto()
+                            })
+                            .child(composer)
+                            .when(mentions_open, |area| {
+                                area.child(self.render_file_mentions(window, cx))
+                            })
+                            .when(commands_open, |area| {
+                                area.child(self.render_chat_commands(window, cx))
+                            }),
+                    ),
+            );
         area.into_any_element()
     }
 

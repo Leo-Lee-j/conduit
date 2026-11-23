@@ -28,9 +28,17 @@ mod turn_diff;
 #[cfg(all(test, feature = "ui-tests"))]
 mod reasoning_tests;
 
+// Keep transcript rows, composer content, and prompt surfaces on one spacing scale.
+pub(super) const CHAT_CONTENT_GUTTER: f32 = 24.;
+pub(super) const CHAT_CONTENT_MAX_WIDTH: f32 = 840.;
+pub(super) const CHAT_CARD_INSET_X: f32 = 12.;
+pub(super) const CHAT_CARD_INSET_Y: f32 = 8.;
+pub(super) const CHAT_BLOCK_GAP: f32 = 12.;
+
 const ACTIVITY_ROW_HEIGHT: f32 = 28.;
-const ACTIVITY_ROW_INSET: f32 = 12.;
+const ACTIVITY_ROW_INSET: f32 = 0.;
 const ACTIVITY_MARKER_SIZE: f32 = 14.;
+const ACTIVITY_MARKER_SLOT_SIZE: f32 = 18.;
 const ACTIVITY_LABEL_GAP: f32 = 8.;
 const MESSAGE_CARD_BORDER: f32 = 1.;
 
@@ -43,7 +51,7 @@ fn activity_container(
     let wrapper = v_flex().relative().w_full().min_w_0().pb(px(2.));
     let wrapper = if let Some((start, end)) = group {
         let guide_width = 1.;
-        let guide_left = ACTIVITY_ROW_INSET + (ACTIVITY_MARKER_SIZE - guide_width) / 2.;
+        let guide_left = ACTIVITY_ROW_INSET + (ACTIVITY_MARKER_SLOT_SIZE - guide_width) / 2.;
         let marker_top = (ACTIVITY_ROW_HEIGHT - ACTIVITY_MARKER_SIZE) / 2.;
         let marker_bottom = marker_top + ACTIVITY_MARKER_SIZE;
         // Each virtualized message has its own border. Bridge those borders
@@ -802,8 +810,8 @@ impl ConduitApp {
         .ghost()
         .debug_selector(move || format!("tool-group-header-{session_id}-{start}"))
         .w_full()
-        .h(px(28.))
-        .px(px(0.))
+        .h(px(ACTIVITY_ROW_HEIGHT))
+        .px(px(ACTIVITY_ROW_INSET))
         .rounded(px(6.))
         .cursor_pointer()
         .focus_ring(true)
@@ -832,11 +840,10 @@ impl ConduitApp {
             h_flex()
                 .w_full()
                 .items_center()
-                .gap_2()
+                .gap(px(ACTIVITY_LABEL_GAP))
                 .child(
                     h_flex()
-                        .w(px(18.))
-                        .h(px(18.))
+                        .size(px(ACTIVITY_MARKER_SLOT_SIZE))
                         .flex_shrink_0()
                         .items_center()
                         .justify_center()
@@ -880,18 +887,24 @@ impl ConduitApp {
             .get(&(session_id, group_key.clone()))
             .copied()
             .filter(|(_, started)| started.elapsed() < Duration::from_millis(140));
-        let row = div().w_full().px_6().pb_3().child(
-            div()
-                .id(SharedString::from(format!(
-                    "tool-group-row-{session_id}-{start}"
-                )))
-                .w_full()
-                .min_w_0()
-                .when(!self.store.ui.full_width_content, |row| {
-                    row.max_w(px(840.)).mx_auto()
-                })
-                .child(self.tool_group_header(session_id, start, end, group_key, false, cx)),
-        );
+        let row = div()
+            .w_full()
+            .px(px(CHAT_CONTENT_GUTTER))
+            .pb(px(CHAT_BLOCK_GAP))
+            .child(
+                div()
+                    .id(SharedString::from(format!(
+                        "tool-group-row-{session_id}-{start}"
+                    )))
+                    .w_full()
+                    .min_w_0()
+                    .when(!self.store.ui.full_width_content, |row| {
+                        row.max_w(px(CHAT_CONTENT_MAX_WIDTH)).mx_auto()
+                    })
+                    .border(px(MESSAGE_CARD_BORDER))
+                    .border_color(transparent_black())
+                    .child(self.tool_group_header(session_id, start, end, group_key, false, cx)),
+            );
         if let Some((generation, _)) = motion_generation {
             row.with_animation(
                 SharedString::from(format!(
@@ -950,7 +963,7 @@ impl ConduitApp {
         .debug_selector(move || format!("activity-{session_id}-{index}"))
         .w_full()
         .h(px(32.))
-        .px_3()
+        .px(px(ACTIVITY_ROW_INSET))
         .focus_ring(has_body)
         .when(has_body, |button| button.cursor_pointer())
         .accessibility_label(if has_body {
@@ -983,11 +996,18 @@ impl ConduitApp {
                 .w_full()
                 .min_w_0()
                 .items_center()
-                .gap_2()
+                .gap(px(ACTIVITY_LABEL_GAP))
                 .child(
-                    Icon::new(FullIconName::Lightbulb)
-                        .size(px(15.))
-                        .text_color(rgb(palette().highlight_text)),
+                    h_flex()
+                        .size(px(ACTIVITY_MARKER_SLOT_SIZE))
+                        .flex_shrink_0()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            Icon::new(FullIconName::Lightbulb)
+                                .size(px(15.))
+                                .text_color(rgb(palette().highlight_text)),
+                        ),
                 )
                 .child(
                     div()
@@ -1055,13 +1075,6 @@ impl ConduitApp {
             .debug_selector(move || format!("reasoning-quote-{session_id}-{index}"))
             .w_full()
             .min_w_0()
-            .when(has_body, |content| {
-                content
-                    .border_l_2()
-                    .border_color(rgb(palette().border))
-                    .rounded(px(6.))
-                    .bg(rgb(palette().surface))
-            })
             .child(self.reasoning_header(session_id, index, item, provider, cx));
         if expanded && has_body {
             content = content.child(
@@ -1070,6 +1083,10 @@ impl ConduitApp {
                     .w_full()
                     .min_w_0()
                     .flex_shrink_0()
+                    .border_l_2()
+                    .border_color(rgb(palette().border))
+                    .rounded(px(6.))
+                    .bg(rgb(palette().surface))
                     .px_3()
                     .pb_3()
                     .text_color(rgb(palette().muted))
@@ -1152,7 +1169,8 @@ impl ConduitApp {
                 .child(
                     h_flex()
                         .debug_selector(move || format!("activity-marker-{session_id}-{index}"))
-                        .size(px(ACTIVITY_MARKER_SIZE))
+                        .w(px(ACTIVITY_MARKER_SLOT_SIZE))
+                        .h(px(ACTIVITY_MARKER_SIZE))
                         .flex_shrink_0()
                         .items_center()
                         .justify_center()
@@ -1468,8 +1486,8 @@ impl ConduitApp {
                             .min_w_0()
                             .gap_2()
                             .rounded(px(8.))
-                            .px_4()
-                            .py_3()
+                            .px(px(CHAT_CARD_INSET_X))
+                            .py(px(CHAT_CARD_INSET_Y))
                             // A restrained prompt surface distinguishes the user
                             // without turning each turn into a separate card.
                             .bg(rgb(palette().surface_hover))
@@ -1748,7 +1766,7 @@ impl ConduitApp {
                                 .w_full()
                                 .min_w_0()
                                 .pl(px(ACTIVITY_ROW_INSET
-                                    + ACTIVITY_MARKER_SIZE
+                                    + ACTIVITY_MARKER_SLOT_SIZE
                                     + ACTIVITY_LABEL_GAP))
                                 .child(panel),
                         )
@@ -2196,7 +2214,7 @@ impl ConduitApp {
         let row = div()
             .debug_selector(move || format!("message-row-{index}"))
             .w_full()
-            .px_6()
+            .px(px(CHAT_CONTENT_GUTTER))
             .when(compact_activity, |row| {
                 row.pb(if tool_group.is_some_and(|(_, end)| index + 1 < end) {
                     px(0.)
@@ -2204,7 +2222,7 @@ impl ConduitApp {
                     px(10.)
                 })
             })
-            .when(!compact_activity, |row| row.pb_3())
+            .when(!compact_activity, |row| row.pb(px(CHAT_BLOCK_GAP)))
             .child(
                 div()
                     .id(SharedString::from(format!(
@@ -2214,7 +2232,7 @@ impl ConduitApp {
                     .w_full()
                     .min_w_0()
                     .when(!self.store.ui.full_width_content, |card| {
-                        card.max_w(px(840.)).mx_auto()
+                        card.max_w(px(CHAT_CONTENT_MAX_WIDTH)).mx_auto()
                     })
                     .rounded(px(12.))
                     .border(px(MESSAGE_CARD_BORDER))
