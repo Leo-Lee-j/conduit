@@ -198,6 +198,17 @@ impl ConduitApp {
             |app| app.store.updates.auto_install,
             |app, value| app.store.updates.auto_install = value,
         );
+        let update_view = view.clone();
+        let update_details = SettingField::render(move |_, _, _| {
+            let view = update_view.clone();
+            Button::new("settings-view-update")
+                .label(conduit::i18n::text_static("update.view_update"))
+                .small()
+                .secondary()
+                .on_click(move |_, window, cx| {
+                    view.update(cx, |app, cx| app.open_about_dialog(window, cx));
+                })
+        });
         let performance_view = view.clone();
         let performance_read = performance_view.clone();
         let performance = SettingField::switch(
@@ -243,6 +254,12 @@ impl ConduitApp {
                 "settings.general.application_updates",
             ))
             .items(vec![
+                SettingItem::new(conduit::i18n::text_static("update.status"), update_details)
+                    .description(settings_description(format!(
+                        "{}\n{}",
+                        self.update_status(),
+                        self.last_update_check_text(),
+                    ))),
                 SettingItem::new(
                     conduit::i18n::text_static("settings.general.automatically_check_for_updates"),
                     auto_check,
@@ -250,7 +267,7 @@ impl ConduitApp {
                 .description(settings_description(conduit::i18n::text_static(
                     "settings.general.check_in_the_background_after_startup_and",
                 )))
-                .disabled(disabled),
+                .disabled(disabled || conduit::update::PUBLIC_KEY.is_empty()),
                 SettingItem::new(
                     conduit::i18n::text_static("settings.general.download_updates_in_background"),
                     auto_download,
@@ -258,7 +275,7 @@ impl ConduitApp {
                 .description(settings_description(conduit::i18n::text_static(
                     "settings.general.download_and_verify_new_versions_when_found",
                 )))
-                .disabled(disabled),
+                .disabled(disabled || conduit::update::PUBLIC_KEY.is_empty()),
                 SettingItem::new(
                     conduit::i18n::text_static("settings.general.install_and_restart_when_idle"),
                     auto_install,
@@ -266,7 +283,7 @@ impl ConduitApp {
                 .description(settings_description(conduit::i18n::text_static(
                     "settings.general.save_drafts_after_tasks_finish_install_the",
                 )))
-                .disabled(disabled),
+                .disabled(disabled || conduit::update::PUBLIC_KEY.is_empty()),
             ]),
             settings_section(conduit::i18n::text_static("settings.general.diagnostics")).item(
                 SettingItem::new(

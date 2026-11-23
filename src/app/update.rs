@@ -1,5 +1,7 @@
 use super::*;
-use conduit::update::{self as service, Event as UpdateEvent, Release, Task, install};
+use conduit::update::{
+    self as service, CheckResult, Event as UpdateEvent, LastCheck, Release, Task, install,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc;
 
@@ -30,6 +32,15 @@ pub(super) enum Phase {
     Failed,
 }
 
+#[derive(Clone, Copy, Default, PartialEq)]
+enum CheckOrigin {
+    #[default]
+    Automatic,
+    Manual,
+}
+
+const AUTO_RESTART_DELAY: Duration = Duration::from_secs(30);
+
 pub(super) struct UpdateUi {
     pub(super) phase: Phase,
     task: Option<Task>,
@@ -39,6 +50,13 @@ pub(super) struct UpdateUi {
     next_check: Instant,
     pub(super) install_requested: bool,
     snoozed: bool,
+    check_origin: CheckOrigin,
+    attempt: u128,
+    check_attempt: u128,
+    failed_check: bool,
+    repeated_check_failure: bool,
+    download_percent: Option<u64>,
+    restart_deadline: Option<Instant>,
     preparation: Option<mpsc::Receiver<Result<install::Pending, String>>>,
     pending: Option<install::Pending>,
     pub(super) exiting: bool,
@@ -55,6 +73,13 @@ impl Default for UpdateUi {
             next_check: Instant::now() + Duration::from_secs(30),
             install_requested: false,
             snoozed: false,
+            check_origin: CheckOrigin::Automatic,
+            attempt: 0,
+            check_attempt: 0,
+            failed_check: false,
+            repeated_check_failure: false,
+            download_percent: None,
+            restart_deadline: None,
             preparation: None,
             pending: None,
             exiting: false,
@@ -68,10 +93,23 @@ impl UpdateUi {
     }
 
     fn fail(&mut self, error: String) {
+        self.failed_check = self.phase == Phase::Checking;
         self.phase = Phase::Failed;
         self.status = error;
         self.install_requested = false;
         self.task = None;
+        self.restart_deadline = None;
+    }
+
+    fn start_attempt(&mut self) {
+        self.attempt = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+            .max(self.attempt.saturating_add(1));
+        self.failed_check = false;
+        self.repeated_check_failure = false;
+        self.restart_deadline = None;
     }
 }
 
@@ -129,23 +167,34 @@ impl ConduitApp {
             && self.persistence.error.is_none()
     }
 
-    fn check_update(&mut self, cx: &mut Context<Self>) {
+    fn check_update(&mut self, origin: CheckOrigin, cx: &mut Context<Self>) {
         if self.closing
             || matches!(
                 self.updater.phase,
-                Phase::Checking | Phase::Downloading | Phase::Preparing
+                Phase::Checking | Phase::Downloading | Phase::Preparing | Phase::Ready
             )
         {
             return;
         }
         self.updater.next_check = Instant::now() + Duration::from_secs(6 * 3600);
+        self.updater.start_attempt();
+        self.updater.check_attempt = self.updater.attempt;
+        self.updater.check_origin = origin;
         self.updater.phase = Phase::Checking;
         self.updater.status = conduit::i18n::text_static("update.checking_for_updates").into();
         self.updater.release = None;
         self.updater.package = None;
         self.updater.install_requested = false;
         self.updater.snoozed = false;
-        self.updater.task = Some(service::check());
+        self.updater.download_percent = None;
+        if service::PUBLIC_KEY.is_empty() {
+            self.handle_update_event(
+                UpdateEvent::Failed(conduit::i18n::text_static("update.unsupported_build").into()),
+                cx,
+            );
+        } else {
+            self.updater.task = Some(service::check());
+        }
         cx.notify();
     }
 
@@ -154,13 +203,16 @@ impl ConduitApp {
             return;
         }
         if let Some(release) = self.updater.release.clone() {
+            self.updater.start_attempt();
+            self.updater.download_percent = None;
+            let version = release.manifest.version.clone();
             self.updater.task = Some(service::download(
                 release,
                 Store::path().with_file_name("updates"),
             ));
             self.updater.phase = Phase::Downloading;
             self.updater.status =
-                conduit::i18n::text_static("update.downloading_in_background").into();
+                conduit::i18n::format("update.new_version_downloading", &[("version", version)]);
             cx.notify();
         }
     }
@@ -179,7 +231,7 @@ impl ConduitApp {
                 Phase::Checking | Phase::Downloading | Phase::Preparing | Phase::Ready
             )
         {
-            self.check_update(cx);
+            self.check_update(CheckOrigin::Automatic, cx);
         }
 
         let events: Vec<_> = self
@@ -189,88 +241,12 @@ impl ConduitApp {
             .map(|t| t.events.try_iter().collect())
             .unwrap_or_default();
         for event in events {
-            match event {
-                UpdateEvent::Checked(release) => {
-                    self.updater.task = None;
-                    self.updater.release = release;
-                    if let Some(release) = &self.updater.release {
-                        self.updater.status = conduit::i18n::format(
-                            "update.new_version_available",
-                            &[("arg0", release.manifest.version.to_string())],
-                        );
-                        self.updater.phase = Phase::Available;
-                        if self.store.updates.auto_download
-                            && self.store.updates.skipped_version.as_deref()
-                                != Some(&release.manifest.version)
-                        {
-                            self.download_update(cx);
-                        }
-                    } else {
-                        self.updater.phase = Phase::Idle;
-                        self.updater.status = conduit::i18n::text_static(
-                            "update.you_have_the_latest_available_version",
-                        )
-                        .into();
-                    }
-                }
-                UpdateEvent::Progress { downloaded, total } => {
-                    self.updater.status = conduit::i18n::format(
-                        "update.downloading_mib",
-                        &[
-                            (
-                                "arg0",
-                                format!("{:.0}", downloaded as f64 / total as f64 * 100.),
-                            ),
-                            ("arg1", format!("{:.1}", downloaded as f64 / 1048576.)),
-                            ("arg2", format!("{:.1}", total as f64 / 1048576.)),
-                        ],
-                    );
-                }
-                UpdateEvent::Downloaded(path) => {
-                    self.updater.package = Some(path);
-                    self.updater.task = None;
-                    self.updater.phase = Phase::Ready;
-                    self.updater.status = conduit::i18n::text_static(
-                        "update.download_and_signature_verification_complete_ready_to",
-                    )
-                    .into();
-                }
-                UpdateEvent::Cancelled => {
-                    self.updater.task = None;
-                    self.updater.phase = Phase::Available;
-                    self.updater.status = conduit::i18n::text_static(
-                        "update.download_cancelled_you_can_download_again",
-                    )
-                    .into();
-                }
-                UpdateEvent::Failed(error) => self.updater.fail(error),
+            if self.handle_update_event(event, cx) {
+                self.download_update(cx);
             }
-            cx.notify();
         }
 
-        if !self.closing
-            && self.updater.phase == Phase::Ready
-            && (self.updater.install_requested
-                || (self.store.updates.auto_install && !self.updater.snoozed))
-        {
-            if self.update_idle() {
-                self.begin_update_install(window, cx);
-            } else {
-                let waiting = if self.terminals.active() {
-                    conduit::i18n::text_static(
-                        "update.waiting_for_terminals_to_exit_before_installing",
-                    )
-                } else {
-                    conduit::i18n::text_static(
-                        "update.waiting_for_background_tasks_before_installing_you",
-                    )
-                };
-                if self.updater.status != waiting {
-                    self.updater.status = waiting.into();
-                    cx.notify();
-                }
-            }
-        }
+        self.poll_update_install(window, cx);
 
         if let Some(result) = self
             .updater
@@ -305,6 +281,7 @@ impl ConduitApp {
                         self.updater.pending = None;
                         self.closing = false;
                         self.updater.phase = Phase::Ready;
+                        self.updater.restart_deadline = None;
                         self.updater.status = conduit::i18n::text_static(
                             "update.new_background_tasks_detected_installation_will_start",
                         )
@@ -342,6 +319,176 @@ impl ConduitApp {
                     cx.notify();
                 }
             }
+        }
+    }
+
+    fn record_update_check(&mut self, result: CheckResult) {
+        self.updater.repeated_check_failure = matches!(result, CheckResult::Failed { .. })
+            && self
+                .store
+                .updates
+                .last_check
+                .as_ref()
+                .is_some_and(|check| matches!(check.result, CheckResult::Failed { .. }));
+        self.store.updates.last_check = Some(LastCheck {
+            checked_at: chrono::Utc::now().timestamp(),
+            result,
+        });
+        if self.writable {
+            self.persist();
+        }
+    }
+
+    fn update_version_skipped(&self) -> bool {
+        self.updater.release.as_ref().is_some_and(|release| {
+            self.store.updates.skipped_version.as_deref() == Some(&release.manifest.version)
+        })
+    }
+
+    /// Apply and announce a result before the caller starts any automatic download.
+    fn handle_update_event(&mut self, event: UpdateEvent, cx: &mut Context<Self>) -> bool {
+        let mut download = false;
+        match event {
+            UpdateEvent::Checked(release) => {
+                self.updater.task = None;
+                self.updater.release = release;
+                if let Some(release) = &self.updater.release {
+                    let version = release.manifest.version.clone();
+                    self.record_update_check(CheckResult::Available {
+                        version: version.clone(),
+                    });
+                    self.updater.status =
+                        conduit::i18n::format("update.new_version_available", &[("arg0", version)]);
+                    self.updater.phase = Phase::Available;
+                    download = self.store.updates.auto_download && !self.update_version_skipped();
+                } else {
+                    self.record_update_check(CheckResult::Current);
+                    self.updater.phase = Phase::Idle;
+                    self.updater.status =
+                        conduit::i18n::text_static("update.you_have_the_latest_available_version")
+                            .into();
+                    if self.updater.check_origin == CheckOrigin::Manual {
+                        self.notify_user(
+                            Notice::new(
+                                NoticeSource::Update,
+                                NoticeLevel::Success,
+                                conduit::i18n::text_static("settings.cli.check_for_updates"),
+                                self.updater.status.clone(),
+                            )
+                            .target(NoticeTarget::Updates)
+                            .key("update/check", format!("current/{}", self.updater.attempt)),
+                            cx,
+                        );
+                    }
+                }
+            }
+            UpdateEvent::Progress { downloaded, total } => {
+                self.updater.download_percent = (total > 0)
+                    .then(|| ((downloaded as f64 / total as f64 * 100.) as u64).min(100));
+                self.updater.status = conduit::i18n::format(
+                    "update.downloading_mib",
+                    &[
+                        (
+                            "arg0",
+                            self.updater.download_percent.unwrap_or(0).to_string(),
+                        ),
+                        ("arg1", format!("{:.1}", downloaded as f64 / 1048576.)),
+                        ("arg2", format!("{:.1}", total as f64 / 1048576.)),
+                    ],
+                );
+            }
+            UpdateEvent::Downloaded(path) => {
+                self.updater.package = Some(path);
+                self.updater.task = None;
+                self.updater.phase = Phase::Ready;
+                self.updater.download_percent = Some(100);
+                self.updater.status = conduit::i18n::text_static(
+                    "update.download_and_signature_verification_complete_ready_to",
+                )
+                .into();
+            }
+            UpdateEvent::Cancelled => {
+                self.updater.task = None;
+                self.updater.phase = Phase::Available;
+                self.updater.download_percent = None;
+                self.updater.status =
+                    conduit::i18n::text_static("update.download_cancelled_you_can_download_again")
+                        .into();
+            }
+            UpdateEvent::Failed(error) => {
+                if self.updater.phase == Phase::Checking {
+                    self.record_update_check(CheckResult::Failed {
+                        message: error.clone(),
+                    });
+                }
+                self.updater.fail(error);
+            }
+        }
+        self.publish_update_notification(cx);
+        cx.notify();
+        download
+    }
+
+    fn poll_update_install(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing || self.updater.phase != Phase::Ready {
+            return;
+        }
+        if !self.updater.install_requested
+            && (!self.store.updates.auto_install || self.updater.snoozed)
+        {
+            if self.updater.restart_deadline.take().is_some() {
+                self.updater.status =
+                    conduit::i18n::text_static("update.update_ready_you_can_install_it_later")
+                        .into();
+                cx.notify();
+            }
+            return;
+        }
+        if !self.update_idle() {
+            self.updater.restart_deadline = None;
+            let waiting = if self.terminals.active() {
+                conduit::i18n::text_static("update.waiting_for_terminals_to_exit_before_installing")
+            } else {
+                conduit::i18n::text_static(
+                    "update.waiting_for_background_tasks_before_installing_you",
+                )
+            };
+            if self.updater.status != waiting {
+                self.updater.status = waiting.into();
+                cx.notify();
+            }
+            return;
+        }
+        if self.updater.install_requested {
+            self.begin_update_install(window, cx);
+            return;
+        }
+        if self.startup.is_some() || !window.is_window_active() {
+            self.updater.restart_deadline = None;
+            let waiting = conduit::i18n::text_static("update.restart_waiting_for_window");
+            if self.updater.status != waiting {
+                self.updater.status = waiting.into();
+                cx.notify();
+            }
+            return;
+        }
+        let now = Instant::now();
+        let deadline = *self
+            .updater
+            .restart_deadline
+            .get_or_insert(now + AUTO_RESTART_DELAY);
+        if now >= deadline {
+            self.begin_update_install(window, cx);
+            return;
+        }
+        let seconds = deadline.duration_since(now).as_millis().div_ceil(1000);
+        let status = conduit::i18n::format(
+            "update.restart_countdown",
+            &[("seconds", seconds.to_string())],
+        );
+        if self.updater.status != status {
+            self.updater.status = status;
+            cx.notify();
         }
     }
 
@@ -580,10 +727,14 @@ impl ConduitApp {
             self.updater.phase,
             Phase::Checking | Phase::Downloading | Phase::Preparing
         );
-        let mut content = v_flex().gap_3().child(
+        let mut content = v_flex()
+            .gap_3()
+            .child(div().text_sm().child(self.update_status()));
+        content = content.child(
             div()
                 .text_sm()
-                .child(conduit::i18n::retained(&self.updater.status).to_string()),
+                .text_color(rgb(palette().muted))
+                .child(self.last_update_check_text()),
         );
         if let Some(release) = &self.updater.release {
             content = content
@@ -615,7 +766,13 @@ impl ConduitApp {
             .justify_end()
             .child(
                 Button::new("update-history")
-                    .label(conduit::i18n::text_static("update.previous_releases"))
+                    .label(conduit::i18n::text_static(
+                        if service::PUBLIC_KEY.is_empty() {
+                            "update.open_releases"
+                        } else {
+                            "update.previous_releases"
+                        },
+                    ))
                     .small()
                     .ghost()
                     .on_click(|_, _, cx| {
@@ -627,9 +784,13 @@ impl ConduitApp {
                     .label(conduit::i18n::text_static("settings.cli.check_for_updates"))
                     .small()
                     .secondary()
-                    .disabled(busy || self.closing)
+                    .disabled(
+                        busy || self.closing
+                            || self.updater.phase == Phase::Ready
+                            || service::PUBLIC_KEY.is_empty(),
+                    )
                     .on_click(move |_, _, cx| {
-                        action_view.update(cx, |app, cx| app.check_update(cx))
+                        action_view.update(cx, |app, cx| app.check_update(CheckOrigin::Manual, cx))
                     }),
             );
         if self.updater.phase == Phase::Downloading {
@@ -705,8 +866,7 @@ impl ConduitApp {
                         .disabled(self.closing || !self.writable)
                         .on_click(move |_, _, cx| {
                             install_view.update(cx, |app, cx| {
-                                app.updater.install_requested = true;
-                                cx.notify();
+                                app.request_update_install(cx);
                             })
                         }),
                 )
@@ -717,13 +877,7 @@ impl ConduitApp {
                         .secondary()
                         .on_click(move |_, _, cx| {
                             later_view.update(cx, |app, cx| {
-                                app.updater.install_requested = false;
-                                app.updater.snoozed = true;
-                                app.updater.status = conduit::i18n::text_static(
-                                    "update.update_ready_you_can_install_it_later",
-                                )
-                                .into();
-                                cx.notify();
+                                app.snooze_update(cx);
                             })
                         }),
                 );
@@ -735,19 +889,10 @@ impl ConduitApp {
                     .label(conduit::i18n::text_static("update.skip_this_version"))
                     .small()
                     .secondary()
+                    .disabled(self.closing || !self.writable)
                     .on_click(move |_, _, cx| {
                         view.update(cx, |app, cx| {
-                            app.store.updates.skipped_version = app
-                                .updater
-                                .release
-                                .as_ref()
-                                .map(|r| r.manifest.version.clone());
-                            app.updater.status = conduit::i18n::text_static(
-                                "update.version_skipped_manual_download_remains_available",
-                            )
-                            .into();
-                            app.persist();
-                            cx.notify();
+                            app.skip_update(cx);
                         })
                     }),
             );
@@ -763,6 +908,12 @@ impl ConduitApp {
             .map(|release| release.manifest.version.to_string())
             .unwrap_or_default();
         let (phase, level, title) = match self.updater.phase {
+            Phase::Available
+                if self.update_version_skipped()
+                    && self.updater.check_origin == CheckOrigin::Automatic =>
+            {
+                return;
+            }
             Phase::Available => (
                 "available",
                 NoticeLevel::Info,
@@ -775,29 +926,28 @@ impl ConduitApp {
             ),
             Phase::Failed => (
                 "failed",
-                NoticeLevel::Error,
+                if self.updater.failed_check && self.updater.check_origin == CheckOrigin::Automatic
+                {
+                    NoticeLevel::Warning
+                } else {
+                    NoticeLevel::Error
+                },
                 conduit::i18n::text_static("update.application_update_failed"),
             ),
-            Phase::Checking | Phase::Downloading => {
-                self.notifications.update_state = None;
-                return;
-            }
             _ => return,
         };
-        let state = format!("{version}/{phase}/{}", self.updater.status);
+        let event = match self.updater.phase {
+            Phase::Available if self.updater.check_origin == CheckOrigin::Manual => {
+                format!("available/{}", self.updater.check_attempt)
+            }
+            Phase::Failed => format!("failed/{}", self.updater.attempt),
+            _ => phase.into(),
+        };
+        let state = format!("{version}/{event}");
         if self.notifications.update_state.as_ref() == Some(&state) {
             return;
         }
         self.notifications.update_state = Some(state);
-        let event = if self.updater.phase == Phase::Available {
-            "available".into()
-        } else {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-                .to_string()
-        };
         let mut notice = Notice::new(
             NoticeSource::Update,
             level,
@@ -807,15 +957,166 @@ impl ConduitApp {
         .target(NoticeTarget::Updates)
         .key(format!("update/{version}"), event);
         if self.updater.phase == Phase::Available {
-            notice = notice.localized_message(conduit::i18n::Message::new(
-                "update.new_version_available",
-                &[("arg0", version.to_string())],
-            ));
+            let message = if self.store.updates.auto_download && !self.update_version_skipped() {
+                conduit::i18n::Message::new(
+                    "update.new_version_downloading",
+                    &[("version", version)],
+                )
+            } else {
+                conduit::i18n::Message::new("update.new_version_available", &[("arg0", version)])
+            };
+            notice = notice.localized_message(message);
+        }
+        if self.updater.phase == Phase::Failed
+            && self.updater.failed_check
+            && self.updater.repeated_check_failure
+            && self.updater.check_origin == CheckOrigin::Automatic
+        {
+            notice = notice.presentation(crate::notifications::Presentation::History);
         }
         self.notify_user(notice, cx);
     }
 
+    fn request_update_install(&mut self, cx: &mut Context<Self>) {
+        if self.closing || !self.writable || self.updater.phase != Phase::Ready {
+            return;
+        }
+        self.updater.install_requested = true;
+        self.updater.snoozed = false;
+        self.updater.restart_deadline = None;
+        cx.notify();
+    }
+
+    fn snooze_update(&mut self, cx: &mut Context<Self>) {
+        if self.closing || self.updater.phase != Phase::Ready {
+            return;
+        }
+        self.updater.install_requested = false;
+        self.updater.snoozed = true;
+        self.updater.restart_deadline = None;
+        self.updater.status =
+            conduit::i18n::text_static("update.update_ready_you_can_install_it_later").into();
+        cx.notify();
+    }
+
+    fn skip_update(&mut self, cx: &mut Context<Self>) {
+        if self.closing || !self.writable || self.updater.phase != Phase::Available {
+            return;
+        }
+        if let Some(release) = &self.updater.release {
+            let version = release.manifest.version.clone();
+            self.store.updates.skipped_version = Some(version.clone());
+            // Dismiss pending reminders as well as the persistent update strip.
+            let key = format!("update/{version}");
+            let ids: Vec<_> = self
+                .notifications
+                .center
+                .records()
+                .iter()
+                .filter(|record| record.key.as_deref() == Some(key.as_str()))
+                .map(|record| record.id)
+                .collect();
+            for id in ids {
+                self.notifications.center.mark_read(id, unix_now());
+            }
+            self.refresh_notifications(cx);
+        }
+        self.updater.check_origin = CheckOrigin::Automatic;
+        self.updater.status =
+            conduit::i18n::text_static("update.version_skipped_manual_download_remains_available")
+                .into();
+        self.persist();
+        cx.notify();
+    }
+
+    pub(super) fn update_status(&self) -> String {
+        if service::PUBLIC_KEY.is_empty() && self.updater.phase == Phase::Idle {
+            conduit::i18n::text_static("update.unsupported_build").into()
+        } else {
+            conduit::i18n::retained(&self.updater.status).to_string()
+        }
+    }
+
+    pub(super) fn last_update_check_text(&self) -> String {
+        let Some(check) = &self.store.updates.last_check else {
+            return conduit::i18n::text_static("update.not_checked_yet").into();
+        };
+        let time = chrono::DateTime::from_timestamp(check.checked_at, 0)
+            .map(|value| {
+                value
+                    .with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string()
+            })
+            .unwrap_or_else(|| conduit::i18n::text_static("update.unknown_time").into());
+        let result = match &check.result {
+            CheckResult::Current => {
+                conduit::i18n::text_static("update.you_have_the_latest_available_version").into()
+            }
+            CheckResult::Available { version } => {
+                conduit::i18n::format("update.new_version_available", &[("arg0", version.clone())])
+            }
+            CheckResult::Failed { message } => conduit::i18n::format(
+                "update.check_failed_reason",
+                &[("error", conduit::i18n::retained(message).to_string())],
+            ),
+        };
+        conduit::i18n::format("update.last_check", &[("time", time), ("result", result)])
+    }
+
+    fn update_indicator_label(&self) -> String {
+        let key = match self.updater.phase {
+            Phase::Checking => "update.indicator_checking",
+            Phase::Available
+                if !self.update_version_skipped()
+                    || self.updater.check_origin == CheckOrigin::Manual =>
+            {
+                "update.indicator_available"
+            }
+            Phase::Downloading => {
+                return conduit::i18n::format(
+                    "update.indicator_downloading",
+                    &[(
+                        "percent",
+                        self.updater.download_percent.unwrap_or(0).to_string(),
+                    )],
+                );
+            }
+            Phase::Ready => "update.indicator_ready",
+            Phase::Preparing => "update.indicator_installing",
+            Phase::Failed => "update.indicator_failed",
+            _ => "update.indicator_idle",
+        };
+        conduit::i18n::text_static(key).into()
+    }
+
+    pub(super) fn update_indicator(&self, cx: &mut Context<Self>) -> AnyElement {
+        let label = self.update_indicator_label();
+        Button::new("title-update")
+            .debug_selector(|| "title-update".into())
+            .accessibility_label(label.clone())
+            .label(label)
+            .small()
+            .ghost()
+            .h(px(28.))
+            .flex_shrink_0()
+            .tooltip(format!(
+                "{}\n{}",
+                self.update_status(),
+                self.last_update_check_text()
+            ))
+            .on_click(cx.listener(|app, _, window, cx| app.open_about_dialog(window, cx)))
+            .into_any_element()
+    }
+
     pub(super) fn update_notice(&self, cx: &mut Context<Self>) -> AnyElement {
+        if (self.updater.phase == Phase::Available
+            && self.update_version_skipped()
+            && self.updater.check_origin == CheckOrigin::Automatic)
+            || (self.updater.phase == Phase::Ready && self.updater.snoozed)
+        {
+            return div().into_any_element();
+        }
         if !(matches!(
             self.updater.phase,
             Phase::Available | Phase::Downloading | Phase::Ready | Phase::Preparing
@@ -824,6 +1125,10 @@ impl ConduitApp {
             return div().into_any_element();
         }
         h_flex()
+            .id("update-notice")
+            .debug_selector(|| "update-notice".into())
+            .flex_shrink_0()
+            .flex_wrap()
             .px_3()
             .py_1()
             .gap_2()
@@ -833,9 +1138,30 @@ impl ConduitApp {
             .border_color(rgb(palette().border))
             .child(
                 div()
+                    .min_w_0()
+                    .flex_1()
                     .text_size(ui_text_size(12.))
                     .child(conduit::i18n::retained(&self.updater.status).to_string()),
             )
+            .when(self.updater.phase == Phase::Ready, |bar| {
+                bar.child(
+                    Button::new("update-notice-install")
+                        .debug_selector(|| "update-notice-install".into())
+                        .label(conduit::i18n::text_static("update.install_and_restart"))
+                        .small()
+                        .disabled(self.closing || !self.writable)
+                        .on_click(cx.listener(|app, _, _, cx| app.request_update_install(cx))),
+                )
+                .child(
+                    Button::new("update-notice-later")
+                        .debug_selector(|| "update-notice-later".into())
+                        .label(conduit::i18n::text_static("update.later"))
+                        .small()
+                        .ghost()
+                        .disabled(self.closing)
+                        .on_click(cx.listener(|app, _, _, cx| app.snooze_update(cx))),
+                )
+            })
             .child(
                 Button::new("show-update")
                     .label(conduit::i18n::text_static("update.view_update"))
@@ -849,6 +1175,7 @@ impl ConduitApp {
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests {
+    use super::{CheckOrigin, CheckResult, Instant, UpdateEvent};
     use super::{
         ComposerFiles, ComposerTarget, ConduitApp, Duration, HashMap, PathBuf, Phase, Recovery,
         Store, Workspace, file_ref, install,
@@ -856,6 +1183,286 @@ mod tests {
     use conduit::update::{Release, manifest::Manifest};
     use gpui_kit::component::WindowExt;
     use gpui_kit::{AppContext as _, TestAppContext, px, size};
+
+    fn release(version: &str) -> Release {
+        Release {
+            manifest: Manifest {
+                schema: 1,
+                version: version.into(),
+                target: "x86_64-pc-windows-msvc".into(),
+                filename: format!("Conduit-{version}-windows-x64-setup.exe"),
+                url: format!(
+                    "https://github.com/Leo-Lee-j/conduit/releases/download/v{version}/Conduit-{version}-windows-x64-setup.exe"
+                ),
+                size: 100,
+                sha256: "0".repeat(64),
+                published_at: "2026-11-23".into(),
+                notes: "Update test".into(),
+                min_updater_version: 1,
+            },
+            raw: vec![],
+            signature: String::new(),
+        }
+    }
+
+    #[gpui_kit::test]
+    fn automatic_download_announces_discovery_and_fast_completion_reuses_one_toast(
+        cx: &mut TestAppContext,
+    ) {
+        let _locale = crate::test_support::chinese();
+        let (app, cx, root) = crate::app::queue::tests::fixture(cx, "update-events");
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.store.ui.system_notifications = false;
+                assert!(app.store.updates.auto_download);
+                assert!(app.handle_update_event(UpdateEvent::Checked(Some(release("1.0.0"))), cx));
+                // Discovery is recorded before the caller can start the download worker.
+                let notice = &app.notifications.center.records()[0];
+                let id = notice.id;
+                assert!(notice.display_message().contains("正在后台下载"));
+                assert_eq!(app.notifications.center.records().len(), 1);
+                app.updater.phase = Phase::Downloading;
+                app.publish_update_notification(cx);
+                assert_eq!(app.notifications.center.records()[0].id, id);
+                app.handle_update_event(UpdateEvent::Downloaded(root.join("package.exe")), cx);
+                app.poll_notifications(window, cx);
+                assert_eq!(window.notifications(cx).len(), 1);
+                assert_eq!(app.notifications.center.records().len(), 1);
+                assert_eq!(app.notifications.center.records()[0].id, id);
+                assert_eq!(
+                    app.notifications.center.records()[0].display_title(),
+                    conduit::i18n::text_static("update.update_ready")
+                );
+                let revision = app.notifications.center.revision();
+                app.updater.status = "等待后台任务结束".into();
+                app.publish_update_notification(cx);
+                assert_eq!(app.notifications.center.revision(), revision);
+                // Checking again must not discard an already verified package.
+                app.check_update(CheckOrigin::Manual, cx);
+                assert_eq!(app.updater.phase, Phase::Ready);
+                assert!(app.updater.package.is_some());
+            });
+        });
+    }
+
+    #[gpui_kit::test]
+    fn manual_checks_always_report_latest_and_last_result_survives_reload(cx: &mut TestAppContext) {
+        let _locale = crate::test_support::chinese();
+        let (app, cx, _) = crate::app::queue::tests::fixture(cx, "update-last-check");
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.store.ui.system_notifications = false;
+                app.handle_update_event(UpdateEvent::Checked(None), cx);
+                app.poll_notifications(window, cx);
+                assert!(window.notifications(cx).is_empty());
+                assert!(app.notifications.center.records().is_empty());
+                app.updater.check_origin = CheckOrigin::Manual;
+            });
+        });
+        for _ in 0..2 {
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    app.updater.start_attempt();
+                    app.handle_update_event(UpdateEvent::Checked(None), cx);
+                    app.poll_notifications(window, cx);
+                    assert_eq!(window.notifications(cx).len(), 1);
+                    assert!(app.last_update_check_text().contains("上次检查"));
+                    app.notifications.center.mark_all_read(super::unix_now());
+                    app.poll_notifications(window, cx);
+                });
+            });
+            cx.executor().advance_clock(Duration::from_secs(1));
+            cx.run_until_parked();
+            cx.update(|window, cx| assert!(window.notifications(cx).is_empty()));
+        }
+        cx.update(|_, cx| {
+            app.update(cx, |app, _| {
+                assert_eq!(app.notifications.center.records().len(), 1);
+                app.persistence.flush();
+                let loaded = Store::load().unwrap();
+                let check = loaded.updates.last_check.unwrap();
+                assert!(check.checked_at > 0);
+                assert!(matches!(check.result, CheckResult::Current));
+                let legacy: conduit::update::Preferences = serde_json::from_str("{}").unwrap();
+                assert!(legacy.last_check.is_none());
+                assert!(legacy.auto_check && legacy.auto_download && !legacy.auto_install);
+            });
+        });
+    }
+
+    #[gpui_kit::test]
+    fn repeated_automatic_failures_stay_in_history_but_manual_retry_is_visible(
+        cx: &mut TestAppContext,
+    ) {
+        let _locale = crate::test_support::chinese();
+        let (app, cx, _) = crate::app::queue::tests::fixture(cx, "update-errors");
+        for (origin, visible, error) in [
+            (CheckOrigin::Automatic, true, "offline"),
+            (CheckOrigin::Automatic, false, "timeout"),
+            (CheckOrigin::Manual, true, "offline again"),
+        ] {
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    app.store.ui.system_notifications = false;
+                    app.updater.start_attempt();
+                    app.updater.check_origin = origin;
+                    app.updater.phase = Phase::Checking;
+                    app.handle_update_event(UpdateEvent::Failed(error.into()), cx);
+                    app.poll_notifications(window, cx);
+                    assert_eq!(!window.notifications(cx).is_empty(), visible);
+                    assert_eq!(app.notifications.center.records().len(), 1);
+                    assert_eq!(app.notifications.center.records()[0].message, error);
+                    app.notifications.center.mark_all_read(super::unix_now());
+                    app.poll_notifications(window, cx);
+                });
+            });
+            cx.executor().advance_clock(Duration::from_secs(1));
+            cx.run_until_parked();
+        }
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.updater.check_origin = CheckOrigin::Automatic;
+                app.handle_update_event(UpdateEvent::Checked(None), cx);
+                app.updater.start_attempt();
+                app.updater.phase = Phase::Checking;
+                app.handle_update_event(UpdateEvent::Failed("new outage".into()), cx);
+                app.poll_notifications(window, cx);
+                assert_eq!(window.notifications(cx).len(), 1);
+            });
+        });
+    }
+
+    #[gpui_kit::test]
+    fn skipped_versions_suppress_automatic_reminders_but_allow_manual_checks(
+        cx: &mut TestAppContext,
+    ) {
+        let _locale = crate::test_support::chinese();
+        let (app, cx, _) = crate::app::queue::tests::fixture(cx, "update-skip");
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.store.ui.system_notifications = false;
+                app.store.updates.auto_download = false;
+                app.handle_update_event(UpdateEvent::Checked(Some(release("1.0.0"))), cx);
+                app.skip_update(cx);
+                app.poll_notifications(window, cx);
+                assert!(window.notifications(cx).is_empty());
+                let revision = app.notifications.center.revision();
+                app.store.updates.auto_download = true;
+                assert!(!app.handle_update_event(UpdateEvent::Checked(Some(release("1.0.0"))), cx));
+                app.publish_update_notification(cx);
+                assert_eq!(app.notifications.center.revision(), revision);
+                assert_eq!(app.update_indicator_label(), "更新");
+                app.updater.check_origin = CheckOrigin::Manual;
+                app.updater.start_attempt();
+                app.updater.check_attempt = app.updater.attempt;
+                assert!(!app.handle_update_event(UpdateEvent::Checked(Some(release("1.0.0"))), cx));
+                app.poll_notifications(window, cx);
+                assert_eq!(window.notifications(cx).len(), 1);
+                app.updater.check_origin = CheckOrigin::Automatic;
+                assert!(app.handle_update_event(UpdateEvent::Checked(Some(release("1.1.0"))), cx));
+                assert_eq!(app.update_indicator_label(), "发现更新");
+            });
+        });
+    }
+
+    #[gpui_kit::test]
+    fn restart_countdown_resets_for_work_and_later_keeps_the_update_accessible(
+        cx: &mut TestAppContext,
+    ) {
+        let _locale = crate::test_support::chinese();
+        let (app, cx, _) = crate::app::queue::tests::fixture(cx, "update-countdown");
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.updater.release = Some(release("1.0.0"));
+                app.updater.phase = Phase::Ready;
+                app.store.updates.auto_install = true;
+                app.updater.restart_deadline = Some(Instant::now() - Duration::from_secs(1));
+                app.history_loading.insert(PathBuf::from("busy"));
+                app.poll_update_install(window, cx);
+                assert!(app.updater.restart_deadline.is_none());
+                assert!(!app.closing);
+                app.history_loading.clear();
+                app.snooze_update(cx);
+                app.poll_update_install(window, cx);
+                assert!(app.updater.snoozed);
+                assert!(app.updater.restart_deadline.is_none());
+                assert_eq!(app.updater.phase, Phase::Ready);
+                assert_eq!(app.update_indicator_label(), "更新已就绪");
+                assert!(!app.closing);
+                app.request_update_install(cx);
+                assert!(app.updater.install_requested);
+                assert!(!app.updater.snoozed);
+                // Do not launch an installer in the UI regression suite.
+                app.updater.install_requested = false;
+                app.store.updates.auto_install = false;
+            });
+        });
+        cx.simulate_resize(size(px(850.), px(500.)));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(cx.debug_bounds("title-update").is_some());
+        assert!(cx.debug_bounds("update-notice-later").is_some());
+    }
+
+    #[gpui_kit::test]
+    fn automatic_restart_gives_a_full_foreground_countdown_and_blur_cancels_it(
+        cx: &mut TestAppContext,
+    ) {
+        let _locale = crate::test_support::chinese();
+        let (app, cx, _) = crate::app::queue::tests::fixture(cx, "update-foreground");
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.updater.phase = Phase::Ready;
+                app.updater.release = Some(release("1.0.0"));
+                app.store.updates.auto_install = true;
+                app.persistence.flush();
+                assert!(app.update_idle());
+                assert!(window.is_window_active());
+                app.poll_update_install(window, cx);
+                let deadline = app.updater.restart_deadline.unwrap();
+                assert!(deadline > Instant::now() + Duration::from_secs(29));
+                assert!(app.updater.status.contains("30 秒"));
+                app.poll_update_install(window, cx);
+                assert_eq!(app.updater.restart_deadline, Some(deadline));
+                assert!(!app.closing);
+            });
+        });
+        cx.deactivate_window();
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.poll_update_install(window, cx);
+                assert!(app.updater.restart_deadline.is_none());
+                assert!(app.updater.status.contains("返回此窗口"));
+                assert!(!app.closing);
+            });
+            window.activate_window();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.poll_update_install(window, cx);
+                assert!(
+                    app.updater.restart_deadline.unwrap()
+                        > Instant::now() + Duration::from_secs(29)
+                );
+                app.snooze_update(cx);
+                app.poll_update_install(window, cx);
+                assert!(app.updater.restart_deadline.is_none());
+                assert_eq!(app.updater.phase, Phase::Ready);
+                assert!(!app.closing);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(cx.debug_bounds("title-update").is_some());
+        assert!(cx.debug_bounds("update-notice").is_none());
+    }
 
     #[test]
     fn release_time_uses_local_seconds_and_handles_legacy_dates() {

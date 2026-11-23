@@ -522,6 +522,7 @@ impl Render for ConduitApp {
                 .mr_1()
                 .flex_shrink_0()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(self.update_indicator(cx))
                 .child(
                     Button::new("title-theme-toggle")
                         .debug_selector(|| "title-theme-toggle".into())

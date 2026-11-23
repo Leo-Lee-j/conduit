@@ -32,6 +32,7 @@ pub struct Preferences {
     pub auto_install: bool,
     pub skipped_version: Option<String>,
     pub last_seen_version: String,
+    pub last_check: Option<LastCheck>,
 }
 
 impl Default for Preferences {
@@ -42,8 +43,23 @@ impl Default for Preferences {
             auto_install: false,
             skipped_version: None,
             last_seen_version: String::new(),
+            last_check: None,
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LastCheck {
+    pub checked_at: i64,
+    pub result: CheckResult,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CheckResult {
+    Current,
+    Available { version: String },
+    Failed { message: String },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
