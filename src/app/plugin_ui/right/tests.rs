@@ -179,6 +179,155 @@ fn session_data_opens_on_session_entry_and_respects_manual_changes(cx: &mut Test
 }
 
 #[gpui_kit::test]
+fn session_data_api_quality_tracks_live_replies_completion_and_session_switches(
+    cx: &mut TestAppContext,
+) {
+    use crate::app::{Event, queue::tests::running};
+    use crate::usage_ledger::{ApiRequestOutcome, Ledger};
+    use std::time::Instant;
+
+    let _locale = crate::test_support::chinese();
+    let (app, cx) = fixture(cx, store(), PluginUi::new());
+    cx.simulate_resize(gpui_kit::size(px(1100.), px(1600.)));
+    let sender = cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.store.ui.auto_rename = false;
+            let sender = running(app, 1);
+            app.session_control
+                .runs
+                .get_mut(&1)
+                .unwrap()
+                .api_request_started = Some(Instant::now());
+            cx.notify();
+            sender
+        })
+    });
+    draw(cx);
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-0")
+            .is_none()
+    );
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            sender
+                .send(Event::Delta {
+                    key: "reply".into(),
+                    text: "First response".into(),
+                })
+                .unwrap();
+            app.poll_streams(window, cx);
+            assert!(app.session_control.runs[&1].api_first_response_ms.is_some());
+            assert!(app.store.usage_ledger.observations.is_empty());
+        })
+    });
+    draw(cx);
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-0")
+            .is_some(),
+        "the first live reply must appear before the CLI finishes"
+    );
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-1")
+            .is_none()
+    );
+
+    cx.update(|window, cx| app.update(cx, |app, cx| app.switch(1, Some(2), window, cx)));
+    draw(cx);
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-0")
+            .is_none()
+    );
+    cx.update(|window, cx| app.update(cx, |app, cx| app.switch(0, Some(1), window, cx)));
+    draw(cx);
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-0")
+            .is_some()
+    );
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let response_ms = app.session_control.runs[&1].api_first_response_ms;
+            sender
+                .send(Event::Finished {
+                    error: None,
+                    cancelled: false,
+                })
+                .unwrap();
+            app.poll_streams(window, cx);
+            assert!(!app.session_control.runs.contains_key(&1));
+            let ledger: Ledger =
+                serde_json::from_str(&serde_json::to_string(&app.store.usage_ledger).unwrap())
+                    .unwrap();
+            assert_eq!(ledger.observations.len(), 1);
+            assert_eq!(ledger.observations[0].session, 1);
+            assert_eq!(ledger.observations[0].api_first_response_ms, response_ms);
+            assert_eq!(
+                ledger.observations[0].api_request_outcome,
+                Some(ApiRequestOutcome::Succeeded)
+            );
+            app.store.usage_ledger = ledger;
+            cx.notify();
+        })
+    });
+    draw(cx);
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-0")
+            .is_some()
+    );
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-1")
+            .is_none()
+    );
+
+    let cancelled_sender = cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let sender = running(app, 1);
+            app.session_control
+                .runs
+                .get_mut(&1)
+                .unwrap()
+                .api_request_started = Some(Instant::now());
+            sender
+                .send(Event::Delta {
+                    key: "next-reply".into(),
+                    text: "Next response".into(),
+                })
+                .unwrap();
+            app.poll_streams(window, cx);
+            sender
+        })
+    });
+    draw(cx);
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-1")
+            .is_some()
+    );
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.session_control.runs.get_mut(&1).unwrap().cancel();
+            cx.notify();
+            cancelled_sender
+                .send(Event::Finished {
+                    error: None,
+                    cancelled: true,
+                })
+                .unwrap();
+            app.poll_streams(window, cx);
+        })
+    });
+    draw(cx);
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-0")
+            .is_some()
+    );
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-1")
+            .is_none()
+    );
+}
+
+#[gpui_kit::test]
 fn session_data_preserves_agent_history_statuses_and_session_isolation(cx: &mut TestAppContext) {
     use crate::subagents::{Agent, Status};
     use gpui_kit::base::test_support::find;

@@ -3259,7 +3259,7 @@
   "session_data.api_quality_preparing": "准备中",
   "session_data.api_quality_waiting": "等待响应",
   "session_data.api_quality_responding": "已收到响应",
-  "session_data.api_quality_note": "展示最近五次已完成请求的质量，从左到右由旧到新。柱子越高、越绿表示质量越好，越矮、越红表示质量越差；灰色表示缺少延迟数据。根据首响应时间和请求结果估算。",
+  "session_data.api_quality_note": "展示最近五次请求的质量，从左到右由旧到新。当前请求收到首响应后即显示，结束后更新结果；取消的请求不计入。柱子越高、越绿表示质量越好，越矮、越红表示质量越差；灰色表示缺少延迟数据。根据首响应时间和请求结果估算。",
   "session_data.api_quality_first_response": "首响应：%{duration}",
   "session_data.metric_unknown": "暂无数据",
   "session_data.usage": "用量",

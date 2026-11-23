@@ -282,10 +282,11 @@ impl ApiQualityLevel {
 
 fn api_quality_samples<'a>(records: impl Iterator<Item = &'a Observation>) -> Vec<&'a Observation> {
     let mut samples = records
-        .filter(|record| {
-            record
-                .api_request_outcome
-                .is_some_and(|outcome| outcome != ApiRequestOutcome::Cancelled)
+        .filter(|record| match record.api_request_outcome {
+            Some(ApiRequestOutcome::Cancelled) => false,
+            Some(_) => true,
+            // Live responses already have a measured latency, but no final outcome yet.
+            None => record.api_first_response_ms.is_some(),
         })
         .collect::<Vec<_>>();
     samples.sort_by_key(|record| record.finished_at);
@@ -309,7 +310,6 @@ fn api_quality<'a>(records: impl Iterator<Item = &'a Observation>) -> ApiQuality
     }
     let mut latencies = recent
         .iter()
-        .filter(|record| record.api_request_outcome == Some(ApiRequestOutcome::Succeeded))
         .filter_map(|record| record.api_first_response_ms)
         .collect::<Vec<_>>();
     latencies.sort_unstable();
@@ -329,7 +329,7 @@ fn api_quality<'a>(records: impl Iterator<Item = &'a Observation>) -> ApiQuality
 fn api_quality_score(record: &Observation) -> Option<f32> {
     match record.api_request_outcome {
         Some(ApiRequestOutcome::Failed) => Some(0.),
-        Some(ApiRequestOutcome::Succeeded) => record
+        Some(ApiRequestOutcome::Succeeded) | None => record
             .api_first_response_ms
             .map(|ms| 1. - (ms.saturating_sub(2_000).min(18_000) as f32 / 18_000.)),
         _ => None,
@@ -1017,11 +1017,17 @@ impl ConduitApp {
             );
         }
         content = content.child(context);
-        let quality_samples = api_quality_samples(records);
-        let request_quality = if let Some(run) = run.filter(|run| {
+        let active_request = run.filter(|run| {
             matches!(run.intent, crate::commands::RequestIntent::Message)
                 && !run.runtime.is_cancelled()
-        }) {
+        });
+        let current_request = current.as_ref().filter(|_| active_request.is_some());
+        let quality_samples = api_quality_samples(
+            records
+                .filter(|record| current_request.is_none_or(|current| current.key != record.key))
+                .chain(current_request),
+        );
+        let request_quality = if let Some(run) = active_request {
             if run.api_request_started.is_none() {
                 ApiQualityLevel::Preparing
             } else if run.api_first_response_ms.is_none() {
@@ -1596,6 +1602,39 @@ mod tests {
             None,
         );
         assert!(api_quality_samples(std::iter::empty()).is_empty());
+    }
+
+    #[test]
+    fn api_quality_includes_measured_live_responses_without_fabricating_an_outcome() {
+        let mut live = turn("live", None, None, None);
+        assert!(api_quality_samples(std::iter::once(&live)).is_empty());
+        live.api_first_response_ms = Some(1_000);
+        live.finished_at = 10;
+        assert_eq!(api_quality(std::iter::once(&live)), ApiQualityLevel::Smooth);
+        assert_eq!(api_quality_score(&live), Some(1.));
+        assert_eq!(live.api_request_outcome, None);
+
+        let completed = (0..5)
+            .map(|index| {
+                let mut record = api_turn(
+                    &format!("completed-{index}"),
+                    ApiRequestOutcome::Succeeded,
+                    Some(3_000),
+                );
+                record.finished_at = index;
+                record
+            })
+            .collect::<Vec<_>>();
+        let samples = api_quality_samples(completed.iter().chain(std::iter::once(&live)));
+        assert_eq!(samples.len(), 5);
+        assert_eq!(samples[0].key, "completed-1");
+        assert_eq!(samples[4].key, "live");
+
+        live.api_request_outcome = Some(ApiRequestOutcome::Failed);
+        assert_eq!(api_quality(std::iter::once(&live)), ApiQualityLevel::Failed);
+        assert_eq!(api_quality_score(&live), Some(0.));
+        live.api_request_outcome = Some(ApiRequestOutcome::Cancelled);
+        assert!(api_quality_samples(std::iter::once(&live)).is_empty());
     }
 
     #[test]

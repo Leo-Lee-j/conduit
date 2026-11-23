@@ -3259,7 +3259,7 @@
   "session_data.api_quality_preparing": "Preparing request",
   "session_data.api_quality_waiting": "Waiting for response",
   "session_data.api_quality_responding": "Response received",
-  "session_data.api_quality_note": "Quality of the last five completed requests, oldest to newest. Taller green bars mean better quality; shorter red bars mean worse quality. Gray bars have no latency data. Estimated from first response times and request outcomes.",
+  "session_data.api_quality_note": "Quality of the last five requests, oldest to newest. The current request appears on its first response and updates when it finishes; cancelled requests are excluded. Taller green bars mean better quality; shorter red bars mean worse quality. Gray bars have no latency data. Estimated from first response times and request outcomes.",
   "session_data.api_quality_first_response": "First response: %{duration}",
   "session_data.metric_unknown": "No data yet",
   "session_data.usage": "Usage",
