@@ -415,6 +415,26 @@ impl Protocol {
         self.text_only = true;
         self
     }
+    fn codex_workspace_writable_roots(&self) -> Vec<String> {
+        let mut roots = vec![self.cwd.clone()];
+        let workspace = std::path::Path::new(&self.cwd);
+        let git_dir = workspace.join(".git");
+        // Codex protects Git metadata under a writable root by default. An
+        // explicit writable root permits local Git without escalating the shell.
+        // Linked worktrees and submodules can point at Git data outside the cwd.
+        if workspace.is_absolute()
+            && std::fs::canonicalize(workspace)
+                .ok()
+                .zip(std::fs::canonicalize(&git_dir).ok())
+                .is_some_and(|(root, resolved)| resolved == root.join(".git"))
+            && std::fs::symlink_metadata(&git_dir).is_ok_and(|meta| meta.is_dir())
+            && let Some(path) = git_dir.to_str()
+        {
+            roots.push(path.to_string());
+        }
+        roots
+    }
+
     fn codex_config(&self) -> serde_json::Map<String, Value> {
         let mut config = self.route.config.clone();
         // Conduit renders structured questions in ordinary chat as well as plan
@@ -756,7 +776,7 @@ impl Protocol {
                     params["sandboxPolicy"] = match self.permission {
                         PermissionLevel::ReadOnly => json!({"type":"readOnly"}),
                         PermissionLevel::WorkspaceWrite => {
-                            json!({"type":"workspaceWrite","writableRoots":[self.cwd],"networkAccess":false})
+                            json!({"type":"workspaceWrite","writableRoots":self.codex_workspace_writable_roots(),"networkAccess":false})
                         }
                         PermissionLevel::FullAccess => json!({"type":"dangerFullAccess"}),
                     };
@@ -1671,6 +1691,42 @@ mod tests {
         .args();
         assert!(args.iter().any(|v| v == "--dangerously-skip-permissions"));
         assert!(args.windows(2).any(|v| v == ["--effort", "medium"]));
+    }
+
+    #[test]
+    fn codex_workspace_write_limits_git_metadata_to_the_local_checkout() {
+        let fixture = std::env::temp_dir().join(format!(
+            "conduit-git-permission-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let repo = fixture.join("repo");
+        let linked = fixture.join("linked");
+        let git = repo.join(".git");
+        std::fs::create_dir_all(&git).unwrap();
+        std::fs::create_dir(&linked).unwrap();
+        std::fs::write(linked.join(".git"), "gitdir: ../repo/.git\n").unwrap();
+        for (workspace, has_local_git) in [(&repo, true), (&linked, false)] {
+            let cwd = workspace.to_str().unwrap().to_string();
+            let mut protocol = Protocol::new(Provider::Codex, cwd.clone(), "hello".into(), None);
+            let mut expected = vec![cwd];
+            if has_local_git {
+                expected.push(git.to_str().unwrap().to_string());
+            }
+            protocol.accept(json!({"id":1,"result":{}}));
+            let turn = protocol.accept(json!({"id":2,"result":{"thread":{"id":"check"}}}));
+            let params = &turn.writes[0]["params"];
+            assert_eq!(params["sandboxPolicy"]["writableRoots"], json!(expected));
+            assert_eq!(params["sandboxPolicy"]["networkAccess"], false);
+            assert_eq!(
+                params["approvalPolicy"],
+                PermissionLevel::WorkspaceWrite.codex_approval_policy()
+            );
+        }
+        std::fs::remove_dir_all(&fixture).unwrap();
     }
 
     #[test]

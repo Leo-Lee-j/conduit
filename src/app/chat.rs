@@ -1125,8 +1125,9 @@ impl ConduitApp {
     ) -> AnyElement {
         let detail_key = (session_id, item.key.clone());
         let expanded = self.expanded_tools.contains(&detail_key);
-        let running = tool_running(item);
-        let failed = !running && tool_failed(item);
+        let waiting = tool_waiting_for_approval(item);
+        let running = !waiting && tool_running(item);
+        let failed = !waiting && !running && tool_failed(item);
         let category = tool_category(item);
         let summary = tool_summary(item);
         let show_summary = !summary.is_empty();
@@ -1814,7 +1815,7 @@ impl ConduitApp {
                 } else if edit {
                     conduit::i18n::text_static("chat.edit_file").to_string()
                 } else {
-                    item.text.clone()
+                    first_line(&item.text)
                 };
                 let header = Button::new(SharedString::from(format!("{tool_id}-toggle")))
                     .ghost()
@@ -1873,7 +1874,10 @@ impl ConduitApp {
                                     .child(
                                         div()
                                             .min_w_0()
-                                            .flex_shrink_1()
+                                            .flex_1()
+                                            .debug_selector(move || {
+                                                format!("tool-title-{session_id}-{index}")
+                                            })
                                             .text_left()
                                             .text_size(px(13.))
                                             .truncate()
@@ -1907,13 +1911,18 @@ impl ConduitApp {
                                         )
                                     }),
                             )
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(palette().faint))
-                                    .child(item.status.label().to_string()),
-                            )
+                            .when(!tool_waiting_for_approval(item), |header| {
+                                header.child(
+                                    div()
+                                        .debug_selector(move || {
+                                            format!("tool-status-{session_id}-{index}")
+                                        })
+                                        .flex_shrink_0()
+                                        .text_size(px(11.))
+                                        .text_color(rgb(palette().faint))
+                                        .child(item.status.label().to_string()),
+                                )
+                            })
                             .child(
                                 Icon::new(if expanded {
                                     IconName::ChevronDown

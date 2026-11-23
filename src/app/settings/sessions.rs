@@ -54,8 +54,12 @@ impl ConduitApp {
                         PermissionLevel::FullAccess,
                     ] {
                         let view = view.clone();
-                        menu = menu.item(PopupMenuItem::new(option.label()).on_click(
-                            move |_, _, cx| {
+                        menu = menu.item(
+                            PopupMenuItem::element(move |_, _| {
+                                Self::permission_option_content(option, option == permission)
+                                    .w(px(220.))
+                            })
+                            .on_click(move |_, _, cx| {
                                 view.update(cx, |app, cx| {
                                     if !app.writable || app.closing {
                                         return;
@@ -65,8 +69,8 @@ impl ConduitApp {
                                     app.persist();
                                     cx.notify();
                                 });
-                            },
-                        ));
+                            }),
+                        );
                     }
                     menu
                 })

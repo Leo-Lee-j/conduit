@@ -647,7 +647,7 @@ impl Render for ConduitApp {
                     .and_then(|id| self.session_control.runs.get(&id))
                     .is_some_and(|r| r.approvals.is_submitted(&approval.id));
                 let id = self.selected_session.unwrap();
-                let summary = notifications::approval_message(&approval);
+                let preview = notifications::approval_preview(&approval);
                 let detail_copy = approval.detail.clone();
                 let origin = self
                     .selected_workspace_path()
@@ -673,84 +673,58 @@ impl Render for ConduitApp {
                     String::new()
                 };
                 conversation = conversation.child(
-                    div().w_full().px_6().mb_4().child(
+                    div().w_full().px_6().mb_3().child(
                         v_flex()
                             .w_full()
+                            .min_w_0()
                             .when(!self.store.ui.full_width_content, |card| {
                                 card.max_w(px(840.)).mx_auto()
                             })
-                            .p_4()
-                            .gap_3()
-                            .rounded(px(14.))
+                            .px_3()
+                            .py_2()
+                            .gap_2()
+                            .rounded(px(10.))
                             .border_1()
                             .border_color(rgb(palette().warning_border))
                             .bg(rgb(palette().warning_bg))
                             .child(
                                 h_flex()
-                                    .items_start()
-                                    .gap_3()
+                                    .items_center()
+                                    .gap_2()
                                     .child(
-                                        h_flex()
-                                            .w(px(28.))
-                                            .h(px(28.))
-                                            .flex_shrink_0()
-                                            .items_center()
-                                            .justify_center()
-                                            .rounded(px(8.))
-                                            .bg(rgb(palette().warning_icon_bg))
-                                            .child(
-                                                Icon::new(IconName::TriangleAlert)
-                                                    .small()
-                                                    .text_color(rgb(palette().warning_text)),
-                                            ),
+                                        Icon::new(IconName::TriangleAlert)
+                                            .small()
+                                            .text_color(rgb(palette().warning_text)),
                                     )
                                     .child(
-                                        v_flex()
+                                        div()
                                             .flex_1()
                                             .min_w_0()
-                                            .gap_1()
-                                            .child(
-                                                h_flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .child(
-                                                        div()
-                                                            .text_size(ui_text_size(13.))
-                                                            .font_semibold()
-                                                            .text_color(rgb(
-                                                                palette().highlight_text
-                                                            ))
-                                                            .child(approval.title.clone()),
-                                                    )
-                                                    .when(!queue_label.is_empty(), |row| {
-                                                        row.child(
-                                                            h_flex()
-                                                                .h(px(18.))
-                                                                .px_2()
-                                                                .items_center()
-                                                                .rounded_full()
-                                                                .bg(rgb(palette().warning_chip_bg))
-                                                                .text_size(ui_text_size(10.))
-                                                                .text_color(rgb(
-                                                                    palette().warning_chip_text
-                                                                ))
-                                                                .child(queue_label.clone()),
-                                                        )
-                                                    }),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_size(ui_text_size(11.))
-                                                    .line_height(relative(1.4))
-                                                    .text_color(rgb(palette().warning_muted))
-                                                    .child(conduit::i18n::text_static("shell.the_cli_requests_permission_for_this_operation")),
-                                            ),
+                                            .truncate()
+                                            .text_size(ui_text_size(13.))
+                                            .font_semibold()
+                                            .text_color(rgb(palette().highlight_text))
+                                            .child(first_line(&approval.title)),
                                     )
+                                    .when(!queue_label.is_empty(), |row| {
+                                        row.child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .text_xs()
+                                                .text_color(rgb(palette().warning_muted))
+                                                .child(queue_label),
+                                        )
+                                    })
                                     .child(
                                         Button::new(("approval-toggle", index))
-                                            .label(if expanded { conduit::i18n::text_static("chat.collapse") } else { conduit::i18n::text_static("shell.show_details") })
+                                            .label(if expanded {
+                                                conduit::i18n::text_static("chat.collapse")
+                                            } else {
+                                                conduit::i18n::text_static("shell.show_details")
+                                            })
                                             .small()
                                             .ghost()
+                                            .flex_shrink_0()
                                             .cursor_pointer()
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 this.toggle_approval_detail(
@@ -761,21 +735,23 @@ impl Render for ConduitApp {
                                             })),
                                     ),
                             )
-                            .child(
-                                div()
-                                    .id(("approval-summary", index))
-                                    .max_h(px(120.))
-                                    .overflow_y_scroll()
-                                    .text_sm()
-                                    .text_color(rgb(palette().warning_text))
-                                    .child(summary),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(palette().warning_muted))
-                                    .child(conduit::i18n::format("shell.workspace", &[("origin", origin.to_string())])),
-                            )
+                            .when_some(preview, |column, preview| {
+                                column.child(
+                                    div()
+                                        .id(("approval-summary", index))
+                                        .min_w_0()
+                                        .max_h(px(66.))
+                                        .overflow_y_scroll()
+                                        .px_2()
+                                        .py_1()
+                                        .rounded(px(6.))
+                                        .bg(rgb(palette().warning_code_bg))
+                                        .text_size(ui_text_size(12.))
+                                        .line_height(relative(1.35))
+                                        .text_color(rgb(palette().warning_code_text))
+                                        .child(preview),
+                                )
+                            })
                             .when(expanded, |column| {
                                 column.child(
                                     div()
@@ -794,13 +770,28 @@ impl Render for ConduitApp {
                                         .child(approval.detail.clone()),
                                 )
                             })
+                            .when(!origin.is_empty(), |column| {
+                                column.child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_xs()
+                                        .text_color(rgb(palette().warning_muted))
+                                        .child(conduit::i18n::format(
+                                            "shell.workspace",
+                                            &[("origin", origin)],
+                                        )),
+                                )
+                            })
                             .child(
                                 h_flex()
                                     .items_center()
                                     .gap_2()
                                     .child(
                                         Button::new(("approval-copy", index))
-                                            .label(conduit::i18n::text_static("shell.copy_full_request"))
+                                            .label(conduit::i18n::text_static(
+                                                "shell.copy_full_request",
+                                            ))
                                             .small()
                                             .ghost()
                                             .on_click(move |_, _, cx| {
@@ -815,9 +806,9 @@ impl Render for ConduitApp {
                                                 .flex_1()
                                                 .text_size(ui_text_size(11.))
                                                 .text_color(rgb(palette().warning_accent))
-                                                .child(
-                                                    conduit::i18n::text_static("shell.the_cli_did_not_offer_allow_once"),
-                                                ),
+                                                .child(conduit::i18n::text_static(
+                                                    "shell.the_cli_did_not_offer_allow_once",
+                                                )),
                                         )
                                     })
                                     .when(approval.allow_once, |row| row.child(div().flex_1()))
@@ -836,7 +827,9 @@ impl Render for ConduitApp {
                                     )
                                     .child(
                                         Button::new(("allow", index))
-                                            .label(conduit::i18n::text_static("notifications.allow_once"))
+                                            .label(conduit::i18n::text_static(
+                                                "notifications.allow_once",
+                                            ))
                                             .small()
                                             .primary()
                                             .disabled(

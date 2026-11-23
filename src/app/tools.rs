@@ -146,6 +146,12 @@ pub(super) fn is_tool_command(item: &ChatItem) -> bool {
         })
 }
 
+pub(super) fn tool_waiting_for_approval(item: &ChatItem) -> bool {
+    item.approval
+        .as_ref()
+        .is_some_and(|approval| approval.status == crate::message_status::ApprovalStatus::Waiting)
+}
+
 pub(super) fn tool_running(item: &ChatItem) -> bool {
     let status = item.status.trim();
     matches!(status, "运行中" | "输出中")

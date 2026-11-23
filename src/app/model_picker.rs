@@ -866,10 +866,11 @@ impl ConduitApp {
         Popover::new("permission-picker")
             .anchor(Anchor::BottomLeft)
             .offset(px(6.))
+            .p_1()
             .trigger(trigger)
             .content(move |_, _, cx| {
                 let popover = cx.entity().downgrade();
-                let mut list = v_flex().w(px(200.)).gap(px(2.));
+                let mut list = v_flex().w(px(220.)).gap(px(1.));
                 for option in [
                     PermissionLevel::ReadOnly,
                     PermissionLevel::WorkspaceWrite,
@@ -878,7 +879,6 @@ impl ConduitApp {
                     let app = view.clone();
                     let popover = popover.clone();
                     let active = option == permission;
-                    let is_danger = option == PermissionLevel::FullAccess;
                     list = list.child(
                         Button::new(match option {
                             PermissionLevel::ReadOnly => "permission-option-readonly",
@@ -886,49 +886,16 @@ impl ConduitApp {
                             PermissionLevel::FullAccess => "permission-option-full",
                         })
                         .ghost()
-                        .h(px(36.))
+                        .h(ui_text_size(34.))
                         .w_full()
-                        .px_2()
+                        .px(px(5.))
                         .cursor_pointer()
-                        .accessibility_label(option.label())
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    Icon::new(if is_danger {
-                                        gpui_kit::assets::IconName::TriangleAlert
-                                    } else {
-                                        match option {
-                                            PermissionLevel::ReadOnly => {
-                                                gpui_kit::assets::IconName::Eye
-                                            }
-                                            _ => gpui_kit::assets::IconName::SquarePen,
-                                        }
-                                    })
-                                    .small()
-                                    .text_color(rgb(
-                                        if is_danger {
-                                            palette().warning_text
-                                        } else {
-                                            palette().muted
-                                        },
-                                    )),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .text_size(ui_text_size(12.))
-                                        .text_color(rgb(if is_danger {
-                                            palette().warning_text
-                                        } else {
-                                            palette().muted
-                                        }))
-                                        .child(option.label()),
-                                )
-                                .when(active, |row| row.child(Icon::new(IconName::Check).small())),
-                        )
+                        .accessibility_label(format!(
+                            "{}. {}",
+                            option.label(),
+                            option.description()
+                        ))
+                        .child(Self::permission_option_content(option, active))
                         .when(active, |button| button.bg(rgb(palette().surface_hover)))
                         .on_click(move |_, window, cx| {
                             app.update(cx, |this, cx| {
@@ -943,6 +910,44 @@ impl ConduitApp {
                 list
             })
             .into_any_element()
+    }
+
+    pub(super) fn permission_option_content(option: PermissionLevel, active: bool) -> Div {
+        let (icon, color) = match option {
+            PermissionLevel::ReadOnly => (FullIconName::Eye, palette().muted),
+            PermissionLevel::WorkspaceWrite => (FullIconName::SquarePen, palette().muted),
+            PermissionLevel::FullAccess => (FullIconName::TriangleAlert, palette().warning_text),
+        };
+        h_flex()
+            .w_full()
+            .items_center()
+            .gap(px(5.))
+            .child(Icon::new(icon).small().text_color(rgb(color)))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .text_left()
+                    .line_height(relative(1.2))
+                    .child(
+                        div()
+                            .text_size(ui_text_size(12.))
+                            .font_semibold()
+                            .text_color(rgb(if option == PermissionLevel::FullAccess {
+                                color
+                            } else {
+                                palette().text
+                            }))
+                            .child(option.label()),
+                    )
+                    .child(
+                        div()
+                            .text_size(ui_text_size(11.))
+                            .text_color(rgb(palette().muted))
+                            .child(option.description()),
+                    ),
+            )
+            .when(active, |row| row.child(Icon::new(IconName::Check).small()))
     }
 
     pub(super) fn set_session_permission(

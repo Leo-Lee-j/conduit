@@ -540,6 +540,31 @@ fn restored_reasoning_summaries_and_bodies_follow_chat_display_preference(cx: &m
 }
 
 #[gpui_kit::test]
+fn pending_multiline_command_fits_one_line_without_running_status(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx, _) = crate::app::queue::tests::fixture(cx, "tool-pending-layout");
+    cx.simulate_resize(gpui_kit::size(px(860.), px(720.)));
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.startup = None;
+            app.writable = false;
+            let session = app.session_mut(1).unwrap();
+            session.messages = serde_json::from_value(json!([
+                {"kind":"User", "key":"user", "text":"Check the implementation"},
+                {"kind":"Tool", "key":"turn-command", "text":format!("git status {}\nsecond line\nthird line", "long ".repeat(80)), "status":"运行中"}
+            ])).unwrap();
+            session.record_tool_approval("turn", "request", "Command", r#"{"itemId":"command"}"#, "等待中");
+            app.sync_chat_rows();
+            cx.notify();
+        });
+    });
+    draw(cx);
+    let title = cx.debug_bounds("tool-title-1-1").unwrap();
+    assert!(title.size.height < px(24.));
+    assert!(cx.debug_bounds("tool-status-1-1").is_none());
+}
+
+#[gpui_kit::test]
 fn tool_groups_can_collapse_before_reply_and_while_running(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     let (app, cx, _) = crate::app::queue::tests::fixture(cx, "tool-disclosure");

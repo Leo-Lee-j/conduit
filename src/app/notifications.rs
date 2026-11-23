@@ -9,7 +9,7 @@ use gpui::Anchor;
 
 mod approvals;
 use approvals::ApprovalBinding;
-pub(super) use approvals::approval_message;
+pub(super) use approvals::{approval_message, approval_preview};
 use gpui_kit::component::{
     alert::Alert,
     notification::{Notification, NotificationDelivery},

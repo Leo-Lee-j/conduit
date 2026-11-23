@@ -51,6 +51,14 @@ impl PermissionLevel {
         }
     }
 
+    pub fn description(self) -> &'static str {
+        conduit::i18n::text_static(match self {
+            Self::ReadOnly => "domain.read_only_description",
+            Self::WorkspaceWrite => "domain.workspace_write_description",
+            Self::FullAccess => "domain.full_access_description",
+        })
+    }
+
     pub fn codex_approval_policy(self) -> serde_json::Value {
         let filesystem_approvals = self == Self::WorkspaceWrite;
         // `never` also rejects native MCP confirmations before they reach us.
