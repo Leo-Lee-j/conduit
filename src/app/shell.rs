@@ -486,9 +486,7 @@ impl Render for ConduitApp {
             conversation = conversation.child(composer);
             conversation
         };
-        conversation = conversation
-            .child(self.notification_banner(cx))
-            .child(self.update_notice(cx));
+        conversation = conversation.child(self.notification_banner(cx));
         let toolbar = self.render_toolbar(window, cx);
         #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
         let toolbar = chat::profiling::host_element(

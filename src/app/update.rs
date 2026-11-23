@@ -440,7 +440,7 @@ impl ConduitApp {
                 self.updater.status =
                     conduit::i18n::text_static("update.update_ready_you_can_install_it_later")
                         .into();
-                cx.notify();
+                self.refresh_notifications(cx);
             }
             return;
         }
@@ -455,7 +455,7 @@ impl ConduitApp {
             };
             if self.updater.status != waiting {
                 self.updater.status = waiting.into();
-                cx.notify();
+                self.refresh_notifications(cx);
             }
             return;
         }
@@ -468,7 +468,7 @@ impl ConduitApp {
             let waiting = conduit::i18n::text_static("update.restart_waiting_for_window");
             if self.updater.status != waiting {
                 self.updater.status = waiting.into();
-                cx.notify();
+                self.refresh_notifications(cx);
             }
             return;
         }
@@ -488,7 +488,7 @@ impl ConduitApp {
         );
         if self.updater.status != status {
             self.updater.status = status;
-            cx.notify();
+            self.refresh_notifications(cx);
         }
     }
 
@@ -977,17 +977,33 @@ impl ConduitApp {
         self.notify_user(notice, cx);
     }
 
-    fn request_update_install(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn is_ready_update_notification(
+        &self,
+        record: &crate::notifications::Record,
+    ) -> bool {
+        self.updater.phase == Phase::Ready
+            && self.updater.package.is_some()
+            && record.source == NoticeSource::Update
+            && record.target == Some(NoticeTarget::Updates)
+            && record.seen_events.iter().any(|event| event == "ready")
+            && self.updater.release.as_ref().is_some_and(|release| {
+                record.key.as_deref()
+                    == Some(format!("update/{}", release.manifest.version).as_str())
+            })
+    }
+
+    pub(super) fn request_update_install(&mut self, cx: &mut Context<Self>) {
         if self.closing || !self.writable || self.updater.phase != Phase::Ready {
             return;
         }
         self.updater.install_requested = true;
         self.updater.snoozed = false;
         self.updater.restart_deadline = None;
-        cx.notify();
+        self.updater.status = conduit::i18n::text_static("update.install_requested").into();
+        self.refresh_notifications(cx);
     }
 
-    fn snooze_update(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn snooze_update(&mut self, cx: &mut Context<Self>) {
         if self.closing || self.updater.phase != Phase::Ready {
             return;
         }
@@ -996,7 +1012,18 @@ impl ConduitApp {
         self.updater.restart_deadline = None;
         self.updater.status =
             conduit::i18n::text_static("update.update_ready_you_can_install_it_later").into();
-        cx.notify();
+        let ids: Vec<_> = self
+            .notifications
+            .center
+            .records()
+            .iter()
+            .filter(|record| self.is_ready_update_notification(record))
+            .map(|record| record.id)
+            .collect();
+        for id in ids {
+            self.notifications.center.mark_read(id, unix_now());
+        }
+        self.refresh_notifications(cx);
     }
 
     fn skip_update(&mut self, cx: &mut Context<Self>) {
@@ -1006,7 +1033,7 @@ impl ConduitApp {
         if let Some(release) = &self.updater.release {
             let version = release.manifest.version.clone();
             self.store.updates.skipped_version = Some(version.clone());
-            // Dismiss pending reminders as well as the persistent update strip.
+            // Dismiss pending reminders for this version.
             let key = format!("update/{version}");
             let ids: Vec<_> = self
                 .notifications
@@ -1108,69 +1135,6 @@ impl ConduitApp {
             .on_click(cx.listener(|app, _, window, cx| app.open_about_dialog(window, cx)))
             .into_any_element()
     }
-
-    pub(super) fn update_notice(&self, cx: &mut Context<Self>) -> AnyElement {
-        if (self.updater.phase == Phase::Available
-            && self.update_version_skipped()
-            && self.updater.check_origin == CheckOrigin::Automatic)
-            || (self.updater.phase == Phase::Ready && self.updater.snoozed)
-        {
-            return div().into_any_element();
-        }
-        if !(matches!(
-            self.updater.phase,
-            Phase::Available | Phase::Downloading | Phase::Ready | Phase::Preparing
-        ) || self.updater.phase == Phase::Failed && self.updater.release.is_some())
-        {
-            return div().into_any_element();
-        }
-        h_flex()
-            .id("update-notice")
-            .debug_selector(|| "update-notice".into())
-            .flex_shrink_0()
-            .flex_wrap()
-            .px_3()
-            .py_1()
-            .gap_2()
-            .items_center()
-            .justify_between()
-            .border_b_1()
-            .border_color(rgb(palette().border))
-            .child(
-                div()
-                    .min_w_0()
-                    .flex_1()
-                    .text_size(ui_text_size(12.))
-                    .child(conduit::i18n::retained(&self.updater.status).to_string()),
-            )
-            .when(self.updater.phase == Phase::Ready, |bar| {
-                bar.child(
-                    Button::new("update-notice-install")
-                        .debug_selector(|| "update-notice-install".into())
-                        .label(conduit::i18n::text_static("update.install_and_restart"))
-                        .small()
-                        .disabled(self.closing || !self.writable)
-                        .on_click(cx.listener(|app, _, _, cx| app.request_update_install(cx))),
-                )
-                .child(
-                    Button::new("update-notice-later")
-                        .debug_selector(|| "update-notice-later".into())
-                        .label(conduit::i18n::text_static("update.later"))
-                        .small()
-                        .ghost()
-                        .disabled(self.closing)
-                        .on_click(cx.listener(|app, _, _, cx| app.snooze_update(cx))),
-                )
-            })
-            .child(
-                Button::new("show-update")
-                    .label(conduit::i18n::text_static("update.view_update"))
-                    .small()
-                    .ghost()
-                    .on_click(cx.listener(|app, _, window, cx| app.open_about_dialog(window, cx))),
-            )
-            .into_any_element()
-    }
 }
 
 #[cfg(all(test, feature = "ui-tests"))]
@@ -1182,7 +1146,9 @@ mod tests {
     };
     use conduit::update::{Release, manifest::Manifest};
     use gpui_kit::component::WindowExt;
-    use gpui_kit::{AppContext as _, TestAppContext, px, size};
+    use gpui_kit::{
+        AppContext as _, Modifiers, MouseButton, TestAppContext, VisualTestContext, px, size,
+    };
 
     fn release(version: &str) -> Release {
         Release {
@@ -1203,6 +1169,96 @@ mod tests {
             raw: vec![],
             signature: String::new(),
         }
+    }
+
+    fn click_update_action(cx: &mut VisualTestContext, selector: &str) {
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.run_until_parked();
+        let at = cx
+            .debug_bounds(selector.to_owned().leak())
+            .unwrap_or_else(|| panic!("missing {selector}"))
+            .center();
+        cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn update_notification_actions_wait_for_work_and_reject_stale_releases(
+        cx: &mut TestAppContext,
+    ) {
+        let _locale = crate::test_support::chinese();
+        let (app, cx, root) = crate::app::queue::tests::fixture(cx, "update-notification-actions");
+        let id = cx.update(|window, cx| {
+            // Toast entry animation uses wall time; exercise actions at their final position.
+            cx.set_reduce_motion(true);
+            app.update(cx, |app, cx| {
+                app.store.ui.system_notifications = false;
+                app.store.updates.auto_install = false;
+                app.updater.release = Some(release("1.0.0"));
+                app.history_loading.insert(PathBuf::from("busy"));
+                app.handle_update_event(UpdateEvent::Downloaded(root.join("package.exe")), cx);
+                assert!(app.writable);
+                app.poll_notifications(window, cx);
+                app.notifications.center.records()[0].id
+            })
+        });
+        cx.simulate_resize(size(px(850.), px(500.)));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        // A ready reminder remains actionable beyond the ordinary toast timeout.
+        cx.executor().advance_clock(Duration::from_secs(6));
+        click_update_action(cx, &format!("update-toast-install-{id}"));
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                assert!(app.updater.install_requested);
+                app.poll_update_install(window, cx);
+                assert!(!app.closing);
+                assert!(app.updater.status.contains("等待后台任务"));
+                assert_eq!(app.notifications.center.records().len(), 1);
+                assert_eq!(window.notifications(cx).len(), 1);
+            });
+        });
+        click_update_action(cx, &format!("update-toast-later-{id}"));
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                assert!(app.updater.snoozed);
+                assert!(!app.updater.install_requested);
+                assert!(app.notifications.center.get(id).unwrap().read_at.is_some());
+                app.toggle_notifications(window, cx);
+            });
+        });
+        // Read history still offers the current verified update after Later.
+        click_update_action(cx, &format!("update-history-install-{id}"));
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                assert!(app.updater.install_requested);
+                assert!(!app.updater.snoozed);
+                app.snooze_update(cx);
+                app.writable = false;
+                app.act_on_update_notification(id, true, window, cx);
+                assert!(!app.updater.install_requested);
+                app.writable = true;
+                app.updater.release = Some(release("2.0.0"));
+                app.act_on_update_notification(id, true, window, cx);
+                assert!(!app.updater.install_requested);
+                app.updater.release = Some(release("1.0.0"));
+                app.updater.phase = Phase::Failed;
+                app.act_on_update_notification(id, true, window, cx);
+                assert!(!app.updater.install_requested);
+                app.updater.phase = Phase::Ready;
+                app.updater.package = None;
+                app.act_on_update_notification(id, true, window, cx);
+                assert!(!app.updater.install_requested);
+                app.history_loading.clear();
+            });
+        });
+        assert!(cx.debug_bounds("update-notice").is_none());
     }
 
     #[gpui_kit::test]
@@ -1403,7 +1459,7 @@ mod tests {
             let _ = window.draw(cx);
         });
         assert!(cx.debug_bounds("title-update").is_some());
-        assert!(cx.debug_bounds("update-notice-later").is_some());
+        assert!(cx.debug_bounds("update-notice").is_none());
     }
 
     #[gpui_kit::test]
