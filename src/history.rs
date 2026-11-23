@@ -13,6 +13,7 @@
 pub(crate) mod children;
 mod index;
 mod opencode;
+mod questions;
 mod scan;
 pub(crate) use scan::Scanner;
 
@@ -158,6 +159,7 @@ fn merge_session(
         merge_imported_subagents(&mut existing.subagents, session.subagents);
         let mut messages = session.messages;
         preserve_reply_timings(&existing.messages, &mut messages);
+        questions::restore_imported(&mut existing.messages, &messages);
         existing.messages = merge_transcript(&existing.messages, messages);
         return 0;
     }
@@ -669,6 +671,8 @@ struct CodexState {
     current_model: Option<String>,
     event_rows: Vec<(usize, usize, ChatItem)>,
     response_rows: Vec<(usize, usize, ChatItem)>,
+    #[serde(default)]
+    questions: questions::State,
     event_reasoning: Vec<CodexReasoningItem>,
     response_reasoning: Vec<CodexReasoningItem>,
     event_users: usize,
@@ -787,6 +791,7 @@ fn extend_codex(
         mut current_model,
         mut event_rows,
         mut response_rows,
+        mut questions,
         mut subagents,
         mut event_reasoning,
         mut response_reasoning,
@@ -814,6 +819,9 @@ fn extend_codex(
             .and_then(rfc3339_to_unix_opt)
             .unwrap_or(created_at);
         timestamps.push(event_created_at);
+        if questions.observe(index, event_created_at, value) {
+            continue;
+        }
         if value.get("type").and_then(Value::as_str) == Some("event_msg") {
             let turn_id = payload.get("turn_id").and_then(Value::as_str).unwrap_or("");
             let timestamp = value
@@ -1287,6 +1295,7 @@ fn extend_codex(
         current_model,
         event_rows,
         response_rows,
+        questions,
         subagents,
         event_reasoning,
         response_reasoning,
@@ -1316,6 +1325,7 @@ impl CodexState {
             mut model,
             event_rows,
             response_rows,
+            questions,
             subagents,
             event_reasoning,
             response_reasoning,
@@ -1357,6 +1367,7 @@ impl CodexState {
             ));
         }
         let mut rows = event_rows;
+        rows.extend(questions.rows());
         rows.extend(
             response_rows
                 .into_iter()

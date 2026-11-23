@@ -41,6 +41,66 @@ fn fixture_with_store(
 }
 
 #[gpui_kit::test]
+fn answered_codex_questions_remain_visible_after_navigation_and_restart(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let disk = Fixture::new();
+    let mut store = disk.store(12);
+    let session = &mut store.workspaces[0].sessions[0];
+    session.provider = crate::domain::Provider::Codex;
+    session.messages.insert(
+        1,
+        serde_json::from_value(serde_json::json!({
+            "key":"turn-0-permission-approval-1", "kind":"Tool", "text":"需要你的回答",
+            "approval": {"request":"approval-1", "status":"已回答", "questions":[{
+                "id":"question_1", "header":"", "question":"使用哪个引擎？",
+                "options":[["Codex",""],["Claude Code",""]], "multiple":false,
+                "secret":false, "selected":[0], "answers":["Codex"]
+            }]}
+        }))
+        .unwrap(),
+    );
+    store.save_to(&disk.state).unwrap();
+    let (app, cx, disk) = fixture_with_store(cx, store, disk);
+    let selector = "tool-1-turn-0-permission-approval-1-question-history";
+    for restart in [false, true] {
+        if restart {
+            let restored = Store::load_from(&disk.state).unwrap();
+            cx.update(|_, cx| {
+                app.update(cx, |app, _| {
+                    app.store = restored;
+                    app.timeline_session = None;
+                })
+            });
+        }
+        for id in [1, 2, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 1] {
+            cx.update(|window, cx| app.update(cx, |app, cx| app.switch(0, Some(id), window, cx)));
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                window.simulate_next_frame(cx);
+                let _ = window.draw(cx);
+            });
+            if id == 1 {
+                cx.update(|_, cx| {
+                    let app = app.read(cx);
+                    let question = &app.session(1).unwrap().messages[1];
+                    let history = super::super::user_input::history(question).unwrap();
+                    assert_eq!(
+                        history.status,
+                        crate::message_status::ApprovalStatus::Answered
+                    );
+                    assert_eq!(history.questions[0].answers, ["Codex"]);
+                    assert!(!super::super::tools::is_groupable_activity(question));
+                });
+                assert!(
+                    cx.debug_bounds(selector).is_some(),
+                    "question history missing after restart={restart}"
+                );
+            }
+        }
+    }
+}
+
+#[gpui_kit::test]
 fn startup_only_loads_the_selected_body_and_navigation_bounds_the_cache(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     let (app, cx, _disk) = fixture(cx, 100, true);

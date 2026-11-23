@@ -91,7 +91,9 @@ pub(super) fn history_text(approval: &ToolApproval) -> String {
 
 /// Natural-height question content shared by the transcript and details dock.
 pub(super) fn history_content(scope: &str, approval: &ToolApproval) -> AnyElement {
+    let history_id = format!("{scope}-question-history");
     let mut content = v_flex()
+        .debug_selector(move || history_id.clone())
         .w_full()
         .min_w_0()
         .p_4()
