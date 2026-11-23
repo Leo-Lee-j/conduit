@@ -337,13 +337,53 @@ fn caption(value: impl Into<SharedString>) -> Div {
         .text_color(rgb(palette().muted))
         .child(value.into())
 }
+fn heading(label: &'static str, note: Option<SharedString>) -> Div {
+    h_flex()
+        .min_w_0()
+        .items_center()
+        .gap_1()
+        .text_size(ui_text_size(11.))
+        .text_color(rgb(palette().muted))
+        .child(div().min_w_0().truncate().child(text(label)))
+        .when_some(note, |heading, note| {
+            heading.child(
+                div()
+                    .id(SharedString::from(format!("session-data-hint-{label}")))
+                    .test_support()
+                    .tab_index(0)
+                    .role(Role::Group)
+                    .aria_label(note.clone())
+                    .size(px(18.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.))
+                    .cursor_default()
+                    .focus_visible(|hint| hint.bg(rgb(palette().surface_hover)))
+                    .tooltip(move |window, cx| Tooltip::new(note.clone()).build(window, cx))
+                    .child(
+                        Icon::new(FullIconName::Info)
+                            .size(px(12.))
+                            .text_color(rgb(palette().muted)),
+                    ),
+            )
+        })
+}
 fn metric(label: &'static str, value: String, detail: impl IntoElement) -> Div {
+    let note = match label {
+        "session_data.cache_hit" => Some(text("session_data.cache_subset").into()),
+        "session_data.turn_elapsed" | "session_data.latest_elapsed" => {
+            Some(text("session_data.speed_note").into())
+        }
+        _ => None,
+    };
     card()
         .flex_1()
         .min_w_0()
         .gap_1()
         .p_3()
-        .child(caption(text(label)).truncate())
+        .child(heading(label, note))
         .child(
             div()
                 .text_size(ui_text_size(23.))
@@ -393,6 +433,18 @@ fn section(
     cx: &Context<ConduitApp>,
 ) -> Button {
     let state = state.clone();
+    let note = match label {
+        "session_data.token_details" => Some(
+            format!(
+                "{}\n{}",
+                text("session_data.cache_subset"),
+                text("session_data.recorded_note"),
+            )
+            .into(),
+        ),
+        "session_data.timing" => Some(text("session_data.speed_note").into()),
+        _ => None,
+    };
     Button::new(id)
         .ghost()
         .small()
@@ -412,10 +464,10 @@ fn section(
                         .min_w_0()
                         .gap_1()
                         .child(
-                            div()
+                            heading(label, note)
                                 .text_size(ui_text_size(13.))
                                 .font_semibold()
-                                .child(text(label)),
+                                .text_color(rgb(palette().text)),
                         )
                         .child(caption(summary).truncate()),
                 )
@@ -751,14 +803,11 @@ impl ConduitApp {
             .p_3()
             .gap_2()
             .child(
-                h_flex()
-                    .w_full()
-                    .justify_between()
-                    .child(caption(text("session_data.context")))
-                    .when(
-                        usage.context_ratio().is_some() && usage.context_window_estimated,
-                        |header| header.child(caption(text("session_data.estimated"))),
-                    ),
+                h_flex().w_full().justify_between().child(heading(
+                    "session_data.context",
+                    (usage.context_ratio().is_some() && usage.context_window_estimated)
+                        .then(|| text("session_data.estimated").into()),
+                )),
             );
         if let Some(ratio) = usage.context_ratio() {
             let color = if ratio >= 0.9 {
@@ -966,7 +1015,16 @@ impl ConduitApp {
                         .truncate(),
                     )),
             );
-            let mut summary = card()
+            let usage_note = if total.incomplete {
+                format!(
+                    "{}\n{}",
+                    text("session_data.recorded_note"),
+                    text("session_data.partial_note"),
+                )
+            } else {
+                text("session_data.recorded_note").to_owned()
+            };
+            let summary = card()
                 .id("session-data-usage-summary")
                 .test_support()
                 .debug_selector(|| "session-data-usage-summary".into())
@@ -977,7 +1035,7 @@ impl ConduitApp {
                         .w_full()
                         .justify_between()
                         .gap_2()
-                        .child(caption(text("session_data.usage")).flex_1())
+                        .child(heading("session_data.usage", Some(usage_note.into())).flex_1())
                         .child(caption(text("session_data.input")).w(px(58.)).text_right())
                         .child(caption(text("session_data.output")).w(px(58.)).text_right()),
                 )
@@ -998,12 +1056,6 @@ impl ConduitApp {
                     total.output,
                     cx,
                 ));
-            if total.incomplete {
-                summary = summary.child(
-                    caption(text("session_data.partial_note"))
-                        .text_color(rgb(palette().warning_text)),
-                );
-            }
             content = content.child(summary);
         }
 
@@ -1020,16 +1072,19 @@ impl ConduitApp {
                 ))
                 .px_3()
                 .py_2()
-                .tooltip(|window, cx| {
-                    Tooltip::new(text("session_data.api_quality_note")).build(window, cx)
-                })
                 .child(
                     h_flex()
                         .w_full()
                         .items_center()
                         .gap_2()
                         .child(api_quality_emoji(request_quality, state.read(cx), cx))
-                        .child(caption(text("session_data.api_quality")).flex_1())
+                        .child(
+                            heading(
+                                "session_data.api_quality",
+                                Some(text("session_data.api_quality_note").into()),
+                            )
+                            .flex_1(),
+                        )
                         .child(
                             div()
                                 .text_size(ui_text_size(12.))
@@ -1060,9 +1115,7 @@ impl ConduitApp {
                     .debug_selector(|| "session-data-token-details".into())
                     .child(row("session_data.input", tokens(total.input), cx))
                     .child(row("session_data.cache_read", tokens(total.cached), cx))
-                    .child(row("session_data.output", tokens(total.output), cx))
-                    .child(caption(text("session_data.cache_subset")))
-                    .child(caption(text("session_data.recorded_note"))),
+                    .child(row("session_data.output", tokens(total.output), cx)),
             );
         }
 
@@ -1276,8 +1329,7 @@ impl ConduitApp {
                             .average_output_speed()
                             .map_or_else(|| "—".into(), |value| format!("{value} tok/s")),
                         cx,
-                    ))
-                    .child(caption(text("session_data.speed_note"))),
+                    )),
             );
         }
         if !plan.is_empty()
