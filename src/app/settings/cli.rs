@@ -508,19 +508,16 @@ impl ConduitApp {
             let help = view.clone();
             v_flex()
                 .w_full()
-                .gap_4()
-                .p_4()
-                .rounded_lg()
-                .border_1()
-                .border_color(rgb(palette().border))
-                .bg(rgb(palette().surface))
+                .gap_2()
                 .child(
                     h_flex()
+                        .debug_selector(|| "engine-detail-heading".into())
                         .w_full()
-                        .gap_3()
+                        .gap_2()
+                        .flex_wrap()
                         .child(
                             div()
-                                .size(px(40.))
+                                .size(px(32.))
                                 .flex_shrink_0()
                                 .rounded_lg()
                                 .bg(rgb(palette().surface_strong))
@@ -530,13 +527,13 @@ impl ConduitApp {
                                 .child(provider_icon(provider)),
                         )
                         .child(
-                            v_flex()
-                                .flex_1()
+                            h_flex()
                                 .min_w_0()
-                                .gap_1()
+                                .gap_2()
+                                .flex_wrap()
                                 .child(
                                     div()
-                                        .text_size(ui_text_size(16.))
+                                        .text_size(ui_text_size(14.))
                                         .font_semibold()
                                         .child(provider.label()),
                                 )
@@ -582,7 +579,7 @@ impl ConduitApp {
                     v_flex()
                         .w_full()
                         .gap_2()
-                        .pt_3()
+                        .pt_2()
                         .border_t_1()
                         .border_color(rgb(palette().border))
                         .child(
@@ -792,36 +789,23 @@ impl ConduitApp {
                                 ),
                         ),
                 )
-                .child(
-                    Button::new("settings-path-help")
-                        .small()
-                        .ghost()
-                        .justify_start()
-                        .icon(if expanded {
-                            FullIconName::ChevronUp
-                        } else {
-                            FullIconName::ChevronDown
+                .child(settings_accordion(
+                    "settings-path-help",
+                    conduit::i18n::text_static("settings.cli.path_lookup_and_when_changes_apply"),
+                    expanded,
+                    div()
+                        .text_size(ui_text_size(12.))
+                        .text_color(rgb(palette().muted))
+                        .child(conduit::i18n::text_static(
+                            "settings.cli.lookup_order_environment_variable_app_specified_path",
+                        )),
+                    move |open, _, cx| {
+                        help.update(cx, |app, cx| {
+                            app.connection_settings.path_help = open;
+                            cx.notify();
                         })
-                        .label(conduit::i18n::text_static(
-                            "settings.cli.path_lookup_and_when_changes_apply",
-                        ))
-                        .on_click(move |_, _, cx| {
-                            help.update(cx, |app, cx| {
-                                app.connection_settings.path_help = !expanded;
-                                cx.notify();
-                            })
-                        }),
-                )
-                .when(expanded, |card| {
-                    card.child(
-                        div()
-                            .text_size(ui_text_size(12.))
-                            .text_color(rgb(palette().muted))
-                            .child(conduit::i18n::text_static(
-                                "settings.cli.lookup_order_environment_variable_app_specified_path",
-                            )),
-                    )
-                })
+                    },
+                ))
         });
         SettingGroup::new()
             .variant(GroupBoxVariant::Normal)

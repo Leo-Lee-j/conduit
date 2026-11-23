@@ -2,7 +2,7 @@ use std::{cell::RefCell, collections::HashSet, rc::Rc, sync::Arc};
 
 use gpui::{
     AnyElement, App, ElementId, InteractiveElement as _, IntoElement, ParentElement, RenderOnce,
-    SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
+    SharedString, StyleRefinement, Styled, Window, div,
     percentage, prelude::FluentBuilder as _, rems,
 };
 
@@ -96,7 +96,8 @@ impl Styled for Accordion {
 
 impl RenderOnce for Accordion {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let open_indices = Rc::new(RefCell::new(HashSet::new()));
+        let open_indices = Rc::new(RefCell::new(self.children.iter().enumerate()
+            .filter_map(|(ix, item)| item.open.then_some(ix)).collect::<HashSet<_>>()));
         let multiple = self.multiple;
         let last_ix = self.children.len().saturating_sub(1);
 
@@ -117,9 +118,6 @@ impl RenderOnce for Accordion {
                     .into_iter()
                     .enumerate()
                     .map(|(ix, accordion)| {
-                        if accordion.open {
-                            open_indices.borrow_mut().insert(ix);
-                        }
                         let disabled = self.disabled || accordion.disabled;
 
                         accordion
@@ -129,7 +127,8 @@ impl RenderOnce for Accordion {
                             .disabled(disabled)
                             .on_toggle_click({
                                 let open_indices = open_indices.clone();
-                                move |open, _, _| {
+                                let on_toggle = self.on_toggle_click.clone();
+                                move |open, window, cx| {
                                     let mut open_indices = open_indices.borrow_mut();
                                     if *open {
                                         if !multiple {
@@ -139,19 +138,15 @@ impl RenderOnce for Accordion {
                                     } else {
                                         open_indices.remove(&ix);
                                     }
+                                    if let Some(on_toggle) = &on_toggle {
+                                        let mut indices = open_indices.iter().copied().collect::<Vec<_>>();
+                                        indices.sort_unstable();
+                                        drop(open_indices);
+                                        on_toggle(&indices, window, cx);
+                                    }
                                 }
                             })
                     }),
-            )
-            .when_some(
-                self.on_toggle_click.filter(|_| !self.disabled),
-                |this, on_toggle| {
-                    this.on_click(move |_, window, cx| {
-                        let open_indices =
-                            open_indices.borrow().iter().copied().collect::<Vec<_>>();
-                        on_toggle(&open_indices, window, cx)
-                    })
-                },
             )
     }
 }

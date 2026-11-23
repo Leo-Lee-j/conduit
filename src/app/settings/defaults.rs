@@ -66,21 +66,24 @@ impl ConduitApp {
             .iter()
             .find(|(channel, _)| *channel == display_channel);
         let service_unavailable = selected_channel.is_none();
-        let label = selected_channel
-            .map(|(_, label)| label.clone())
-            .unwrap_or_else(|| {
-                let id = match &selection.channel {
-                    ModelChannel::Provider(id) | ModelChannel::Ccs(id) => id.as_str(),
-                    ModelChannel::Cli => "",
-                };
-                format!(
-                    "{} · {}",
-                    conduit::i18n::text_static(
-                        "settings.defaults.service_unavailable_select_another_service",
-                    ),
-                    id,
-                )
-            });
+        let (label, service_description) = if let Some((_, label)) = selected_channel {
+            (
+                label.clone(),
+                conduit::i18n::text("settings.sessions.service_description"),
+            )
+        } else {
+            let id = match &selection.channel {
+                ModelChannel::Provider(id) | ModelChannel::Ccs(id) => id.as_str(),
+                ModelChannel::Cli => "",
+            };
+            (
+                conduit::i18n::text("settings.navigation.service_unavailable"),
+                conduit::i18n::format(
+                    "settings.sessions.service_unavailable_description",
+                    &[("id", id.into())],
+                ),
+            )
+        };
         let route_view = view.clone();
         let route = SettingField::render(move |_, _, _| {
             let channels = channels.clone();
@@ -89,6 +92,7 @@ impl ConduitApp {
                 .debug_selector(move || format!("default-channel-{}", engine as usize))
                 .outline()
                 .small()
+                .max_w(rems(14.))
                 .label(label.clone())
                 .tooltip(label.clone())
                 .icon(FullIconName::ChevronDown)
@@ -145,6 +149,7 @@ impl ConduitApp {
                 .debug_selector(move || format!("default-model-{}", engine as usize))
                 .outline()
                 .small()
+                .max_w(rems(14.))
                 .label(label.clone())
                 .tooltip(label.clone())
                 .icon(FullIconName::ChevronDown)
@@ -180,26 +185,20 @@ impl ConduitApp {
                 conduit::i18n::text_static("settings.sessions.default_service"),
                 route,
             )
-            .description(settings_description(conduit::i18n::text_static(
-                if service_unavailable {
-                    "settings.sessions.service_unavailable_description"
-                } else {
-                    "settings.sessions.service_description"
-                },
-            )))
-            .disabled(disabled),
+            .description(settings_description(service_description)),
             SettingItem::new(
                 conduit::i18n::text_static("settings.sessions.default_model"),
                 model,
             )
             .description(settings_description(conduit::i18n::text_static(
-                if model_unconfirmed {
+                if service_unavailable {
+                    "settings.sessions.model_needs_service_description"
+                } else if model_unconfirmed {
                     "settings.sessions.model_pending_confirmation_description"
                 } else {
                     "settings.sessions.model_description"
                 },
-            )))
-            .disabled(disabled || service_unavailable),
+            ))),
         ])
         .footer(|_, _| conduit::i18n::text_static("settings.sessions.defaults_scope"))
     }

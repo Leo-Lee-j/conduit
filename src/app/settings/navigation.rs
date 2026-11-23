@@ -20,7 +20,7 @@ pub(in crate::app) struct SettingsUi {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
-pub(super) enum SettingsRoute {
+pub(in crate::app) enum SettingsRoute {
     General = 0,
     Appearance = 1,
     Shortcuts = 2,
@@ -55,7 +55,7 @@ impl SettingsRoute {
         Self::ALL.get(index).copied()
     }
 
-    pub(super) fn index(self) -> usize {
+    pub(in crate::app) const fn index(self) -> usize {
         self as usize
     }
 
@@ -137,21 +137,6 @@ pub(super) fn settings_navigation_width(available_width: f32, font_size: f32) ->
     }
 }
 
-pub(super) const PAGE_SUMMARIES: [&str; 12] = [
-    "settings.summary.general",
-    "settings.summary.appearance",
-    "settings.summary.shortcuts",
-    "settings.summary.cli",
-    "settings.summary.skills",
-    "settings.summary.naming",
-    "settings.summary.git",
-    "settings.summary.maintenance",
-    "settings.summary.models",
-    "settings.summary.mcp",
-    "settings.summary.sessions",
-    "settings.plugins.summary",
-];
-
 pub(super) fn matches_search(text: &str, query: &str) -> bool {
     let text = text.to_lowercase();
     query
@@ -207,23 +192,13 @@ impl ConduitApp {
             .into_any_element()
     }
 
-    pub(super) fn settings_body(
+    fn settings_navigation(
         &self,
-        window: &Window,
-        available_width: f32,
+        route: SettingsRoute,
+        searching: bool,
         view: Entity<Self>,
-        cx: &App,
-    ) -> AnyElement {
-        let disabled = !self.writable || self.closing;
+    ) -> impl IntoElement {
         let font_scale = (self.store.ui.ui_font_size / DEFAULT_UI_FONT_SIZE).max(1.);
-        let navigation_width =
-            settings_navigation_width(available_width, self.store.ui.ui_font_size);
-        let compact = navigation_width == 0.;
-        let content_width = (available_width - navigation_width).max(0.);
-        let route =
-            SettingsRoute::from_index(self.settings_ui.page).unwrap_or(SettingsRoute::General);
-        let query = self.settings_ui.search.read(cx).value();
-        let searching = !query.trim().is_empty();
         let mut navigation = v_flex().gap_1().w_full();
         let mut group = "";
         for index in PAGE_ORDER {
@@ -269,10 +244,19 @@ impl ConduitApp {
                             .min_w_0()
                             .gap_2()
                             .child(Icon::new(icon).size(px(16. * font_scale)).flex_shrink_0())
-                            .child(div().flex_1().min_w_0().truncate().child(title)),
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .whitespace_normal()
+                                    .line_height(ui_text_size(18.))
+                                    .child(title),
+                            ),
                     )
                     .ghost()
-                    .h(px(36. * font_scale))
+                    .h_auto()
+                    .min_h(px(36. * font_scale))
+                    .py(px(7. * font_scale))
                     .w_full()
                     .justify_start()
                     .text_size(ui_text_size(13.))
@@ -285,10 +269,29 @@ impl ConduitApp {
                     }),
             );
         }
+        navigation
+    }
+
+    pub(super) fn settings_body(
+        &self,
+        window: &Window,
+        navigation_width: f32,
+        available_width: f32,
+        view: Entity<Self>,
+        cx: &App,
+    ) -> impl IntoElement {
+        let disabled = !self.writable || self.closing;
+        let compact = navigation_width == 0.;
+        let content_width = (available_width - navigation_width).max(0.);
+        let route =
+            SettingsRoute::from_index(self.settings_ui.page).unwrap_or(SettingsRoute::General);
+        let query = self.settings_ui.search.read(cx).value();
+        let searching = !query.trim().is_empty();
         let content = if searching {
-            self.settings_search_results(&query, view.clone())
+            SettingsContent::new(self.settings_search_results(&query, view.clone()))
         } else {
             match route {
+                SettingsRoute::Shortcuts => self.settings_shortcuts_page(view.clone()),
                 SettingsRoute::Plugins => self.settings_plugins_content(view.clone()),
                 SettingsRoute::Engines | SettingsRoute::Services => {
                     self.settings_connections_content(content_width, view.clone())
@@ -300,9 +303,6 @@ impl ConduitApp {
                     let page = match route {
                         SettingsRoute::Appearance => {
                             self.settings_appearance_page(disabled, view.clone())
-                        }
-                        SettingsRoute::Shortcuts => {
-                            self.settings_shortcuts_page(disabled, view.clone())
                         }
                         SettingsRoute::AutomaticNaming => {
                             self.settings_session_page(disabled, view.clone())
@@ -316,43 +316,37 @@ impl ConduitApp {
                         }
                         _ => self.settings_general_page(disabled, view.clone()),
                     };
-                    let controls = Settings::new(format!(
-                        "conduit-settings-page-{}-{:?}",
-                        route.index(),
-                        self.settings_ui.group
-                    ))
-                    .sidebar_width(px(0.))
-                    .sidebar_size_range(px(0.)..px(0.))
-                    .sidebar_style(&StyleRefinement::default().hidden())
-                    .with_group_variant(GroupBoxVariant::Normal)
-                    .default_selected_index(gpui_kit::component::setting::SelectIndex {
-                        page_ix: 0,
-                        group_ix: None,
-                    })
-                    .page(page.into_page(self.settings_ui.group, view.clone()))
-                    .into_any_element();
+                    let controls = settings_controls(
+                        format!(
+                            "conduit-settings-page-{}-{:?}",
+                            route.index(),
+                            self.settings_ui.group
+                        ),
+                        page.into_page(self.settings_ui.group, view.clone()),
+                    );
+                    let content = SettingsContent::new(controls);
                     if route == SettingsRoute::Sessions {
-                        v_flex()
-                            .size_full()
-                            .min_h_0()
-                            .child(management_toolbar(
-                                self.connection_settings.engine,
-                                false,
-                                None,
-                                content_width,
-                                self.store.ui.ui_font_size,
-                                view.clone(),
-                            ))
-                            .child(div().flex_1().min_h_0().w_full().child(controls))
-                            .into_any_element()
+                        content.with_toolbar(management_toolbar(
+                            self.connection_settings.engine,
+                            false,
+                            None,
+                            None,
+                            content_width,
+                            self.store.ui.ui_font_size,
+                            view.clone(),
+                        ))
                     } else {
-                        controls
+                        content
                     }
                 }
             }
         };
         h_flex()
-            .size_full()
+            .id("settings-workspace-body")
+            .debug_selector(|| "settings-workspace-body".into())
+            .flex_1()
+            .min_h_0()
+            .w_full()
             .min_w_0()
             .items_start()
             .when(!compact, |body| {
@@ -374,7 +368,7 @@ impl ConduitApp {
                                 .px_3()
                                 .pb_3()
                                 .overflow_y_scroll()
-                                .child(navigation),
+                                .child(self.settings_navigation(route, searching, view.clone())),
                         )
                         .child(
                             div()
@@ -386,16 +380,7 @@ impl ConduitApp {
                         ),
                 )
             })
-            .child(
-                div()
-                    .id("settings-content")
-                    .debug_selector(|| "settings-content".into())
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .child(content),
-            )
-            .into_any_element()
+            .child(self.settings_content_pane(compact, content, view))
     }
 
     pub(super) fn select_settings_page(
@@ -476,50 +461,51 @@ impl ConduitApp {
         )
     }
 
-    pub(super) fn generation_disclosure(&self, naming: bool, view: Entity<Self>) -> SettingItem {
+    pub(super) fn generation_disclosure(
+        &self,
+        naming: bool,
+        view: Entity<Self>,
+        fields: Vec<SettingItem>,
+    ) -> SettingItem {
         let expanded = if naming {
             self.settings_ui.naming_expanded
         } else {
             self.settings_ui.git_expanded
         };
         let summary = self.generation_summary(naming);
-        SettingItem::render(move |_, _, _| {
+        SettingItem::render(move |options, window, cx| {
             let view = view.clone();
-            h_flex()
-                .w_full()
-                .gap_2()
-                .justify_between()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_size(ui_text_size(12.))
-                        .child(summary.clone()),
-                )
-                .child(
-                    Button::new(if naming {
-                        "naming-config-expand"
-                    } else {
-                        "git-config-expand"
+            settings_accordion(
+                if naming {
+                    "naming-config-expand"
+                } else {
+                    "git-config-expand"
+                },
+                v_flex()
+                    .min_w_0()
+                    .gap_1()
+                    .child(conduit::i18n::text_static(
+                        "settings.navigation.configure_model",
+                    ))
+                    .child(
+                        div()
+                            .text_size(ui_text_size(12.))
+                            .text_color(rgb(palette().muted))
+                            .child(summary.clone()),
+                    ),
+                expanded,
+                accordion_fields(&fields, options, window, cx),
+                move |open, _, cx| {
+                    view.update(cx, |app, cx| {
+                        if naming {
+                            app.settings_ui.naming_expanded = open;
+                        } else {
+                            app.settings_ui.git_expanded = open;
+                        }
+                        cx.notify();
                     })
-                    .small()
-                    .ghost()
-                    .label(if expanded {
-                        conduit::i18n::text_static("settings.navigation.hide_configuration")
-                    } else {
-                        conduit::i18n::text_static("settings.navigation.configure_model")
-                    })
-                    .on_click(move |_, _, cx| {
-                        view.update(cx, |app, cx| {
-                            if naming {
-                                app.settings_ui.naming_expanded = !expanded;
-                            } else {
-                                app.settings_ui.git_expanded = !expanded;
-                            }
-                            cx.notify();
-                        });
-                    }),
-                )
+                },
+            )
         })
         .keywords([
             conduit::i18n::text_static("model_picker.model_98fd0c"),

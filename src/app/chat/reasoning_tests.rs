@@ -307,8 +307,16 @@ fn reasoning_stream_stays_visible_after_reply_and_restoration(cx: &mut TestAppCo
     }
     cx.update(|window, cx| app.update(cx, |app, cx| app.poll_streams(window, cx)));
     draw(cx);
-    assert!(cx.debug_bounds("reasoning-quote-1-0").is_none());
-    cx.update(|_, cx| assert!(app.read(cx).chat_rows.rows.is_empty()));
+    assert!(cx.debug_bounds("activity-1-0").is_some());
+    assert!(cx.debug_bounds("reasoning-body-1-0").is_some());
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert_eq!(app.chat_rows.rows.len(), 1);
+        assert_eq!(
+            app.session(1).unwrap().messages[0].reasoning_summary,
+            Some(true)
+        );
+    });
     let mut feed = |value| {
         for event in protocol.accept(value).events {
             sender.send(event).unwrap();
@@ -471,7 +479,7 @@ fn reasoning_markdown_keeps_prose_and_code_unchanged() {
 }
 
 #[gpui_kit::test]
-fn restored_reasoning_hides_summaries_and_keeps_bodies(cx: &mut TestAppContext) {
+fn restored_reasoning_summaries_and_bodies_follow_chat_display_preference(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     let (app, cx, _) = crate::app::queue::tests::fixture(cx, "reasoning-paragraphs");
     cx.simulate_resize(gpui_kit::size(px(1200.), px(900.)));
@@ -480,7 +488,7 @@ fn restored_reasoning_hides_summaries_and_keeps_bodies(cx: &mut TestAppContext) 
             app.startup = None;
             app.writable = false;
             app.session_mut(1).unwrap().provider = Provider::Codex;
-            app.store.ui.collapse_reasoning = false;
+            app.set_reasoning_collapsed(true);
             app.session_mut(1).unwrap().messages = serde_json::from_value(json!([
                 {"key":"one", "kind":"Reasoning", "text":"**Inspect files**", "status":"completed", "elapsed_ms":46},
                 {"key":"legacy", "kind":"Reasoning", "text":"**Inspect files**\n**Check tests**", "status":"completed"},
@@ -488,21 +496,40 @@ fn restored_reasoning_hides_summaries_and_keeps_bodies(cx: &mut TestAppContext) 
                 {"key":"details", "kind":"Reasoning", "text":"**Inspect files**\n\nRead the implementation.\n\nVerify the result.", "reasoning_summary":false, "status":"completed"}
             ])).unwrap();
             app.sync_chat_rows();
-            assert_eq!(app.chat_rows.rows.len(), 1);
-            assert_eq!(app.chat_rows.rows[0].message, 3);
+            let visible: Vec<_> = app.chat_rows.rows.iter().map(|row| row.message).collect();
+            assert_eq!(visible, [0, 1, 2, 3]);
             cx.notify();
         });
     });
     draw(cx);
     draw(cx);
-    for selector in [
-        "reasoning-quote-1-0",
-        "reasoning-quote-1-1",
-        "reasoning-quote-1-2",
+    for (header, body) in [
+        ("activity-1-0", "reasoning-body-1-0"),
+        ("activity-1-1", "reasoning-body-1-1"),
+        ("activity-1-2", "reasoning-body-1-2"),
+        ("activity-1-3", "reasoning-body-1-3"),
     ] {
-        assert!(cx.debug_bounds(selector).is_none());
+        assert!(cx.debug_bounds(header).is_some());
+        assert!(cx.debug_bounds(body).is_none());
     }
-    assert!(cx.debug_bounds("reasoning-body-1-3").is_some());
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.set_reasoning_collapsed(false);
+            cx.notify();
+        });
+    });
+    draw(cx);
+    draw(cx);
+    // A single heading fits in the header. Multi-part summaries and the full
+    // body expand when the user changes the chat display preference.
+    assert!(cx.debug_bounds("reasoning-body-1-0").is_none());
+    for body in [
+        "reasoning-body-1-1",
+        "reasoning-body-1-2",
+        "reasoning-body-1-3",
+    ] {
+        assert!(cx.debug_bounds(body).is_some());
+    }
     cx.update(|_, cx| {
         assert_eq!(
             app.read(cx).session(1).unwrap().messages[1].text,

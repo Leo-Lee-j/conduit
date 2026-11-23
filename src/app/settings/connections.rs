@@ -39,11 +39,11 @@ impl ConnectionsUi {
 }
 
 impl ConduitApp {
-    pub(in crate::app) fn settings_connections_content(
+    pub(super) fn settings_connections_content(
         &self,
         available_width: f32,
         view: Entity<Self>,
-    ) -> AnyElement {
+    ) -> SettingsContent {
         let engine = self.connection_settings.engine;
         let services = self.settings_ui.page == 8;
         let disabled = !self.writable || self.closing;
@@ -181,33 +181,22 @@ impl ConduitApp {
                 .header_style(&StyleRefinement::default().hidden()),
             groups,
         };
-        v_flex()
-            .size_full()
-            .min_w_0()
-            .child(management_toolbar(
-                engine,
-                false,
-                (services || self.settings_ui.group.is_some()).then(|| actions.into_any_element()),
-                available_width,
-                self.store.ui.ui_font_size,
-                view.clone(),
-            ))
-            .child(
-                div().flex_1().min_h_0().w_full().child(
-                    Settings::new(format!(
-                        "conduit-connections-{}-{:?}-{:?}",
-                        self.settings_ui.page, engine, self.settings_ui.group
-                    ))
-                    .sidebar_width(px(0.))
-                    .sidebar_size_range(px(0.)..px(0.))
-                    .sidebar_style(&StyleRefinement::default().hidden())
-                    .with_group_variant(GroupBoxVariant::Fill)
-                    .page(
-                        page.into_page(self.settings_ui.group, view)
-                            .header_style(&StyleRefinement::default().hidden()),
-                    ),
-                ),
-            )
-            .into_any_element()
+        SettingsContent::new(settings_controls(
+            format!(
+                "conduit-connections-{}-{:?}-{:?}",
+                self.settings_ui.page, engine, self.settings_ui.group
+            ),
+            page.into_page(self.settings_ui.group, view.clone())
+                .header_style(&StyleRefinement::default().hidden()),
+        ))
+        .with_toolbar(management_toolbar(
+            engine,
+            false,
+            None,
+            (services || self.settings_ui.group.is_some()).then(|| actions.into_any_element()),
+            available_width,
+            self.store.ui.ui_font_size,
+            view,
+        ))
     }
 }

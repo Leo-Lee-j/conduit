@@ -224,11 +224,11 @@ impl ConduitApp {
                 .read(cx)
                 .naming_model_picker(model_view.clone(), disabled)
         });
-        let mut items = vec![self.generation_disclosure(true, view)];
-        if self.settings_ui.naming_expanded {
-            // These pickers also serve manual AI renaming: only the trigger is
-            // disabled when automatic naming is off, not this configuration.
-            items.extend([
+        // The pickers also serve manual renaming when automatic naming is off.
+        vec![self.generation_disclosure(
+            true,
+            view,
+            vec![
                 SettingItem::new(
                     conduit::i18n::text_static("settings.general.naming_engine"),
                     provider,
@@ -247,8 +247,7 @@ impl ConduitApp {
                     model,
                 )
                 .disabled(disabled),
-            ]);
-        }
-        items
+],
+        )]
     }
 }

@@ -22,8 +22,8 @@ const ENTRIES: &[(usize, usize, &str, &str, &str)] = &[
         "权限 默认权限 默认会话权限 会话 工作区 permission default session workspace",
     ),
     (
-        1,
-        0,
+        SettingsRoute::Appearance.index(),
+        APPEARANCE_OPTIONS_GROUP,
         "自动将活跃工作空间排到前面",
         "优先显示有运行中会话的工作空间，再按最近会话活动时间排序。关闭后恢复手动顺序。",
         "工作区 侧栏 自动 排序 活跃 最近 workspace sidebar automatic sort active recent",
@@ -64,8 +64,8 @@ const ENTRIES: &[(usize, usize, &str, &str, &str)] = &[
         "tab 标签 限制",
     ),
     (
-        1,
-        0,
+        SettingsRoute::Appearance.index(),
+        APPEARANCE_OPTIONS_GROUP,
         "应用主题",
         "选择浅色、深色或跟随系统",
         "外观 theme dark light",
@@ -85,8 +85,8 @@ const ENTRIES: &[(usize, usize, &str, &str, &str)] = &[
         "文字 字体 字号 行高 font size",
     ),
     (
-        1,
-        0,
+        SettingsRoute::Appearance.index(),
+        APPEARANCE_OPTIONS_GROUP,
         "自动折叠非活跃工作空间",
         "自动折叠最近 3 天内没有会话活动的工作空间。当前工作空间和正在运行的会话保持可见，仍可手动展开任意工作空间。",
         "工作区 侧栏 自动 折叠 非活跃 3天 workspace sidebar automatic collapse inactive",
@@ -282,8 +282,8 @@ impl ConduitApp {
         }
         if matches_search(&background_search, query) {
             results.push(SettingsResult {
-                page: 1,
-                group: Some(2),
+                page: SettingsRoute::Appearance.index(),
+                group: Some(BACKGROUND_GROUP),
                 title: background_title.into(),
                 description: background_description.into(),
                 engine: None,
@@ -403,6 +403,25 @@ impl ConduitApp {
         results
     }
 
+    pub(in crate::app) fn open_first_settings_result(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.settings_ui.open || window.has_active_dialog(cx) {
+            return;
+        }
+        let input = self.settings_ui.search.read(cx);
+        if input.focus_handle(cx).is_focused(window)
+            && let Some(result) = self
+                .settings_search_matches(&input.value())
+                .into_iter()
+                .next()
+        {
+            self.open_settings_result(result, window, cx);
+        }
+    }
+
     pub(super) fn open_settings_result(
         &mut self,
         result: SettingsResult,
@@ -447,20 +466,15 @@ impl ConduitApp {
                 .justify_between()
                 .gap_3()
                 .child(
-                    v_flex()
-                        .gap_2()
-                        .child(div().text_size(ui_text_size(22.)).font_semibold().child(
-                            conduit::i18n::text_static("settings.search.search_settings"),
-                        ))
-                        .child(
-                            div()
-                                .text_size(ui_text_size(13.))
-                                .text_color(rgb(palette().muted))
-                                .child(conduit::i18n::format(
-                                    "settings.search.results_open_a_group_or_press_enter",
-                                    &[("count", format!("{}", count))],
-                                )),
-                        ),
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(ui_text_size(13.))
+                        .text_color(rgb(palette().muted))
+                        .child(conduit::i18n::format(
+                            "settings.search.results_open_a_group_or_press_enter",
+                            &[("count", format!("{}", count))],
+                        )),
                 )
                 .child(
                     Button::new("settings-search-clear")
@@ -481,10 +495,11 @@ impl ConduitApp {
                         }),
                 ),
         );
+        let mut matches = v_flex().refine_style(&settings_group_style()).gap_1().p_1();
         for (index, result) in results.into_iter().enumerate() {
             let select = view.clone();
             let (section, page, _) = PAGES[result.page];
-            body = body.child(
+            matches = matches.child(
                 Button::new(("settings-search-result", index))
                     .debug_selector(move || format!("settings-search-result-{index}"))
                     .accessibility_label(format!(
@@ -493,10 +508,10 @@ impl ConduitApp {
                         conduit::i18n::source(page),
                         result.title
                     ))
-                    .outline()
+                    .ghost()
                     .w_full()
                     .h_auto()
-                    .p_4()
+                    .p_3()
                     .justify_start()
                     .child(
                         v_flex()
@@ -533,7 +548,9 @@ impl ConduitApp {
                     }),
             );
         }
-        if count == 0 {
+        if count > 0 {
+            body = body.child(matches);
+        } else {
             body = body.child(
                 v_flex()
                     .py_6()
@@ -576,11 +593,7 @@ impl ConduitApp {
                     ),
             );
         }
-        div()
-            .id("settings-search-results")
-            .size_full()
-            .overflow_y_scroll()
-            .p_6()
+        settings_scroll_area("settings-search-results")
             .child(body)
             .into_any_element()
     }

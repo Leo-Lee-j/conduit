@@ -21,17 +21,6 @@ pub(super) fn management_badge(label: impl Into<SharedString>, active: bool) -> 
         .child(label.into())
 }
 
-fn management_actions(actions: AnyElement) -> Div {
-    h_flex()
-        .debug_selector(|| "settings-page-actions".into())
-        .w_full()
-        .flex_shrink_0()
-        .justify_end()
-        .px(px(settings_content_inset()))
-        .py(px(8.))
-        .child(actions)
-}
-
 fn engine_tabs(
     engine: Provider,
     extensions: bool,
@@ -48,7 +37,8 @@ fn engine_tabs(
         .gap_1()
         .p_1()
         .rounded_lg()
-        .bg(rgb(palette().surface_strong));
+        .border_1()
+        .border_color(settings_group_border());
     for (index, candidate) in Provider::ALL.into_iter().enumerate() {
         let view = view.clone();
         let selected = candidate == engine;
@@ -114,55 +104,16 @@ fn engine_tabs(
 pub(super) fn management_toolbar(
     engine: Provider,
     extensions: bool,
+    mode_tabs: Option<AnyElement>,
     actions: Option<AnyElement>,
     available_width: f32,
     font_size: f32,
     view: Entity<ConduitApp>,
 ) -> AnyElement {
-    management_toolbar_padding(
-        engine,
-        extensions,
-        actions,
-        available_width,
-        font_size,
-        view,
-        (12., 8.),
-    )
-}
-
-/// Let content-dense pages align the engine tabs with their own page inset.
-pub(super) fn management_toolbar_inset(
-    engine: Provider,
-    extensions: bool,
-    actions: Option<AnyElement>,
-    available_width: f32,
-    font_size: f32,
-    view: Entity<ConduitApp>,
-    inset: f32,
-) -> AnyElement {
-    management_toolbar_padding(
-        engine,
-        extensions,
-        actions,
-        available_width,
-        font_size,
-        view,
-        (inset, inset),
-    )
-}
-
-fn management_toolbar_padding(
-    engine: Provider,
-    extensions: bool,
-    actions: Option<AnyElement>,
-    available_width: f32,
-    font_size: f32,
-    view: Entity<ConduitApp>,
-    (horizontal_inset, vertical_inset): (f32, f32),
-) -> AnyElement {
+    let inset = settings_content_inset();
     // Budget for complete labels, icons, button padding and grid gaps. Change
     // the column count with the pane width and UI font, never clip a label.
-    let inner_width = (available_width - horizontal_inset * 2.).max(0.);
+    let inner_width = (available_width - inset * 2.).max(0.);
     let scale = font_size / DEFAULT_UI_FONT_SIZE;
     let columns = if inner_width >= 548. * scale {
         4
@@ -172,19 +123,17 @@ fn management_toolbar_padding(
         1
     };
     let tabs = engine_tabs(engine, extensions, columns, view);
-    v_flex()
+    h_flex()
+        .debug_selector(|| "management-engine-bar".into())
         .w_full()
+        .min_w_0()
         .flex_shrink_0()
-        .child(
-            div()
-                .debug_selector(|| "management-engine-bar".into())
-                .w_full()
-                .px(px(horizontal_inset))
-                .py(px(vertical_inset))
-                .child(tabs),
-        )
-        .when_some(actions, |bar, actions| {
-            bar.child(management_actions(actions))
-        })
+        .flex_wrap()
+        .gap_2()
+        .px(px(inset))
+        .pt(px(inset))
+        .child(tabs)
+        .when_some(mode_tabs, |bar, modes| bar.child(modes))
+        .when_some(actions, |bar, actions| bar.child(actions))
         .into_any_element()
 }

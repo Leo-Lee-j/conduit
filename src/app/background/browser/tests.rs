@@ -1,6 +1,9 @@
 use super::{Arc, AtomicBool, Category, ConduitApp, Ordering, Query, Sort, Store};
+use crate::app::settings::{BACKGROUND_GROUP, SettingsRoute};
 use conduit::i18n;
-use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext, px, size};
+use gpui_kit::{
+    AppContext as _, Modifiers, MouseButton, TestAppContext, VisualTestContext, px, size,
+};
 
 fn draw(cx: &mut VisualTestContext) {
     cx.run_until_parked();
@@ -20,8 +23,8 @@ fn inline_browser_and_background_switch_have_independent_lifetimes(cx: &mut Test
             let mut app = ConduitApp::with_store(window, cx, Ok(Store::default()), false, false);
             app.startup = None;
             app.settings_ui.open = true;
-            app.settings_ui.page = 1;
-            app.settings_ui.group = Some(5);
+            app.settings_ui.page = SettingsRoute::Appearance.index();
+            app.settings_ui.group = Some(BACKGROUND_GROUP);
             app
         });
         *output.borrow_mut() = Some(app.clone());
@@ -35,18 +38,12 @@ fn inline_browser_and_background_switch_have_independent_lifetimes(cx: &mut Test
             assert!(app.store.ui.background.enabled);
             assert!(app.background.browser.is_none());
             assert!(app.background.operation.is_none());
-            app.open_background_browser(window, cx);
-            assert!(
-                app.background
-                    .browser
-                    .as_ref()
-                    .unwrap()
-                    .read(cx)
-                    .cancel
-                    .is_none()
-            );
         })
     });
+    draw(cx);
+    let point = cx.debug_bounds("background-browse").unwrap().center();
+    cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
     draw(cx);
     assert!(
         cx.debug_bounds("wallpaper-search").is_some(),
@@ -55,6 +52,7 @@ fn inline_browser_and_background_switch_have_independent_lifetimes(cx: &mut Test
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
             let browser = app.background.browser.clone().unwrap();
+            assert!(browser.read(cx).cancel.is_none());
             let cancel = Arc::new(AtomicBool::new(false));
             browser.update(cx, |browser, _| browser.cancel = Some(cancel.clone()));
             app.close_background_browser(cx);
@@ -69,14 +67,18 @@ fn inline_browser_and_background_switch_have_independent_lifetimes(cx: &mut Test
         })
     });
     draw(cx);
+    let cancel = Arc::new(AtomicBool::new(false));
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
-            app.settings_ui.page = 0;
-            app.settings_ui.group = None;
+            let browser = app.background.browser.as_ref().unwrap();
+            browser.update(cx, |browser, _| browser.cancel = Some(cancel.clone()));
+            // Leaving the background section of Appearance must also close it.
+            app.settings_ui.group = Some(1);
             cx.notify();
         })
     });
     draw(cx);
+    assert!(cancel.load(Ordering::Acquire));
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
             assert!(app.background.browser.is_none());
@@ -187,7 +189,10 @@ fn language_switch_preserves_wallpaper_search_and_translates_retained_messages(
                     let result = app
                         .settings_search_matches(query)
                         .into_iter()
-                        .find(|result| result.page == 1 && result.group == Some(5))
+                        .find(|result| {
+                            result.page == SettingsRoute::Appearance.index()
+                                && result.group == Some(BACKGROUND_GROUP)
+                        })
                         .expect("background settings must match both languages");
                     assert_eq!(result.title, i18n::text("wallpaper.title"));
                 }

@@ -656,8 +656,20 @@ impl ConduitApp {
                     cx.notify();
                 }
             });
-        let settings_search_subscription =
-            cx.subscribe(&settings_search, |_, _, _: &InputEvent, cx| cx.notify());
+        let settings_search_subscription = cx.subscribe_in(
+            &settings_search,
+            window,
+            |app, _, event: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter {
+                    secondary: false,
+                    shift: false,
+                } = event
+                {
+                    app.open_first_settings_result(window, cx);
+                }
+                cx.notify();
+            },
+        );
         let skill_search = cx.new(|cx| {
             InputState::new(window, cx).placeholder(conduit::i18n::text_static(
                 "localization.search_names_or_descriptions",

@@ -1,4 +1,4 @@
-"""Verify the pinned GPUI renderer snapshot without a Cargo cache or network."""
+"""Verify the pinned GPUI snapshot without a Cargo cache or network."""
 
 import hashlib
 import json
@@ -9,12 +9,17 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 VENDOR = ROOT / "vendor" / "gpui-kit"
 PATCHED = {
+    "crates/base/src/accordion.rs",
     "crates/base/src/text/style.rs",
     "crates/base/src/text/text_view.rs",
     "crates/base/src/text/node.rs",
     "crates/base/src/text/state.rs",
     "crates/base/src/text/inline_flow.rs",
     "crates/component/src/text/compat.rs",
+    "crates/component/src/accordion.rs",
+    "crates/component/src/setting/group.rs",
+    "crates/component/src/setting/item.rs",
+    "crates/component/src/setting/settings.rs",
 }
 
 
@@ -59,7 +64,7 @@ def main():
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1
-    print(f"GPUI vendor OK: {revision}, {len(actual)} files, {len(PATCHED)} declared renderer patches")
+    print(f"GPUI vendor OK: {revision}, {len(actual)} files, {len(PATCHED)} declared patches")
     return 0
 
 

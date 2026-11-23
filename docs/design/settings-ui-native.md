@@ -4,7 +4,7 @@
 
 在原有 Rust / GPUI 设置工作区上增量接入，不替换为弹窗，也不迁移配置或改写会话历史。产品、视觉/交互、技术集成和 QA 并行工作，按文件划分写集；已有 `services.rs` 与 `workspace_tests.rs` 用户修改保持不变。
 
-- 公共壳：统一标题、分区标题、文字层级与间距，跟随现有主题，不增加装饰性渐变或逐字段卡片。
+- 公共布局：左侧是分类菜单，右侧上方固定全局搜索，下方滚动显示当前分类或搜索结果。各分类复用内容容器，相关设置共用一层圆角边框。分组标题和辅助说明留在边框外。
 - 导航：四个域、11 个可见入口。依据设置主区实际宽度与 UI 字号，选择文字侧栏或带文字的分类下拉；保留主工作台周边面板。
 - 外观与字体：外观 / 文字 / 背景三组；界面、聊天、代码字体独立；界面恢复与聊天/代码恢复分开；静态排版预览不会读取会话或执行示例代码。
 - 会话设置：默认服务/模型、默认权限、聊天显示、自动命名四组。仅默认服务/模型使用当前浏览引擎；权限与显示偏好有独立范围说明。
@@ -107,5 +107,17 @@
 | 共享服务引用范围、旧 route 5 与命名搜索落点 | `services-shared-editor.png` | 编辑器截图可见引用范围说明；route / 搜索落点由测试覆盖，未对每个状态人工巡检 |
 
 IME、辅助技术、多档 DPI 和真实 CLI 并发仍须按 `docs/testing.md` 人工验收。未完成或未覆盖的项目保留为待补 / 未验收，不从自动化通过结果推断为人工验收通过。
+
+### 续作验证
+
+在 `a5750c6` 上重跑全仓测试，复现了上表的 5 个失败。背景浏览器仍按旧 group 5 判定可见性，现已与搜索落点共用背景分组编号；回归覆盖了点击展开、背景开关独立、切到同页其他分组时关闭并取消请求。另将侧栏偏好搜索断言更新到实际「外观」分组，并按 `f20b54c` 的时间线行为验证历史推理摘要随「折叠推理」偏好改变显示。
+
+实窗中还修复了两处裁切：文字侧栏允许长分类名换行；会话默认项限制下拉宽度，将失效服务的旧 ID 移到可换行的说明中。服务失效时禁用模型下拉并解释原因；服务有效但模型待确认时，仍允许重选模型。两种状态都保留已保存的选择。
+
+本轮实窗使用 Debug 构建、隔离配置和模拟服务，以 `scripts/ui-acceptance.ps1` 采集；截图和 UI Automation 记录位于 `target/settings-redesign-continuation-native/out/`。核对了 1600×1000 深色和 1000×800 浅色、20px 界面字号下的背景搜索落点和展开状态，以及会话默认项的失效服务、模型待确认、Legacy CCS 和只读状态。窄窗另核对了失效服务的可读性。晚一轮截图正常关闭成功；此前两次捕获的 5 秒关闭超时仍保留在验收记录。未发起壁纸查询，也未连接真实模型服务。多档 DPI、IME、Narrator 和真实 CLI 验收仍按 `docs/testing.md` 单独执行。
+
+背景、会话默认项和侧栏改动后，设置及相关专项 54 passed / 0 failed / 1 ignored；更广的 `cargo test --locked --features ui-tests -- --test-threads=1 --skip git::tests::` 主程序 831 passed / 0 failed / 26 ignored（筛掉 71 项），库与工具另有 62 项通过。基线完整运行、专项与较广回归日志分别为 `target/settings-redesign-continuation-baseline.log`、`target/settings-redesign-continuation-focused.log` 和 `target/settings-redesign-continuation-final-tests.log`。首次复跑曾遇到基线进程占用测试程序，链接失败记录保留在 `target/settings-redesign-continuation-link-retry.log`。
+
+搜索提交现由搜索框自身的 Enter 事件处理。最终构建的设置及相关专项复跑仍为 54 passed / 0 failed / 1 ignored；Debug 构建、Clippy、格式和中英文目录检查均通过。Windows 定向投递 Return 键后，宽窄两窗均从搜索打开「背景图」首项，并可展开浏览器（`verified-posted-return`、`verified-compact-posted-return`，两个窗口实测均为 96 DPI）。键盘事件和 UI Automation 记录仅覆盖这条流程，不替代人工验收。
 
 设计方法参考 Unslop by Damir Sokolovsky（@heydamir，CC BY 4.0）。实际界面延续 Conduit 主题与图标体系，没有引入生成图片。

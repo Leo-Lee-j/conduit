@@ -82,7 +82,7 @@ impl ConduitApp {
             .w_full()
             .min_w_0()
             .p_2()
-            .gap_0p5()
+            .gap_1()
             .rounded_lg()
             .border_1()
             .border_color(rgb(palette().border))
@@ -152,7 +152,7 @@ impl ConduitApp {
                         .py_2()
                         .rounded_md()
                         .border_1()
-                        .border_color(gpui_kit::rgba(0))
+                        .border_color(settings_group_border())
                         .when(active, |row| {
                             row.bg(gpui_kit::rgba((palette().activity_running << 8) | 0x0c))
                                 .border_color(gpui_kit::rgba(

@@ -324,6 +324,15 @@ fn settings_plugins_manage_icon_theme_lifecycle_and_readonly_state(cx: &mut Test
         cx.simulate_resize(size(px(width), px(height)));
         draw(cx);
         let bounds = cx.debug_bounds("settings-content").unwrap();
+        let search = cx.debug_bounds("settings-search-bar").unwrap();
+        assert_eq!(search.left(), bounds.left());
+        assert_eq!(search.right(), bounds.right());
+        assert_eq!(search.bottom(), bounds.top());
+        assert!(cx.debug_bounds("settings-workspace-header").is_none());
+        if let Some(rail) = cx.debug_bounds("settings-navigation-scroll") {
+            assert!(rail.right() <= search.left());
+            assert_eq!(rail.top(), search.top());
+        }
         for selector in ["plugin-install", "plugin-refresh", "plugin-default-icons"] {
             let control = cx.debug_bounds(selector).unwrap();
             assert!(control.left() >= bounds.left() && control.right() <= bounds.right());
@@ -345,12 +354,14 @@ fn settings_plugins_manage_icon_theme_lifecycle_and_readonly_state(cx: &mut Test
     });
     draw(cx);
     let viewport = cx.debug_bounds("settings-plugins-list").unwrap();
+    let search = cx.debug_bounds("settings-search-bar").unwrap();
     cx.simulate_event(ScrollWheelEvent {
         position: viewport.center(),
         delta: ScrollDelta::Pixels(point(px(0.), px(-1200.))),
         ..Default::default()
     });
     draw(cx);
+    assert_eq!(cx.debug_bounds("settings-search-bar"), Some(search));
     let select = cx
         .debug_bounds("plugin-use-example.outline-icons")
         .unwrap()
@@ -706,11 +717,10 @@ fn settings_services_inline_selection_resizes_without_changing_defaults(cx: &mut
         engines.left() - engine_bar.left(),
         "engine tabs have matching top and left padding"
     );
-    assert_eq!(engine_bar.bottom() - engines.bottom(), px(16.));
     assert_eq!(
         summary.top() - engines.bottom(),
-        px(16.),
-        "content does not add another top inset"
+        px(8.),
+        "default summary sits close to the engine selector"
     );
     assert_eq!(
         engines.left(),
@@ -775,7 +785,6 @@ fn settings_services_inline_selection_resizes_without_changing_defaults(cx: &mut
     let engine_bar = cx.debug_bounds("management-engine-bar").unwrap();
     assert_eq!(engines.left() - engine_bar.left(), px(16.));
     assert_eq!(engines.top() - engine_bar.top(), px(16.));
-    assert_eq!(engine_bar.bottom() - engines.bottom(), px(16.));
     click(cx, "service-detail-back");
     assert!(cx.debug_bounds("service-list").is_some());
     assert!(cx.debug_bounds("service-details").is_none());

@@ -59,7 +59,7 @@ fn fixture(cx: &mut TestAppContext) -> (Entity<ConduitApp>, &mut VisualTestConte
         gpui_kit::component::Root::new(app, window, cx)
     });
     let app = slot.borrow().as_ref().unwrap().clone();
-    cx.simulate_resize(size(px(1400.), px(900.)));
+    cx.simulate_resize(size(px(1500.), px(900.)));
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
             app.open_settings(window, cx);

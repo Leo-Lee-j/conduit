@@ -1,7 +1,6 @@
 //! Models settings.
 
 use super::*;
-use gpui_kit::component::collapsible::Collapsible;
 #[path = "models/editor_models.rs"]
 mod editor_models;
 use editor_models::{FetchModels, ModelsChanged, ProviderModels};
@@ -415,79 +414,64 @@ impl ProviderEditor {
                     })),
             );
         }
-        Collapsible::new()
-            .w_full()
-            .open(self.advanced_open)
-            .rounded_lg()
-            .border_1()
-            .border_color(rgb(palette().border))
-            .child(
-                Button::new("provider-advanced-toggle")
-                    .debug_selector(|| "provider-advanced-toggle".into())
-                    .ghost()
-                    .w_full()
-                    .justify_start()
-                    .icon(if self.advanced_open {
-                        FullIconName::ChevronDown
-                    } else {
-                        FullIconName::ChevronRight
-                    })
-                    .label(conduit::i18n::text_static(
-                        "settings.models.advanced_options",
-                    ))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.advanced_open = !this.advanced_open;
-                        cx.notify();
-                    })),
-            )
-            .content(
-                v_flex()
-                    .debug_selector(|| "provider-advanced-fields".into())
-                    .w_full()
-                    .p_4()
-                    .gap_4()
-                    .child(
-                        h_flex()
-                            .items_start()
-                            .flex_wrap()
-                            .gap_4()
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .min_w(px(180.))
-                                    .gap_2()
-                                    .child(provider_field_label(
-                                        conduit::i18n::text_static(
-                                            "settings.models.service_engine",
-                                        ),
-                                        false,
-                                    ))
-                                    .child(engines),
-                            )
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .min_w(px(180.))
-                                    .gap_2()
-                                    .child(provider_field_label(
-                                        conduit::i18n::text_static(
-                                            "settings.models.authentication",
-                                        ),
-                                        false,
-                                    ))
-                                    .child(authentication),
-                            ),
-                    )
-                    .child(
-                        v_flex()
-                            .debug_selector(|| "provider-editor-field-3".into())
-                            .border_t_1()
-                            .border_color(rgb(palette().border))
-                            .pt_4()
-                            .gap_2()
-                            .child(self.models.clone()),
-                    ),
-            )
+        let editor = cx.entity();
+        settings_accordion(
+            "provider-advanced-toggle",
+            div()
+                .debug_selector(|| "provider-advanced-toggle".into())
+                .child(conduit::i18n::text_static(
+                    "settings.models.advanced_options",
+                )),
+            self.advanced_open,
+            v_flex()
+                .debug_selector(|| "provider-advanced-fields".into())
+                .w_full()
+                .p_4()
+                .gap_4()
+                .child(
+                    h_flex()
+                        .items_start()
+                        .flex_wrap()
+                        .gap_4()
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w(px(180.))
+                                .gap_2()
+                                .child(provider_field_label(
+                                    conduit::i18n::text_static("settings.models.service_engine"),
+                                    false,
+                                ))
+                                .child(engines),
+                        )
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w(px(180.))
+                                .gap_2()
+                                .child(provider_field_label(
+                                    conduit::i18n::text_static("settings.models.authentication"),
+                                    false,
+                                ))
+                                .child(authentication),
+                        ),
+                )
+                .child(
+                    v_flex()
+                        .debug_selector(|| "provider-editor-field-3".into())
+                        .border_t_1()
+                        .border_color(rgb(palette().border))
+                        .pt_4()
+                        .gap_2()
+                        .child(self.models.clone()),
+                ),
+            move |open, _, cx| {
+                editor.update(cx, |editor, cx| {
+                    editor.advanced_open = open;
+                    cx.notify();
+                })
+            },
+        )
     }
 }
 
@@ -769,40 +753,46 @@ impl ConduitApp {
                 ("arg1", format!("{}", ccs_model_count)),
             ],
         );
-        let toggle = SettingItem::render(move |_, _, _| {
-            let toggle_view = view.clone();
-            Button::new("settings-models-sources")
-                .label(if expanded {
-                    conduit::i18n::text_static("settings.models.hide_configuration_sources")
-                } else {
-                    conduit::i18n::text_static("settings.models.view_configuration_sources")
-                })
-                .small()
-                .ghost()
-                .cursor_pointer()
-                .on_click(move |_, _, cx| {
-                    toggle_view.update(cx, |this, cx| {
-                        this.connection_settings.sources_expanded = !expanded;
+        let mut fields = vec![
+            value_item(engine.label(), config_path),
+            value_item("cc-switch", display_path(&self.ccs.database_path)),
+            value_item(
+                conduit::i18n::text_static("settings.models.loaded"),
+                ccs_summary,
+            ),
+        ];
+        if self.ccs.error.is_none()
+            && let Some(note) = self.ccs.note.clone()
+        {
+            fields.push(
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.models.description"),
+                    paragraph_field(note),
+                )
+                .layout(Axis::Vertical),
+            );
+        }
+        let sources = SettingItem::render(move |options, window, cx| {
+            let view = view.clone();
+            settings_accordion(
+                "settings-models-sources",
+                conduit::i18n::text_static("settings.models.view_configuration_sources"),
+                expanded,
+                accordion_fields(&fields, options, window, cx),
+                move |open, _, cx| {
+                    view.update(cx, |app, cx| {
+                        app.connection_settings.sources_expanded = open;
                         cx.notify();
-                    });
-                })
+                    })
+                },
+            )
         })
         .keywords([
             conduit::i18n::text_static("settings.models.configuration_sources"),
             "CCS",
             "cc-switch",
         ]);
-        let mut items = vec![toggle];
-        if expanded {
-            items.extend(vec![
-                value_item(engine.label(), config_path),
-                value_item("cc-switch", display_path(&self.ccs.database_path)),
-                value_item(
-                    conduit::i18n::text_static("settings.models.loaded"),
-                    ccs_summary,
-                ),
-            ]);
-        }
+        let mut items = vec![sources];
         if let Some(error) = self.ccs.error.clone() {
             items.push(
                 SettingItem::new(
@@ -811,15 +801,6 @@ impl ConduitApp {
                 )
                 .layout(Axis::Vertical)
                 .keywords([conduit::i18n::text_static("settings.models.error")]),
-            );
-        } else if let Some(note) = self.ccs.note.clone().filter(|_| expanded) {
-            items.push(
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.models.description"),
-                    paragraph_field(note),
-                )
-                .layout(Axis::Vertical)
-                .keywords([conduit::i18n::text_static("settings.models.description")]),
             );
         }
         SettingGroup::new()
@@ -847,64 +828,80 @@ impl ConduitApp {
         let note = catalog.and_then(|catalog| catalog.note.clone());
         let expanded = self.connection_settings.models_expanded;
         let closing = self.closing;
-        let summary_view = view.clone();
-        let summary = SettingItem::render(move |_, _, _| {
-            let toggle_view = summary_view.clone();
-            let refresh_view = summary_view.clone();
-            h_flex()
-                .w_full()
-                .justify_between()
-                .gap_2()
-                .flex_wrap()
-                .child(
-                    div()
-                        .text_size(ui_text_size(12.))
-                        .text_color(rgb(palette().muted))
-                        .child(conduit::i18n::format(
-                            "settings.models.model_definitions_generation_not_verified",
-                            &[("model_count", format!("{}", model_count))],
-                        )),
-                )
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .when(provider == Provider::OpenCode, |row| {
-                            row.child(
-                                Button::new("settings-opencode-refresh")
-                                    .ghost()
-                                    .small()
-                                    .label(conduit::i18n::text_static(
-                                        "settings.models.refresh_models",
-                                    ))
-                                    .disabled(closing)
-                                    .cursor_pointer()
-                                    .on_click(move |_, _, cx| {
-                                        refresh_view.update(cx, |app, cx| {
-                                            app.ensure_opencode_models(true, cx)
-                                        })
-                                    }),
-                            )
-                        })
-                        .child(
-                            Button::new("settings-models-expand")
+        let mut fields = vec![value_item(
+            conduit::i18n::text_static("settings.general.configuration_file"),
+            config_path,
+        )];
+        if let Some(path) = catalog.and_then(|catalog| catalog.catalog_path.as_deref()) {
+            fields.push(value_item(
+                conduit::i18n::text_static("settings.models.model_catalog"),
+                display_path(path),
+            ));
+        }
+        if let Some(endpoint) = catalog.and_then(|catalog| catalog.endpoint.clone()) {
+            fields.push(value_item(
+                conduit::i18n::text_static("settings.models.interface"),
+                endpoint,
+            ));
+        }
+        if let Some(detail) = catalog.and_then(|catalog| catalog.detail.clone()) {
+            fields.push(value_item(
+                conduit::i18n::text_static("settings.models.additional_configuration"),
+                detail,
+            ));
+        }
+        fields.push(
+            SettingItem::new(
+                conduit::i18n::text_static("settings.models.model_list"),
+                self.managed_models_field(provider, view.clone()),
+            )
+            .layout(Axis::Vertical),
+        );
+        let summary = SettingItem::render(move |options, window, cx| {
+            let toggle = view.clone();
+            let refresh = view.clone();
+            let fields = accordion_fields(&fields, options, window, cx);
+            settings_accordion(
+                "settings-models-expand",
+                v_flex()
+                    .min_w_0()
+                    .gap_1()
+                    .child(conduit::i18n::text_static(
+                        "settings.models.manage_model_catalog",
+                    ))
+                    .child(
+                        div()
+                            .text_size(ui_text_size(12.))
+                            .text_color(rgb(palette().muted))
+                            .child(conduit::i18n::format(
+                                "settings.models.model_definitions_generation_not_verified",
+                                &[("model_count", model_count.to_string())],
+                            )),
+                    ),
+                expanded,
+                v_flex()
+                    .gap_2()
+                    .when(provider == Provider::OpenCode, |panel| {
+                        panel.child(
+                            Button::new("settings-opencode-refresh")
                                 .ghost()
                                 .small()
-                                .label(if expanded {
-                                    conduit::i18n::text_static("settings.models.hide_model_catalog")
-                                } else {
-                                    conduit::i18n::text_static(
-                                        "settings.models.manage_model_catalog",
-                                    )
-                                })
-                                .cursor_pointer()
+                                .label(conduit::i18n::text_static("settings.models.refresh_models"))
+                                .disabled(closing)
                                 .on_click(move |_, _, cx| {
-                                    toggle_view.update(cx, |app, cx| {
-                                        app.connection_settings.models_expanded = !expanded;
-                                        cx.notify();
-                                    })
+                                    refresh
+                                        .update(cx, |app, cx| app.ensure_opencode_models(true, cx))
                                 }),
-                        ),
-                )
+                        )
+                    })
+                    .child(fields),
+                move |open, _, cx| {
+                    toggle.update(cx, |app, cx| {
+                        app.connection_settings.models_expanded = open;
+                        cx.notify();
+                    })
+                },
+            )
         })
         .keywords([
             conduit::i18n::text_static("settings.models.model_list"),
@@ -918,37 +915,6 @@ impl ConduitApp {
             ),
             summary,
         ];
-        if expanded {
-            items.push(value_item(
-                conduit::i18n::text_static("settings.general.configuration_file"),
-                config_path,
-            ));
-            if let Some(path) = catalog.and_then(|catalog| catalog.catalog_path.as_deref()) {
-                items.push(value_item(
-                    conduit::i18n::text_static("settings.models.model_catalog"),
-                    display_path(path),
-                ));
-            }
-            if let Some(endpoint) = catalog.and_then(|catalog| catalog.endpoint.clone()) {
-                items.push(value_item(
-                    conduit::i18n::text_static("settings.models.interface"),
-                    endpoint,
-                ));
-            }
-            if let Some(detail) = catalog.and_then(|catalog| catalog.detail.clone()) {
-                items.push(value_item(
-                    conduit::i18n::text_static("settings.models.additional_configuration"),
-                    detail,
-                ));
-            }
-            items.extend(vec![
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.models.model_list"),
-                    self.managed_models_field(provider, view.clone()),
-                )
-                .layout(Axis::Vertical),
-            ]);
-        }
         if let Some(error) = error {
             items.push(
                 SettingItem::new(
@@ -959,13 +925,13 @@ impl ConduitApp {
                 .keywords([conduit::i18n::text_static("settings.models.error")]),
             );
         }
-        let group = settings_section(if provider == Provider::OpenCode {
-            conduit::i18n::text_static("settings.models.opencode_native_models")
-        } else {
-            conduit::i18n::text_static("settings.models.cli_defaults")
-        })
-        .variant(GroupBoxVariant::Outline)
-        .items(items);
+        let group = SettingGroup::new()
+            .title(if provider == Provider::OpenCode {
+                conduit::i18n::text_static("settings.models.opencode_native_models")
+            } else {
+                conduit::i18n::text_static("settings.models.cli_defaults")
+            })
+            .items(items);
         if let Some(note) = note {
             group.footer(move |_, _| note.clone())
         } else {

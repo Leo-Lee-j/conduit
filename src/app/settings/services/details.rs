@@ -539,18 +539,13 @@ fn detail_settings(id: &'static str, group: SettingGroup) -> AnyElement {
     div()
         .w_full()
         .h(px(400.))
-        .child(
-            Settings::new(id)
-                .sidebar_width(px(0.))
-                .sidebar_size_range(px(0.)..px(0.))
-                .sidebar_style(&StyleRefinement::default().hidden())
-                .page(
-                    gpui_kit::component::setting::SettingPage::new("")
-                        .resettable(false)
-                        .header_style(&StyleRefinement::default().hidden())
-                        .group(group),
-                ),
-        )
+        .child(settings_controls(
+            id,
+            gpui_kit::component::setting::SettingPage::new("")
+                .resettable(false)
+                .header_style(&StyleRefinement::default().hidden())
+                .group(group),
+        ))
         .into_any_element()
 }
 

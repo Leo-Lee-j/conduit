@@ -500,10 +500,19 @@ fn settings_connections_switch_engines_and_guard_service_editors(cx: &mut TestAp
             cx.update(|window, cx| {
                 let _ = window.draw(cx);
             });
-            assert_eq!(
-                cx.debug_bounds("provider-advanced-fields").is_some(),
-                expanded
-            );
+            let trigger = cx.update(|window, _| {
+                gpui_kit::base::test_support::snapshots(window)
+                    .into_iter()
+                    .find(|node| {
+                        node.expanded().is_some() && node.bounds().contains(&toggle.center())
+                    })
+                    .expect("accordion trigger")
+            });
+            // Closing panels can remain mounted until the spring finishes.
+            assert_eq!(trigger.expanded(), Some(expanded));
+            if expanded {
+                assert!(cx.debug_bounds("provider-advanced-fields").is_some());
+            }
         }
         cx.simulate_keystrokes("escape");
         cx.run_until_parked();

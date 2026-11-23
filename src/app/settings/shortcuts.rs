@@ -1,6 +1,7 @@
 //! Binding editor and conflict feedback for the shortcut catalogue.
 use super::*;
 use crate::app::shortcuts::{self, SHORTCUTS, Scope, Shortcut};
+use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState as ShortcutListState};
 
 struct ShortcutEditor {
     app: Entity<ConduitApp>,
@@ -300,42 +301,161 @@ impl ConduitApp {
         focus.focus(window, cx);
     }
 
-    pub(super) fn settings_shortcuts_page(
-        &self,
-        disabled: bool,
-        view: Entity<Self>,
-    ) -> SettingPage {
-        let groups = [
-            (
-                true,
-                conduit::i18n::text_static("settings.shortcuts.global_shortcuts"),
-            ),
-            (
-                false,
-                conduit::i18n::text_static("settings.shortcuts.context_shortcuts"),
-            ),
-        ]
-        .into_iter()
-        .map(|(global, title)| {
-            settings_section(title).items(
-                SHORTCUTS
-                    .iter()
-                    .filter(|shortcut| (shortcut.scope == Scope::Global) == global)
-                    .map(|shortcut| {
-                        let value = shortcuts::display(shortcut.id, &self.store.ui.shortcuts);
-                        let customized = self.store.ui.shortcuts.contains_key(shortcut.id);
-                        let view = view.clone();
-                        let field = SettingField::render(move |_, _, _| {
-                            let view = view.clone();
-                            Button::new(SharedString::from(format!(
-                                "shortcut-edit-{}",
-                                shortcut.id
-                            )))
+    pub(super) fn settings_shortcuts_page(&self, view: Entity<Self>) -> SettingsContent {
+        SettingsContent::new(ShortcutList { view })
+    }
+}
+
+#[derive(IntoElement)]
+struct ShortcutList {
+    view: Entity<ConduitApp>,
+}
+
+impl RenderOnce for ShortcutList {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let list = window.use_keyed_state("settings-shortcut-list", cx, |window, cx| {
+            ShortcutListState::new(
+                ShortcutRows {
+                    view: self.view.downgrade(),
+                    shortcuts: [true, false].map(|global| {
+                        SHORTCUTS
+                            .iter()
+                            .filter(|shortcut| (shortcut.scope == Scope::Global) == global)
+                            .collect()
+                    }),
+                },
+                window,
+                cx,
+            )
+            .searchable(false)
+            .selectable(false)
+        });
+        List::new(&list).size_full().p_4()
+    }
+}
+
+struct ShortcutRows {
+    view: WeakEntity<ConduitApp>,
+    shortcuts: [Vec<&'static Shortcut>; 2],
+}
+
+impl ListDelegate for ShortcutRows {
+    type Item = ListItem;
+
+    fn sections_count(&self, _: &App) -> usize {
+        self.shortcuts.len()
+    }
+
+    fn items_count(&self, section: usize, _: &App) -> usize {
+        self.shortcuts[section].len()
+    }
+
+    fn render_section_header(
+        &mut self,
+        section: usize,
+        _: &mut Window,
+        cx: &mut Context<ShortcutListState<Self>>,
+    ) -> Option<impl IntoElement> {
+        let view = self.view.upgrade()?;
+        let app = view.read(cx);
+        let disabled = !app.writable || app.closing;
+        Some(
+            h_flex()
+                .debug_selector(move || format!("shortcuts-section-{section}"))
+                .w_full()
+                .min_w_0()
+                .h(ui_text_size(38.))
+                .px_2()
+                .gap_2()
+                .justify_between()
+                .font_semibold()
+                .child(conduit::i18n::text_static(if section == 0 {
+                    "settings.shortcuts.global_shortcuts"
+                } else {
+                    "settings.shortcuts.context_shortcuts"
+                }))
+                .when(section == 0, |header| {
+                    header.child(
+                        Button::new("shortcuts-reset-all")
+                            .debug_selector(|| "shortcuts-reset-all".into())
+                            .small()
+                            .outline()
+                            .flex_shrink_0()
+                            .label(conduit::i18n::text_static(
+                                "settings.shortcuts.restore_all_defaults",
+                            ))
+                            .disabled(disabled)
+                            .on_click(move |_, _, cx| {
+                                view.update(cx, |app, cx| {
+                                    if !app.writable || app.closing {
+                                        return;
+                                    }
+                                    app.store.ui.shortcuts.clear();
+                                    shortcuts::install(&app.store.ui.shortcuts, cx);
+                                    app.double_shift.cancel();
+                                    app.persist();
+                                    cx.notify();
+                                });
+                            }),
+                    )
+                }),
+        )
+    }
+
+    fn render_item(
+        &mut self,
+        index: IndexPath,
+        _: &mut Window,
+        cx: &mut Context<ShortcutListState<Self>>,
+    ) -> Option<ListItem> {
+        let view = self.view.upgrade()?;
+        let app = view.read(cx);
+        let shortcut = *self.shortcuts.get(index.section)?.get(index.row)?;
+        let value = shortcuts::display(shortcut.id, &app.store.ui.shortcuts);
+        let disabled = !app.writable || app.closing;
+        let customized = app.store.ui.shortcuts.contains_key(shortcut.id);
+        Some(
+            ListItem::new(shortcut.id).child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .h(ui_text_size(48.))
+                    .gap_2()
+                    .justify_between()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .truncate()
+                                    .child(conduit::i18n::source(shortcut.label)),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(ui_text_size(11.))
+                                    .text_color(rgb(palette().muted))
+                                    .child(format!(
+                                        "{}{}",
+                                        shortcut.scope.label(),
+                                        conduit::i18n::text_static(if customized {
+                                            "settings.shortcuts.customized"
+                                        } else {
+                                            "settings.shortcuts.default"
+                                        })
+                                    )),
+                            ),
+                    )
+                    .child(
+                        Button::new(SharedString::from(format!("shortcut-edit-{}", shortcut.id)))
                             .debug_selector(move || format!("shortcut-edit-{}", shortcut.id))
                             .small()
                             .outline()
-                            .label(value.clone())
+                            .max_w(relative(0.55))
                             .icon(FullIconName::Pencil)
+                            .tooltip(value.clone())
+                            .child(div().min_w_0().truncate().child(value))
                             .accessibility_label(conduit::i18n::format(
                                 "settings.shortcuts.edit_shortcut_bde991",
                                 &[("arg0", conduit::i18n::source(shortcut.label).to_string())],
@@ -344,58 +464,19 @@ impl ConduitApp {
                             .on_click(move |_, window, cx| {
                                 view.update(cx, |app, cx| {
                                     app.open_shortcut_editor(shortcut.id, window, cx)
-                                })
-                            })
-                        });
-                        SettingItem::new(conduit::i18n::source(shortcut.label), field).description(
-                            settings_description(format!(
-                                "{}{}",
-                                shortcut.scope.label(),
-                                if customized {
-                                    conduit::i18n::text_static("settings.shortcuts.customized")
-                                } else {
-                                    conduit::i18n::text_static("settings.shortcuts.default")
-                                }
-                            )),
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .collect::<Vec<_>>();
-        let mut page = settings_page(
-            conduit::i18n::text_static("settings.navigation.shortcuts"),
-            FullIconName::Keyboard,
+                                });
+                            }),
+                    ),
+            ),
         )
-        .groups(groups);
-        page.page = page
-            .page
-            .title("")
-            .header_style(&settings_actions_style())
-            .title_suffix(move |_, _| {
-                let view = view.clone();
-                Button::new("shortcuts-reset-all")
-                    .debug_selector(|| "shortcuts-reset-all".into())
-                    .small()
-                    .ghost()
-                    .label(conduit::i18n::text_static(
-                        "settings.shortcuts.restore_all_defaults",
-                    ))
-                    .disabled(disabled)
-                    .on_click(move |_, _, cx| {
-                        view.update(cx, |app, cx| {
-                            if !app.writable || app.closing {
-                                return;
-                            }
-                            app.store.ui.shortcuts.clear();
-                            shortcuts::install(&app.store.ui.shortcuts, cx);
-                            app.double_shift.cancel();
-                            app.persist();
-                            cx.notify();
-                        })
-                    })
-            });
-        page
+    }
+
+    fn set_selected_index(
+        &mut self,
+        _: Option<IndexPath>,
+        _: &mut Window,
+        _: &mut Context<ShortcutListState<Self>>,
+    ) {
     }
 }
 
@@ -456,7 +537,10 @@ mod tests {
     ) {
         let _locale = crate::test_support::chinese();
         let (app, cx) = fixture(cx, Store::default());
-        assert!(cx.debug_bounds("shortcuts-reset-all").is_some());
+        let header = cx.debug_bounds("shortcuts-section-0").unwrap();
+        let reset = cx.debug_bounds("shortcuts-reset-all").unwrap();
+        assert_eq!(header.center().y, reset.center().y);
+        assert!(reset.left() > header.center().x && reset.right() <= header.right());
         click(cx, "shortcut-edit-open_settings");
         cx.simulate_keystrokes("ctrl-p");
         draw(cx);
@@ -495,6 +579,17 @@ mod tests {
         assert!(app.read_with(cx, |app, _| app.settings_ui.open));
         click(cx, "shortcut-edit-open_settings");
         click(cx, "shortcut-reset");
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.store
+                    .ui
+                    .shortcuts
+                    .insert("open_settings".into(), vec!["ctrl-alt-s".into()]);
+                cx.notify();
+            })
+        });
+        draw(cx);
+        click(cx, "shortcuts-reset-all");
         assert!(app.read_with(cx, |app, _| {
             !app.store.ui.shortcuts.contains_key("open_settings")
         }));

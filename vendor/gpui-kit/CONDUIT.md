@@ -1,4 +1,4 @@
-# Conduit renderer patch
+# Conduit GPUI patches
 
 This directory contains `gpui-base` and `gpui-component` from upstream
 `longbridge/gpui-kit`, revision `11345ec002d9f182a266b5d5dd3a217090700a87`.
@@ -35,6 +35,16 @@ checkout without changing Cargo's cache or running a preparation script.
   decoration at the link label's first grapheme. The icon shares wrapping and
   table measurement with native text without introducing document bytes or an
   atomic label. Layout caches include icon identity; click and drag remain distinct.
+- `crates/base/src/accordion.rs`: makes enabled accordion triggers keyboard
+  tab stops and exposes the disabled state to accessibility tools.
+- `crates/component/src/accordion.rs`: sends toggle callbacks from the trigger
+  so that clicking a control inside the panel does not toggle the accordion.
+- `crates/component/src/setting/item.rs`: exposes the existing field renderer
+  for use without group borders inside an accordion.
+- `crates/component/src/setting/group.rs`: optional style for the shared content
+  surface, leaving the group heading and footer outside it.
+- `crates/component/src/setting/settings.rs`: omits the resizable sidebar and
+  its divider when the host sets the sidebar width to zero.
 - `Cargo.toml`: trims the upstream workspace to these two crates and pins
   references to the remaining Kit crates to the original Git revision.
 
@@ -47,11 +57,11 @@ keep their default appearance. The icon size is 0.9em with a 0.25em gap.
 
 `upstream-files.json` records SHA-256 hashes of every copied crate file and
 the exact upstream revision. `python scripts/check-gpui-vendor.py` checks that
-only the declared renderer files differ and that the application, vendor
+only the declared files differ and that the application, vendor
 workspace, and lockfile still select the intended dependency graph.
 
 When upgrading Kit, replace both crate snapshots from one revision, reapply
-the small renderer changes, regenerate the upstream hashes from the pristine
+the local changes, regenerate the upstream hashes from the pristine
 revision, and run the Markdown selection/search/streaming tests plus the core
 checks. Do not edit the Cargo checkout or change only one crate's revision.
 Once upstream provides equivalent APIs, remove these patches and this directory

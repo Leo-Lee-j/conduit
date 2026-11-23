@@ -446,10 +446,15 @@ impl ConduitApp {
         view: Entity<Self>,
         cx: &App,
     ) -> AnyElement {
-        let narrow = available_width < 540.;
+        let scale = self.store.ui.ui_font_size / DEFAULT_UI_FONT_SIZE;
+        let narrow = available_width < 640. * scale;
         let compact = narrow || f32::from(window.viewport_size().height) < 650.;
-        let engine = self.extensions_ui.engine;
-        let mut controls = h_flex().w_full().min_w_0().gap_2().flex_wrap();
+        let mut controls = h_flex()
+            .debug_selector(|| "extension-filter-bar".into())
+            .w_full()
+            .min_w_0()
+            .gap_2()
+            .flex_wrap();
         let mut choices = vec![(
             None,
             conduit::i18n::text_static("settings.extensions.global").to_owned(),
@@ -543,28 +548,6 @@ impl ConduitApp {
             for error in &catalog.errors {
                 rows.push(ExtensionRow::Message(error.clone(), true));
             }
-            if self.extensions_ui.sources_expanded {
-                rows.push(ExtensionRow::Message(
-                    conduit::i18n::text_static(
-                        "settings.extensions.scan_scope_missing_files_are_skipped_plugin",
-                    )
-                    .into(),
-                    false,
-                ));
-                let mut sources = catalog.sources.clone();
-                sources.sort();
-                sources.dedup();
-                for source in sources {
-                    rows.push(ExtensionRow::Source(source));
-                }
-                rows.push(ExtensionRow::Message(
-                    conduit::i18n::text_static(
-                        "settings.extensions.scanning_does_not_resolve_configuration_priority_or",
-                    )
-                    .into(),
-                    false,
-                ));
-            }
         }
         if count == 0 {
             rows.push(ExtensionRow::Empty(
@@ -585,6 +568,12 @@ impl ConduitApp {
                 .into(),
             ));
         }
+        if let Some(catalog) = catalog {
+            let mut sources = catalog.sources.clone();
+            sources.sort();
+            sources.dedup();
+            rows.insert(0, ExtensionRow::ScanScope(sources));
+        }
         let list_state = self.extensions_ui.lists[selected].clone();
         if list_state.item_count() != rows.len() {
             list_state.reset(rows.len());
@@ -602,8 +591,6 @@ impl ConduitApp {
             )
         })
         .size_full();
-        let sources_view = view.clone();
-        let sources_expanded = self.extensions_ui.sources_expanded;
         let info = catalog
             .and_then(|c| c.updated)
             .map(|time| {
@@ -628,37 +615,10 @@ impl ConduitApp {
                     ],
                 )
             });
-        let sources_button = || {
-            let sources_view = sources_view.clone();
-            Button::new("extensions-sources")
-                .small()
-                .ghost()
-                .icon(if sources_expanded {
-                    FullIconName::ChevronUp
-                } else {
-                    FullIconName::ChevronDown
-                })
-                .accessibility_label(conduit::i18n::text_static("settings.extensions.scan_scope"))
-                .tooltip(conduit::i18n::text_static("settings.extensions.scan_scope"))
-                .when(!narrow, |button| {
-                    button.label(if sources_expanded {
-                        conduit::i18n::text_static("settings.extensions.hide_scan_scope")
-                    } else {
-                        conduit::i18n::text_static("settings.extensions.scan_scope")
-                    })
-                })
-                .on_click(move |_, _, cx| {
-                    sources_view.update(cx, |app, cx| {
-                        app.extensions_ui.sources_expanded = !sources_expanded;
-                        app.extensions_ui.lists = new_lists();
-                        cx.notify();
-                    })
-                })
-        };
         let filter_view = view.clone();
         let actions = self.extension_actions(narrow, view.clone());
         let search = || {
-            div().flex_1().min_w_0().w_full().child(
+            div().flex_1().min_w(px(120.)).max_w(px(480.)).child(
                 Input::new(&self.extensions_ui.searches[selected])
                     .small()
                     .prefix(FullIconName::Search)
@@ -721,7 +681,6 @@ impl ConduitApp {
                         refresh.update(cx, |app, cx| app.ensure_extensions(window, cx, true))
                     }),
             )
-            .when(narrow, |row| row.child(sources_button()))
             .when(probing, |row| {
                 row.child(
                     Button::new("extensions-cancel")
@@ -735,7 +694,8 @@ impl ConduitApp {
                             })
                         }),
                 )
-            });
+            })
+            .child(actions);
         let toolbar = if narrow {
             v_flex()
                 .w_full()
@@ -750,14 +710,13 @@ impl ConduitApp {
             .size_full()
             .min_w_0()
             .text_color(rgb(palette().text))
-            .child(management_toolbar(engine, true, Some(actions), available_width, self.store.ui.ui_font_size, view))
             .child(
                 v_flex()
                     .w_full()
                     .flex_shrink_0()
                     .px(px(settings_content_inset()))
-                    .pb_3()
-                    .gap_2()
+                    .py_2()
+                    .gap_1()
                     .child(toolbar)
                     .when(!compact, |body| {
                         body.child(
@@ -775,19 +734,7 @@ impl ConduitApp {
                         body.child(div().text_size(ui_text_size(12.)).child(message))
                     })
                     .when(!narrow, |body| {
-                        body.child(
-                            h_flex()
-                                .w_full()
-                                .justify_between()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_size(ui_text_size(12.))
-                                        .text_color(rgb(palette().muted))
-                                        .child(info),
-                                )
-                                .child(sources_button()),
-                        )
+                        body.child(div().text_size(ui_text_size(12.)).text_color(rgb(palette().muted)).child(info))
                     }),
             )
             .child(
@@ -837,6 +784,7 @@ impl ConduitApp {
                                     .flex_1()
                                     .min_h_0()
                                     .w_full()
+                                    .px_2()
                                     .child(rows)
                                     .vertical_scrollbar(&list_state),
                             ),
@@ -854,7 +802,7 @@ enum ExtensionRow {
     Entry(extensions::Entry, bool),
     Empty(Kind, String),
     Message(String, bool),
-    Source(PathBuf),
+    ScanScope(Vec<PathBuf>),
 }
 fn render_extension_row(
     row: &ExtensionRow,
@@ -977,11 +925,10 @@ fn render_extension_row(
             };
             (v_flex()
                 .w_full()
-                .px_4()
+                .my_1()
+                .refine_style(&settings_group_style())
                 .py(px(if narrow { 8. } else { 12. }))
                 .gap_2()
-                .border_b_1()
-                .border_color(rgb(palette().border))
                 .child(
                     h_flex()
                         .w_full()
@@ -1036,28 +983,11 @@ fn render_extension_row(
                         .label(if entry.disabled { conduit::i18n::text_static("settings.extensions.restore") } else { conduit::i18n::text_static("settings.extensions.disable") }).disabled(disabled || view.read(cx).extensions_ui.changing)
                         .on_click(move |_, window, cx| state_view.update(cx, |app, cx| app.open_extension_toggle(state_entry.clone(), window, cx)))))
                     .when(!managed && !toggle_supported, |row| row.child(Button::new(("extension-native-toggle", index)).small().ghost().label(conduit::i18n::text_static("settings.extensions.native_management")).disabled(true).tooltip(conduit::i18n::text_static("settings.extensions.edit_the_source_configuration_to_enable_or")))))
-                        .child(
-                            Button::new(("extension-detail", index))
-                                .debug_selector(move || format!("extension-detail-{index}"))
-                                .small()
-                                .ghost()
-                                .label(if expanded { conduit::i18n::text_static("chat.collapse") } else { conduit::i18n::text_static("settings.extensions.details") })
-                                .on_click(move |_, _, cx| {
-                                    toggle_view.update(cx, |app, cx| {
-                                        if !app.extensions_ui.expanded.remove(&toggle_id) {
-                                            app.extensions_ui.expanded.clear();
-                                            app.extensions_ui.expanded.insert(toggle_id.clone());
-                                        }
-                                        let selected = usize::from(app.extensions_ui.mcp);
-                                        app.extensions_ui.lists[selected]
-                                            .reset(app.extensions_ui.lists[selected].item_count());
-                                        cx.notify();
-                                    });
-                                }),
-                        ),
                 )
-                .when(expanded, |row| {
-                    row.child(
+                .child(settings_accordion(
+                    ("extension-detail", index),
+                    div().debug_selector(move || format!("extension-detail-{index}")).child(conduit::i18n::text_static("settings.extensions.details")),
+                    expanded,
                         v_flex()
                             .w_full()
                             .gap_2()
@@ -1108,8 +1038,17 @@ fn render_extension_row(
                                         ))
                                     }),
                             ),
-                    )
-                }))
+                    move |open, _, cx| {
+                        toggle_view.update(cx, |app, cx| {
+                            app.extensions_ui.expanded.clear();
+                            if open { app.extensions_ui.expanded.insert(toggle_id.clone()); }
+                            let selected = usize::from(app.extensions_ui.mcp);
+                            let list = &app.extensions_ui.lists[selected];
+                            list.reset(list.item_count());
+                            cx.notify();
+                        });
+                    },
+                )))
             .into_any_element()
         }
         ExtensionRow::Empty(kind, message) => v_flex()
@@ -1152,35 +1091,65 @@ fn render_extension_row(
             }))
             .child(message.clone())
             .into_any_element(),
-        ExtensionRow::Source(path) => {
-            let text = display_path(path);
-            let tooltip = text.clone();
-            h_flex()
-                .px_3()
-                .py_1()
+        ExtensionRow::ScanScope(sources) => {
+            let open = view.read(cx).extensions_ui.sources_expanded;
+            let panel = v_flex()
+                .w_full()
                 .gap_2()
-                .child(
-                    div()
-                        .id(("extensions-scan-source", index))
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .tooltip(move |window, cx| {
-                            gpui_kit::component::tooltip::Tooltip::new(tooltip.clone())
-                                .build(window, cx)
+                .text_size(ui_text_size(12.))
+                .text_color(rgb(palette().muted))
+                .child(conduit::i18n::text_static(
+                    "settings.extensions.scan_scope_missing_files_are_skipped_plugin",
+                ))
+                .children(sources.iter().enumerate().map(|(index, path)| {
+                    let text = display_path(path);
+                    let tooltip = text.clone();
+                    h_flex()
+                        .px_3()
+                        .py_1()
+                        .gap_2()
+                        .child(
+                            div()
+                                .id(("extensions-scan-source", index))
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .tooltip(move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(tooltip.clone())
+                                        .build(window, cx)
+                                })
+                                .text_size(ui_text_size(12.))
+                                .child(text.clone()),
+                        )
+                        .child(
+                            Button::new(("extensions-source-copy", index))
+                                .small()
+                                .ghost()
+                                .label(conduit::i18n::text_static("settings.extensions.copy_path"))
+                                .on_click(move |_, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
+                                }),
+                        )
+                }))
+                .child(conduit::i18n::text_static(
+                    "settings.extensions.scanning_does_not_resolve_configuration_priority_or",
+                ));
+            div()
+                .my_1()
+                .child(settings_accordion(
+                    "extensions-sources",
+                    conduit::i18n::text_static("settings.extensions.scan_scope"),
+                    open,
+                    panel,
+                    move |open, _, cx| {
+                        view.update(cx, |app, cx| {
+                            app.extensions_ui.sources_expanded = open;
+                            let list = &app.extensions_ui.lists[usize::from(app.extensions_ui.mcp)];
+                            list.reset(list.item_count());
+                            cx.notify();
                         })
-                        .text_size(ui_text_size(12.))
-                        .child(text.clone()),
-                )
-                .child(
-                    Button::new(("extensions-source-copy", index))
-                        .small()
-                        .ghost()
-                        .label(conduit::i18n::text_static("settings.extensions.copy_path"))
-                        .on_click(move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
-                        }),
-                )
+                    },
+                ))
                 .into_any_element()
         }
     }

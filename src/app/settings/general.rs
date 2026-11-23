@@ -345,9 +345,10 @@ impl ConduitApp {
                     }
                 })
         });
-        let mut generation = vec![self.generation_disclosure(false, view.clone())];
-        if self.settings_ui.git_expanded {
-            generation.extend([
+        let generation = self.generation_disclosure(
+            false,
+            view.clone(),
+            vec![
                 SettingItem::new(
                     conduit::i18n::text_static("settings.general.generation_engine"),
                     provider,
@@ -363,8 +364,8 @@ impl ConduitApp {
                     model,
                 )
                 .disabled(disabled),
-            ]);
-        }
+            ],
+        );
         let tag_settings_view = view.clone();
         let tag_increment = self.store.git.tag_increment;
         let tag_strategy = SettingField::render(move |_, _, _| {
@@ -420,57 +421,54 @@ impl ConduitApp {
         }
         .to_owned();
         let prompt_view = view.clone();
-        let edit = SettingItem::render(move |_, _, _| {
+        let prompt_fields = [
+            SettingItem::new(
+                conduit::i18n::text_static("settings.general.prompt"),
+                prompt,
+            )
+            .layout(Axis::Vertical)
+            .disabled(disabled),
+            SettingItem::new(
+                conduit::i18n::text_static("settings.appearance.restore_defaults"),
+                reset,
+            )
+            .disabled(disabled),
+        ];
+        let edit = SettingItem::render(move |options, window, cx| {
             let view = prompt_view.clone();
-            v_flex()
-                .w_full()
-                .gap_2()
-                .when(!expanded, |row| {
-                    row.child(
+            settings_accordion(
+                "git-prompt-expand",
+                v_flex()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
                         div()
-                            .text_size(ui_text_size(12.))
-                            .text_color(rgb(palette().muted))
-                            .child(preview.clone()),
+                            .debug_selector(|| "git-prompt-expand".into())
+                            .child(conduit::i18n::text_static("settings.general.edit_prompt")),
                     )
-                })
-                .child(
-                    Button::new("git-prompt-expand")
-                        .debug_selector(|| "git-prompt-expand".into())
-                        .small()
-                        .ghost()
-                        .label(if expanded {
-                            conduit::i18n::text_static("settings.general.hide_prompt")
-                        } else {
-                            conduit::i18n::text_static("settings.general.edit_prompt")
-                        })
-                        .on_click(move |_, _, cx| {
-                            view.update(cx, |app, cx| {
-                                app.settings_ui.prompt_expanded = !expanded;
-                                cx.notify();
-                            });
-                        }),
-                )
+                    .when(!expanded, |title| {
+                        title.child(
+                            div()
+                                .truncate()
+                                .text_size(ui_text_size(12.))
+                                .text_color(rgb(palette().muted))
+                                .child(preview.clone()),
+                        )
+                    }),
+                expanded,
+                v_flex().child(accordion_fields(&prompt_fields, options, window, cx)),
+                move |open, _, cx| {
+                    view.update(cx, |app, cx| {
+                        app.settings_ui.prompt_expanded = open;
+                        cx.notify();
+                    })
+                },
+            )
         })
         .keywords([
             conduit::i18n::text_static("settings.general.prompt"),
             "prompt",
         ]);
-        let mut prompts = vec![edit];
-        if expanded {
-            prompts.extend([
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.general.prompt"),
-                    prompt,
-                )
-                .layout(Axis::Vertical)
-                .disabled(disabled),
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.appearance.restore_defaults"),
-                    reset,
-                )
-                .disabled(disabled),
-            ]);
-        }
         let auto_fetch_enabled = self.store.git.auto_fetch_incoming;
         let auto_fetch = SettingField::render(move |_, _, _| {
             let view = view.clone();
@@ -526,16 +524,17 @@ impl ConduitApp {
             settings_section(conduit::i18n::text_static(
                 "settings.general.generation_model",
             ))
-            .items(generation),
-            settings_section(conduit::i18n::text_static(
-                "settings.general.commit_message_prompt",
-            ))
-            .items(prompts)
-            .footer(|_, _| {
-                conduit::i18n::text_static(
-                    "settings.general.changes_save_automatically_and_apply_to_the",
-                )
-            }),
+            .item(generation),
+            SettingGroup::new()
+                .title(conduit::i18n::text_static(
+                    "settings.general.commit_message_prompt",
+                ))
+                .item(edit)
+                .footer(|_, _| {
+                    conduit::i18n::text_static(
+                        "settings.general.changes_save_automatically_and_apply_to_the",
+                    )
+                }),
             settings_section(conduit::i18n::text_static(
                 "settings.general.branch_updates",
             ))

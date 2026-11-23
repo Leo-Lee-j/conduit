@@ -249,7 +249,8 @@ impl SettingItem {
         renderer.render(field, &options, &style, window, cx)
     }
 
-    pub(super) fn render_item(
+    /// Render the field or custom content without applying a group item frame.
+    pub fn render_item(
         self,
         options: &RenderOptions,
         window: &mut Window,
