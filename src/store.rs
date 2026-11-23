@@ -379,8 +379,8 @@ impl EncouragerVerbosity {
     pub fn max_chars(self) -> usize {
         match self {
             Self::Short => 40,
-            Self::Normal => 100,
-            Self::Chatty => 180,
+            Self::Normal => 80,
+            Self::Chatty => 120,
         }
     }
 }

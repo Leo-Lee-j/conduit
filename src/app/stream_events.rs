@@ -411,6 +411,15 @@ impl ConduitApp {
                     let finished_run = self.session_control.runs.remove(&id);
                     if let Some(run) = &finished_run
                         && matches!(run.intent, crate::commands::RequestIntent::Message)
+                        && !cancelled
+                        && !run.runtime.is_cancelled()
+                    {
+                        cx.emit(super::encourager::PetFeedback {
+                            failed: error.is_some(),
+                        });
+                    }
+                    if let Some(run) = &finished_run
+                        && matches!(run.intent, crate::commands::RequestIntent::Message)
                     {
                         self.finish_ai_review(
                             id,

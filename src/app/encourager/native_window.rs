@@ -48,7 +48,15 @@ pub(super) fn prepare(
                         | WS_EX_CLIENTEDGE
                         | WS_EX_DLGMODALFRAME
                         | WS_EX_STATICEDGE))
-                    | WS_EX_TOOLWINDOW) as i32,
+                    | WS_EX_TOOLWINDOW
+                    | WS_EX_NOACTIVATE) as i32,
+            );
+            // gpui-pre-windows explicitly returns MA_ACTIVATE. Override that
+            // locally; WS_EX_NOACTIVATE alone cannot override its message handler.
+            anyhow::ensure!(
+                windows_sys::Win32::UI::Shell::SetWindowSubclass(hwnd, Some(no_activate), 1, 0)
+                    != 0,
+                "Cannot install desktop pet activation handler"
             );
             // Disabling non-client rendering removes DWM's frame and shadow.
             let policy = DWMNCRP_DISABLED;
@@ -75,12 +83,12 @@ pub(super) fn prepare(
             // call GPUI resize here: its old border offsets are still cached.
             let result = SetWindowPos(
                 hwnd,
-                std::ptr::null_mut(),
+                HWND_TOPMOST,
                 (f32::from(bounds.origin.x) * scale).round() as i32,
                 (f32::from(bounds.origin.y) * scale).round() as i32,
                 (f32::from(bounds.size.width) * scale).round() as i32,
                 (f32::from(bounds.size.height) * scale).round() as i32,
-                SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER,
+                SWP_FRAMECHANGED | SWP_NOACTIVATE,
             );
             anyhow::ensure!(
                 result != 0,
@@ -95,6 +103,28 @@ pub(super) fn prepare(
     #[cfg(not(target_os = "windows"))]
     let _ = (window, bounds, cx);
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn no_activate(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+    id: usize,
+    _: usize,
+) -> isize {
+    use windows_sys::Win32::UI::{Shell::*, WindowsAndMessaging::*};
+    if message == WM_MOUSEACTIVATE {
+        return MA_NOACTIVATE as isize;
+    }
+    // No heap state or callbacks survive destruction of this HWND.
+    unsafe {
+        if message == WM_NCDESTROY {
+            RemoveWindowSubclass(hwnd, Some(no_activate), id);
+        }
+        DefSubclassProc(hwnd, message, wparam, lparam)
+    }
 }
 
 /// Called after preparing the first scene, without activating the app.

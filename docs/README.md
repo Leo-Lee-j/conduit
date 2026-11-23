@@ -26,7 +26,7 @@
 | [内容分栏与文件预览](design/content-panes-and-live-preview.md) | 两组路由、全区/并排、文件刷新、已实现的变化提示与可选回放，以及真实 CLI 增量的待验证范围 |
 | [??????????????](design/subagent-conversations.md) | ?? Codex ????????????????????????????????????? |
 | [手机远程控制设计](design/mobile-remote-control.md) | Web 试用版能力、完整目标与尚待实现的配置和授权管理 |
-| [桌面宠物设计](design/desktop-pet.md) | 可启停的内置宠物、直连模型 API、悬浮交互与隐私边界 |
+| [桌面宠物设计](design/desktop-pet.md) | 像素角色、任务状态、离散动画、悬浮交互与隐私边界 |
 | [Web 远控试用](design/mobile-remote-preview.md) | 桌面开启、浏览器配对与手机连接 |
 | [应用背景图](background-images.md) | Wallhaven 免 Key 接入、渲染分层、缓存预算与性能验收 |
 | [会话与存储](sessions.md) | 并发、发送确认、正文按需加载、历史导入及恢复 |

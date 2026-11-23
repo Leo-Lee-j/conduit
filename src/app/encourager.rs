@@ -4,7 +4,8 @@ use std::io::Read;
 
 mod native_window;
 mod pet;
-use pet::{PetOutput, PetView, pet_window_bounds, position_from_bounds};
+pub(super) use pet::PetFeedback;
+use pet::{PetOutput, PetView, pet_window_bounds, position_from_window};
 
 const MAX_RESPONSE_BYTES: u64 = 64 * 1024;
 const MAX_CONTEXT_CHARS: usize = 2_000;
@@ -72,7 +73,7 @@ impl ConduitApp {
             return false;
         };
         let position = handle
-            .update(cx, |_, window, _| position_from_bounds(window.bounds()))
+            .update(cx, |_, window, _| position_from_window(window))
             .ok();
         let changed = position.is_some_and(|position| {
             if self.store.ui.encourager.pet_position == Some(position) {
@@ -511,6 +512,57 @@ fn limit_chars(value: &str, limit: usize) -> String {
     value.chars().take(limit).collect()
 }
 
+fn reply_length_instruction(max_chars: usize) -> String {
+    conduit::i18n::format(
+        "encourager.prompt.length",
+        &[("limit", max_chars.to_string())],
+    )
+}
+
+/// Keep a complete short paragraph when possible, without cutting an emoji or
+/// silently ending mid-sentence if the service ignores the requested limit.
+fn finish_reply(text: &str, max_chars: usize) -> String {
+    use unicode_segmentation::UnicodeSegmentation;
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() <= max_chars {
+        return text;
+    }
+    if max_chars == 0 {
+        return String::new();
+    }
+    let mut used = 0;
+    let prefix: String = text
+        .graphemes(true)
+        .take_while(|part| {
+            used += part.chars().count();
+            used < max_chars
+        })
+        .collect();
+    if let Some((index, end)) = prefix
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| matches!(ch, '。' | '！' | '？' | '.' | '!' | '?'))
+    {
+        return prefix[..index + end.len_utf8()].to_owned();
+    }
+    let prefix = if prefix
+        .chars()
+        .last()
+        .is_some_and(|ch| ch.is_ascii_alphanumeric())
+        && text[prefix.len()..].starts_with(|ch: char| ch.is_ascii_alphanumeric())
+    {
+        prefix
+            .rsplit_once(' ')
+            .map_or(prefix.as_str(), |(words, _)| words)
+    } else {
+        &prefix
+    };
+    format!(
+        "{}…",
+        prefix.trim_end_matches([' ', '，', ',', '；', ';', '：', ':'])
+    )
+}
+
 pub(super) fn encourager_model_ids(provider: &ModelProvider) -> Vec<String> {
     if !matches!(provider.engine, Provider::Claude | Provider::Codex) {
         return Vec::new();
@@ -554,11 +606,13 @@ fn generate_text(
 ) -> Result<String, String> {
     check_cancel(cancel)?;
     let service = api_service(provider, database)?;
+    let max_chars = settings.verbosity.max_chars();
     let instruction = format!(
-        "{}\n{}\n{}",
+        "{}\n{}\n{}\n{}",
         conduit::i18n::text("encourager.prompt.base"),
         conduit::i18n::text(scene.label()),
-        conduit::i18n::text(settings.persona.label())
+        conduit::i18n::text(settings.persona.label()),
+        reply_length_instruction(max_chars)
     );
     let mut prompt = format!(
         "{}\n{}",
@@ -585,8 +639,7 @@ fn generate_text(
         "\n\n{}",
         conduit::i18n::text("encourager.prompt.finish")
     ));
-    let max_chars = settings.verbosity.max_chars();
-    let max_tokens = (max_chars * 2).clamp(96, 512);
+    let max_tokens = (max_chars * 3).clamp(256, 512);
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .max_redirects(0)
         .timeout_global(Some(REQUEST_TIMEOUT))
@@ -670,7 +723,7 @@ fn generate_text(
     if reply.is_empty() {
         return Err(conduit::i18n::text("encourager.error.empty_response"));
     }
-    Ok(limit_chars(reply, max_chars))
+    Ok(finish_reply(reply, max_chars))
 }
 
 fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
@@ -793,7 +846,9 @@ fn request_url(provider: &ModelProvider) -> Result<url::Url, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{api_service, encourager_model_ids, limit_chars, request_url};
+    use super::{
+        api_service, encourager_model_ids, finish_reply, reply_length_instruction, request_url,
+    };
     use crate::store::EncouragerVerbosity;
     use crate::{
         domain::Provider,
@@ -807,23 +862,46 @@ mod tests {
     fn response_length_is_bounded_by_selected_verbosity() {
         let text = "鼓励".repeat(250);
         assert_eq!(
-            limit_chars(&text, EncouragerVerbosity::Short.max_chars())
+            finish_reply(&text, EncouragerVerbosity::Short.max_chars())
                 .chars()
                 .count(),
             40
         );
         assert_eq!(
-            limit_chars(&text, EncouragerVerbosity::Normal.max_chars())
+            finish_reply(&text, EncouragerVerbosity::Normal.max_chars())
                 .chars()
                 .count(),
-            100
+            80
         );
         assert_eq!(
-            limit_chars(&text, EncouragerVerbosity::Chatty.max_chars())
+            finish_reply(&text, EncouragerVerbosity::Chatty.max_chars())
                 .chars()
                 .count(),
-            180
+            120
         );
+    }
+
+    #[test]
+    fn replies_keep_sentence_boundaries_and_normalize_paragraphs() {
+        assert_eq!(
+            finish_reply("  我在。\n\n 慢慢来，\t一起完成。 ", 40),
+            "我在。 慢慢来， 一起完成。"
+        );
+        assert_eq!(
+            finish_reply("先休息一下。然后我们再慢慢处理剩下的问题。", 12),
+            "先休息一下。"
+        );
+        assert_eq!(finish_reply("一步一步慢慢来不用着急", 8), "一步一步慢慢来…");
+        assert_eq!(finish_reply("Take a break and breathe", 12), "Take a…");
+        assert_eq!(finish_reply("好👩‍💻慢慢来", 4), "好…");
+        assert_eq!(finish_reply("👩‍💻", 1), "…");
+        let _locale = crate::test_support::chinese();
+        for verbosity in EncouragerVerbosity::ALL {
+            assert!(
+                reply_length_instruction(verbosity.max_chars())
+                    .contains(&verbosity.max_chars().to_string())
+            );
+        }
     }
 
     #[test]
