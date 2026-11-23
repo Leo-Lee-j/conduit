@@ -20,6 +20,7 @@
 </p>
 
 <p align="center">
+  <a href="https://leo-lee-j.github.io/conduit/zh-cn/">产品网站</a> ·
   <a href="https://github.com/Leo-Lee-j/conduit/releases/latest"><strong>下载 Windows 版</strong></a> ·
   <a href="docs/usage.md">使用指南</a> ·
   <a href="https://github.com/Leo-Lee-j/conduit/issues">反馈问题</a> ·
