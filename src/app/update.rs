@@ -1118,10 +1118,10 @@ impl ConduitApp {
     }
 
     pub(super) fn update_indicator(&self, cx: &mut Context<Self>) -> AnyElement {
-        let label = self.update_indicator_label();
+        let label = concat!("v", env!("CARGO_PKG_VERSION"));
         Button::new("title-update")
             .debug_selector(|| "title-update".into())
-            .accessibility_label(label.clone())
+            .accessibility_label(format!("{label} · {}", self.update_indicator_label()))
             .label(label)
             .small()
             .ghost()
