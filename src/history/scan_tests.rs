@@ -980,7 +980,7 @@ fn skips_unchanged_files_on_second_scan() {
     let content = fixture.claude("native-id", "first message");
     std::fs::write(&path, &content).unwrap();
 
-    let mut first = fixture.scan();
+    let first = fixture.scan();
     assert_eq!(first.sessions[0].len(), 1);
     assert_eq!(first.skipped, 0);
     assert!(first.bytes_read > 0);
@@ -1006,18 +1006,33 @@ fn skips_unchanged_files_on_second_scan() {
         second.done = next.done;
     }
 
-    assert_eq!(second.sessions[0].len(), 0, "skipped file should not emit sessions");
+    assert_eq!(
+        second.sessions[0].len(),
+        0,
+        "skipped file should not emit sessions"
+    );
     assert_eq!(second.skipped, 1);
     assert_eq!(second.bytes_read, 0);
     assert_eq!(second.verified_bytes, 0);
-    assert!(second.file_stamps[0].is_empty(), "skipped files don't write new stamps");
+    assert!(
+        second.file_stamps[0].is_empty(),
+        "skipped files don't write new stamps"
+    );
 
     // Change the file: third scan should reparse.
-    std::fs::write(&path, format!("{}{}", content, fixture.claude("native-id", "second message"))).unwrap();
+    std::fs::write(
+        &path,
+        format!(
+            "{}{}",
+            content,
+            fixture.claude("native-id", "second message")
+        ),
+    )
+    .unwrap();
     let mut third_scanner = Scanner::open(
         Some(&fixture.root),
         vec![fixture.workspace.clone()],
-        vec![(path.clone(), stamp).into_iter().collect()],
+        vec![[(path.clone(), stamp)].into_iter().collect()],
         &fixture.index,
         Some(&fixture.opencode_path()),
         &AtomicBool::new(false),

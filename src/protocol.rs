@@ -2780,8 +2780,14 @@ mod tests {
             "ccs-proxy--claude-opus-5-5": {"contextWindow": 1000000, "canonicalModel": "claude-opus-5-5"},
             "claude-haiku-5-5": {"contextWindow": 200000, "canonicalModel": "claude-haiku-5-5"}
         });
-        assert_eq!(claude_context_window(&usage, "claude-opus-5-5"), Some(1_000_000));
-        assert_eq!(claude_context_window(&usage, "claude-haiku-5-5"), Some(200_000));
+        assert_eq!(
+            claude_context_window(&usage, "claude-opus-5-5"),
+            Some(1_000_000)
+        );
+        assert_eq!(
+            claude_context_window(&usage, "claude-haiku-5-5"),
+            Some(200_000)
+        );
         assert_eq!(claude_context_window(&usage, "claude-sonnet-5-5"), None);
         let ambiguous = json!({
             "a": {"contextWindow": 1000000, "canonicalModel": "m"},

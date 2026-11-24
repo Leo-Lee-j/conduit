@@ -175,7 +175,7 @@ fn path_contains(path: &gpui_kit::Path<Pixels>, p: Point<Pixels>) -> bool {
     let cross = |a: Point<Pixels>, b: Point<Pixels>, p: Point<Pixels>| {
         f32::from(b.x - a.x) * f32::from(p.y - a.y) - f32::from(b.y - a.y) * f32::from(p.x - a.x)
     };
-    path.vertices.chunks_exact(3).any(|vertices| {
+    path.vertices.as_chunks::<3>().0.iter().any(|vertices| {
         let [a, b, c] = [
             vertices[0].xy_position,
             vertices[1].xy_position,

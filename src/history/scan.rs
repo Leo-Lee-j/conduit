@@ -217,7 +217,7 @@ enum Loaded {
     Pending,
     Changed,
     /// The stamp is the one the content was validated against, not the queued one.
-    Complete(Stamp, Option<(Vec<String>, ImportedSession)>),
+    Complete(Stamp, Option<Box<(Vec<String>, ImportedSession)>>),
 }
 
 pub(super) fn batch_exhausted(batch: &Batch, started: std::time::Instant) -> bool {
@@ -447,7 +447,8 @@ impl Scanner {
                         ));
                     }
                 }
-                Ok(Loaded::Complete(stamp, Some((cwds, mut session)))) => {
+                Ok(Loaded::Complete(stamp, Some(imported))) => {
+                    let (cwds, mut session) = *imported;
                     if session.is_subagent {
                         for agent in &session.subagents {
                             self.subagent_statuses
@@ -556,7 +557,7 @@ impl Scanner {
                         if let Some(index) = &mut self.index {
                             let _ = index.touch(path);
                         }
-                        return Ok(Loaded::Complete(stamp, parser.finish()));
+                        return Ok(Loaded::Complete(stamp, parser.finish().map(Box::new)));
                     }
                     if metadata.may_append(&stamp) {
                         Pending::Verify {
@@ -698,7 +699,7 @@ impl Scanner {
                 &[("error", error.to_string())],
             ));
         }
-        Ok(Loaded::Complete(stamp, parser.finish()))
+        Ok(Loaded::Complete(stamp, parser.finish().map(Box::new)))
     }
 
     fn foreign_codex(
