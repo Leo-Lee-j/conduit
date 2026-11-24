@@ -3,6 +3,9 @@ use super::*;
 use crate::usage_ledger::{ApiRequestOutcome, Observation, Totals};
 use chrono::Months;
 use gpui_kit::component::progress::Progress;
+mod dashboard;
+#[cfg(all(test, feature = "ui-tests"))]
+mod dashboard_tests;
 mod insights;
 mod render;
 mod report;
@@ -221,8 +224,11 @@ impl ConduitApp {
                 budget,
                 error: None,
                 selected_service: None,
+                selected_engine: None,
+                log_status: None,
+                table_tab: dashboard::TableTab::Records,
+                chart_open: true,
                 shown: 20,
-                by_service: false,
                 model_details: HashSet::new(),
                 budget_open: false,
                 details_open: false,
@@ -245,8 +251,11 @@ pub(super) struct UsagePanel {
     budget: Entity<InputState>,
     error: Option<String>,
     selected_service: Option<String>,
+    selected_engine: Option<Provider>,
+    log_status: Option<ApiRequestOutcome>,
+    table_tab: dashboard::TableTab,
+    chart_open: bool,
     shown: usize,
-    by_service: bool,
     model_details: HashSet<String>,
     budget_open: bool,
     details_open: bool,

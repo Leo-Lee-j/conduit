@@ -134,8 +134,34 @@ pub(super) fn message_markdown(item: &ChatItem, provider: Provider) -> Cow<'_, s
     }
 }
 
-pub(super) fn should_render_message_item(item: &ChatItem, _provider: Provider) -> bool {
-    !is_empty_chat_placeholder(item)
+pub(super) fn should_render_message_item(item: &ChatItem, provider: Provider) -> bool {
+    if is_empty_chat_placeholder(item) {
+        return false;
+    }
+    if item.kind != ItemKind::Reasoning
+        || provider != Provider::Codex
+        || item.reasoning_summary == Some(false)
+    {
+        return true;
+    }
+    // Codex summaries (including legacy records without a source marker) can
+    // consist entirely of headings. Wait for prose before allocating a row;
+    // do not use length or the summary marker itself to discard readable text.
+    let mut lines = item.text.lines().peekable();
+    while let Some(line) = lines.next() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let pending = tool_running(item) && lines.peek().is_none() && !item.text.ends_with('\n');
+        if pending && matches!(line, "*" | "**") {
+            continue;
+        }
+        let (heading, _) = reasoning_parts(line);
+        if heading.is_none() || (!line.trim_end().ends_with("**") && !pending) {
+            return true;
+        }
+    }
+    false
 }
 
 fn reasoning_body(item: &ChatItem, provider: Provider) -> &str {
@@ -1837,9 +1863,7 @@ impl ConduitApp {
                 } else {
                     Vec::new()
                 };
-                let title = if question_history {
-                    conduit::i18n::text_static("user_input.question_history").to_string()
-                } else if edit {
+                let title = if edit {
                     conduit::i18n::text_static("chat.edit_file").to_string()
                 } else {
                     first_line(&item.text)
@@ -1898,18 +1922,20 @@ impl ConduitApp {
                                     .min_w_0()
                                     .items_center()
                                     .gap_2()
-                                    .child(
-                                        div()
-                                            .min_w_0()
-                                            .flex_1()
-                                            .debug_selector(move || {
-                                                format!("tool-title-{session_id}-{index}")
-                                            })
-                                            .text_left()
-                                            .text_size(px(13.))
-                                            .truncate()
-                                            .child(title),
-                                    )
+                                    .when(!question_history, |row| {
+                                        row.child(
+                                            div()
+                                                .min_w_0()
+                                                .flex_1()
+                                                .debug_selector(move || {
+                                                    format!("tool-title-{session_id}-{index}")
+                                                })
+                                                .text_left()
+                                                .text_size(px(13.))
+                                                .truncate()
+                                                .child(title),
+                                        )
+                                    })
                                     .children(edit_paths.iter().take(2).map(|path| {
                                         let name = Path::new(path)
                                             .file_name()
@@ -1950,6 +1976,54 @@ impl ConduitApp {
                                         .child(item.status.label().to_string()),
                                 )
                             })
+                            .when(question_history, |header| {
+                                let dock_key = item.key.clone();
+                                header
+                                    .child(
+                                        Button::new(SharedString::from(format!("{tool_id}-dock")))
+                                            .ghost()
+                                            .small()
+                                            .compact()
+                                            .icon(IconName::PanelRight)
+                                            .tooltip(conduit::i18n::text_static(
+                                                "tools.view_tool_details_on_the_right",
+                                            ))
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                cx.stop_propagation();
+                                                this.open_tool_details(
+                                                    session_id, &dock_key, window, cx,
+                                                );
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new(SharedString::from(format!("{tool_id}-copy")))
+                                            .ghost()
+                                            .small()
+                                            .compact()
+                                            .icon(IconName::Copy)
+                                            .tooltip(conduit::i18n::text_static(
+                                                "tools.copy_input_and_output",
+                                            ))
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                cx.stop_propagation();
+                                                if let Some(approval) = this
+                                                    .session(session_id)
+                                                    .and_then(|session| session.messages.get(index))
+                                                    .and_then(super::user_input::history)
+                                                {
+                                                    cx.write_to_clipboard(
+                                                        ClipboardItem::new_string(
+                                                            super::user_input::history_text(
+                                                                approval,
+                                                            ),
+                                                        ),
+                                                    );
+                                                }
+                                            })),
+                                    )
+                            })
                             .child(
                                 Icon::new(if expanded {
                                     IconName::ChevronDown
@@ -1984,20 +2058,25 @@ impl ConduitApp {
                     .bg(rgb(palette().surface))
                     .child(header);
                 if expanded {
-                    let tool_scroll = self
-                        .tool_scrolls
-                        .entry((session_id, item.key.clone()))
-                        .or_default()
-                        .clone();
-                    card = card.child(tool_detail_panel(
-                        &detail_key,
-                        item,
-                        &tool_scroll,
-                        &typography,
-                        &mut self.tool_diffs,
-                        &mut self.tool_analysis,
-                        cx,
-                    ));
+                    let content = if let Some(approval) = super::user_input::history(item) {
+                        super::user_input::history_content(&tool_id, approval)
+                    } else {
+                        let tool_scroll = self
+                            .tool_scrolls
+                            .entry(detail_key.clone())
+                            .or_default()
+                            .clone();
+                        tool_detail_panel(
+                            &detail_key,
+                            item,
+                            &tool_scroll,
+                            &typography,
+                            &mut self.tool_diffs,
+                            &mut self.tool_analysis,
+                            cx,
+                        )
+                    };
+                    card = card.child(content);
                 }
                 card.into_any_element()
             }

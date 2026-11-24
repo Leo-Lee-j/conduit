@@ -49,6 +49,7 @@ impl Insights {
         today: NaiveDate,
         selected: Option<&str>,
         report: &Report,
+        engine: Option<Provider>,
     ) -> Self {
         let end = first.checked_add_months(Months::new(1)).unwrap() - Days::new(1);
         let elapsed_days = if first > today {
@@ -75,6 +76,7 @@ impl Insights {
         for record in ledger.observations.iter().filter(|record| {
             record.workspace == workspace
                 && matches_service(record.provider, &record.service, selected)
+                && engine.is_none_or(|engine| record.provider == engine)
         }) {
             let Some(date) = record_date(record.finished_at).filter(|date| *date <= today) else {
                 continue;
@@ -192,8 +194,17 @@ mod tests {
             &first.format("%Y-%m").to_string(),
             &[],
             None,
+            None,
         );
-        Insights::build(ledger, Path::new("C:/usage"), first, today, None, &report)
+        Insights::build(
+            ledger,
+            Path::new("C:/usage"),
+            first,
+            today,
+            None,
+            &report,
+            None,
+        )
     }
 
     #[test]

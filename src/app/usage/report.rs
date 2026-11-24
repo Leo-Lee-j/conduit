@@ -47,6 +47,10 @@ pub(super) struct Report {
     pub models: Vec<(Option<String>, Totals)>,
     pub sessions: Vec<(u64, Totals)>,
     pub daily: BTreeMap<String, Totals>,
+    /// Indices into the source ledger, newest first; avoids copying observations per frame.
+    pub records: Vec<usize>,
+    cache_input: u128,
+    cache_hits: u128,
 }
 
 impl Report {
@@ -56,15 +60,19 @@ impl Report {
         month: &str,
         providers: &[ModelProvider],
         selected: Option<&str>,
+        engine: Option<Provider>,
     ) -> Self {
         let mut report = Self::default();
         let mut services = BTreeMap::<String, Service>::new();
         let mut models = BTreeMap::<Option<String>, Totals>::new();
         let mut sessions = BTreeMap::<u64, Totals>::new();
-        for row in observations.iter().filter(|o| {
+        for (index, row) in observations.iter().enumerate().filter(|(_, o)| {
             o.workspace == workspace && usage_ledger::date(o.finished_at).starts_with(month)
         }) {
             report.totals.add(row);
+            if engine.is_some_and(|engine| engine != row.provider) {
+                continue;
+            }
             let key = service_key(row.provider, &row.service);
             let service = services.entry(key.clone()).or_insert_with(|| Service {
                 key: key.clone(),
@@ -85,6 +93,13 @@ impl Report {
                 continue;
             }
             report.filtered.add(row);
+            report.records.push(index);
+            if let (Some(input), Some(cached)) = (row.input, row.cached)
+                && cached <= input
+            {
+                report.cache_input += u128::from(input);
+                report.cache_hits += u128::from(cached);
+            }
             let model = row
                 .model
                 .as_deref()
@@ -109,9 +124,16 @@ impl Report {
             .sort_by_key(|(_, t)| std::cmp::Reverse(t.tokens()));
         report.sessions = sessions.into_iter().collect();
         report
+            .records
+            .sort_by_key(|index| std::cmp::Reverse((observations[*index].finished_at, *index)));
+        report
             .sessions
             .sort_by_key(|(_, t)| std::cmp::Reverse(t.tokens()));
         report
+    }
+
+    pub fn cache_hit_rate(&self) -> Option<f64> {
+        (self.cache_input > 0).then(|| self.cache_hits as f64 * 100. / self.cache_input as f64)
     }
 }
 
@@ -151,14 +173,14 @@ mod tests {
         let mut outside = record.clone();
         outside.workspace = "C:/other".into();
         let records = [record, modern, other, outside];
-        let report = Report::build(&records, root, &month, &[], None);
+        let report = Report::build(&records, root, &month, &[], None, None);
         assert_eq!(report.totals.tokens(), 300); // Cached input is not counted twice.
         assert_eq!(report.services.len(), 2); // Same names do not merge different identities.
         assert_eq!(report.services[0].totals.turns, 2); // Legacy/new CCS identities merge.
         assert_eq!(report.models.len(), 3);
         assert_eq!(report.totals.incomplete, 1);
         let selected = &report.services[0].key;
-        let filtered = Report::build(&records, root, &month, &[], Some(selected));
+        let filtered = Report::build(&records, root, &month, &[], Some(selected), None);
         assert_eq!(filtered.totals.turns, 3);
         assert_eq!(filtered.filtered.turns, 2);
         assert_eq!(filtered.models.len(), 2);
@@ -173,6 +195,66 @@ mod tests {
             service_key(Provider::Codex, "cli"),
             service_key(Provider::Codex, "provider:cli")
         );
+    }
+
+    #[test]
+    fn engine_filters_share_the_ledger_scope_and_cache_uses_paired_counters() {
+        let root = Path::new("C:/usage");
+        let record = Observation {
+            key: "first".into(),
+            session: 1,
+            workspace: root.into(),
+            provider: Provider::Claude,
+            service: "cli".into(),
+            service_name: None,
+            model: Some("model-a".into()),
+            finished_at: 1_783_000_000,
+            input: Some(100),
+            cached: Some(80),
+            output: Some(10),
+            elapsed_ms: 1000,
+            incomplete: false,
+            api_first_response_ms: None,
+            api_request_outcome: None,
+        };
+        let month = usage_ledger::date(record.finished_at)[..7].to_owned();
+        let mut records = vec![record; 5];
+        records[1].cached = None;
+        records[1].finished_at += 30;
+        records[2].cached = Some(150);
+        records[2].finished_at += 10;
+        records[3].provider = Provider::Codex;
+        records[3].service = "provider:other".into();
+        records[3].finished_at += 40;
+        records[4].input = Some(50);
+        records[4].cached = Some(0);
+        records[4].finished_at += 20;
+        let report = Report::build(&records, root, &month, &[], None, Some(Provider::Claude));
+        assert_eq!(report.totals.turns, 5); // Reminder scope stays workspace-wide.
+        assert_eq!(report.filtered.turns, 4);
+        assert_eq!(report.services.len(), 1);
+        assert_eq!(report.records, vec![1, 4, 2, 0]);
+        assert!((report.cache_hit_rate().unwrap() - 80. / 150. * 100.).abs() < 0.001);
+        assert_eq!(
+            report
+                .daily
+                .values()
+                .map(|total| total.turns)
+                .sum::<usize>(),
+            4
+        );
+        let incompatible = Report::build(
+            &records,
+            root,
+            &month,
+            &[],
+            Some(&service_key(Provider::Codex, "provider:other")),
+            Some(Provider::Claude),
+        );
+        assert!(incompatible.records.is_empty());
+        assert!(incompatible.cache_hit_rate().is_none());
+        let unknown = Report::build(&records[1..2], root, &month, &[], None, None);
+        assert!(unknown.cache_hit_rate().is_none());
     }
 
     #[test]

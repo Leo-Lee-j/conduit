@@ -102,13 +102,13 @@ OpenCode 普通聊天提供一个具有相同权限配置的托管 worker，并�
 
 | 通知 / 字段 | 含义与显示规则 |
 | --- | --- |
-| `item/reasoning/summaryTextDelta` | 可读摘要；内部按 `itemId` 与 `summaryIndex` 累积，不展示卡片、正文或占位行 |
+| `item/reasoning/summaryTextDelta` | 可读摘要；按 `itemId` 与 `summaryIndex` 累积，只有独立标题时暂不显示，正文到达后保留正文和分段 |
 | `item/reasoning/summaryPartAdded` | 摘要分段边界；不生成正文，不清空已收到的同索引文本 |
 | `item/reasoning/textDelta` | 模型实际公开的推理文本，按 `contentIndex` 累积；不能与摘要直接拼接 |
 | `item/completed` 的 `summary` / `content` | 权威最终状态，替换流式临时文本；最终内容缩短或为空时也必须接受 |
 | `item/agentMessage/delta` | 助手回复，与思考内容分别保存和展示 |
 
-只展示 CLI 实际公开的非空思考正文，收到正文增量即可流式显示；摘要无论长短都不展示，也不触发界面“思考中”状态或思考计时。此规则同时适用于实时消息和保存、导入的历史；旧版 Codex 历史缺少来源标记时沿用摘要语义并隐藏。只有摘要或加密内容时不出现思考卡片。结束标记不重复正文的其他 CLI 仍保留已收到的文本，不套用 Codex 的最终快照规则。
+显示 CLI 实际公开的摘要正文和思考正文，收到正文增量即可流式显示。`summary` 是内容来源标记，不能单凭该标记隐藏内容：摘要可能包含完整段落，旧版 Codex 历史缺少来源标记时也应保留可读正文。仅包含一个或多个独立粗体标题的 Codex 摘要不生成卡片或占位行，流式标题尚未闭合时也等待正文；普通短句仍然显示。同一条目同时提供摘要和公开正文时优先显示正文，避免重复拼接；只有加密内容时不出现思考卡片。此规则同时适用于主会话、分屏、子会话和保存、导入的历史，只影响显示，不改写存储文本。摘要不单独触发界面“思考中”状态或思考计时。结束标记不重复正文的其他 CLI 仍保留已收到的文本，不套用 Codex 的最终快照规则。
 
 普通对话通过 `turn/start.summary = "auto"` 请求模型支持的最详细摘要；纯文本辅助任务不覆盖摘要设置。[官方推理指南](https://developers.openai.com/api/docs/guides/reasoning#reasoning-summaries) 将摘要与原始推理区分，`auto` / `detailed` 不保证长正文，也不会解密 `encrypted_content`。[配置说明](https://developers.openai.com/codex/config-reference/) 中的 `show_raw_agent_reasoning` 仅在模型实际输出该内容时生效，不能用它要求服务返回未公开推理。
 

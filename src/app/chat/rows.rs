@@ -111,7 +111,7 @@ impl Rows {
                 self.classifications += 1;
             }
             let shape = Shape {
-                empty: is_empty_chat_placeholder(item)
+                empty: !super::should_render_message_item(item, session.provider)
                     || (item.kind == ItemKind::Notice
                         && item.key.starts_with("session-notice:codex:mcp:")),
                 activity: is_groupable_activity(item),
@@ -382,6 +382,51 @@ mod tests {
         assert_eq!(
             rows.rows.iter().map(|row| row.message).collect::<Vec<_>>(),
             vec![1, 2, 4]
+        );
+    }
+
+    #[test]
+    fn reasoning_heading_rows_follow_streamed_body_and_final_snapshot() {
+        use crate::app::Provider;
+        let mut session = crate::app::tests::session();
+        session.provider = Provider::Codex;
+        session.messages = serde_json::from_value(serde_json::json!([
+            {"key":"stream", "kind":"Reasoning", "text":"**", "reasoning_summary":true, "status":"running"},
+            {"key":"legacy", "kind":"Reasoning", "text":"**Inspect files**\n\n**Check tests**\n**Finish**", "status":"completed"},
+            {"key":"published", "kind":"Reasoning", "text":"**Published content**", "reasoning_summary":false, "status":"completed"},
+            {"key":"reply", "kind":"Assistant", "text":"Answer"}
+        ])).unwrap();
+        let mut rows = super::Rows::default();
+        let visible =
+            |rows: &super::Rows| rows.rows.iter().map(|row| row.message).collect::<Vec<_>>();
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(visible(&rows), [2, 3]);
+        session.messages[0]
+            .text
+            .push_str("Inspect files**\n\n**Check tests**");
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(visible(&rows), [2, 3]);
+
+        let revision = rows.mapping_revision;
+        session.messages[0].text.push_str("\n\nRead.");
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(visible(&rows), [0, 2, 3]);
+        assert_ne!(rows.mapping_revision, revision);
+
+        // The authoritative completion can shrink back to headings. No stale
+        // visible row should survive either that snapshot or a history reload.
+        session.messages[0].text = "**Inspect files**\n\n**Check tests**".into();
+        session.messages[0].status = "completed".into();
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(visible(&rows), [2, 3]);
+        let saved = serde_json::to_string(&session.messages).unwrap();
+        session.messages = serde_json::from_str(&saved).unwrap();
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(visible(&rows), [2, 3]);
+        assert_eq!(
+            session.messages.len(),
+            4,
+            "display filtering must preserve history"
         );
     }
 
