@@ -257,6 +257,22 @@ fn text<'a>(v: &'a Value, key: &str) -> &'a str {
 fn codex_error_diagnostic(params: &Value) -> crate::failure::StreamFailure {
     crate::failure::StreamFailure::codex(params)
 }
+/// `modelUsage` is keyed by the requested model (e.g. a ccs/proxy alias), while
+/// assistant messages carry the upstream model; `canonicalModel` links the two.
+fn claude_context_window(model_usage: &Value, model: &str) -> Option<u64> {
+    let window = |entry: &Value| entry["contextWindow"].as_u64().filter(|w| *w > 0);
+    window(&model_usage[model]).or_else(|| {
+        let mut matches = model_usage
+            .as_object()?
+            .values()
+            .filter(|entry| entry["canonicalModel"].as_str() == Some(model))
+            .filter_map(window);
+        let first = matches.next()?;
+        // Ambiguous canonical matches (different windows) are not trusted.
+        matches.all(|w| w == first).then_some(first)
+    })
+}
+
 fn pretty(v: &Value) -> String {
     serde_json::to_string_pretty(v).unwrap_or_default()
 }
@@ -1485,7 +1501,7 @@ impl Protocol {
                         .as_ref()
                         .and_then(|id| self.claude_usage.get(id))
                         .and_then(|response| response.model.as_ref())
-                        .and_then(|model| v["modelUsage"][model]["contextWindow"].as_u64())
+                        .and_then(|model| claude_context_window(&v["modelUsage"], model))
                         .unwrap_or(0);
                     step.events.push(Event::Usage(usage));
                 }
@@ -2756,6 +2772,22 @@ mod tests {
         assert_eq!(usage.turn_output_tokens, Some(150));
         assert_eq!(usage.context_tokens, Some(1070));
         assert_eq!(usage.context_window, 200_000);
+    }
+
+    #[test]
+    fn claude_context_window_resolves_aliased_model_usage_by_canonical_model() {
+        let usage = json!({
+            "ccs-proxy--claude-opus-5-5": {"contextWindow": 1000000, "canonicalModel": "claude-opus-5-5"},
+            "claude-haiku-5-5": {"contextWindow": 200000, "canonicalModel": "claude-haiku-5-5"}
+        });
+        assert_eq!(claude_context_window(&usage, "claude-opus-5-5"), Some(1_000_000));
+        assert_eq!(claude_context_window(&usage, "claude-haiku-5-5"), Some(200_000));
+        assert_eq!(claude_context_window(&usage, "claude-sonnet-5-5"), None);
+        let ambiguous = json!({
+            "a": {"contextWindow": 1000000, "canonicalModel": "m"},
+            "b": {"contextWindow": 200000, "canonicalModel": "m"}
+        });
+        assert_eq!(claude_context_window(&ambiguous, "m"), None);
     }
 
     #[test]
