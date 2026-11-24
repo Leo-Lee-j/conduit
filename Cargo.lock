@@ -1088,7 +1088,7 @@ dependencies = [
 
 [[package]]
 name = "conduit"
-version = "0.3.18"
+version = "0.3.19"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
