@@ -99,6 +99,9 @@ pub struct Usage {
     pub output_tokens_known: bool,
     pub input_tokens: u64,
     pub cached_input_tokens: u64,
+    /// Cache writes are included in input; absent when the provider does not report them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_input_tokens: Option<u64>,
     pub output_tokens: u64,
     pub total_tokens: u64,
     /// Model context window; 0 when the CLI has not reported it.

@@ -17,6 +17,8 @@ pub struct Observation {
     pub finished_at: u64,
     pub input: Option<u64>,
     pub cached: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write: Option<u64>,
     pub output: Option<u64>,
     pub elapsed_ms: u64,
     pub incomplete: bool,
@@ -201,6 +203,7 @@ mod tests {
             finished_at: timestamp,
             input: Some(100),
             cached: Some(80),
+            cache_write: Some(10),
             output: Some(50),
             elapsed_ms: 1_000,
             incomplete: false,
@@ -234,6 +237,7 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&ledger).unwrap()).unwrap();
         assert_eq!(restored.monthly(&workspace, &month).incomplete, 1);
         assert_eq!(restored.observations[0].api_first_response_ms, Some(250));
+        assert_eq!(restored.observations[0].cache_write, Some(10));
         assert_eq!(
             restored.observations[0].api_request_outcome,
             Some(ApiRequestOutcome::Succeeded)
@@ -251,6 +255,7 @@ mod tests {
             "input": 79, "cached": null, "output": 0, "elapsed_ms": 0, "incomplete": false
         }))
         .unwrap();
+        assert_eq!(observation.cache_write, None);
         let month = date(observation.finished_at)[..7].to_owned();
         let mut ledger = Ledger::default();
         ledger.save_budget(workspace.clone(), 100);

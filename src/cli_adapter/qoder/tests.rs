@@ -274,12 +274,13 @@ fn qoder_streams_merge_tools_filter_sessions_and_display_thinking() {
             Event::Delta { .. }
         ]
     ));
-    let done=adapter.accept(json!({"id":writes.last().unwrap()["id"],"result":{"stopReason":"end_turn","usage":{"inputTokens":100,"outputTokens":10,"totalTokens":110}}}));
+    let done=adapter.accept(json!({"id":writes.last().unwrap()["id"],"result":{"stopReason":"end_turn","usage":{"inputTokens":100,"outputTokens":10,"cachedReadTokens":40,"cachedWriteTokens":20,"totalTokens":110}}}));
     assert!(matches!(
         &done.events[0],
         Event::Usage(Usage {
             context_tokens: Some(250),
             total_tokens: 110,
+            cache_write_input_tokens: Some(20),
             ..
         })
     ));

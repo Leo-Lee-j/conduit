@@ -180,6 +180,7 @@ mod tests {
                 .timestamp() as u64,
             input: Some(tokens),
             cached: None,
+            cache_write: None,
             output: Some(0),
             elapsed_ms: 1,
             incomplete: false,

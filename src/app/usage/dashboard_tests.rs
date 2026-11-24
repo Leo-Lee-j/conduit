@@ -41,6 +41,7 @@ fn dashboard_filters_reflow_and_chart_toggle_preserve_ledger_scope(cx: &mut Test
                     finished_at: unix_now(),
                     input: Some(1000),
                     cached: Some(500),
+                    cache_write: None,
                     output: Some(100),
                     elapsed_ms: 2000,
                     incomplete: false,

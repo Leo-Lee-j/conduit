@@ -242,12 +242,13 @@ fn opencode_new_load_and_resume_apply_model_and_variant_before_prompt() {
         assert!(
             matches!(&chunk.events[0], Event::Delta {key,text} if key == "msg_a" && text == "new text")
         );
-        let done = protocol.accept(json!({"id":writes.last().unwrap()["id"],"result":{"stopReason":"end_turn","usage":{"inputTokens":10,"outputTokens":2,"cachedReadTokens":4,"totalTokens":16}}}));
+        let done = protocol.accept(json!({"id":writes.last().unwrap()["id"],"result":{"stopReason":"end_turn","usage":{"inputTokens":10,"outputTokens":2,"cachedReadTokens":4,"cachedWriteTokens":0,"totalTokens":12}}}));
         assert!(done.done && done.error.is_none());
         assert!(matches!(
             done.events[0],
             Event::Usage(Usage {
-                total_tokens: 16,
+                total_tokens: 12,
+                cache_write_input_tokens: Some(0),
                 ..
             })
         ));

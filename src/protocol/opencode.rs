@@ -788,6 +788,7 @@ impl Protocol {
             output_tokens_known: usage["outputTokens"].as_u64().is_some(),
             input_tokens: usage["inputTokens"].as_u64().unwrap_or(0),
             cached_input_tokens: usage["cachedReadTokens"].as_u64().unwrap_or(0),
+            cache_write_input_tokens: usage["cachedWriteTokens"].as_u64(),
             output_tokens: usage["outputTokens"].as_u64().unwrap_or(0),
             total_tokens: usage["totalTokens"].as_u64().unwrap_or(0),
             context_window: self.acp.context_window,

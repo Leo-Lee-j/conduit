@@ -496,6 +496,7 @@ impl CliAdapter for QoderAdapter {
                             input_tokens: usage["inputTokens"].as_u64().unwrap_or(0),
                             output_tokens: usage["outputTokens"].as_u64().unwrap_or(0),
                             cached_input_tokens: usage["cachedReadTokens"].as_u64().unwrap_or(0),
+                            cache_write_input_tokens: usage["cachedWriteTokens"].as_u64(),
                             total_tokens: usage["totalTokens"].as_u64().unwrap_or(0),
                             turn_output_tokens: usage["outputTokens"].as_u64(),
                             context_window: self.context_window,

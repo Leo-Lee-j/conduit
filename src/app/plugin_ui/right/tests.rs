@@ -87,6 +87,7 @@ fn session_data_opens_on_session_entry_and_respects_manual_changes(cx: &mut Test
             finished_at: 1,
             input: Some(1_000),
             cached: Some(800),
+            cache_write: Some(100),
             output: Some(100),
             elapsed_ms: 1_000,
             incomplete: false,

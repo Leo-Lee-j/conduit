@@ -80,12 +80,13 @@ impl Sections {
 struct Consumption {
     input: Option<u64>,
     cached: Option<u64>,
+    cache_write: Option<u64>,
     output: Option<u64>,
     elapsed_ms: u64,
     turns: usize,
     incomplete: bool,
-    cache_hit_input: u64,
-    cache_hit_cached: u64,
+    cache_hit_input: u128,
+    cache_hit_cached: u128,
 }
 impl Consumption {
     fn add(&mut self, turn: &Observation) {
@@ -96,15 +97,20 @@ impl Consumption {
         }
         add_known(&mut self.input, turn.input);
         add_known(&mut self.cached, turn.cached);
+        add_known(&mut self.cache_write, turn.cache_write);
         add_known(&mut self.output, turn.output);
         self.elapsed_ms = self.elapsed_ms.saturating_add(turn.elapsed_ms);
         self.turns += 1;
-        self.incomplete |= turn.incomplete || turn.input.is_none() || turn.output.is_none();
+        self.incomplete |= turn.incomplete
+            || turn.input.is_none()
+            || turn.output.is_none()
+            || turn.cached.is_none()
+            || turn.cache_write.is_none();
         if let (Some(input), Some(cached)) = (turn.input, turn.cached)
             && cached <= input
         {
-            self.cache_hit_input = self.cache_hit_input.saturating_add(input);
-            self.cache_hit_cached = self.cache_hit_cached.saturating_add(cached);
+            self.cache_hit_input += u128::from(input);
+            self.cache_hit_cached += u128::from(cached);
         }
     }
     fn cache_hit(self) -> Option<f64> {
@@ -457,7 +463,7 @@ fn heading(label: &'static str, note: Option<SharedString>) -> Div {
 }
 fn metric(label: &'static str, value: String, detail: impl IntoElement) -> Div {
     let note = match label {
-        "session_data.cache_hit" => Some(text("session_data.cache_subset").into()),
+        "session_data.cache_hit" => Some(text("session_data.cache_hit_note").into()),
         "session_data.turn_elapsed" | "session_data.latest_elapsed" => {
             Some(text("session_data.speed_note").into())
         }
@@ -478,10 +484,11 @@ fn metric(label: &'static str, value: String, detail: impl IntoElement) -> Div {
         )
         .child(detail)
 }
-fn usage_row(label: &'static str, input: Option<u64>, output: Option<u64>, cx: &App) -> Div {
+fn usage_row(label: &'static str, latest: Option<u64>, total: Option<u64>, cx: &App) -> Div {
     let value = |value| {
         div()
-            .w(px(58.))
+            .w(px(78.))
+            .flex_shrink_0()
             .text_right()
             .text_size(ui_text_size(13.))
             .font_semibold()
@@ -492,8 +499,8 @@ fn usage_row(label: &'static str, input: Option<u64>, output: Option<u64>, cx: &
         .w_full()
         .gap_2()
         .child(caption(text(label)).flex_1())
-        .child(value(input))
-        .child(value(output))
+        .child(value(latest))
+        .child(value(total))
 }
 fn row(label: &'static str, value: impl Into<SharedString>, cx: &App) -> Div {
     h_flex()
@@ -1145,24 +1152,46 @@ impl ConduitApp {
                         .justify_between()
                         .gap_2()
                         .child(heading("session_data.usage", Some(usage_note.into())).flex_1())
-                        .child(caption(text("session_data.input")).w(px(58.)).text_right())
-                        .child(caption(text("session_data.output")).w(px(58.)).text_right()),
+                        .child(
+                            caption(text(if run.is_some() {
+                                "session_data.current_turn"
+                            } else {
+                                "session_data.latest_turn"
+                            }))
+                            .w(px(78.))
+                            .flex_shrink_0()
+                            .text_right(),
+                        )
+                        .child(
+                            caption(text("session_data.recorded_total"))
+                                .w(px(78.))
+                                .flex_shrink_0()
+                                .text_right(),
+                        ),
                 )
                 .child(usage_row(
-                    if run.is_some() {
-                        "session_data.current_turn"
-                    } else {
-                        "session_data.latest_turn"
-                    },
+                    "session_data.input",
                     turn.and_then(|turn| turn.input),
+                    total.input,
+                    cx,
+                ))
+                .child(usage_row(
+                    "session_data.output",
                     turn.and_then(|turn| turn.output),
+                    total.output,
                     cx,
                 ))
                 .child(divider())
                 .child(usage_row(
-                    "session_data.recorded_total",
-                    total.input,
-                    total.output,
+                    "session_data.cache_read",
+                    turn.and_then(|turn| turn.cached),
+                    total.cached,
+                    cx,
+                ))
+                .child(usage_row(
+                    "session_data.cache_write",
+                    turn.and_then(|turn| turn.cache_write),
+                    total.cache_write,
                     cx,
                 ));
             content = content.child(summary);
@@ -1222,8 +1251,13 @@ impl ConduitApp {
                     .test_support()
                     .debug_selector(|| "session-data-token-details".into())
                     .child(row("session_data.input", tokens(total.input), cx))
+                    .child(row("session_data.output", tokens(total.output), cx))
                     .child(row("session_data.cache_read", tokens(total.cached), cx))
-                    .child(row("session_data.output", tokens(total.output), cx)),
+                    .child(row(
+                        "session_data.cache_write",
+                        tokens(total.cache_write),
+                        cx,
+                    )),
             );
         }
 
@@ -1506,6 +1540,7 @@ mod tests {
             finished_at: 1,
             input,
             cached,
+            cache_write: None,
             output,
             elapsed_ms: 1000,
             incomplete: false,
@@ -1681,6 +1716,43 @@ mod tests {
         assert_eq!(total.input, Some(200));
         assert_eq!(total.cached, Some(280));
         assert_eq!(total.cache_hit(), Some(80.));
+    }
+
+    #[test]
+    fn cache_writes_replace_live_snapshots_and_preserve_unknowns() {
+        let mut old = turn("old", Some(100), Some(80), Some(20));
+        old.cache_write = Some(10);
+        let mut recorded_live = turn("live", Some(100), Some(80), Some(20));
+        recorded_live.cache_write = Some(1);
+        let mut current = recorded_live.clone();
+        current.cache_write = Some(20);
+        let (total, latest) = consumption([old, recorded_live].iter(), Some(&current));
+        assert_eq!(total.cache_write, Some(30));
+        assert_eq!(latest.unwrap().cache_write, Some(20));
+        assert_eq!(total.cache_hit(), Some(80.));
+        current.cache_write = None;
+        assert_eq!(
+            consumption(std::iter::empty(), Some(&current))
+                .0
+                .cache_write,
+            None
+        );
+        current.cache_write = Some(0);
+        assert_eq!(
+            consumption(std::iter::empty(), Some(&current))
+                .0
+                .cache_write,
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn cache_hit_does_not_saturate_its_weighted_denominator() {
+        let records = [
+            turn("cached", Some(u64::MAX), Some(u64::MAX), Some(0)),
+            turn("uncached", Some(u64::MAX), Some(0), Some(0)),
+        ];
+        assert_eq!(consumption(records.iter(), None).0.cache_hit(), Some(50.));
     }
 
     #[test]

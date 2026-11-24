@@ -74,6 +74,9 @@ impl ConduitApp {
             finished_at: unix_now(),
             input,
             cached,
+            cache_write: reported
+                .then_some(run.usage.cache_write_input_tokens)
+                .flatten(),
             output: (reported && run.usage.output_tokens_known)
                 .then_some(run.usage.turn_output_tokens)
                 .flatten(),
@@ -520,6 +523,7 @@ mod tests {
                     finished_at: unix_now(),
                     input: Some(1200),
                     cached: Some(800),
+                    cache_write: None,
                     output: Some(400),
                     elapsed_ms: 1000,
                     incomplete: false,

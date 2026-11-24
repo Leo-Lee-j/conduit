@@ -1248,6 +1248,7 @@ mod tests {
             finished_at: 1,
             input: Some(1_000),
             cached: None,
+            cache_write: None,
             output: Some(500),
             elapsed_ms: 12_000,
             incomplete: false,

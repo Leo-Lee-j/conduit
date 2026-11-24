@@ -157,6 +157,7 @@ struct ClaudeUsage {
     input: u64,
     input_reported: bool,
     cache_reported: bool,
+    cache_write_reported: bool,
     output_reported: bool,
     model: Option<String>,
     cache_read: u64,
@@ -167,6 +168,7 @@ impl ClaudeUsage {
     fn merge(&mut self, value: &Value) {
         self.input_reported |= value["input_tokens"].as_u64().is_some();
         self.cache_reported |= value["cache_read_input_tokens"].as_u64().is_some();
+        self.cache_write_reported |= value["cache_creation_input_tokens"].as_u64().is_some();
         self.output_reported |= value["output_tokens"].as_u64().is_some();
         for (field, target) in [
             ("input_tokens", &mut self.input),
@@ -188,11 +190,14 @@ impl ClaudeUsage {
             .saturating_add(self.cache_read)
             .saturating_add(self.cache_write);
         Usage {
-            input_tokens_known: self.input_reported,
+            input_tokens_known: self.input_reported
+                && self.cache_reported
+                && self.cache_write_reported,
             cached_input_tokens_known: self.cache_reported,
             output_tokens_known: self.output_reported,
             input_tokens: input,
             cached_input_tokens: self.cache_read,
+            cache_write_input_tokens: self.cache_write_reported.then_some(self.cache_write),
             output_tokens: self.output,
             total_tokens: input.saturating_add(self.output),
             turn_output_tokens: Some(self.output),
@@ -1453,8 +1458,16 @@ impl Protocol {
         }
         self.claude_usage.entry(id.into()).or_default().merge(value);
         let mut total = Usage {
-            input_tokens_known: self.claude_usage.values().all(|u| u.input_reported),
+            input_tokens_known: self
+                .claude_usage
+                .values()
+                .all(|u| u.snapshot().input_tokens_known),
             cached_input_tokens_known: self.claude_usage.values().all(|u| u.cache_reported),
+            cache_write_input_tokens: self
+                .claude_usage
+                .values()
+                .all(|u| u.cache_write_reported)
+                .then_some(0),
             output_tokens_known: self.claude_usage.values().all(|u| u.output_reported),
             ..Default::default()
         };
@@ -1465,6 +1478,9 @@ impl Protocol {
                 .cached_input_tokens
                 .saturating_add(usage.cached_input_tokens);
             total.output_tokens = total.output_tokens.saturating_add(usage.output_tokens);
+            if let Some(written) = total.cache_write_input_tokens.as_mut() {
+                *written = written.saturating_add(usage.cache_write_input_tokens.unwrap_or(0));
+            }
         }
         total.total_tokens = total.input_tokens.saturating_add(total.output_tokens);
         total.turn_output_tokens = Some(total.output_tokens);
@@ -2505,6 +2521,23 @@ mod tests {
     }
 
     #[test]
+    fn claude_partial_cache_counts_do_not_claim_complete_input() {
+        let mut response = ClaudeUsage::default();
+        response.merge(&json!({"input_tokens":100,"output_tokens":20}));
+        assert!(!response.snapshot().input_tokens_known);
+        assert_eq!(response.snapshot().cache_write_input_tokens, None);
+        response.merge(&json!({"cache_read_input_tokens":500}));
+        assert!(!response.snapshot().input_tokens_known);
+        response.merge(&json!({"cache_creation_input_tokens":200}));
+        let usage = response.snapshot();
+        assert!(usage.input_tokens_known);
+        assert_eq!(usage.input_tokens, 800);
+        assert_eq!(usage.cache_write_input_tokens, Some(200));
+        response.merge(&json!({"cache_creation_input_tokens":0}));
+        assert_eq!(response.snapshot().cache_write_input_tokens, Some(0));
+    }
+
+    #[test]
     fn claude_stream_usage_merges_caches_and_deduplicates_response_snapshots() {
         let _locale = crate::test_support::chinese();
         let mut protocol = Protocol::new(Provider::Claude, "C:\\work".into(), "hello".into(), None);
@@ -2512,6 +2545,7 @@ mod tests {
             "id":"m1","usage":{"input_tokens":100,"cache_read_input_tokens":500,"cache_creation_input_tokens":200,"output_tokens":1}
         }}}));
         assert_eq!(reported_usage(&start).input_tokens, 800);
+        assert_eq!(reported_usage(&start).cache_write_input_tokens, Some(200));
         let delta = protocol.accept(json!({"type":"stream_event","event":{"type":"message_delta","usage":{"output_tokens":50}}}));
         let usage = reported_usage(&delta);
         assert_eq!(
@@ -2529,6 +2563,10 @@ mod tests {
             }}));
             assert_eq!(reported_usage(&snapshot).total_tokens, 850);
             assert_eq!(reported_usage(&snapshot).turn_output_tokens, Some(50));
+            assert_eq!(
+                reported_usage(&snapshot).cache_write_input_tokens,
+                Some(200)
+            );
         }
     }
 
