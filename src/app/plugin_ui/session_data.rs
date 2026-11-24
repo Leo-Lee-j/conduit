@@ -405,7 +405,7 @@ fn api_quality_chart(samples: &[&Observation], status: ApiQualityLevel) -> impl 
                 .flex_shrink_0()
                 .flex()
                 .items_end()
-                .tooltip(move |window, cx| Tooltip::new(detail.clone()).build(window, cx))
+                .tooltip(move |window, cx| tooltip(detail.clone()).build(window, cx))
                 .child(
                     div()
                         .id(SharedString::from(format!(
@@ -420,6 +420,15 @@ fn api_quality_chart(samples: &[&Observation], status: ApiQualityLevel) -> impl 
         );
     }
     chart
+}
+
+fn tooltip(note: SharedString) -> Tooltip {
+    Tooltip::element(move |window, _| {
+        div()
+            .max_w(px(300.).min((window.viewport_size().width - px(48.)).max(px(0.))))
+            .whitespace_normal()
+            .child(note.clone())
+    })
 }
 
 fn caption(value: impl Into<SharedString>) -> Div {
@@ -452,7 +461,7 @@ fn heading(label: &'static str, note: Option<SharedString>) -> Div {
                     .rounded(px(4.))
                     .cursor_default()
                     .focus_visible(|hint| hint.bg(rgb(palette().surface_hover)))
-                    .tooltip(move |window, cx| Tooltip::new(note.clone()).build(window, cx))
+                    .tooltip(move |window, cx| tooltip(note.clone()).build(window, cx))
                     .child(
                         Icon::new(FullIconName::Info)
                             .size(px(12.))
@@ -640,7 +649,7 @@ fn agent_row(agent: &Agent) -> impl IntoElement {
         &agent.activity
     };
     let summary = summary.lines().find(|line| !line.trim().is_empty());
-    let tooltip = SharedString::from(
+    let tooltip_text = SharedString::from(
         [
             agent.name.as_str(),
             agent.id.as_str(),
@@ -688,7 +697,7 @@ fn agent_row(agent: &Agent) -> impl IntoElement {
         .id(identity)
         .test_support()
         .role(Role::Group)
-        .aria_label(tooltip.clone())
+        .aria_label(tooltip_text.clone())
         .w_full()
         .min_w_0()
         .min_h(px(40.))
@@ -698,7 +707,7 @@ fn agent_row(agent: &Agent) -> impl IntoElement {
         .rounded(px(8.))
         .bg(rgb(colors.surface_strong))
         .hover(|row| row.bg(rgb(colors.surface_hover)))
-        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+        .tooltip(move |window, cx| tooltip(tooltip_text.clone()).build(window, cx))
         .child(
             div()
                 .size(px(24.))
