@@ -1024,12 +1024,12 @@ fn skips_unchanged_files_on_second_scan() {
     );
     let mut third = third_scanner.next(&cancel);
     while !third.done {
-        let next = third_scanner.next(&cancel);
-        third.merge_read_metrics(&next);
-        third.sessions[0].extend(next.sessions.into_iter().next().unwrap());
-        third.warnings.extend(next.warnings);
-        third.completed = next.completed;
-        third.done = next.done;
+        let batch = third_scanner.next(&cancel);
+        third.merge_read_metrics(&batch);
+        third.sessions[0].extend(batch.sessions.into_iter().next().unwrap());
+        third.warnings.extend(batch.warnings);
+        third.completed = batch.completed;
+        third.done = batch.done;
     }
 
     assert_eq!(third.sessions[0].len(), 1, "changed file should reparse");
