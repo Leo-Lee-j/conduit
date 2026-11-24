@@ -47,11 +47,9 @@ impl Fixture {
         let mut batch = scanner.next(&cancel);
         while !batch.done {
             let next = scanner.next(&cancel);
+            batch.merge_read_metrics(&next);
             batch.sessions[0].extend(next.sessions.into_iter().next().unwrap());
             batch.warnings.extend(next.warnings);
-            batch.bytes_read += next.bytes_read;
-            batch.verified_bytes += next.verified_bytes;
-            batch.cache_hits += next.cache_hits;
             batch.completed = next.completed;
             batch.done = next.done;
         }
@@ -225,6 +223,14 @@ fn opencode_history_joins_cli_imports_without_duplicates_or_source_writes() {
     let original = std::fs::read(fixture.opencode_path()).unwrap();
     let cold = fixture.scan();
     assert!(cold.warnings.is_empty(), "{:?}", cold.warnings);
+    assert!(cold.opencode_bytes > 0);
+    assert_eq!(
+        cold.bytes_read,
+        cold.claude_parse_bytes
+            + cold.codex_parse_bytes
+            + cold.codex_probe_bytes
+            + cold.opencode_bytes
+    );
     assert_eq!(
         cold.sessions[0].len(),
         3,
@@ -557,16 +563,22 @@ fn persistent_cache_and_append_match_a_fresh_claude_parse() {
     let cold = fixture.scan();
     assert!(cold.warnings.is_empty(), "{:?}", cold.warnings);
     assert_eq!(cold.bytes_read, first.len() as u64);
+    assert_eq!(cold.claude_parse_bytes, first.len() as u64);
+    assert_eq!(cold.codex_parse_bytes, 0);
     let warm = fixture.scan();
     assert_eq!(warm.bytes_read, 0);
     assert_eq!(warm.verified_bytes, 0);
     assert_eq!(warm.cache_hits, 1);
+    assert_eq!(warm.claude_cache_hits, 1);
+    assert_eq!(warm.codex_cache_hits, 0);
     assert_eq!(messages(&cold), messages(&warm));
     let suffix = fixture.claude("native", "second");
     append(&path, &suffix);
     let incremental = fixture.scan();
     assert_eq!(incremental.bytes_read, suffix.len() as u64);
     assert_eq!(incremental.verified_bytes, first.len() as u64);
+    assert_eq!(incremental.claude_verified_bytes, first.len() as u64);
+    assert_eq!(incremental.codex_verified_bytes, 0);
     let expected = parse_claude_lines((first + &suffix).lines().map(str::to_owned))
         .unwrap()
         .1;
@@ -588,7 +600,14 @@ fn codex_incremental_state_preserves_fallback_dedup_and_turn_timing() {
         serde_json::json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}}),
     ].iter().map(|value| format!("{value}\n")).collect::<String>();
     std::fs::write(&path, &first).unwrap();
-    assert_eq!(fixture.scan().sessions[0][0].messages.len(), 2);
+    let initial = fixture.scan();
+    assert_eq!(initial.sessions[0][0].messages.len(), 2);
+    assert_eq!(initial.codex_parse_bytes, first.len() as u64);
+    assert_eq!(initial.codex_probe_bytes, first.len() as u64);
+    assert_eq!(initial.claude_parse_bytes, 0);
+    let warm = fixture.scan();
+    assert_eq!(warm.codex_cache_hits, 1);
+    assert_eq!(warm.bytes_read, 0);
     let suffix = [
         serde_json::json!({"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"answer","text":"answer"}}}),
         serde_json::json!({"type":"event_msg","timestamp":"2026-11-04T00:00:02Z","payload":{"type":"task_complete","turn_id":"turn"}}),

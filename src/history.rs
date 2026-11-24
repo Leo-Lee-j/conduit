@@ -11,10 +11,12 @@
 //! same conversation the terminal CLI sees.
 
 pub(crate) mod children;
+mod diagnostics;
 mod index;
 mod opencode;
 mod questions;
 mod scan;
+pub(crate) use diagnostics::record_scan_summary;
 pub(crate) use scan::Scanner;
 
 use crate::domain::{ChatItem, ItemKind, Provider};
@@ -23,7 +25,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// A CLI-side session discovered on disk, ready to become a `SessionRecord`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ImportedSession {
     pub is_subagent: bool,
     pub provider: Provider,

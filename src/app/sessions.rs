@@ -1112,14 +1112,37 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) {
         cx.spawn_in(window, async move |this, cx| {
+            let started = std::time::Instant::now();
+            let init_started = std::time::Instant::now();
             let scan_paths = paths.clone();
             let ticket = cancel.clone();
             let mut scanner = cx
                 .background_executor()
                 .spawn(async move { crate::history::Scanner::new(scan_paths, &ticket) })
                 .await;
+            let init_time = init_started.elapsed();
+            let mut scan_time = std::time::Duration::ZERO;
+            let mut prepare_time = std::time::Duration::ZERO;
+            let mut merge_time = std::time::Duration::ZERO;
+            let mut batches = 0usize;
+            let (mut completed, mut total): (usize, usize);
+            let mut cache_hits = 0usize;
+            let mut claude_cache_hits = 0usize;
+            let mut codex_cache_hits = 0usize;
+            let mut bytes_read = 0u64;
+            let mut claude_parse_bytes = 0u64;
+            let mut codex_parse_bytes = 0u64;
+            let mut codex_probe_bytes = 0u64;
+            let mut opencode_bytes = 0u64;
+            let mut verified_bytes = 0u64;
+            let mut claude_verified_bytes = 0u64;
+            let mut codex_verified_bytes = 0u64;
+            let mut emitted_sessions = 0usize;
+            let mut warning_count = 0usize;
+            let mut finished = false;
             loop {
                 let ticket = cancel.clone();
+                let batch_started = std::time::Instant::now();
                 let (next_scanner, batch) = cx
                     .background_executor()
                     .spawn(async move {
@@ -1127,7 +1150,23 @@ impl ConduitApp {
                         (scanner, batch)
                     })
                     .await;
+                scan_time += batch_started.elapsed();
                 scanner = next_scanner;
+                batches += 1;
+                completed = batch.completed;
+                total = batch.total;
+                cache_hits += batch.cache_hits;
+                claude_cache_hits += batch.claude_cache_hits;
+                codex_cache_hits += batch.codex_cache_hits;
+                bytes_read = bytes_read.saturating_add(batch.bytes_read);
+                claude_parse_bytes = claude_parse_bytes.saturating_add(batch.claude_parse_bytes);
+                codex_parse_bytes = codex_parse_bytes.saturating_add(batch.codex_parse_bytes);
+                codex_probe_bytes = codex_probe_bytes.saturating_add(batch.codex_probe_bytes);
+                opencode_bytes = opencode_bytes.saturating_add(batch.opencode_bytes);
+                verified_bytes = verified_bytes.saturating_add(batch.verified_bytes);
+                claude_verified_bytes = claude_verified_bytes.saturating_add(batch.claude_verified_bytes);
+                codex_verified_bytes = codex_verified_bytes.saturating_add(batch.codex_verified_bytes);
+                emitted_sessions += batch.sessions.iter().map(Vec::len).sum::<usize>();
                 let done = batch.done;
                 let Ok(workspaces) = this.update(cx, |this, _| {
                     paths
@@ -1169,6 +1208,7 @@ impl ConduitApp {
                 };
                 let incoming = batch.sessions;
                 let ticket = cancel.clone();
+                let prepare_started = std::time::Instant::now();
                 let (prepared, warnings) = cx
                     .background_executor()
                     .spawn(async move {
@@ -1187,6 +1227,9 @@ impl ConduitApp {
                         (prepared, warnings)
                     })
                     .await;
+                prepare_time += prepare_started.elapsed();
+                warning_count += warnings.len();
+                let merge_started = std::time::Instant::now();
                 let updated = this.update_in(cx, |this, window, cx| {
                     if cancel.load(std::sync::atomic::Ordering::Acquire) {
                         return false;
@@ -1232,14 +1275,53 @@ impl ConduitApp {
                     cx.notify();
                     true
                 });
-                if done || !matches!(updated, Ok(true)) {
+                merge_time += merge_started.elapsed();
+                if done {
+                    finished = true;
+                    break;
+                }
+                if !matches!(updated, Ok(true)) {
                     break;
                 }
             }
+            let status = if cancel.load(std::sync::atomic::Ordering::Acquire) {
+                "cancelled"
+            } else if finished {
+                "complete"
+            } else {
+                "aborted"
+            };
+            let summary = format!(
+                "history_import mode={} status={} workspaces={} batches={} files={}/{} cache_hits={} claude_cache_hits={} codex_cache_hits={} bytes_read={} claude_parse_bytes={} codex_parse_bytes={} codex_probe_bytes={} opencode_bytes={} verified_bytes={} claude_verified_bytes={} codex_verified_bytes={} emitted_sessions={} warnings={} init_ms={} scan_ms={} prepare_ms={} merge_ms={} total_ms={}",
+                if persist { "manual" } else { "startup" },
+                status,
+                paths.len(),
+                batches,
+                completed,
+                total,
+                cache_hits,
+                claude_cache_hits,
+                codex_cache_hits,
+                bytes_read,
+                claude_parse_bytes,
+                codex_parse_bytes,
+                codex_probe_bytes,
+                opencode_bytes,
+                verified_bytes,
+                claude_verified_bytes,
+                codex_verified_bytes,
+                emitted_sessions,
+                warning_count,
+                init_time.as_millis(),
+                scan_time.as_millis(),
+                prepare_time.as_millis(),
+                merge_time.as_millis(),
+                started.elapsed().as_millis(),
+            );
+            let _ = crate::history::record_scan_summary(&summary);
         })
         .detach();
     }
-
     #[cfg(all(test, feature = "ui-tests"))]
     pub(super) fn finish_history_import(
         &mut self,
