@@ -1382,6 +1382,12 @@ impl ConduitApp {
         let Some(item) = session.messages.get(index) else {
             return div().into_any_element();
         };
+        if item.kind == ItemKind::Error && crate::failure::recovered(&session.messages, index) {
+            return div()
+                .debug_selector(move || format!("recovered-error-{index}"))
+                .h(px(0.))
+                .into_any_element();
+        }
         if !should_render_message_item(item, session.provider) {
             return div()
                 .debug_selector(move || format!("empty-message-{index}"))
@@ -2097,15 +2103,7 @@ impl ConduitApp {
                     .runs
                     .get(&session_id)
                     .is_some_and(|run| item.key.starts_with(&format!("{}-", run.prefix)));
-                let recovered = session.messages[index + 1..]
-                    .iter()
-                    .take_while(|item| item.kind != ItemKind::User)
-                    .any(|item| {
-                        matches!(
-                            item.kind,
-                            ItemKind::Assistant | ItemKind::Reasoning | ItemKind::Tool
-                        ) && !item.text.trim().is_empty()
-                    });
+                let recovered = crate::failure::recovered(&session.messages, index);
                 let retry_activity = (active && !recovered)
                     .then(|| crate::failure::retry_activity(&raw_error))
                     .flatten();

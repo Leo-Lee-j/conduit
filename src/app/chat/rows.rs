@@ -98,11 +98,12 @@ impl Rows {
         self.entries.truncate(session.messages.len());
         for (index, item) in session.messages.iter().enumerate() {
             let identity = item.identity();
-            if self
-                .entries
-                .get(index)
-                .is_some_and(|entry| entry.identity.ptr_eq(&identity))
-            {
+            let recovered_error =
+                item.kind == ItemKind::Error && crate::failure::recovered(&session.messages, index);
+            if self.entries.get(index).is_some_and(|entry| {
+                entry.identity.ptr_eq(&identity)
+                    && (item.kind != ItemKind::Error || entry.shape.empty == recovered_error)
+            }) {
                 continue;
             }
             self.invalidate();
@@ -113,7 +114,8 @@ impl Rows {
             let shape = Shape {
                 empty: !super::should_render_message_item(item, session.provider)
                     || (item.kind == ItemKind::Notice
-                        && item.key.starts_with("session-notice:codex:mcp:")),
+                        && item.key.starts_with("session-notice:codex:mcp:"))
+                    || recovered_error,
                 activity: is_groupable_activity(item),
                 running: tool_running(item),
                 failed: matches!(item.kind, ItemKind::Tool | ItemKind::Reasoning)
@@ -324,6 +326,34 @@ impl ConduitApp {
 mod tests {
     #[cfg(feature = "ui-tests")]
     use super::ChatItem;
+
+    #[test]
+    fn recovered_error_cards_disappear_when_the_same_turn_resumes() {
+        let mut session = crate::app::tests::session();
+        session.messages = serde_json::from_value(serde_json::json!([
+            {"key":"user", "kind":"User", "text":"hello"},
+            {"key":"error", "kind":"Error", "text":"Connection interrupted", "detail":"original diagnostic"}
+        ])).unwrap();
+        let mut rows = super::Rows::default();
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(
+            rows.rows.iter().map(|row| row.message).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+
+        session.messages.push(
+            serde_json::from_value(serde_json::json!({
+                "key":"reply", "kind":"Assistant", "text":"The connection is back"
+            }))
+            .unwrap(),
+        );
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(
+            rows.rows.iter().map(|row| row.message).collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+        assert_eq!(session.messages[1].detail, "original diagnostic");
+    }
 
     #[test]
     fn restored_mcp_notices_have_no_rows_and_preserve_message_indices() {
