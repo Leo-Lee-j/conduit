@@ -3048,6 +3048,8 @@
   "usage.budget_forecast": "月末预计 ≈ %{forecast}",
   "usage.daily_average_note": "按当前日均 %{average}",
   "usage.breakdown_title": "用量集中在哪里",
+  "usage.concentration_note": "当前筛选范围内，前 5 项按已知 Token 排序；悬停查看完整名称、用量和占比。Token 占比不等于费用占比。",
+  "usage.more_analysis": "更多分析",
   "usage.by_model": "按模型",
   "usage.by_provider": "按提供商",
   "usage.usage_share": "用量占比",

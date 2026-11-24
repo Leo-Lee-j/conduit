@@ -119,6 +119,137 @@ pub(super) fn daily_chart(insights: &Insights) -> impl IntoElement + use<> {
 }
 
 impl UsagePanel {
+    fn concentration(&self, report: &Report, cx: &Context<Self>) -> Div {
+        let mut result = card()
+            .debug_selector(|| "usage-concentration-card".into())
+            .h(px(270.))
+            .flex_1()
+            .flex_basis(px(340.))
+            .min_w_0()
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .justify_between()
+                    .gap_2()
+                    .child(section(
+                        "usage.breakdown_title",
+                        label("usage.concentration_note"),
+                    ))
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .child(
+                                Button::new("usage-concentration-model")
+                                    .debug_selector(|| "usage-concentration-model".into())
+                                    .small()
+                                    .ghost()
+                                    .selected(!self.concentration_by_service)
+                                    .label(label("usage.by_model"))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.concentration_by_service = false;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Button::new("usage-concentration-provider")
+                                    .debug_selector(|| "usage-concentration-provider".into())
+                                    .small()
+                                    .ghost()
+                                    .selected(self.concentration_by_service)
+                                    .label(label("usage.by_provider"))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.concentration_by_service = true;
+                                        cx.notify();
+                                    })),
+                            ),
+                    ),
+            );
+        let data: Vec<(String, u64)> = if self.concentration_by_service {
+            report
+                .services
+                .iter()
+                .filter(|service| {
+                    self.selected_service
+                        .as_ref()
+                        .is_none_or(|selected| selected == &service.key)
+                })
+                .take(5)
+                .map(|service| (service_title(service), service.totals.tokens()))
+                .collect()
+        } else {
+            report
+                .models
+                .iter()
+                .take(5)
+                .map(|(model, totals)| {
+                    (
+                        model
+                            .clone()
+                            .unwrap_or_else(|| label("usage.unknown_model").into()),
+                        totals.tokens(),
+                    )
+                })
+                .collect()
+        };
+        if data.is_empty() {
+            return result.child(
+                v_flex()
+                    .h(px(170.))
+                    .items_center()
+                    .justify_center()
+                    .gap_2()
+                    .child(caption(label("usage.no_matching_records")))
+                    .child(caption(label("usage.empty_hint"))),
+            );
+        }
+        // Rank prefixes keep categories distinct even when display names match.
+        let data: Vec<_> = data
+            .into_iter()
+            .enumerate()
+            .map(|(index, (title, tokens))| {
+                let short: String = title.chars().take(18).collect();
+                let suffix = if title.chars().count() > 18 {
+                    "…"
+                } else {
+                    ""
+                };
+                (format!("{}. {short}{suffix}", index + 1), title, tokens)
+            })
+            .collect();
+        let scope_tokens = report.filtered.tokens();
+        result = result.child(
+            div()
+                .id("usage-ranking-chart-region")
+                .debug_selector(|| "usage-ranking-chart-region".into())
+                .h(px(180.))
+                .w_full()
+                .role(Role::Group)
+                .aria_label(label("usage.ranking_chart_note"))
+                .child(
+                    BarChart::new(data)
+                        .id("usage-ranking-chart")
+                        .band(|row: &(String, String, u64)| SharedString::from(row.0.clone()))
+                        .value(|row| row.2 as f64)
+                        .alignment(BarAlignment::Left)
+                        .label(|row| format_tokens(row.2))
+                        .fill(|_, _, _, _| rgb(super::dashboard::chart_color()))
+                        .grid(false)
+                        .corner_radii(px(2.))
+                        .appear(false)
+                        .tooltip_title(|row| row.1.clone().into())
+                        .tooltip_value(move |row, _| {
+                            format!(
+                                "{} Token · {}",
+                                format_tokens(row.2),
+                                share(row.2, scope_tokens)
+                            )
+                            .into()
+                        }),
+                ),
+        );
+        result
+    }
+
     fn comparison(&self, insights: &Insights) -> Div {
         let range = message(
             "usage.comparison_range",
@@ -219,14 +350,16 @@ impl UsagePanel {
             ));
         }
         let mut result = card()
+            .debug_selector(|| "usage-budget-card".into())
             .child(
                 h_flex()
                     .flex_wrap()
                     .justify_between()
                     .gap_2()
-                    .child(section("usage.reminder_status", reminder_note))
+                    .child(section("usage.budget", reminder_note))
                     .child(
                         Button::new("usage-edit-reminder")
+                            .debug_selector(|| "usage-edit-reminder".into())
                             .small()
                             .ghost()
                             .label(label(if self.budget_open {
@@ -242,6 +375,7 @@ impl UsagePanel {
             )
             .child(
                 div()
+                    .debug_selector(|| "usage-budget-status".into())
                     .font_semibold()
                     .text_color(rgb(color))
                     .child(label(status)),
@@ -302,6 +436,7 @@ impl UsagePanel {
         let changed = parse_budget(&self.budget.read(cx).value()) != Some(limit);
         result = result.child(
             div()
+                .debug_selector(|| "usage-budget-settings".into())
                 .border_t_1()
                 .border_color(rgb(palette().border))
                 .pt_3()
@@ -326,6 +461,7 @@ impl UsagePanel {
                                 .child(caption("M Token"))
                                 .child(
                                     Button::new("usage-save-budget")
+                                        .debug_selector(|| "usage-save-budget".into())
                                         .small()
                                         .label(label(if changed {
                                             "usage.save_budget"
@@ -541,8 +677,18 @@ impl Render for UsagePanel {
                         .child(error.clone()),
                 );
             }
-            content =
-                content.child(self.dashboard_overview(report, insights, ledger.truncated, cx));
+            content = content.child(self.dashboard_overview(report, ledger.truncated));
+            content = content
+                .child(
+                    h_flex()
+                        .w_full()
+                        .items_start()
+                        .flex_wrap()
+                        .gap_3()
+                        .child(self.dashboard_daily(report, insights, ledger.truncated, cx))
+                        .child(self.concentration(report, cx)),
+                )
+                .child(self.reminder(&all_report, &all_insights, limit, writable, cx));
             if self.details_open {
                 let change = insights.change().map_or_else(
                     || label("usage.no_comparison").into(),
@@ -564,8 +710,7 @@ impl Render for UsagePanel {
                 content = content
                     .child(notes)
                     .child(self.comparison(insights))
-                    .child(self.sessions(report, app))
-                    .child(self.reminder(&all_report, &all_insights, limit, writable, cx));
+                    .child(self.sessions(report, app));
             }
             content = content.child(div().pt_2().child(self.dashboard_table(report, app, cx)));
         } else {

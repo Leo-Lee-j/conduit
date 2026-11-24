@@ -3048,6 +3048,8 @@
   "usage.budget_forecast": "Month-end estimate ≈ %{forecast}",
   "usage.daily_average_note": "At the current daily average of %{average}",
   "usage.breakdown_title": "Where usage concentrates",
+  "usage.concentration_note": "Top 5 by known Tokens in the current filter scope. Hover for full names, usage and shares. Token share is not cost share.",
+  "usage.more_analysis": "More analysis",
   "usage.by_model": "By model",
   "usage.by_provider": "By provider",
   "usage.usage_share": "Usage share",

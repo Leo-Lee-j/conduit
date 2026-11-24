@@ -123,7 +123,7 @@ impl UsagePanel {
                     .outline()
                     .debug_selector(|| "usage-analysis-toggle".into())
                     .icon(FullIconName::Settings)
-                    .label(label("usage.analysis_reminders"))
+                    .label(label("usage.more_analysis"))
                     .selected(self.details_open)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.details_open = !this.details_open;
@@ -208,7 +208,12 @@ impl UsagePanel {
                                 cx.listener(|this, _, window, cx| this.shift_month(-1, window, cx)),
                             ),
                     )
-                    .child(div().w(px(106.)).child(Input::new(&self.month).small()))
+                    .child(
+                        div()
+                            .w(px(106.))
+                            .text_center()
+                            .child(self.month.read(cx).value().to_string()),
+                    )
                     .child(
                         Button::new("usage-next-month")
                             .small()
@@ -267,13 +272,7 @@ impl UsagePanel {
         cx.notify();
     }
 
-    pub(super) fn dashboard_overview(
-        &self,
-        report: &Report,
-        insights: &Insights,
-        truncated: bool,
-        cx: &Context<Self>,
-    ) -> Div {
+    pub(super) fn dashboard_overview(&self, report: &Report, truncated: bool) -> Div {
         let totals = &report.filtered;
         let mut coverage = message(
             "usage.coverage_count",
@@ -285,7 +284,7 @@ impl UsagePanel {
         if truncated {
             coverage.push_str(&format!("\n{}", label("usage.truncated")));
         }
-        let mut overview = v_flex()
+        v_flex()
             .w_full()
             .min_w_0()
             .rounded(px(8.))
@@ -317,15 +316,32 @@ impl UsagePanel {
                         share(totals.complete_turns as u64, totals.turns as u64),
                         coverage,
                     )),
-            );
+            )
+    }
+
+    pub(super) fn dashboard_daily(
+        &self,
+        report: &Report,
+        insights: &Insights,
+        truncated: bool,
+        cx: &Context<Self>,
+    ) -> Div {
+        let totals = &report.filtered;
+        let mut overview = card()
+            .debug_selector(|| "usage-daily-card".into())
+            .h(px(270.))
+            .flex_1()
+            .flex_basis(px(340.))
+            .min_w_0();
         let mut chart_header = h_flex()
-            .px_4()
-            .py_2()
             .items_center()
             .gap_2()
-            .border_t_1()
-            .border_color(rgb(palette().border))
-            .child(caption(label("usage.tokens_by_day")))
+            .flex_wrap()
+            .child(
+                heading("usage.trend", label("usage.daily_chart_note"))
+                    .font_semibold()
+                    .text_size(ui_text_size(16.)),
+            )
             .child(div().flex_1());
         if totals.incomplete > 0 {
             chart_header = chart_header.child(
@@ -370,6 +386,15 @@ impl UsagePanel {
             ),
         );
         if self.chart_open {
+            if let Some(peak) = insights.peak() {
+                overview = overview.child(caption(message(
+                    "usage.peak_day",
+                    &[
+                        ("date", peak.date.to_string()),
+                        ("tokens", format_tokens(peak.tokens)),
+                    ],
+                )));
+            }
             overview = overview.child(
                 if insights.elapsed_days == 0 || insights.days.iter().all(|day| day.turns == 0) {
                     v_flex()
@@ -381,11 +406,7 @@ impl UsagePanel {
                         .child(caption(label("usage.empty_hint")))
                         .into_any_element()
                 } else {
-                    div()
-                        .px_4()
-                        .pb_3()
-                        .child(daily_chart(insights))
-                        .into_any_element()
+                    daily_chart(insights).into_any_element()
                 },
             );
         }
