@@ -237,16 +237,40 @@ impl PullRequestPanel {
                         if expanded {
                             summary = summary.child(thread_body(thread));
                         } else {
-                            summary = summary.child(thread.path.clone()).child(
-                                div()
-                                    .text_size(ui_text_size(11.))
-                                    .text_color(rgb(palette().muted))
-                                    .child(format!(
-                                        "{} · {}",
-                                        thread.location(),
-                                        thread.remote_status()
-                                    )),
-                            );
+                            let path = thread.path.clone();
+                            let available =
+                                self.details.snapshot.as_ref().is_some_and(|snapshot| {
+                                    snapshot.files.iter().any(|file| {
+                                        file.path == path
+                                            || file.original.as_deref() == Some(path.as_str())
+                                    })
+                                });
+                            summary = summary
+                                .child(
+                                    Button::new("thread-open-file")
+                                        .small()
+                                        .ghost()
+                                        .label(thread.path.clone())
+                                        .disabled(
+                                            !self.document
+                                                || !available
+                                                || self.loading
+                                                || self.details.loading,
+                                        )
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.open_request_file(&path, window, cx)
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(ui_text_size(11.))
+                                        .text_color(rgb(palette().muted))
+                                        .child(format!(
+                                            "{} · {}",
+                                            thread.location(),
+                                            thread.remote_status()
+                                        )),
+                                );
                             if let Some(comment) = thread.comments.last() {
                                 summary = summary.child(
                                     div()

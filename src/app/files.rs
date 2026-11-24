@@ -732,6 +732,15 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        for tab in tabs {
+            if let DocumentTab::PullRequest(id) = tab
+                && let Some(panel) = self.github_ui.panels.get(id).cloned()
+                && !panel.update(cx, |panel, cx| panel.can_close(cx))
+            {
+                self.select_document(*tab, window, cx);
+                return;
+            }
+        }
         let overlay_return = self.content_overlay_return();
         let overlay_pane = self.files.panes.overlay.map(|(_, _, pane)| pane);
         let closing_reference = self

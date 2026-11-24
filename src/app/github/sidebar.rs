@@ -1,6 +1,7 @@
 //! Repository request navigation, with independent state for each workspace.
 use super::*;
 use crate::github::{forge::Forge, list::Entry};
+use gpui_kit::component::skeleton::Skeleton;
 
 pub(in crate::app) struct RequestSidebar {
     host: WeakEntity<ConduitApp>,
@@ -481,20 +482,89 @@ impl Render for RequestSidebar {
             content = content.child(div().px_3().pb_2().child(form));
         }
         if indices.is_empty() && self.error.is_none() {
-            content = content.child(
-                v_flex()
-                    .p_3()
-                    .gap_2()
-                    .text_size(ui_text_size(12.))
-                    .text_color(rgb(palette().muted))
-                    .child(label(if self.loading {
-                        "github.loading"
-                    } else if filtered {
-                        "github.list_no_matches"
-                    } else {
-                        "github.list_empty"
-                    })),
-            );
+            if self.loading {
+                content = content.child(
+                    v_flex()
+                        .id("request-list-skeleton")
+                        .debug_selector(|| "request-list-skeleton".into())
+                        .flex_1()
+                        .min_h_0()
+                        .children((0usize..6).map(|index| {
+                            let title_width = [0.54, 0.61, 0.48, 0.58, 0.52, 0.6][index];
+                            let detail_width = [0.42, 0.46, 0.48, 0.4, 0.44, 0.38][index];
+                            v_flex()
+                                .id(("request-list-skeleton-row", index))
+                                .debug_selector(move || {
+                                    format!("request-list-skeleton-row-{index}")
+                                })
+                                .w_full()
+                                .h(px(52.))
+                                .flex_shrink_0()
+                                .px_3()
+                                .py_1()
+                                .gap_1()
+                                .justify_center()
+                                .child(
+                                    h_flex()
+                                        .gap_2()
+                                        .min_w_0()
+                                        .items_center()
+                                        .child(
+                                            Skeleton::new()
+                                                .w(relative(title_width))
+                                                .h(px(12.))
+                                                .rounded(px(3.)),
+                                        )
+                                        .child(
+                                            Skeleton::new()
+                                                .w(px(42.))
+                                                .h(px(12.))
+                                                .rounded(px(3.))
+                                                .secondary(),
+                                        ),
+                                )
+                                .child(
+                                    h_flex()
+                                        .gap_2()
+                                        .min_w_0()
+                                        .items_center()
+                                        .child(
+                                            Skeleton::new()
+                                                .w(relative(detail_width))
+                                                .h(px(10.))
+                                                .rounded(px(3.))
+                                                .secondary(),
+                                        )
+                                        .child(
+                                            Skeleton::new()
+                                                .size(px(18.))
+                                                .rounded_full()
+                                                .flex_shrink_0(),
+                                        )
+                                        .child(
+                                            Skeleton::new()
+                                                .w(px(24.))
+                                                .h(px(10.))
+                                                .rounded(px(3.))
+                                                .secondary(),
+                                        ),
+                                )
+                        })),
+                );
+            } else {
+                content = content.child(
+                    v_flex()
+                        .p_3()
+                        .gap_2()
+                        .text_size(ui_text_size(12.))
+                        .text_color(rgb(palette().muted))
+                        .child(label(if filtered {
+                            "github.list_no_matches"
+                        } else {
+                            "github.list_empty"
+                        })),
+                );
+            }
         } else if !indices.is_empty() {
             content = content.child(
                 uniform_list(

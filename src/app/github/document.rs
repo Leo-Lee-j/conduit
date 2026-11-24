@@ -46,7 +46,8 @@ impl ConduitApp {
                     {
                         panel.requested = Some(requested);
                         panel.snapshot = None;
-                        panel.tab = 0;
+                        panel.details.reset_request();
+                        panel.tab = 2;
                         panel.reload(cx);
                     }
                 });
@@ -61,6 +62,7 @@ impl ConduitApp {
                 workspace: workspace.clone(),
                 focus: cx.focus_handle(),
                 document: true,
+                details: Default::default(),
                 scrolls: Default::default(),
                 snapshot: None,
                 requested,
@@ -69,7 +71,7 @@ impl ConduitApp {
                 sign_in: Default::default(),
                 loading: false,
                 shown: 20,
-                tab: 0,
+                tab: 2,
                 expanded_threads: Default::default(),
                 cancel: Arc::new(AtomicBool::new(false)),
                 _task: Task::ready(()),

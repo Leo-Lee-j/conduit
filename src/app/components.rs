@@ -5,6 +5,23 @@ use super::*;
 mod app_logo;
 pub(super) use app_logo::app_icon;
 
+/// A fixed action/status row for the panes of a document.
+pub(super) fn document_footer() -> Div {
+    h_flex()
+        .w_full()
+        .h(px(48.))
+        .flex_shrink_0()
+        .min_w_0()
+        .items_center()
+        .px_3()
+        .gap_2()
+        .border_t_1()
+        .border_color(rgb(palette().border))
+        .bg(rgb(palette().surface_strong))
+        .text_size(ui_text_size(11.))
+        .text_color(rgb(palette().muted))
+}
+
 /// Share the same status appearance between sidebar and tabs, with separate
 /// element/animation keys so both can be mounted for the same session.
 pub(super) fn session_activity_dot(scope: &'static str, id: u64, running: bool) -> AnyElement {

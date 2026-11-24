@@ -21,6 +21,7 @@ fn pr_document_preserves_workspace_drafts_tabs_and_releases_closed_panels(cx: &m
             workspace,
             focus: cx.focus_handle(),
             document: true,
+            details: Default::default(),
             scrolls: Default::default(),
             snapshot: None,
             requested: None,
@@ -102,7 +103,7 @@ fn pr_document_checks_fit_and_attachment_returns_to_chat_without_losing_the_page
         pr.local_head = pr.head.clone();
         pr.threads = Some(snapshot());
         let panel = cx.new(|cx| PullRequestPanel {
-            host: app.downgrade(), workspace: root.clone(), focus: cx.focus_handle(), document: true,
+            host: app.downgrade(), workspace: root.clone(), focus: cx.focus_handle(), document: true, details: Default::default(),
             scrolls: Default::default(), snapshot: Some(pr), requested: None, error: None, sign_in: Default::default(), sync_result: None,
             loading: false, shown: 20, tab: 0, expanded_threads: Default::default(),
             cancel: Arc::new(AtomicBool::new(false)), _task: Task::ready(()), _subscription: None,
@@ -134,7 +135,7 @@ fn pr_document_checks_fit_and_attachment_returns_to_chat_without_losing_the_page
             assert!(refresh.bottom() <= page.bottom());
             assert!(
                 gpui_kit::base::test_support::find(window, &[], &"github-publish-comment".into())
-                    .is_none()
+                    .is_some()
             );
         });
     }
@@ -183,6 +184,7 @@ fn gitlab_document_renders_mr_and_keeps_sync_and_composer_bound_to_gitlab(cx: &m
             workspace: root.clone(),
             focus: cx.focus_handle(),
             document: true,
+            details: Default::default(),
             scrolls: Default::default(),
             snapshot: Some(pr),
             requested: None,
@@ -286,6 +288,7 @@ fn pr_review_sync_and_attachments_keep_the_original_workspace_and_saved_status(
             expanded_threads: Default::default(),
             focus: cx.focus_handle(),
             document: false,
+            details: Default::default(),
             scrolls: Default::default(),
             cancel: Arc::new(AtomicBool::new(false)),
             _task: Task::ready(()),
@@ -414,6 +417,7 @@ fn pr_review_loading_missing_workspaces_and_readonly_state_block_sync(cx: &mut T
             expanded_threads: Default::default(),
             focus: cx.focus_handle(),
             document: false,
+            details: Default::default(),
             scrolls: Default::default(),
             cancel: Arc::new(AtomicBool::new(false)),
             _task: Task::ready(()),
@@ -461,7 +465,7 @@ fn failed_check_task_preserves_workspace_drafts_and_user_acceptance(cx: &mut Tes
             tab: 0,
             expanded_threads: Default::default(),
             focus: cx.focus_handle(),
-            document: false,
+            document: false, details: Default::default(),
             scrolls: Default::default(),
             cancel: Arc::new(AtomicBool::new(false)), _task: Task::ready(()),
             _subscription: Some(cx.observe(&app, |_, _, cx| cx.notify())),
@@ -564,6 +568,7 @@ fn failed_check_task_rejects_stale_readonly_loading_and_missing_workspace_action
             expanded_threads: Default::default(),
             focus: cx.focus_handle(),
             document: false,
+            details: Default::default(),
             scrolls: Default::default(),
             cancel: Arc::new(AtomicBool::new(false)),
             _task: Task::ready(()),
@@ -629,6 +634,7 @@ fn github_write_form_blocks_removed_readonly_and_uncertain_resubmission(cx: &mut
             expanded_threads: Default::default(),
             focus: cx.focus_handle(),
             document: false,
+            details: Default::default(),
             scrolls: Default::default(),
             cancel: Arc::new(AtomicBool::new(false)),
             _task: Task::ready(()),
@@ -637,6 +643,7 @@ fn github_write_form_blocks_removed_readonly_and_uncertain_resubmission(cx: &mut
         let editor =
             cx.new(|cx| super::TextareaState::new(window, cx).default_value("Keep this draft"));
         let form = cx.new(|cx| super::GithubCommentPanel {
+            inline: false,
             host: app.downgrade(),
             parent: parent.downgrade(),
             workspace: root.clone(),
