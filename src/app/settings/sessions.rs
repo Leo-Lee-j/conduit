@@ -22,13 +22,54 @@ impl ConduitApp {
                 "settings.defaults.automatic_naming",
             ))
             .items(self.settings_automatic_naming_items(disabled, view.clone()))
-            .items(self.settings_naming_model_items(disabled, view))
+            .items(self.settings_naming_model_items(disabled, view.clone()))
             .footer(|_, _| {
                 conduit::i18n::text_static(
                     "settings.general.naming_runs_in_the_background_failures_keep",
                 )
             }),
+            self.settings_empty_session_cleanup_group(disabled, view),
         ])
+    }
+
+    fn settings_empty_session_cleanup_group(
+        &self,
+        disabled: bool,
+        view: Entity<Self>,
+    ) -> SettingGroup {
+        let read_view = view.clone();
+        let cleanup_empty_sessions = SettingField::switch(
+            move |cx: &App| read_view.read(cx).store.ui.auto_cleanup_empty_sessions,
+            move |value, cx| {
+                view.update(cx, |this, cx| {
+                    if !this.writable || this.closing {
+                        return;
+                    }
+                    this.store.ui.auto_cleanup_empty_sessions = value;
+                    if value {
+                        this.cleanup_stale_empty_sessions(cx);
+                    }
+                    this.persist();
+                    cx.notify();
+                });
+            },
+        );
+        settings_section(conduit::i18n::text_static(
+            "settings.sessions.empty_cleanup",
+        ))
+        .items(vec![
+            SettingItem::new(
+                conduit::i18n::text_static("settings.sessions.auto_cleanup_empty_sessions"),
+                cleanup_empty_sessions,
+            )
+            .description(settings_description(conduit::i18n::text_static(
+                "settings.sessions.auto_cleanup_empty_sessions_description",
+            )))
+            .disabled(disabled),
+        ])
+        .footer(|_, _| {
+            conduit::i18n::text_static("settings.sessions.auto_cleanup_empty_sessions_scope")
+        })
     }
 
     fn settings_conversation_permission_group(
@@ -150,7 +191,7 @@ impl ConduitApp {
                 )
             }),
             settings_section(conduit::i18n::text_static("settings.general.naming_model"))
-                .items(self.settings_naming_model_items(disabled, view))
+                .items(self.settings_naming_model_items(disabled, view.clone()))
                 .footer(|_, _| conduit::i18n::text_static("settings.sessions.naming_model_scope")),
         ])
     }

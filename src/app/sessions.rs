@@ -2,6 +2,22 @@
 
 use super::*;
 
+const EMPTY_SESSION_RETENTION_SECS: u64 = 24 * 60 * 60;
+
+fn eligible_for_empty_session_cleanup(session: &SessionRecord, now: u64) -> bool {
+    session.created_at > 0
+        && now.saturating_sub(session.created_at) >= EMPTY_SESSION_RETENTION_SECS
+        && !session.archived
+        && !session.is_subagent
+        && !session.pinned
+        && session.native_id.is_none()
+        && session.subagents.is_empty()
+        && session.exit_code.is_none()
+        && !session.interrupted
+        && session.usage == crate::domain::Usage::default()
+        && session.message_count() == 0
+}
+
 pub(super) fn single_line_title(title: &str) -> String {
     title.replace(['\r', '\n'], " ")
 }
@@ -57,6 +73,77 @@ pub(super) fn naming_failure_text(error: &str) -> String {
 }
 
 impl ConduitApp {
+    pub(super) fn cleanup_stale_empty_sessions(&mut self, cx: &mut Context<Self>) {
+        self.last_empty_session_cleanup = Some(Instant::now());
+        if !self.writable || self.closing || !self.store.ui.auto_cleanup_empty_sessions {
+            return;
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let candidates: Vec<_> = self
+            .store
+            .workspaces
+            .iter()
+            .flat_map(Workspace::visible_sessions)
+            .filter(|session| eligible_for_empty_session_cleanup(session, now))
+            .map(|session| session.id)
+            .collect();
+
+        let mut deleted = 0;
+        for id in candidates {
+            let protected = self.session_has_unsent_content(id, cx)
+                || self.child_draft_pending(id, cx)
+                || self.queued_messages.contains_key(&id)
+                || self.session_control.runs.contains_key(&id)
+                || self.session_control.queue_saves.contains_key(&id)
+                || self.session_draft_save_pending(id)
+                || self
+                    .store
+                    .usage_ledger
+                    .observations
+                    .iter()
+                    .any(|observation| observation.session == id)
+                || self
+                    .store
+                    .child_commands
+                    .iter()
+                    .any(|command| command.root == id)
+                || self
+                    .store
+                    .child_bindings
+                    .iter()
+                    .any(|(_, binding)| binding.root == id);
+            if !protected {
+                self.delete_session(id, cx);
+                if self.session(id).is_none() {
+                    deleted += 1;
+                }
+            }
+        }
+        if deleted > 0 {
+            let message_key = if deleted == 1 {
+                "notifications.empty_sessions_cleaned_one"
+            } else {
+                "notifications.empty_sessions_cleaned_many"
+            };
+            self.notify_user(
+                Notice::new(
+                    NoticeSource::App,
+                    NoticeLevel::Success,
+                    conduit::i18n::text_static("notifications.empty_sessions_cleaned"),
+                    "",
+                )
+                .localized_message(conduit::i18n::Message::new(
+                    message_key,
+                    &[("count", deleted.to_string())],
+                )),
+                cx,
+            );
+        }
+    }
+
     pub(super) fn session(&self, id: u64) -> Option<&SessionRecord> {
         let (w, s) = self.session_control.locate(&self.store.workspaces, id)?;
         self.store.workspaces.get(w)?.sessions.get(s)
@@ -1662,5 +1749,44 @@ impl ConduitApp {
                     )),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod empty_session_cleanup_tests {
+    use super::{EMPTY_SESSION_RETENTION_SECS, eligible_for_empty_session_cleanup};
+    use crate::domain::SessionRecord;
+
+    fn empty_session(created_at: u64) -> SessionRecord {
+        serde_json::from_value(serde_json::json!({
+            "id": 1,
+            "provider": "Claude",
+            "created_at": created_at,
+            "title": "New session"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn cleanup_requires_a_full_day_and_preserves_native_sessions() {
+        let _locale = crate::test_support::chinese();
+        let created_at = 10;
+        let session = empty_session(created_at);
+        assert!(!eligible_for_empty_session_cleanup(
+            &session,
+            created_at + EMPTY_SESSION_RETENTION_SECS - 1
+        ));
+        assert!(eligible_for_empty_session_cleanup(
+            &session,
+            created_at + EMPTY_SESSION_RETENTION_SECS
+        ));
+        assert!(!eligible_for_empty_session_cleanup(&session, 0));
+
+        let mut native = session;
+        native.native_id = Some("native-thread".into());
+        assert!(!eligible_for_empty_session_cleanup(
+            &native,
+            created_at + EMPTY_SESSION_RETENTION_SECS
+        ));
     }
 }

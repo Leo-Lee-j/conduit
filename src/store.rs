@@ -102,6 +102,9 @@ pub struct UiSettings {
     pub naming_mode: NamingMode,
     #[serde(default = "default_auto_rename")]
     pub auto_rename: bool,
+    /// Remove stale, unused sessions that have no conversation history.
+    #[serde(default)]
+    pub auto_cleanup_empty_sessions: bool,
     /// CLI engine used to auto-name sessions; `None` follows the session's
     /// own engine.
     #[serde(default)]
@@ -281,6 +284,7 @@ impl Default for UiSettings {
             max_tabs: default_max_tabs(),
             naming_mode: NamingMode::default(),
             auto_rename: true,
+            auto_cleanup_empty_sessions: false,
             naming_provider: None,
             naming_model: None,
             naming_channel: None,
@@ -1429,6 +1433,7 @@ mod tests {
                 .collapse_reasoning
         );
         assert_eq!(store.ui.naming_mode, NamingMode::FirstMessage);
+        assert!(!store.ui.auto_cleanup_empty_sessions);
         assert_eq!(store.ui.ui_font_family, None);
         assert_eq!(store.ui.ui_font_size, DEFAULT_UI_FONT_SIZE);
         assert_eq!(store.ui.chat_font_family, None);
@@ -1465,6 +1470,7 @@ mod tests {
         store.ui.collapse_reasoning = true;
         store.ui.auto_collapse_question_history = true;
         store.ui.naming_mode = NamingMode::Latest;
+        store.ui.auto_cleanup_empty_sessions = true;
         store.ui.ui_font_family = Some("Microsoft YaHei".into());
         store.ui.ui_font_size = 18.0;
         store.ui.chat_font_family = Some("Segoe UI".into());
@@ -1479,6 +1485,7 @@ mod tests {
             "Write an English subject followed by a body.\nKeep it under 72 columns.".into();
         store.save_to(&path).unwrap();
         let reloaded = Store::load_from(&path).unwrap();
+        assert!(reloaded.ui.auto_cleanup_empty_sessions);
         assert!(reloaded.ui.encourager.enabled);
         assert!(reloaded.ui.encourager.pet_enabled);
         assert_eq!(

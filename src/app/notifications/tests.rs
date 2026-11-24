@@ -118,6 +118,39 @@ fn git_results_wait_for_toast_capacity_and_clear_progress(cx: &mut TestAppContex
     }
 }
 
+#[gpui_kit::test]
+fn empty_session_cleanup_records_one_notification_per_nonempty_cleanup(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx) = fixture(cx, true);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.store.ui.auto_cleanup_empty_sessions = true;
+            let created_at = unix_now().saturating_sub(2 * 24 * 60 * 60);
+            for workspace in &mut app.store.workspaces {
+                workspace.sessions[0].created_at = created_at;
+            }
+
+            app.cleanup_stale_empty_sessions(cx);
+
+            assert!(
+                app.store
+                    .workspaces
+                    .iter()
+                    .all(|workspace| workspace.sessions.is_empty())
+            );
+            let records = app.notifications.center.records();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].source, Source::App);
+            assert_eq!(records[0].level, Level::Success);
+            assert_eq!(records[0].title, "空会话清理完成");
+            assert_eq!(records[0].message, "已删除 2 个空会话。");
+
+            app.cleanup_stale_empty_sessions(cx);
+            assert_eq!(app.notifications.center.records().len(), 1);
+        });
+    });
+}
+
 fn fixture(
     cx: &mut TestAppContext,
     sessions: bool,

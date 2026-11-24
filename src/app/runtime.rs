@@ -795,6 +795,13 @@ impl ConduitApp {
         self.prune_composer_editors();
         self.poll_terminals(window, cx);
         self.poll_persistence(cx);
+        if self.store.ui.auto_cleanup_empty_sessions
+            && self
+                .last_empty_session_cleanup
+                .is_none_or(|last| last.elapsed() >= Duration::from_secs(60 * 60))
+        {
+            self.cleanup_stale_empty_sessions(cx);
+        }
         self.poll_pending_sends(window, cx);
         if self.closing
             && let Some(error) = self

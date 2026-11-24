@@ -311,6 +311,8 @@ pub struct ConduitApp {
     expanded_errors: HashSet<(u64, String)>,
     /// Last elapsed-label repaint: every second for turns/recent ages, otherwise every minute.
     last_live_tick: Instant,
+    /// Last automatic sweep of stale empty workspace sessions.
+    last_empty_session_cleanup: Option<Instant>,
     tool_scrolls: HashMap<(u64, String), ScrollHandle>,
     /// Parsed diff viewers for expanded edit cards, keyed like `tool_scrolls`.
     tool_diffs: DiffCache,
@@ -890,6 +892,7 @@ impl ConduitApp {
             question_expansion: HashMap::new(),
             expanded_errors: HashSet::new(),
             last_live_tick: Instant::now(),
+            last_empty_session_cleanup: None,
             tool_scrolls: HashMap::new(),
             tool_diffs: DiffCache::default(),
             tool_analysis: Default::default(),
