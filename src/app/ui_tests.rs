@@ -2,6 +2,8 @@ use super::{ChatItem, file_ref};
 use crate::app::{NoticeLevel, NoticeSource};
 use gpui_kit::{AppContext as _, TestAppContext, point, px};
 
+mod workspace_colors;
+
 fn pet_store(pet_enabled: bool) -> crate::store::Store {
     let mut store = crate::store::Store::default();
     store.ui.encourager.enabled = true;

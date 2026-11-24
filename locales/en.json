@@ -864,6 +864,8 @@
   "sessions.a_task_is_still_running_in_this": "A task is still running in this session. Cancel it before deleting.",
   "sessions.context_usage": "Context usage %{arg0}%",
   "sessions.remove_workspace": "Remove workspace",
+  "sessions.workspace_color": "Workspace color",
+  "sessions.clear_workspace_color": "Clear workspace color",
   "sessions.remove_from_conduit_files_on_disk_and": "Remove “%{name}” from Conduit? Files on disk and CLI history will remain. This workspace's sessions will no longer appear in the application.",
   "sessions.remove": "Remove",
   "sessions.tasks_or_terminals_are_still_running_in": "Tasks or terminals are still running in this workspace. Stop them before removing it.",

@@ -714,6 +714,34 @@ impl ConduitApp {
         });
     }
 
+    pub(super) fn set_workspace_color(
+        &mut self,
+        path: &Path,
+        color: Option<u32>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.writable || self.closing {
+            return;
+        }
+        let changed = match color {
+            Some(color) => {
+                self.store
+                    .ui
+                    .workspace_colors
+                    .insert(path.to_owned(), color)
+                    != Some(color)
+            }
+            None => self.store.ui.workspace_colors.remove(path).is_some(),
+        };
+        if changed {
+            // ColorPicker emits while sliders are dragged. Let the normal one-second
+            // dirty-state save coalesce those updates instead of writing every frame.
+            self.dirty = true;
+            self.sidebar_view.update(cx, |_, cx| cx.notify());
+            cx.notify();
+        }
+    }
+
     pub(super) fn remove_workspace(&mut self, index: usize, cx: &mut Context<Self>) {
         self.remove_workspace_target = None;
         if index >= self.store.workspaces.len() {
@@ -733,6 +761,10 @@ impl ConduitApp {
             return;
         }
         let removed = self.store.workspaces.remove(index);
+        self.store.ui.workspace_colors.remove(&removed.path);
+        if self.workspace_color_target.as_ref() == Some(&removed.path) {
+            self.workspace_color_target = None;
+        }
         #[cfg(feature = "remote")]
         if self.remote.applies_to(&removed.path) {
             self.remote.stop();
@@ -786,9 +818,25 @@ impl ConduitApp {
         cx.notify();
     }
 
-    pub(super) fn workspace_menu(&self, index: usize, app: Entity<Self>) -> AnyElement {
+    pub(super) fn workspace_menu(
+        &self,
+        index: usize,
+        app: Entity<Self>,
+        can_edit: bool,
+        cx: &gpui_kit::App,
+    ) -> AnyElement {
+        let Some(workspace) = self.store.workspaces.get(index) else {
+            return div().into_any_element();
+        };
+        let path = workspace.path.clone();
         let selected = self.selected_workspace == Some(index);
+        let has_color = self.store.ui.workspace_colors.contains_key(&path);
+        let picker_open = self.workspace_color_target.as_ref() == Some(&path)
+            && self.workspace_color_picker.read(cx).is_open();
+        let trigger_app = app.clone();
+        let trigger_path = path.clone();
         let trigger = Button::new(("workspace-menu-trigger", index))
+            .debug_selector(move || format!("workspace-menu-trigger-{index}"))
             .ghost()
             .small()
             .compact()
@@ -801,16 +849,49 @@ impl ConduitApp {
             .icon(IconName::Ellipsis)
             .cursor_pointer()
             .on_click(|_, _, cx| cx.stop_propagation());
+        let picker_state = self.workspace_color_picker.clone();
         Popover::new(("workspace-menu", index))
             .anchor(Anchor::LeftCenter)
             .offset(px(8.))
             .refine_style(&menu_popover_style())
             .trigger(trigger)
+            // The picker popup lies outside this menu's bounds. Let it own
+            // outside-click dismissal while open so swatches receive mouse-up.
+            .overlay_closable(!picker_open)
+            .on_open_change(move |open, window, cx| {
+                trigger_app.update(cx, |this, cx| {
+                    if !*open {
+                        if this.workspace_color_target.as_ref() == Some(&trigger_path) {
+                            this.workspace_color_picker
+                                .update(cx, |picker, cx| picker.set_open(false, cx));
+                        }
+                        return;
+                    }
+                    if !this.writable || this.closing {
+                        return;
+                    }
+                    this.workspace_color_target = Some(trigger_path.clone());
+                    let color = this.store.ui.workspace_colors.get(&trigger_path).copied();
+                    this.workspace_color_picker.update(cx, |picker, cx| {
+                        picker.set_open(false, cx);
+                        match color {
+                            Some(color) => picker.set_value(
+                                gpui_kit::Hsla::from(gpui_kit::rgba(color)),
+                                window,
+                                cx,
+                            ),
+                            None => picker.clear_value(window, cx),
+                        }
+                    });
+                });
+            })
             .content(move |_, _, cx| {
                 let popover = cx.entity().downgrade();
                 let clear_app = app.clone();
+                let clear_color_app = app.clone();
                 let remove_app = app.clone();
                 let clear_popover = popover.clone();
+                let clear_color_popover = popover.clone();
                 let remove_popover = popover.clone();
                 let clear = session_menu_button(
                     ("workspace-clear-selection", index as u64),
@@ -820,6 +901,23 @@ impl ConduitApp {
                 .on_click(move |_, window, cx| {
                     clear_app.update(cx, |this, cx| this.clear_workspace_selection(window, cx));
                     if let Some(popover) = clear_popover.clone().upgrade() {
+                        popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                    }
+                });
+                let clear_color_path = path.clone();
+                let clear_color = session_menu_button(
+                    ("workspace-clear-color", index as u64),
+                    conduit::i18n::text_static("sessions.clear_workspace_color"),
+                    IconName::CircleX,
+                )
+                .debug_selector(move || format!("workspace-clear-color-{index}"))
+                .on_click(move |_, window, cx| {
+                    clear_color_app.update(cx, |this, cx| {
+                        this.set_workspace_color(&clear_color_path, None, cx);
+                        this.workspace_color_picker
+                            .update(cx, |picker, cx| picker.clear_value(window, cx));
+                    });
+                    if let Some(popover) = clear_color_popover.clone().upgrade() {
                         popover.update(cx, |popover, cx| popover.dismiss(window, cx));
                     }
                 });
@@ -836,9 +934,32 @@ impl ConduitApp {
                         popover.update(cx, |popover, cx| popover.dismiss(window, cx));
                     }
                 });
-                let mut content = v_flex().w(px(170.)).gap(px(1.));
+                let color_label = conduit::i18n::text_static("sessions.workspace_color");
+                let color_picker = h_flex()
+                    .h(px(30.))
+                    .px_2()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(ui_text_size(12.))
+                            .text_color(rgb(palette().text))
+                            .child(color_label),
+                    )
+                    .child(
+                        gpui_kit::component::color_picker::ColorPicker::new(&picker_state)
+                            .with_size(Size::Small)
+                            .accessibility_label(color_label),
+                    );
+                let mut content = v_flex().w(px(180.)).gap(px(1.));
                 if selected {
                     content = content.child(clear);
+                }
+                if can_edit {
+                    content = content.child(color_picker);
+                    if has_color {
+                        content = content.child(clear_color);
+                    }
                 }
                 content.child(remove)
             })

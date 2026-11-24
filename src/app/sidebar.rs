@@ -1279,6 +1279,12 @@ impl ConduitApp {
         let nested = self.sidebar.projects.parent(&workspace.path).is_some();
         let collapsed = self.workspace_collapsed(&workspace.path);
         let importing = self.history_loading.contains(&workspace.path);
+        let workspace_color = self.store.ui.workspace_colors.get(&workspace.path).copied();
+        let workspace_hover_color = workspace_color.map(|color| {
+            let mut tint = gpui_kit::rgba(color);
+            tint.a *= 0.24;
+            tint
+        });
         let toggle_path = workspace.path.clone();
         let compact_path = workspace.path.clone();
         let drag_path = workspace.path.clone();
@@ -1334,7 +1340,15 @@ impl ConduitApp {
             .text_size(ui_text_size(13.))
             .text_color(rgb(palette().text))
             .cursor_pointer()
-            .hover(|style| style.bg(rgb(palette().surface_hover)))
+            .hover(move |style| match workspace_hover_color {
+                Some(color) => style.bg(color),
+                None => style.bg(rgb(palette().surface_hover)),
+            })
+            .when_some(workspace_color, |row, color| {
+                let mut tint = gpui_kit::rgba(color);
+                tint.a *= 0.18;
+                row.bg(tint)
+            })
             .when(can_edit, |row| {
                 row.on_drag(
                     WorkspaceDrag {
@@ -1475,7 +1489,7 @@ impl ConduitApp {
                                 this.new_session_here(index, window, cx)
                             })),
                     )
-                    .child(self.workspace_menu(index, app_entity.clone())),
+                    .child(self.workspace_menu(index, app_entity.clone(), can_edit, cx)),
             )
             .when(!collapsed && self.expanded_workspaces.contains(&index), |row| {
                 row.child(

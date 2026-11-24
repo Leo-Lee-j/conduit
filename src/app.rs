@@ -30,6 +30,7 @@ use gpui_kit::{
         Size,
         button::*,
         clipboard::Clipboard,
+        color_picker::{ColorPickerEvent, ColorPickerState},
         diff::{
             Diff, DiffChangeIndicator, DiffFile, DiffHoverHighlight, DiffHunkSeparator, DiffMode,
             DiffState,
@@ -183,6 +184,12 @@ actions!(
     ]
 );
 
+fn workspace_color_rgba(color: gpui_kit::Hsla) -> u32 {
+    let color = color.to_rgb();
+    let channel = |value: f32| (value.clamp(0., 1.) * 255.).round() as u32;
+    (channel(color.r) << 24) | (channel(color.g) << 16) | (channel(color.b) << 8) | channel(color.a)
+}
+
 pub struct ConduitApp {
     store: Store,
     background: background::BackgroundState,
@@ -277,6 +284,8 @@ pub struct ConduitApp {
     rename_input: Option<Entity<InputState>>,
     delete_target: Option<u64>,
     remove_workspace_target: Option<usize>,
+    workspace_color_picker: Entity<ColorPickerState>,
+    workspace_color_target: Option<PathBuf>,
     _subscriptions: Vec<Subscription>,
     dirty: bool,
     window_active: bool,
@@ -537,6 +546,7 @@ impl ConduitApp {
             )
             .searchable(true)
         });
+        let workspace_color_picker = cx.new(|cx| ColorPickerState::new(window, cx));
         let ui_font_subscription =
             cx.subscribe(&ui_font_select, |this, _, event: &SelectEvent<_>, cx| {
                 if !this.writable || this.closing {
@@ -578,6 +588,22 @@ impl ConduitApp {
                 this.persist();
                 cx.notify();
             });
+        let workspace_color_subscription = cx.subscribe(
+            &workspace_color_picker,
+            |this, _, event: &ColorPickerEvent, cx| {
+                if !this.writable || this.closing {
+                    return;
+                }
+                let Some(path) = this.workspace_color_target.clone() else {
+                    return;
+                };
+                let color = match event {
+                    ColorPickerEvent::Change(Some(color)) => Some(workspace_color_rgba(*color)),
+                    ColorPickerEvent::Change(None) => None,
+                };
+                this.set_workspace_color(&path, color, cx);
+            },
+        );
         let next_id = store
             .workspaces
             .iter()
@@ -851,6 +877,8 @@ impl ConduitApp {
             rename_input: None,
             delete_target: None,
             remove_workspace_target: None,
+            workspace_color_picker,
+            workspace_color_target: None,
             _subscriptions: vec![
                 settings_search_subscription,
                 skill_search_subscription,
@@ -865,6 +893,7 @@ impl ConduitApp {
                 ui_font_subscription,
                 chat_font_subscription,
                 code_font_subscription,
+                workspace_color_subscription,
                 light_theme_subscription,
                 dark_theme_subscription,
             ],

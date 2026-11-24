@@ -76,6 +76,9 @@ pub struct UiSettings {
     /// Session ids ordered by most recently opened.
     #[serde(default)]
     pub recent_sessions: Vec<u64>,
+    /// Optional packed RGBA display colors keyed by stable workspace path.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub workspace_colors: HashMap<PathBuf, u32>,
     /// User bindings by stable action ID; an empty list explicitly unbinds an action.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub shortcuts: std::collections::BTreeMap<String, Vec<String>>,
@@ -295,6 +298,7 @@ impl Default for UiSettings {
             terminal_profile: Default::default(),
             terminal_height: default_terminal_height(),
             recent_sessions: Vec::new(),
+            workspace_colors: HashMap::new(),
             shortcuts: Default::default(),
             sessions_per_workspace: default_sessions_per_workspace(),
             default_session_permission: Default::default(),
@@ -1690,6 +1694,21 @@ mod tests {
             };
             assert_eq!(settings.content_split_ratio(), 0.5);
         }
+    }
+
+    #[test]
+    fn workspace_colors_default_empty_and_roundtrip_by_path() {
+        let old: UiSettings = serde_json::from_str("{}").unwrap();
+        assert!(old.workspace_colors.is_empty());
+
+        let path = PathBuf::from("/workspace/project");
+        let settings = UiSettings {
+            workspace_colors: HashMap::from([(path.clone(), 0x2a7fffff)]),
+            ..Default::default()
+        };
+        let restored: UiSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.workspace_colors.get(&path), Some(&0x2a7fffff));
     }
 
     #[test]

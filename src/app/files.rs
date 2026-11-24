@@ -2502,6 +2502,13 @@ impl ConduitApp {
                 DocumentTab::Diff(id) => format!("diff-tab-close-{id}"),
             };
             let workspace = self.tab_workspace(&tab);
+            let workspace_color = match tab {
+                DocumentTab::Chat(_) => workspace
+                    .as_ref()
+                    .and_then(|path| self.store.ui.workspace_colors.get(path))
+                    .copied(),
+                _ => None,
+            };
             let starts_group =
                 self.store.ui.group_tabs && workspace.is_some() && workspace != previous_workspace;
             previous_workspace = workspace.clone();
@@ -2556,7 +2563,10 @@ impl ConduitApp {
                 .prefix(icon)
                 .label(title)
                 .text_size(ui_text_size(12.))
-                .when(preview, |style| style.italic());
+                .when(preview, |style| style.italic())
+                .when_some(workspace_color, |item, color| {
+                    item.folder_border_color(gpui_kit::rgba(color))
+                });
             if let DocumentTab::Chat(id) = tab
                 && (running || unread)
             {

@@ -49,6 +49,12 @@ checkout without changing Cargo's cache or running a preparation script.
   transforms while preserving each icon's layout and hitbox.
 - `crates/component/src/theme/mod.rs`: stores the runtime icon scale outside
   serialized theme files.
+- `crates/component/src/color_picker.rs`: debug selectors for native pointer
+  regression tests of the picker and its palette swatches.
+- `crates/component/src/tab/tab.rs`: optional folder-tab border color using
+  the same rounded/concave contour as the selected tab's fill. A thin open
+  stroke fades vertically to transparent at the content edge; inactive tabs
+  are dimmer. Other variants and tabs without a border color are unchanged.
 - `Cargo.toml`: trims the upstream workspace to these two crates and pins
   references to the remaining Kit crates to the original Git revision.
 

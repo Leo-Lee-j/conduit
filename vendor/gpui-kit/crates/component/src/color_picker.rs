@@ -137,6 +137,7 @@ impl ColorPicker {
         let click_state = self.state.clone();
 
         ColorSwatch::new(id, color)
+            .debug_selector(move || format!("color-picker-swatch-{}", color.to_hex()))
             .selected(selected)
             .h_5()
             .w_5()
@@ -484,6 +485,7 @@ impl RenderOnce for ColorPicker {
         let popover_state = self.state.clone();
 
         BaseColorPicker::new(self.id.clone())
+            .debug_selector(|| "color-picker".into())
             .when(self.field, |this| this.w_full())
             .refine_style(&self.style)
             .open(open)

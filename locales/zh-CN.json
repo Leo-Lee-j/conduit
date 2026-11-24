@@ -864,6 +864,8 @@
   "sessions.a_task_is_still_running_in_this": "该会话仍有任务运行，请先取消后再删除。",
   "sessions.context_usage": "上下文使用 %{arg0}%",
   "sessions.remove_workspace": "移除工作区",
+  "sessions.workspace_color": "工作区颜色",
+  "sessions.clear_workspace_color": "清除工作区颜色",
   "sessions.remove_from_conduit_files_on_disk_and": "从 Conduit 移除「%{name}」？磁盘上的文件与 CLI 自带历史不会被删除；应用内该工作区的会话记录将不再显示。",
   "sessions.remove": "移除",
   "sessions.tasks_or_terminals_are_still_running_in": "该工作区仍有任务或终端运行，请先停止后再移除。",
