@@ -205,6 +205,12 @@ impl Protocol {
             };
             json!({"*":action,"read":"allow","glob":"allow","grep":"allow","list":"allow","external_directory":action,"question":"allow","plan_enter":"deny","plan_exit":"deny","task":"deny"})
         };
+        if !self.text_only && self.permission == PermissionLevel::WorkspaceWrite {
+            permission["websearch"] = json!("allow");
+            permission["webfetch"] = json!("allow");
+            permission["edit"] = json!("allow");
+            permission["external_directory"] = json!("deny");
+        }
         if !self.text_only {
             // A server prefix can overlap a built-in permission such as
             // `plan_enter` or `doom_loop`; keep those exact rules authoritative.

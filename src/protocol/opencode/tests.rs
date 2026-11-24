@@ -453,6 +453,12 @@ fn opencode_managed_agents_override_inherited_rules_and_helpers_have_private_sto
         assert_eq!(agent["permission"]["plan_enter"], "deny");
         assert_eq!(agent["permission"]["plan_exit"], "deny");
         assert_eq!(agent["permission"]["doom_loop"], agent["permission"]["*"]);
+        if permission == PermissionLevel::WorkspaceWrite {
+            assert_eq!(agent["permission"]["websearch"], "allow");
+            assert_eq!(agent["permission"]["webfetch"], "allow");
+            assert_eq!(agent["permission"]["edit"], "allow");
+            assert_eq!(agent["permission"]["external_directory"], "deny");
+        }
         assert_eq!(config["mcp"]["native.server"]["enabled"], false);
         assert_eq!(
             protocol.environment()["OPENCODE_ENABLE_QUESTION_TOOL"],

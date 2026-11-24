@@ -62,7 +62,9 @@
 | OpenCode | ACP | 原生模型/档位与会话身份；用户问答通过适配器旁路通信 |
 | Qoder CLI | `qodercli --acp` | 原生认证、动态模型/档位、工具审批与表单问答；纯文本辅助任务禁用工具 |
 
-应用权限约束只针对 CLI 实际支持并上报的请求；经过批准的命令仍可能访问工作区外文件，不将“工作区内修改”描述为文件系统沙箱。
+Codex 的“工作区内修改”使用 `workspace-write` 文件沙箱并开启联网与实时 Web Search；工作区内受默认保护的本地配置/Git 目录显式加入 writable roots，外部临时目录不另行授权。进程配置、thread/start、thread/resume 和 turn/start 使用一致设置，路由配置不能追加外部可写根。沙箱逃逸、规则审批和扩展权限请求自动拒绝；原生 MCP 确认仍独立处理。
+
+其他引擎的应用权限约束只针对 CLI 实际支持并上报的请求；经过批准的 Shell 命令仍可能访问工作区外文件，不能将其原生工具权限描述为文件系统沙箱。工作区模式自动放行已知搜索/网页读取工具；工具身份取自原生字段，不根据展示标题推断。
 
 Codex 普通聊天使用分项 `approvalPolicy.granular`，单独开启 `mcp_elicitations`；只读和完全访问也不能使用会提前拒绝 MCP 确认的 `never`。原生 `mcpServer/elicitation/request` 中带有 `_meta.codex_approval_kind=mcp_tool_call` 的空表单工具审批自动放行；实际需要填写的表单与认证请求不能代填。纯文本辅助任务继续使用 `never` 并拒绝工具审批。
 
@@ -141,7 +143,7 @@ OpenCode 普通聊天提供一个具有相同权限配置的托管 worker，并�
 
 - 初始化后由 CLI 恢复原生登录态；未登录时提示先登录，不自动打开认证浏览器。新会话使用 `session/new`，已有会话优先 `session/resume`，不支持时使用 `session/load`。恢复失败不会静默新建，历史回放不重复追加。
 - 模型和 `reasoning_effort` 从会话的 `configOptions` 获取。首次可使用 CLI 默认模型，连接后显示会话目录；显式指定的模型或档位不可用时直接报错。切换模型清除旧档位。ACP 公共类型与 OpenCode 共享，磁盘仍保留原有 `opencode` 字段，兼容旧会话。
-- 只读模式将内置工具限制为 `Read,Grep,Glob`，保留原生 MCP；普通模式通过 `permissions.ask=["*"]` 将内置工具调用交给应用审批，MCP 请求自动放行；完全访问模式自动批准工具请求。MCP 身份使用 ACP 的 `_meta.qoder.toolName`，不依赖展示标题。所有模式禁用 hooks。权限约束依赖 CLI 的工具策略，不构成文件系统沙箱。
+- 只读模式将内置工具限制为 `Read,Grep,Glob`，保留原生 MCP；工作区模式通过 `permissions.ask=["*"]` 接收工具请求，已知搜索/网页读取和 MCP 请求自动放行，其他内置工具交给应用审批；完全访问模式自动批准工具请求。工具身份使用 ACP 的 `_meta.qoder.toolName`，不依赖展示标题。所有模式禁用 hooks。权限约束依赖 CLI 的工具策略，不构成文件系统沙箱。
 - 标题与 Git 说明等纯文本辅助任务使用同一 ACP 流程，但禁用全部工具、MCP 与 hooks；切换完全访问也不能解除限制。提示词通过 stdin 的两段文本发送，避免被当成 `/allow` 等原生命令执行。
 - 工具审批按 `kind` 选择真实 `optionId`。表单问答支持字符串、布尔/数值及单选/多选，校验数值、长度和数量限制；显示的字段需逐一填写。不支持的格式、正则等约束明确拒绝。取消后沿用运行时的软取消与进程树清理。
 - 保留公开回复、工具、计划、用量和会话配置；`agent_thought_chunk` 中公开的文本独立显示为思考内容。Skills/MCP 的发现与编辑、终端历史自动导入、Conduit 自定义 Provider / CCS 路由暂未接入，相关配置仍由原生 CLI 管理。

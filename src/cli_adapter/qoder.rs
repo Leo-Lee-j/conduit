@@ -560,7 +560,16 @@ impl CliAdapter for QoderAdapter {
                 option(&approval.input, "allow_once").is_some()
                     || option(&approval.input, "allow_always").is_some(),
             ),
-            PermissionLevel::WorkspaceWrite => None,
+            PermissionLevel::WorkspaceWrite => {
+                let tool = approval.input["toolCall"]
+                    .pointer("/_meta/qoder/toolName")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                crate::protocol::is_web_tool_name(tool).then(|| {
+                    option(&approval.input, "allow_once").is_some()
+                        || option(&approval.input, "allow_always").is_some()
+                })
+            }
         }
     }
     fn approval_response(&self, approval: &Approval, allow: bool) -> Value {

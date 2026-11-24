@@ -262,6 +262,13 @@ pub(crate) fn is_mcp_tool_name(name: &str) -> bool {
         .is_some_and(|(server, tool)| !server.is_empty() && !tool.is_empty())
 }
 
+pub(crate) fn is_web_tool_name(name: &str) -> bool {
+    matches!(
+        name,
+        "WebSearch" | "WebFetch" | "web_search" | "web_fetch" | "websearch" | "webfetch"
+    )
+}
+
 fn id_text(v: &Value) -> String {
     v.as_str()
         .map(str::to_owned)
@@ -396,6 +403,25 @@ impl Protocol {
             )
         } else if self.permission == PermissionLevel::ReadOnly {
             Some(false)
+        } else if self.permission == PermissionLevel::WorkspaceWrite
+            && self.provider == Provider::Codex
+        {
+            // Explicit native approval fixtures use an untrusted/read-only
+            // profile to exercise the broker instead of ordinary workspace chat.
+            #[cfg(test)]
+            if self.approval_test {
+                return None;
+            }
+            // In-sandbox tools need no approval. A request here would extend
+            // the workspace grant, so never offer an unrestricted retry.
+            Some(false)
+        } else if self.permission == PermissionLevel::WorkspaceWrite
+            && approval.kind == ApprovalKind::ClaudeTool
+            && serde_json::from_str::<Value>(&approval.detail)
+                .ok()
+                .is_some_and(|request| is_web_tool_name(text(&request, "tool_name")))
+        {
+            Some(approval.allow_once)
         } else if self.permission == PermissionLevel::FullAccess {
             // Fully authorized runs never fall back to a UI permission gate.
             // Some CLI versions offer only a session/permanent allow option;
@@ -436,25 +462,53 @@ impl Protocol {
     fn codex_workspace_writable_roots(&self) -> Vec<String> {
         let mut roots = vec![self.cwd.clone()];
         let workspace = std::path::Path::new(&self.cwd);
-        let git_dir = workspace.join(".git");
-        // Codex protects Git metadata under a writable root by default. An
-        // explicit writable root permits local Git without escalating the shell.
-        // Linked worktrees and submodules can point at Git data outside the cwd.
+        // Native sandboxes protect configuration and Git metadata even within
+        // a writable root. Grant those local directories explicitly, including
+        // ones not created yet, but never follow a link or a worktree .git file.
         if workspace.is_absolute()
-            && std::fs::canonicalize(workspace)
-                .ok()
-                .zip(std::fs::canonicalize(&git_dir).ok())
-                .is_some_and(|(root, resolved)| resolved == root.join(".git"))
-            && std::fs::symlink_metadata(&git_dir).is_ok_and(|meta| meta.is_dir())
-            && let Some(path) = git_dir.to_str()
+            && let Ok(root) = std::fs::canonicalize(workspace)
         {
-            roots.push(path.to_string());
+            for name in [".git", ".agents", ".codex", ".aws"] {
+                let path = workspace.join(name);
+                let local = match std::fs::symlink_metadata(&path) {
+                    Ok(meta) => {
+                        meta.is_dir()
+                            && std::fs::canonicalize(&path)
+                                .is_ok_and(|resolved| resolved == root.join(name))
+                    }
+                    Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+                };
+                if local && let Some(path) = path.to_str() {
+                    roots.push(path.to_string());
+                }
+            }
         }
         roots
     }
 
     fn codex_config(&self) -> serde_json::Map<String, Value> {
         let mut config = self.route.config.clone();
+        if !self.text_only && self.permission == PermissionLevel::WorkspaceWrite {
+            // Apply the same boundary to process startup, new threads and
+            // resumes. Selected routes must not add external writable roots.
+            config.retain(|key, _| {
+                key != "sandbox_workspace_write" && !key.starts_with("sandbox_workspace_write.")
+            });
+            config.insert("web_search".into(), json!("live"));
+            config.insert("sandbox_workspace_write.network_access".into(), json!(true));
+            config.insert(
+                "sandbox_workspace_write.writable_roots".into(),
+                json!(self.codex_workspace_writable_roots()),
+            );
+            config.insert(
+                "sandbox_workspace_write.exclude_tmpdir_env_var".into(),
+                json!(true),
+            );
+            config.insert(
+                "sandbox_workspace_write.exclude_slash_tmp".into(),
+                json!(true),
+            );
+        }
         // Conduit renders structured questions in ordinary chat as well as plan
         // mode. Enable the CLI tool before a thread is started or resumed.
         config.insert(
@@ -785,7 +839,7 @@ impl Protocol {
                     params["sandboxPolicy"] = match self.permission {
                         PermissionLevel::ReadOnly => json!({"type":"readOnly"}),
                         PermissionLevel::WorkspaceWrite => {
-                            json!({"type":"workspaceWrite","writableRoots":self.codex_workspace_writable_roots(),"networkAccess":false})
+                            json!({"type":"workspaceWrite","writableRoots":self.codex_workspace_writable_roots(),"networkAccess":true,"excludeTmpdirEnvVar":true,"excludeSlashTmp":true})
                         }
                         PermissionLevel::FullAccess => json!({"type":"dangerFullAccess"}),
                     };
@@ -1626,6 +1680,20 @@ mod tests {
                 json!(true),
             );
             expected_config.insert("suppress_unstable_features_warning".into(), json!(true));
+            expected_config.insert("web_search".into(), json!("live"));
+            expected_config.insert("sandbox_workspace_write.network_access".into(), json!(true));
+            expected_config.insert(
+                "sandbox_workspace_write.writable_roots".into(),
+                json!(protocol.codex_workspace_writable_roots()),
+            );
+            expected_config.insert(
+                "sandbox_workspace_write.exclude_tmpdir_env_var".into(),
+                json!(true),
+            );
+            expected_config.insert(
+                "sandbox_workspace_write.exclude_slash_tmp".into(),
+                json!(true),
+            );
             assert_eq!(params["config"], json!(expected_config));
             // Resume reads back only the thread id, never the turn history.
             assert_eq!(
@@ -1634,17 +1702,18 @@ mod tests {
             );
         }
         let native = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None);
-        assert_eq!(
-            native.args(),
-            [
-                "app-server",
-                "--stdio",
-                "-c",
-                "features.default_mode_request_user_input=true",
-                "-c",
-                "suppress_unstable_features_warning=true"
-            ]
-        );
+        let args = native.args();
+        assert_eq!(&args[..2], ["app-server", "--stdio"]);
+        for setting in [
+            "features.default_mode_request_user_input=true",
+            "suppress_unstable_features_warning=true",
+            "web_search=\"live\"",
+            "sandbox_workspace_write.network_access=true",
+            "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+            "sandbox_workspace_write.exclude_slash_tmp=true",
+        ] {
+            assert!(args.windows(2).any(|pair| pair == ["-c", setting]));
+        }
     }
 
     #[test]
@@ -1718,7 +1787,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_workspace_write_limits_git_metadata_to_the_local_checkout() {
+    fn codex_workspace_write_allows_local_operations_without_external_write_grants() {
         let fixture = std::env::temp_dir().join(format!(
             "conduit-git-permission-{}-{}",
             std::process::id(),
@@ -1736,15 +1805,45 @@ mod tests {
         for (workspace, has_local_git) in [(&repo, true), (&linked, false)] {
             let cwd = workspace.to_str().unwrap().to_string();
             let mut protocol = Protocol::new(Provider::Codex, cwd.clone(), "hello".into(), None);
-            let mut expected = vec![cwd];
+            let mut expected = vec![cwd.clone()];
             if has_local_git {
                 expected.push(git.to_str().unwrap().to_string());
             }
-            protocol.accept(json!({"id":1,"result":{}}));
+            for name in [".agents", ".codex", ".aws"] {
+                expected.push(workspace.join(name).to_str().unwrap().to_string());
+            }
+            protocol.route.config.insert(
+                "sandbox_workspace_write".into(),
+                json!({"writable_roots":[fixture],"network_access":false}),
+            );
+            protocol.route.config.insert(
+                "sandbox_workspace_write.writable_roots".into(),
+                json!([fixture]),
+            );
+            protocol
+                .route
+                .config
+                .insert("web_search".into(), json!("disabled"));
+            let start = protocol.accept(json!({"id":1,"result":{}}));
+            let config = &start.writes[1]["params"]["config"];
+            assert!(config.get("sandbox_workspace_write").is_none());
+            assert_eq!(config["web_search"], "live");
+            assert_eq!(config["sandbox_workspace_write.network_access"], true);
+            assert_eq!(
+                config["sandbox_workspace_write.writable_roots"],
+                json!(expected)
+            );
+            assert_eq!(
+                config["sandbox_workspace_write.exclude_tmpdir_env_var"],
+                true
+            );
+            assert_eq!(config["sandbox_workspace_write.exclude_slash_tmp"], true);
             let turn = protocol.accept(json!({"id":2,"result":{"thread":{"id":"check"}}}));
             let params = &turn.writes[0]["params"];
             assert_eq!(params["sandboxPolicy"]["writableRoots"], json!(expected));
-            assert_eq!(params["sandboxPolicy"]["networkAccess"], false);
+            assert_eq!(params["sandboxPolicy"]["networkAccess"], true);
+            assert_eq!(params["sandboxPolicy"]["excludeTmpdirEnvVar"], true);
+            assert_eq!(params["sandboxPolicy"]["excludeSlashTmp"], true);
             assert_eq!(
                 params["approvalPolicy"],
                 PermissionLevel::WorkspaceWrite.codex_approval_policy()
@@ -1762,7 +1861,7 @@ mod tests {
         let Event::Approval(approval) = &step.events[0] else {
             panic!("expected approval")
         };
-        assert_eq!(normal.automatic_approval(approval), None);
+        assert_eq!(normal.automatic_approval(approval), Some(false));
         let full = Protocol::new(Provider::Codex, "C:\\work".into(), "hello".into(), None)
             .with_permission(PermissionLevel::FullAccess);
         assert_eq!(full.automatic_approval(approval), Some(true));
@@ -1809,7 +1908,7 @@ mod tests {
                 assert_eq!(response["id"], "request-1");
                 assert_eq!(response["result"]["decision"], expected);
                 let normal = Protocol::new(Provider::Codex, "C:/work".into(), "hello".into(), None);
-                assert_eq!(normal.automatic_approval(approval), None);
+                assert_eq!(normal.automatic_approval(approval), Some(false));
                 assert_eq!(
                     normal.approval_response(approval, true)["result"]["decision"],
                     if approval.allow_once {
@@ -1820,6 +1919,42 @@ mod tests {
                 );
                 assert_eq!(full.text_only().automatic_approval(approval), Some(false));
             }
+        }
+    }
+
+    #[test]
+    fn workspace_permissions_reject_codex_escalations_and_allow_claude_web_tools() {
+        let mut codex = Protocol::new(Provider::Codex, "C:/work".into(), "hello".into(), None);
+        for (method, params) in [
+            (
+                "item/commandExecution/requestApproval",
+                json!({"itemId":"command","command":"write outside","availableDecisions":["accept","decline"]}),
+            ),
+            (
+                "item/fileChange/requestApproval",
+                json!({"itemId":"file","grantRoot":"C:/outside"}),
+            ),
+            (
+                "item/permissions/requestApproval",
+                json!({"itemId":"permissions","permissions":{"fileSystem":{"write":["C:/outside"]}}}),
+            ),
+        ] {
+            let step = codex.accept(json!({"id":88,"method":method,"params":params}));
+            let Event::Approval(approval) = &step.events[0] else {
+                panic!("missing approval")
+            };
+            assert_eq!(codex.automatic_approval(approval), Some(false));
+        }
+        for tool in ["WebSearch", "WebFetch", "Bash", "Edit"] {
+            let mut claude =
+                Protocol::new(Provider::Claude, "C:/work".into(), "hello".into(), None);
+            let step = claude.accept(json!({"type":"control_request","request_id":"web","request":{"subtype":"can_use_tool","tool_name":tool,"input":{"query":"rust"}}}));
+            let Event::Approval(approval) = &step.events[0] else {
+                panic!("missing approval")
+            };
+            let expected = is_web_tool_name(tool).then_some(true);
+            assert_eq!(claude.automatic_approval(approval), expected);
+            assert_eq!(claude.text_only().automatic_approval(approval), Some(false));
         }
     }
 
@@ -1842,10 +1977,16 @@ mod tests {
                 let start = protocol.accept(json!({"id":1,"result":{}}));
                 let policy = &start.writes[1]["params"]["approvalPolicy"]["granular"];
                 assert_eq!(policy["mcp_elicitations"], true);
-                assert_eq!(
-                    policy["sandbox_approval"],
-                    level == PermissionLevel::WorkspaceWrite
-                );
+                assert_eq!(policy["sandbox_approval"], false);
+                assert_eq!(policy["rules"], false);
+                assert_eq!(policy["request_permissions"], false);
+                if level == PermissionLevel::WorkspaceWrite {
+                    assert_eq!(start.writes[1]["params"]["config"]["web_search"], "live");
+                    assert_eq!(
+                        start.writes[1]["params"]["config"]["sandbox_workspace_write.network_access"],
+                        true
+                    );
+                }
                 assert_eq!(start.writes[1]["params"]["sandbox"], level.codex_sandbox());
                 let turn = protocol.accept(json!({"id":2,"result":{"thread":{"id":"thread"}}}));
                 assert_eq!(

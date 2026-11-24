@@ -441,6 +441,24 @@ fn qoder_mcp_tools_bypass_every_chat_permission_and_preserve_helper_restrictions
 }
 
 #[test]
+fn qoder_workspace_web_tools_use_native_identity_and_keep_other_requests_gated() {
+    let (mut adapter, _) = ready(request(), true);
+    for tool in ["WebSearch", "WebFetch", "Bash", "Write", ""] {
+        let mut request = permission("original");
+        request["params"]["toolCall"]["title"] = json!("WebSearch");
+        request["params"]["toolCall"]["_meta"] = json!({"qoder":{"toolName":tool}});
+        let step = adapter.accept(request);
+        let Event::Approval(approval) = &step.events[0] else {
+            panic!("missing approval")
+        };
+        assert_eq!(
+            adapter.automatic_approval(approval),
+            crate::protocol::is_web_tool_name(tool).then_some(true)
+        );
+    }
+}
+
+#[test]
 fn qoder_elicitation_supports_choices_multi_select_validation_and_cancellation() {
     let mut req = request();
     req.permission = PermissionLevel::FullAccess;

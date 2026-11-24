@@ -34,7 +34,7 @@ impl Provider {
 pub enum PermissionLevel {
     /// View only: Codex read-only sandbox.
     ReadOnly,
-    /// Read plus edits inside the workspace (default).
+    /// Workspace operations and network access, without filesystem escalation (default).
     #[default]
     WorkspaceWrite,
     /// Unrestricted filesystem/network access; shown with a warning.
@@ -60,13 +60,14 @@ impl PermissionLevel {
     }
 
     pub fn codex_approval_policy(self) -> serde_json::Value {
-        let filesystem_approvals = self == Self::WorkspaceWrite;
         // `never` also rejects native MCP confirmations before they reach us.
+        // Workspace chat runs freely inside its sandbox; an approval must not
+        // turn that workspace grant into unrestricted filesystem access.
         serde_json::json!({"granular": {
-            "sandbox_approval": filesystem_approvals,
-            "rules": filesystem_approvals,
+            "sandbox_approval": false,
+            "rules": false,
             "skill_approval": false,
-            "request_permissions": filesystem_approvals,
+            "request_permissions": false,
             "mcp_elicitations": true
         }})
     }

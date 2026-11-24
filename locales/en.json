@@ -1732,7 +1732,7 @@
   "domain.read_only": "Read only",
   "domain.read_only_description": "Inspect files without changing them",
   "domain.workspace_write": "Workspace write",
-  "domain.workspace_write_description": "Edit files and use local Git",
+  "domain.workspace_write_description": "Allow workspace operations, network access and search; restrict external file changes",
   "domain.full_access": "Full access",
   "domain.full_access_description": "Allow changes beyond the workspace",
   "domain.request_to_use": "Request to use ",

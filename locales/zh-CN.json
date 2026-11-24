@@ -1732,7 +1732,7 @@
   "domain.read_only": "仅可查看",
   "domain.read_only_description": "查看文件，不进行修改",
   "domain.workspace_write": "工作区内修改",
-  "domain.workspace_write_description": "修改文件和操作本地 Git",
+  "domain.workspace_write_description": "允许工作区内操作、联网和搜索；限制工作区外文件修改",
   "domain.full_access": "完全权限",
   "domain.full_access_description": "允许修改工作区外的内容",
   "domain.request_to_use": "请求使用 ",
