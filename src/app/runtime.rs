@@ -198,8 +198,7 @@ impl ConduitApp {
             .send_target(true)
             .is_some_and(|id| self.session_fork_pending(id))
         {
-            self.message = Some(conduit::i18n::text("branching.pending"));
-            cx.notify();
+            self.notify_composer_warning(conduit::i18n::text("branching.pending"), cx);
             return;
         }
         let target = self.composer_target();
@@ -228,8 +227,7 @@ impl ConduitApp {
         }
         let prompt = file_ref::compose_prompt(&text, references);
         if let Some(reason) = self.composer_send_blocked() {
-            self.message = Some(reason.into());
-            cx.notify();
+            self.notify_composer_warning(reason, cx);
             return;
         }
         let accepted = if let Some(id) = self.send_target(true)
@@ -266,25 +264,24 @@ impl ConduitApp {
             return false;
         }
         let Some(index) = self.composer_workspace() else {
-            self.message = Some(
-                conduit::i18n::text_static("composer.select_a_workspace_in_the_upper_left").into(),
+            self.notify_composer_warning(
+                conduit::i18n::text_static("composer.select_a_workspace_in_the_upper_left"),
+                cx,
             );
-            cx.notify();
             return false;
         };
         if let Some(reason) = self.send_blocked(append_user) {
-            self.message = Some(reason.into());
-            cx.notify();
+            self.notify_composer_warning(reason, cx);
             return false;
         }
         if prompt.trim().is_empty() {
             return false;
         }
         if prompt.len() > 256 * 1024 {
-            self.message = Some(
-                conduit::i18n::text_static("runtime.each_message_may_be_no_larger_than").into(),
+            self.notify_composer_warning(
+                conduit::i18n::text_static("runtime.each_message_may_be_no_larger_than"),
+                cx,
             );
-            cx.notify();
             return false;
         }
         // Resolve the target engine and validate the environment before creating
@@ -328,8 +325,6 @@ impl ConduitApp {
                     .read(cx)
                     .focus_handle(cx)
                     .focus(window, cx);
-                // Save progress belongs to the run activity, not the error banner.
-                self.message = None;
                 if self.composer_is_main() {
                     self.scroll_to_end();
                 }
@@ -763,11 +758,10 @@ impl ConduitApp {
             return;
         }
         if session.native_id.is_none() {
-            self.message = Some(
-                conduit::i18n::text_static("runtime.this_session_has_no_reliable_cli_session")
-                    .into(),
+            self.notify_composer_warning(
+                conduit::i18n::text_static("runtime.this_session_has_no_reliable_cli_session"),
+                cx,
             );
-            cx.notify();
             return;
         }
         let prompt = session.messages[user_index].text.clone();
@@ -823,8 +817,7 @@ impl ConduitApp {
                 })
         {
             self.closing = false;
-            self.message = Some(error);
-            cx.notify();
+            self.notify_feedback(NoticeSource::App, NoticeLevel::Error, error, None, cx);
         }
         if !self.search_query.trim().is_empty()
             && !self.search_ui.running
@@ -857,12 +850,6 @@ impl ConduitApp {
             if self.startup.as_ref().is_some_and(|s| !s.imports_done) {
                 self.session_control.cancel_imports();
                 self.history_loading.clear();
-                self.message = Some(
-                    conduit::i18n::text_static(
-                        "runtime.history_reading_timed_out_existing_conversations_were",
-                    )
-                    .into(),
-                );
                 self.notify_user(
                     Notice::new(
                         NoticeSource::App,
@@ -935,17 +922,22 @@ impl ConduitApp {
         {
             match self.save_exit_drafts(cx) {
                 Ok(()) => {
-                    self.cleanup_attachments();
+                    self.cleanup_attachments(cx);
                     window.remove_window();
                     cx.quit();
                 }
                 Err(error) => {
                     self.closing = false;
-                    self.message = Some(conduit::i18n::format(
-                        "runtime.draft_save_failed_exit_cancelled_keep_your",
-                        &[("error", format!("{:#}", error))],
-                    ));
-                    cx.notify();
+                    self.notify_feedback(
+                        NoticeSource::Persistence,
+                        NoticeLevel::Error,
+                        conduit::i18n::format(
+                            "runtime.draft_save_failed_exit_cancelled_keep_your",
+                            &[("error", format!("{:#}", error))],
+                        ),
+                        None,
+                        cx,
+                    );
                 }
             }
         }

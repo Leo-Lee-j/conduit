@@ -2127,6 +2127,8 @@
   "notifications.history.notification_history_save_thread_exited": "Notification history save thread exited",
   "notifications.history.history_exceeds_capacity": "History exceeds capacity",
   "notifications.session": "Session",
+  "notifications.operation_unavailable": "Operation unavailable",
+  "notifications.operation_failed": "Operation failed",
   "notifications.data_saving": "Data saving",
   "notifications.expired": "Expired",
   "notifications.unsupported_notification_history_version_original_file_preserved": "Unsupported notification history version; original file preserved",

@@ -66,7 +66,7 @@ pub(super) struct ComposerFiles {
 impl ConduitApp {
     /// A deduplicated image can be shared by drafts and sent messages across
     /// workspaces. Rebuild reachability only when attachments are discarded.
-    pub(super) fn cleanup_attachments(&mut self) {
+    pub(super) fn cleanup_attachments(&mut self, cx: &mut Context<Self>) {
         if !self.writable
             || self.persistence.busy()
             || self.persistence.error.is_some()
@@ -120,10 +120,16 @@ impl ConduitApp {
             &Store::path().with_file_name("attachments"),
             &referenced,
         ) {
-            self.message = Some(conduit::i18n::format(
-                "composer.failed_to_clean_up_image_attachments",
-                &[("error", format!("{:#}", error))],
-            ));
+            self.notify_feedback(
+                NoticeSource::App,
+                NoticeLevel::Warning,
+                conduit::i18n::format(
+                    "composer.failed_to_clean_up_image_attachments",
+                    &[("error", format!("{:#}", error))],
+                ),
+                None,
+                cx,
+            );
         }
     }
 
@@ -134,12 +140,12 @@ impl ConduitApp {
     }
 
     #[cfg(all(test, feature = "ui-tests"))]
-    pub(super) fn discard_composer_attachments(&mut self) {
+    pub(super) fn discard_composer_attachments(&mut self, cx: &mut Context<Self>) {
         self.composer_files.clear();
         // Draft attachments are in memory only. The close path has already
         // waited for every transcript/queue save; do not enqueue another save
         // immediately before exiting.
-        self.cleanup_attachments();
+        self.cleanup_attachments(cx);
     }
 
     /// Let the input perform its normal text paste unless files or pixels exist.
@@ -165,10 +171,10 @@ impl ConduitApp {
             return true;
         }
         let Some(target) = self.composer_target() else {
-            self.message = Some(
-                conduit::i18n::text_static("composer.select_a_workspace_in_the_upper_left").into(),
+            self.notify_composer_warning(
+                conduit::i18n::text_static("composer.select_a_workspace_in_the_upper_left"),
+                cx,
             );
-            cx.notify();
             return true;
         };
         let mut errors = Vec::new();
@@ -221,10 +227,10 @@ impl ConduitApp {
             return false;
         }
         let Some(target) = self.composer_target() else {
-            self.message = Some(
-                conduit::i18n::text_static("composer.select_a_workspace_in_the_upper_left").into(),
+            self.notify_composer_warning(
+                conduit::i18n::text_static("composer.select_a_workspace_in_the_upper_left"),
+                cx,
             );
-            cx.notify();
             return false;
         };
         let (references, rejected) = file_ref::resolve(paths, &target.workspace);

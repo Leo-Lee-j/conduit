@@ -222,7 +222,6 @@ fn error_retry_keeps_partial_output_when_context_validation_fails(cx: &mut TestA
                 before
             );
             assert!(app.session_control.runs.is_empty());
-            assert!(app.message.is_none());
             assert!(app.notifications.center.records().iter().any(|notice| {
                 notice.title == "会话无法启动" && notice.message.contains("缺少可靠的 CLI 会话标识")
             }));
@@ -287,7 +286,11 @@ fn error_retry_clears_cards_before_repeated_failures_and_preserves_output(cx: &m
                     .rposition(|item| item.kind == super::ItemKind::Error)
                     .unwrap();
                 app.retry_error(error_index, window, cx);
-                assert!(app.session_control.runs.contains_key(&1), "{:?}", app.message);
+                assert!(
+                    app.session_control.runs.contains_key(&1),
+                    "{:?}",
+                    app.notifications.center.records()
+                );
                 assert_eq!(
                     serde_json::to_value(&app.session(1).unwrap().messages).unwrap(),
                     serde_json::to_value(&kept).unwrap(),
@@ -1305,9 +1308,9 @@ fn attaching_a_file_outside_the_workspace_uses_an_absolute_mention(cx: &mut Test
     cx.update(|_, cx| {
         let app = app.read(cx);
         assert!(
-            app.message.is_none(),
+            app.notifications.center.records().is_empty(),
             "both paths are usable, so nothing may be skipped: {:?}",
-            app.message
+            app.notifications.center.records()
         );
         assert!(app.input.read(cx).value().is_empty());
         let files = app
@@ -1658,7 +1661,7 @@ fn clipboard_images_are_collected_after_the_last_draft_or_history_reference(
             this.switch(0, None, window, cx);
             this.paste_attachments(&ClipboardItem::new_image(&image), window, cx);
             assert!(pasted.exists());
-            this.discard_composer_attachments();
+            this.discard_composer_attachments(cx);
             assert!(
                 !pasted.exists(),
                 "closing must collect unsent workspace drafts"
@@ -1680,13 +1683,13 @@ fn clipboard_images_are_collected_after_the_last_draft_or_history_reference(
 
             file_ref::save_clipboard_image(&image, &directory).unwrap();
             this.writable = false;
-            this.cleanup_attachments();
+            this.cleanup_attachments(cx);
             assert!(
                 pasted.exists(),
                 "read-only or corrupt state must disable collection"
             );
             this.writable = true;
-            this.cleanup_attachments();
+            this.cleanup_attachments(cx);
             assert!(!pasted.exists());
         })
     });

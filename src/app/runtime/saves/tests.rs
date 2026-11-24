@@ -197,8 +197,7 @@ fn commands_revalidate_after_save_and_preserve_drafts_on_failure_or_cancellation
                 this.send_prompt(window, cx);
                 assert!(
                     this.session_control.runs.contains_key(&1),
-                    "scenario {scenario}: {:?}; notices: {:?}",
-                    this.message,
+                    "scenario {scenario}: notices: {:?}",
                     this.notifications.center.records()
                 );
                 let saved = snapshot.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -303,16 +302,12 @@ fn slow_save_retains_draft_and_attachments_and_gates_cli(cx: &mut TestAppContext
             assert_eq!(this.current_files().unwrap().references.len(), 1);
             assert!(this.composer_save_pending());
             assert!(this.session_control.namings.is_empty());
-            assert!(
-                this.message.is_none(),
-                "save progress must not use the error banner"
-            );
             assert!(this.notifications.center.records().is_empty());
             this.send_prompt(window, cx);
             assert_eq!(this.session(1).unwrap().messages.len(), 1);
             assert!(this.queued_messages.is_empty());
             assert!(
-                this.message.is_none(),
+                this.notifications.center.records().is_empty(),
                 "a repeated send during saving stays silent"
             );
             let run = &this.session_control.runs[&1];
@@ -501,10 +496,6 @@ fn failed_save_restores_existing_and_new_sessions_without_consuming_drafts(
                 assert_eq!(this.input.read(cx).value().as_ref(), "keep on failure");
                 assert_eq!(this.current_files().unwrap().references.len(), 1);
                 assert!(this.session_control.unread_completed.contains(&1));
-                assert!(
-                    this.message.is_none(),
-                    "send failures use unified notifications"
-                );
                 let notices = this
                     .notifications
                     .center
@@ -561,7 +552,6 @@ fn invalid_provider_does_not_create_session_or_submit_snapshot(cx: &mut TestAppC
                 sessions
             );
             assert_eq!(this.input.read(cx).value().as_ref(), "invalid route");
-            assert!(this.message.is_none());
             let notice = this
                 .notifications
                 .center
@@ -681,7 +671,13 @@ fn delayed_success_preserves_edited_draft_navigation_and_model_choice(cx: &mut T
                     this.switch(1, Some(2), window, cx);
                     this.input
                         .update(cx, |input, cx| input.set_value("other draft", window, cx));
-                    this.message = Some("other banner".into());
+                    this.notify_feedback(
+                        NoticeSource::Session,
+                        NoticeLevel::Warning,
+                        "other notification",
+                        this.session_notice_target(2),
+                        cx,
+                    );
                 } else {
                     this.input.update(cx, |input, cx| {
                         input.set_value("edited during save", window, cx)
@@ -696,7 +692,10 @@ fn delayed_success_preserves_edited_draft_navigation_and_model_choice(cx: &mut T
                     assert_eq!(this.selected_session, Some(2));
                     assert_eq!(this.selected_workspace, Some(1));
                     assert_eq!(this.input.read(cx).value().as_ref(), "other draft");
-                    assert_eq!(this.message.as_deref(), Some("other banner"));
+                    assert!(this.notifications.center.records().iter().any(|notice| {
+                        notice.message == "other notification"
+                            && notice.target == this.session_notice_target(2)
+                    }));
                     assert!(
                         !this
                             .workspace_drafts
@@ -817,7 +816,9 @@ fn retry_and_regenerate_restore_original_output_when_save_fails(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
-fn queued_dispatch_failure_restores_paused_message_and_background_banner(cx: &mut TestAppContext) {
+fn queued_dispatch_failure_restores_paused_message_and_preserves_notifications(
+    cx: &mut TestAppContext,
+) {
     let _locale = crate::test_support::chinese();
     let (app, cx, _) = fixture(cx, "queue-save-failure");
     cx.update(|window, cx| {
@@ -832,7 +833,13 @@ fn queued_dispatch_failure_restores_paused_message_and_background_banner(cx: &mu
             );
             this.selected_workspace = Some(1);
             this.selected_session = Some(2);
-            this.message = Some("other banner".into());
+            this.notify_feedback(
+                NoticeSource::Session,
+                NoticeLevel::Warning,
+                "other notification",
+                this.session_notice_target(2),
+                cx,
+            );
             let (release, snapshot) = hold_save(this);
             this.dispatch_queued_message(1, cx);
             snapshot.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -844,7 +851,10 @@ fn queued_dispatch_failure_restores_paused_message_and_background_banner(cx: &mu
             assert_eq!(this.queued_messages[&1].text, "queued content");
             assert!(this.queued_messages[&1].paused.is_some());
             assert!(this.session(1).unwrap().messages.is_empty());
-            assert_eq!(this.message.as_deref(), Some("other banner"));
+            assert!(this.notifications.center.records().iter().any(|notice| {
+                notice.message == "other notification"
+                    && notice.target == this.session_notice_target(2)
+            }));
             assert_eq!(this.selected_session, Some(2));
         })
     });
@@ -874,7 +884,13 @@ fn pending_queue_save_blocks_deletion_and_failure_preserves_composer(cx: &mut Te
             this.remove_workspace(0, cx);
             assert!(this.session(1).is_some());
             assert_eq!(this.store.workspaces.len(), 2);
-            let feedback = this.message.clone();
+            let feedback = this
+                .notifications
+                .center
+                .records()
+                .iter()
+                .map(|notice| (notice.id, notice.message.clone(), notice.target.clone()))
+                .collect::<Vec<_>>();
             release
                 .send(Err("injected queue save failure".into()))
                 .unwrap();
@@ -882,10 +898,11 @@ fn pending_queue_save_blocks_deletion_and_failure_preserves_composer(cx: &mut Te
             assert!(this.queued_messages.is_empty());
             assert!(this.session_control.queue_saves.is_empty());
             assert_eq!(this.input.read(cx).value().as_ref(), "unsaved queue");
-            assert_eq!(
-                this.message, feedback,
-                "save failures must not overwrite inline feedback"
-            );
+            for (id, message, target) in feedback {
+                let notice = this.notifications.center.get(id).unwrap();
+                assert_eq!(notice.message, message);
+                assert_eq!(notice.target, target);
+            }
             let notices = this
                 .notifications
                 .center
@@ -1033,7 +1050,7 @@ fn helper_cleanup_faults_remain_visible_until_verified_completion(cx: &mut TestA
 fn failed_save_cancels_closing_even_without_a_pending_send(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     let (app, cx, _) = fixture(cx, "close-save-failure");
-    cx.update(|_, cx| {
+    cx.update(|window, cx| {
         app.update(cx, |this, cx| {
             let (release, snapshot) = hold_save(this);
             this.persist();
@@ -1051,12 +1068,12 @@ fn failed_save_cancels_closing_even_without_a_pending_send(cx: &mut TestAppConte
             }
             assert!(!this.closing);
             assert!(this.dirty);
-            assert!(
-                this.message
-                    .as_deref()
-                    .unwrap()
-                    .contains("injected close save failure")
-            );
+            this.poll_notifications(window, cx);
+            assert!(this.notifications.center.records().iter().any(|notice| {
+                notice.source == NoticeSource::Persistence
+                    && notice.level == NoticeLevel::Error
+                    && notice.message.contains("injected close save failure")
+            }));
         })
     });
 }

@@ -10,11 +10,14 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) {
         if self.selected_workspace_path().as_ref() != Some(&workspace) {
-            self.message = Some(
+            self.notify_feedback(
+                NoticeSource::Git,
+                NoticeLevel::Warning,
                 conduit::i18n::text_static(
                     "git_compare.the_workspace_changed_reopen_the_branch_menu",
-                )
-                .into(),
+                ),
+                Some(NoticeTarget::Workspace(workspace)),
+                cx,
             );
             cx.notify();
             return;

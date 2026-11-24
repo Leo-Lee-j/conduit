@@ -2127,6 +2127,8 @@
   "notifications.history.notification_history_save_thread_exited": "通知历史保存线程已退出",
   "notifications.history.history_exceeds_capacity": "历史超出容量限制",
   "notifications.session": "会话",
+  "notifications.operation_unavailable": "操作暂时不可用",
+  "notifications.operation_failed": "操作失败",
   "notifications.data_saving": "数据保存",
   "notifications.expired": "已失效",
   "notifications.unsupported_notification_history_version_original_file_preserved": "通知历史版本不受支持，原文件已保留",

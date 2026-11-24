@@ -714,10 +714,16 @@ impl ConduitApp {
             Ok(())
         })();
         if let Err(error) = result {
-            self.message = Some(conduit::i18n::format(
-                "update.draft_recovery_failed_recovery_file_preserved",
-                &[("error", format!("{:#}", error))],
-            ));
+            self.notify_feedback(
+                NoticeSource::Persistence,
+                NoticeLevel::Error,
+                conduit::i18n::format(
+                    "update.draft_recovery_failed_recovery_file_preserved",
+                    &[("error", format!("{:#}", error))],
+                ),
+                None,
+                cx,
+            );
         }
     }
 

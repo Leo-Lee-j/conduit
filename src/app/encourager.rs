@@ -148,10 +148,16 @@ impl ConduitApp {
             }
             Err(error) => {
                 self.store.ui.encourager.pet_enabled = false;
-                self.message = Some(conduit::i18n::format(
-                    "encourager.pet.open_failed",
-                    &[("error", format!("{error:#}"))],
-                ));
+                self.notify_feedback(
+                    NoticeSource::Settings,
+                    NoticeLevel::Error,
+                    conduit::i18n::format(
+                        "encourager.pet.open_failed",
+                        &[("error", format!("{error:#}"))],
+                    ),
+                    Some(NoticeTarget::Settings),
+                    cx,
+                );
             }
         }
     }

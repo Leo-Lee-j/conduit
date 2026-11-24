@@ -109,6 +109,7 @@ impl ConduitApp {
     /// Drain naming requests. Manual renames cancel and remove pending requests.
     pub(super) fn poll_session_namings(&mut self, cx: &mut Context<Self>) {
         let mut finished = vec![];
+        let mut cleanup_errors = vec![];
         for (id, naming) in &mut self.session_control.namings {
             if naming.started.elapsed() > Duration::from_secs(60) && naming.error.is_none() {
                 naming.error =
@@ -155,7 +156,7 @@ impl ConduitApp {
                             .naming_errors
                             .insert(*id, error.clone());
                         self.closing = false;
-                        self.message = Some(error);
+                        cleanup_errors.push((*id, error));
                         cx.notify();
                     }
                     Ok(Event::Finished { error, cancelled }) => {
@@ -186,6 +187,15 @@ impl ConduitApp {
                     }
                 }
             }
+        }
+        for (id, error) in cleanup_errors {
+            self.notify_feedback(
+                NoticeSource::Session,
+                NoticeLevel::Error,
+                error,
+                self.session_notice_target(id),
+                cx,
+            );
         }
         for id in finished {
             let Some(naming) = self.session_control.namings.remove(&id) else {

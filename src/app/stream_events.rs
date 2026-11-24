@@ -651,7 +651,6 @@ impl ConduitApp {
                         ),
                     );
                     self.closing = false;
-                    self.message = Some(error.clone());
                     if let Some(session) = self.session_mut(id) {
                         crate::failure::record_failure(session, &prefix, &error, true);
                     }

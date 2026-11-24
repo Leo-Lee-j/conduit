@@ -50,10 +50,13 @@ impl ConduitApp {
         }
         let prompt = file_ref::compose_prompt(&text, &references);
         if prompt.trim().is_empty() || prompt.len() > 256 * 1024 {
-            self.message = Some(
-                conduit::i18n::text_static("queue.messages_must_be_nonempty_and_no_larger").into(),
+            self.notify_feedback(
+                NoticeSource::Session,
+                NoticeLevel::Warning,
+                conduit::i18n::text_static("queue.messages_must_be_nonempty_and_no_larger"),
+                self.session_notice_target(id),
+                cx,
             );
-            cx.notify();
             return false;
         }
         self.queued_messages.insert(
@@ -97,7 +100,6 @@ impl ConduitApp {
                     .flatten(),
             },
         );
-        self.message = None;
         cx.notify();
         true
     }
@@ -156,8 +158,6 @@ impl ConduitApp {
         }
         let prompt = file_ref::compose_prompt(&message.text, &message.references);
         let provider = self.session(id).unwrap().provider;
-        // Failure in a background conversation must not replace another chat's banner.
-        let banner = self.message.clone();
         let message = self.queued_messages.remove(&id).unwrap();
         match self.start_turn(index, Some(id), provider, prompt, true, cx) {
             Ok(_) => {
@@ -203,7 +203,6 @@ impl ConduitApp {
                 self.persist();
             }
         }
-        self.message = banner;
         cx.notify();
     }
 
@@ -236,11 +235,10 @@ impl ConduitApp {
                 .current_files()
                 .is_some_and(|files| !files.references.is_empty())
         {
-            self.message = Some(
-                conduit::i18n::text_static("queue.handle_the_current_draft_before_retrieving_the")
-                    .into(),
+            self.notify_composer_warning(
+                conduit::i18n::text_static("queue.handle_the_current_draft_before_retrieving_the"),
+                cx,
             );
-            cx.notify();
             return;
         }
         let Some(message) = self.queued_messages.remove(&id) else {

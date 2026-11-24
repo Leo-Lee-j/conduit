@@ -436,43 +436,6 @@ impl Render for ConduitApp {
             if let Some(id) = self.selected_session {
                 conversation = conversation.children(self.render_chat_approval(id, window, cx));
             }
-            if let Some(message) = &self.message
-                && self.writable
-                && self.persistence.error.is_none()
-            {
-                conversation = conversation.child(
-                    div()
-                        .mx_6()
-                        .mb_3()
-                        .child(
-                            gpui_kit::component::alert::Alert::error(
-                                "application-message",
-                                message.clone(),
-                            )
-                            .small()
-                            .on_close(cx.listener(|app, _, _, cx| {
-                                app.message = None;
-                                cx.notify();
-                            })),
-                        )
-                        .when(
-                            self.selected_session.is_some() || self.selected_workspace.is_some(),
-                            |body| {
-                                body.child(
-                                    Button::new("message-engine-settings")
-                                        .label(conduit::i18n::text_static(
-                                            "shell.open_ai_engine_settings",
-                                        ))
-                                        .small()
-                                        .ghost()
-                                        .on_click(cx.listener(|app, _, window, cx| {
-                                            app.open_engine_settings(window, cx)
-                                        })),
-                                )
-                            },
-                        ),
-                );
-            }
             let composer = {
                 #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
                 let _span = chat::profiling::host_span("composer_build");

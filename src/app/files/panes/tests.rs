@@ -93,7 +93,7 @@ fn content_panes_cross_workspace_reference_preserves_send_target(cx: &mut TestAp
             assert!(
                 app.session_control.runs.contains_key(&1),
                 "{:?}",
-                app.message
+                app.notifications.center.records()
             );
             assert!(!app.session_control.runs.contains_key(&2));
             assert_eq!(app.session_control.runs[&1].worktree, root);

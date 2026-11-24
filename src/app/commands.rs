@@ -280,11 +280,11 @@ impl ConduitApp {
                     .current_files()
                     .is_some_and(|files| !files.references.is_empty())
                 {
-                    self.message = Some(conduit::i18n::text("commands.attachments"));
+                    self.notify_composer_warning(conduit::i18n::text("commands.attachments"), cx);
                 } else if let Some(reason) = &command.unavailable {
-                    self.message = Some(reason.clone());
+                    self.notify_composer_warning(reason.clone(), cx);
                 } else if !command.accepts(&text[query.range.end..]) {
-                    self.message = Some(conduit::i18n::text("commands.arguments"));
+                    self.notify_composer_warning(conduit::i18n::text("commands.arguments"), cx);
                 } else {
                     match command.execution {
                         Execution::Host(action) => {
@@ -316,13 +316,13 @@ impl ConduitApp {
                                         cx,
                                     );
                                 }
-                                Err(error) => self.message = Some(error),
+                                Err(error) => self.notify_composer_warning(error, cx),
                             }
                         }
                     }
                 }
             }
-            Err(error) => self.message = Some(error),
+            Err(error) => self.notify_composer_warning(error, cx),
         }
         cx.notify();
         true

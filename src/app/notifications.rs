@@ -41,13 +41,18 @@ pub(super) struct NotificationUi {
     pub update_state: Option<String>,
     persistence_error: Option<String>,
     load_failed: bool,
+    load_error: Option<String>,
     target_error: Option<(u64, String)>,
     // Capabilities for live requests only. Never written to notification history.
     approvals: HashMap<u64, ApprovalBinding>,
 }
 
 impl NotificationUi {
-    pub(super) fn new(writable: bool, cx: &mut Context<ConduitApp>) -> Self {
+    pub(super) fn new(
+        writable: bool,
+        load_error: Option<String>,
+        cx: &mut Context<ConduitApp>,
+    ) -> Self {
         let path = Store::path().with_file_name("notifications.json");
         // UI fixtures never share notification history or acquire the production writer lock.
         #[cfg(test)]
@@ -82,6 +87,7 @@ impl NotificationUi {
             update_state: None,
             persistence_error: None,
             load_failed: !writable,
+            load_error,
             target_error: None,
             approvals: HashMap::new(),
         }
@@ -182,6 +188,39 @@ impl ConduitApp {
             self.refresh_notifications(cx);
         }
         published.id
+    }
+    pub(super) fn notify_feedback(
+        &mut self,
+        source: Source,
+        level: Level,
+        message: impl Into<String>,
+        target: Option<Target>,
+        cx: &mut Context<Self>,
+    ) {
+        let title = match level {
+            Level::Warning => conduit::i18n::text_static("notifications.operation_unavailable"),
+            Level::Error => conduit::i18n::text_static("notifications.operation_failed"),
+            _ => source.label(),
+        };
+        let mut notice = Notice::new(source, level, title, message);
+        if let Some(target) = target {
+            notice = notice.target(target);
+        }
+        self.notify_user(notice, cx);
+    }
+    pub(super) fn notify_composer_warning(
+        &mut self,
+        message: impl Into<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let target = self
+            .send_target(true)
+            .and_then(|id| self.session_notice_target(id))
+            .or_else(|| {
+                self.composer_target()
+                    .map(|target| Target::Workspace(target.workspace))
+            });
+        self.notify_feedback(Source::Session, Level::Warning, message, target, cx);
     }
     pub(super) fn refresh_notifications(&mut self, cx: &mut Context<Self>) {
         self.expire_notification_approvals();
@@ -947,12 +986,15 @@ impl ConduitApp {
     pub(super) fn poll_notifications(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.expire_notification_approvals();
         let persistence_error = if self.notifications.load_failed {
-            Some(
-                conduit::i18n::text_static(
-                    "notifications.application_data_could_not_be_loaded_original",
-                )
-                .to_string(),
+            let mut error = conduit::i18n::text_static(
+                "notifications.application_data_could_not_be_loaded_original",
             )
+            .to_string();
+            if let Some(detail) = &self.notifications.load_error {
+                error.push('\n');
+                error.push_str(detail);
+            }
+            Some(error)
         } else {
             self.persistence.error.clone()
         };
@@ -978,25 +1020,6 @@ impl ConduitApp {
                     cx,
                 );
             } else {
-                if self
-                    .notifications
-                    .persistence_error
-                    .as_ref()
-                    .is_some_and(|error| {
-                        self.message.as_ref().is_some_and(|message| {
-                            conduit::i18n::languages().iter().any(|language| {
-                                *message
-                                    == conduit::i18n::format_for(
-                                        &language.id.clone().into(),
-                                        "notifications.save_failed",
-                                        &[("error", error.clone())],
-                                    )
-                            })
-                        })
-                    })
-                {
-                    self.message = None;
-                }
                 self.resolve_notification("application-persistence", cx);
             }
             self.notifications.persistence_error = persistence_error;

@@ -237,7 +237,6 @@ pub struct ConduitApp {
     opencode_catalogs: HashMap<PathBuf, ModelCatalog>,
     opencode_model_probes: HashMap<PathBuf, models::OpenCodeModelsProbe>,
     ccs: CcsCatalog,
-    message: Option<String>,
     git_prompt_input: Entity<TextareaState>,
     /// Font pickers rebuilt from installed families when the app starts.
     ui_font_select: Entity<SelectState<SearchableVec<FontChoice>>>,
@@ -376,7 +375,7 @@ impl ConduitApp {
             KeyBinding::new("escape", DismissChatCommand, Some("ChatCommand > Input")),
         ]);
         terminal::init(cx);
-        let (mut store, message, writable) = match loaded {
+        let (mut store, load_error, writable) = match loaded {
             Ok(store) => (store, None, true),
             Err(error) => (Store::default(), Some(error), false),
         };
@@ -771,7 +770,7 @@ impl ConduitApp {
             branch_manager: None,
             branches_open: false,
             updater: update::UpdateUi::default(),
-            notifications: notifications::NotificationUi::new(writable, cx),
+            notifications: notifications::NotificationUi::new(writable, load_error, cx),
             connection_settings: settings::ConnectionsUi::new(new_session_provider, model_search),
             settings_ui: settings::SettingsUi {
                 open: false,
@@ -824,7 +823,6 @@ impl ConduitApp {
             opencode_catalogs: HashMap::new(),
             opencode_model_probes: HashMap::new(),
             ccs,
-            message,
             git_prompt_input,
             ui_font_select,
             chat_font_select,
@@ -927,7 +925,7 @@ impl ConduitApp {
         if start_in_git {
             app.show_git_navigation(cx);
         }
-        app.cleanup_attachments();
+        app.cleanup_attachments(cx);
         app.ensure_selected_transcript(cx);
         app.restore_background(window, cx);
         app
@@ -1019,11 +1017,6 @@ impl ConduitApp {
         self.store.queued_messages = self.queued_messages.clone();
         if !self.persistence.submit(&self.store) {
             self.dirty = true;
-            self.message = self
-                .persistence
-                .error
-                .as_ref()
-                .map(|e| conduit::i18n::format("app.save_failed", &[("e", e.to_string())]));
             return false;
         }
         self.dirty = false;
@@ -1043,23 +1036,9 @@ impl ConduitApp {
     fn poll_persistence(&mut self, cx: &mut Context<Self>) {
         if self.persistence.poll() {
             self.trim_transcripts();
-            if let Some(error) = &self.persistence.error {
+            if self.persistence.error.is_some() {
                 self.dirty = true;
                 self.closing = false;
-                // Pending sends report their own failure against the originating
-                // conversation, preserving another conversation's banner.
-                if self
-                    .session_control
-                    .runs
-                    .values()
-                    .all(|run| run.pending_save.is_none())
-                    && self.session_control.queue_saves.is_empty()
-                {
-                    self.message = Some(conduit::i18n::format(
-                        "notifications.save_failed",
-                        &[("error", error.to_string())],
-                    ));
-                }
             }
             cx.notify();
         }
@@ -1075,7 +1054,7 @@ impl ConduitApp {
             && self.session_control.queue_saves.is_empty()
         {
             self.attachments_cleanup_pending = false;
-            self.cleanup_attachments();
+            self.cleanup_attachments(cx);
         }
     }
 }

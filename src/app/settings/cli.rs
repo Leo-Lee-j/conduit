@@ -125,7 +125,7 @@ impl ConduitApp {
             self.store.cli = previous;
             self.diagnostics.insert(
                 provider,
-                self.message.clone().unwrap_or_else(|| {
+                self.persistence.error.clone().unwrap_or_else(|| {
                     conduit::i18n::text_static("settings.cli.configuration_save_failed").into()
                 }),
             );

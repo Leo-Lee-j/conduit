@@ -346,9 +346,13 @@ impl ConduitApp {
         self.rename_input = None;
         let title = title.trim().to_string();
         if title.is_empty() {
-            self.message =
-                Some(conduit::i18n::text_static("sessions.session_name_cannot_be_empty").into());
-            cx.notify();
+            self.notify_feedback(
+                NoticeSource::Session,
+                NoticeLevel::Warning,
+                conduit::i18n::text_static("sessions.session_name_cannot_be_empty"),
+                self.session_notice_target(id),
+                cx,
+            );
             return;
         }
         self.set_session_title(id, &title);
@@ -502,7 +506,13 @@ impl ConduitApp {
                 .iter()
                 .any(|command| command.root == id)
         {
-            self.message = Some(conduit::i18n::text("subagents.child_draft_pending"));
+            self.notify_feedback(
+                NoticeSource::Session,
+                NoticeLevel::Warning,
+                conduit::i18n::text("subagents.child_draft_pending"),
+                self.session_notice_target(id),
+                cx,
+            );
             self.delete_target = None;
             cx.notify();
             return;
@@ -515,8 +525,13 @@ impl ConduitApp {
             || self.session_control.queue_saves.contains_key(&id)
             || self.session_draft_save_pending(id)
         {
-            self.message =
-                Some(conduit::i18n::text_static("sessions.a_task_is_still_running_in_this").into());
+            self.notify_feedback(
+                NoticeSource::Session,
+                NoticeLevel::Warning,
+                conduit::i18n::text_static("sessions.a_task_is_still_running_in_this"),
+                self.session_notice_target(id),
+                cx,
+            );
             self.delete_target = None;
             cx.notify();
             return;
@@ -705,9 +720,14 @@ impl ConduitApp {
             return;
         }
         if self.workspace_busy(index) {
-            self.message = Some(
-                conduit::i18n::text_static("sessions.tasks_or_terminals_are_still_running_in")
-                    .into(),
+            self.notify_feedback(
+                NoticeSource::Session,
+                NoticeLevel::Warning,
+                conduit::i18n::text_static("sessions.tasks_or_terminals_are_still_running_in"),
+                Some(NoticeTarget::Workspace(
+                    self.store.workspaces[index].path.clone(),
+                )),
+                cx,
             );
             cx.notify();
             return;
@@ -843,7 +863,6 @@ impl ConduitApp {
         self.active_diff = None;
         self.selected_workspace = None;
         self.selected_session = None;
-        self.message = None;
         self.message_focus = None;
         self.pending_message_jump = None;
         self.timeline_session = None;
@@ -894,10 +913,6 @@ impl ConduitApp {
         let session = session
             .filter(|id| self.document_pane(DocumentTab::Chat(*id)) == super::files::Pane::Main);
         if session.is_some_and(|id| self.pending_new_session(id)) {
-            self.message = Some(
-                conduit::i18n::text_static("sessions.saving_new_session_please_wait_your_draft")
-                    .into(),
-            );
             cx.notify();
             return;
         }
@@ -944,7 +959,6 @@ impl ConduitApp {
         }
         self.message_focus = None;
         self.pending_message_jump = None;
-        self.message = None;
         let draft = match session {
             Some(id) => self.drafts.get(&id),
             None => self
@@ -1025,12 +1039,15 @@ impl ConduitApp {
                                 this.start_history_import(index, window, cx);
                             }
                             _ => {
-                                this.message = Some(
+                                this.notify_feedback(
+                                    NoticeSource::App,
+                                    NoticeLevel::Warning,
                                     conduit::i18n::text_static(
                                         "sessions.directory_does_not_exist_or_is_inaccessible",
-                                    )
-                                    .into(),
-                                )
+                                    ),
+                                    None,
+                                    cx,
+                                );
                             }
                         }
                         cx.notify();
@@ -1040,10 +1057,16 @@ impl ConduitApp {
             Ok(Ok(None)) => {}
             other => {
                 let _ = this.update(cx, |this, cx| {
-                    this.message = Some(conduit::i18n::format(
-                        "sessions.failed_to_open_directory",
-                        &[("other", format!("{:?}", other))],
-                    ));
+                    this.notify_feedback(
+                        NoticeSource::App,
+                        NoticeLevel::Error,
+                        conduit::i18n::format(
+                            "sessions.failed_to_open_directory",
+                            &[("other", format!("{:?}", other))],
+                        ),
+                        None,
+                        cx,
+                    );
                     cx.notify();
                 });
             }
@@ -1235,7 +1258,14 @@ impl ConduitApp {
                         return false;
                     }
                     if !warnings.is_empty() {
-                        this.message = Some(warnings.join("\n"));
+                        this.notify_feedback(
+                            NoticeSource::Session,
+                            NoticeLevel::Warning,
+                            warnings.join("\n"),
+                            paths.first().filter(|_| paths.len() == 1)
+                                .map(|path| NoticeTarget::Workspace(path.clone())),
+                            cx,
+                        );
                     }
                     for (path, sessions) in paths.iter().zip(prepared) {
                         if !this
@@ -1346,7 +1376,13 @@ impl ConduitApp {
             &crate::transcript::directory(&Store::path()),
         );
         if !warnings.is_empty() {
-            self.message = Some(warnings.join("\n"));
+            self.notify_feedback(
+                NoticeSource::Session,
+                NoticeLevel::Warning,
+                warnings.join("\n"),
+                Some(NoticeTarget::Workspace(path.to_path_buf())),
+                cx,
+            );
         }
         self.finish_prepared_history_import(path, records, persist, complete, window, cx);
     }

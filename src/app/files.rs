@@ -3432,7 +3432,6 @@ mod tests {
                         "{link}"
                     );
                     assert_eq!(app.store.workspaces.len(), 2);
-                    assert!(app.message.is_none());
                     assert_eq!(app.notifications.center.records().len(), notices);
                 });
             });
@@ -3466,7 +3465,6 @@ mod tests {
                     if !registered {
                         assert_eq!(app.input.read(cx).value(), "draft alpha");
                     }
-                    assert!(app.message.is_none());
                     assert_eq!(app.notifications.center.records().len(), notices);
                 });
             });

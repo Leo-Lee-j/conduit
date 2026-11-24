@@ -266,10 +266,11 @@ fn commands_preserve_arguments_attachments_ime_and_reject_busy_or_stale_targets(
             this.session_mut(1).unwrap().permission = PermissionLevel::FullAccess;
             this.send_prompt(window, cx);
             assert!(this.session_control.runs.is_empty());
-            assert_eq!(
-                this.message.as_deref(),
-                Some(conduit::i18n::text_static("commands.stale"))
-            );
+            assert!(this.notifications.center.records().iter().any(|notice| {
+                notice.message == conduit::i18n::text_static("commands.stale")
+                    && notice.level == crate::notifications::Level::Warning
+                    && notice.target == this.session_notice_target(1)
+            }));
             this.input.update(cx, |input, cx| {
                 input.set_value("/conduit:s", window, cx);
                 input.set_selected_range(10..10, cx);

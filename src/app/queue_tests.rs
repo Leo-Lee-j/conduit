@@ -1,4 +1,7 @@
-use crate::app::{ActiveRun, ChatRuntime, ConduitApp, Event, ItemKind, Provider, Store, Workspace};
+use crate::app::{
+    ActiveRun, ChatRuntime, ConduitApp, Event, ItemKind, NoticeLevel, NoticeSource, Provider,
+    Store, Workspace,
+};
 use crate::event_queue::Sender;
 use gpui_kit::{AppContext as _, Entity, Focusable as _, TestAppContext, VisualTestContext};
 use std::path::PathBuf;
@@ -319,7 +322,13 @@ fn queue_message_background_completion_uses_bound_session_and_keeps_focus(cx: &m
             this.input
                 .update(cx, |input, cx| input.set_value("other draft", window, cx));
             this.drafts.insert(2, "other draft".into());
-            this.message = Some("other banner".into());
+            this.notify_feedback(
+                NoticeSource::Session,
+                NoticeLevel::Warning,
+                "other notification",
+                this.session_notice_target(2),
+                cx,
+            );
             this.input.read(cx).focus_handle(cx).focus(window, cx);
             sender
                 .send(Event::NativeId("latest-native-id".into()))
@@ -343,7 +352,10 @@ fn queue_message_background_completion_uses_bound_session_and_keeps_focus(cx: &m
             assert_eq!(this.input.read(cx).value().as_ref(), "other draft");
             assert_eq!(this.drafts[&2], "other draft");
             assert!(this.input.read(cx).focus_handle(cx).is_focused(window));
-            assert_eq!(this.message.as_deref(), Some("other banner"));
+            assert!(this.notifications.center.records().iter().any(|notice| {
+                notice.message == "other notification"
+                    && notice.target == this.session_notice_target(2)
+            }));
             assert!(this.session(2).unwrap().messages.is_empty());
             let messages = &this.session(1).unwrap().messages;
             assert_eq!(messages.len(), 2);
