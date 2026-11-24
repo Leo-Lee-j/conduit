@@ -26,6 +26,22 @@ fn draft(app: &Entity<ConduitApp>, text: &str, cx: &mut VisualTestContext) {
     draw(cx);
 }
 
+fn assert_new_session_controls(cx: &mut VisualTestContext) {
+    cx.update(|window, _| {
+        for id in ["permission-picker-trigger", "session-data-panel"] {
+            assert!(
+                gpui_kit::base::test_support::find(
+                    window,
+                    &[],
+                    &gpui_kit::SharedString::from(id).into()
+                )
+                .is_some_and(|element| element.visible()),
+                "missing {id}"
+            );
+        }
+    });
+}
+
 fn catalog(app: &mut ConduitApp) -> Descriptor {
     app.session_mut(1).unwrap().provider = Provider::OpenCode;
     app.new_session_provider = Provider::OpenCode;
@@ -53,6 +69,118 @@ fn catalog(app: &mut ConduitApp) -> Descriptor {
         .catalog
         .publish(&ticket, Ok(vec![item.clone()]));
     item
+}
+
+#[gpui_kit::test]
+fn commands_new_creates_a_session_with_permissions_and_default_data_sidebar(
+    cx: &mut TestAppContext,
+) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx, _) = fixture(cx, "commands-new-session");
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            this.startup = None;
+            this.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
+            this.store.ui.default_session_permission = PermissionLevel::WorkspaceWrite;
+            let session = this.session_mut(1).unwrap();
+            session.permission = PermissionLevel::FullAccess;
+            session.model = Some("workspace-model".into());
+            session.reasoning_effort = crate::providers::ReasoningEffort::High;
+            this.switch(0, Some(1), window, cx);
+            this.close_right_view(window, cx);
+        })
+    });
+    draft(&app, "/conduit:n", cx);
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    cx.update(|_, cx| {
+        assert_eq!(app.read(cx).selected_session, Some(1));
+        assert_eq!(app.read(cx).store.workspaces[0].sessions.len(), 1);
+        assert_eq!(
+            app.read(cx).input.read(cx).value().as_ref(),
+            "/conduit:new "
+        );
+    });
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    cx.update(|window, cx| {
+        let this = app.read(cx);
+        let id = this.selected_session.expect("/new must create a session");
+        assert_ne!(id, 1);
+        assert_eq!(this.selected_workspace, Some(0));
+        assert_eq!(this.store.workspaces[0].sessions.len(), 2);
+        assert!(
+            this.open_tabs
+                .contains(&crate::app::files::DocumentTab::Chat(id))
+        );
+        let created = this.session(id).unwrap();
+        assert_eq!(created.permission, PermissionLevel::WorkspaceWrite);
+        assert_eq!(created.model.as_deref(), Some("workspace-model"));
+        assert_eq!(
+            created.reasoning_effort,
+            crate::providers::ReasoningEffort::High
+        );
+        assert!(created.native_id.is_none() && created.messages.is_empty());
+        assert_eq!(
+            this.session(1).unwrap().permission,
+            PermissionLevel::FullAccess
+        );
+        assert_eq!(
+            this.session(1).unwrap().native_id.as_deref(),
+            Some("queue-first")
+        );
+        assert!(!this.drafts.contains_key(&1));
+        assert!(this.input.read(cx).value().is_empty());
+        assert!(this.input.read(cx).focus_handle(cx).is_focused(window));
+        assert!(this.session_control.runs.is_empty());
+        assert!(
+            this.plugins
+                .right_is(conduit::plugins::builtins::SESSION_DATA)
+        );
+    });
+    assert_new_session_controls(cx);
+    assert!(cx.debug_bounds("chat-command-menu").is_none());
+}
+
+#[gpui_kit::test]
+fn commands_new_from_workspace_draft_creates_a_session_and_keeps_explicit_model(
+    cx: &mut TestAppContext,
+) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx, root) = fixture(cx, "commands-new-workspace");
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            this.startup = None;
+            this.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
+            this.store.ui.default_session_permission = PermissionLevel::ReadOnly;
+            this.store.workspaces[0].sessions.clear();
+            this.switch(0, None, window, cx);
+            let mut selection = crate::app::ComposerSelection::new(Provider::Codex);
+            selection.model = Some("explicit-model".into());
+            this.new_session_provider = Provider::Codex;
+            this.pending_model_selection = Some(selection);
+            this.drafts.insert(2, "other session draft".into());
+        })
+    });
+    draft(&app, "/conduit:new ", cx);
+    cx.update(|window, cx| {
+        app.update(cx, |this, cx| {
+            this.send_prompt(window, cx);
+            let id = this.selected_session.expect("/new must create a session");
+            let created = this.session(id).unwrap();
+            assert_eq!(created.provider, Provider::Codex);
+            assert_eq!(created.model.as_deref(), Some("explicit-model"));
+            assert_eq!(created.permission, PermissionLevel::ReadOnly);
+            assert!(created.native_id.is_none() && created.messages.is_empty());
+            assert!(!this.workspace_drafts.contains_key(&root));
+            assert_eq!(this.drafts[&2], "other session draft");
+            assert!(this.input.read(cx).value().is_empty());
+            assert!(this.session_control.runs.is_empty());
+            this.persistence.flush();
+        })
+    });
+    draw(cx);
+    assert_new_session_controls(cx);
 }
 
 #[gpui_kit::test]

@@ -291,15 +291,7 @@ impl ConduitApp {
                             let sent = self.sent_composer(cx);
                             match action {
                                 HostAction::Settings => self.open_settings(window, cx),
-                                HostAction::NewChat => {
-                                    if self.composer_is_main() {
-                                        if let Some(index) = self.composer_workspace() {
-                                            self.switch(index, None, window, cx);
-                                        }
-                                    } else {
-                                        self.new_composer_session(window, cx);
-                                    }
-                                }
+                                HostAction::NewChat => self.new_composer_session(window, cx),
                             }
                             if let Some(sent) = sent {
                                 self.clear_saved_composer(&sent, window, cx);
