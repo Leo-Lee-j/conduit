@@ -45,6 +45,10 @@ checkout without changing Cargo's cache or running a preparation script.
   surface, leaving the group heading and footer outside it.
 - `crates/component/src/setting/settings.rs`: omits the resizable sidebar and
   its divider when the host sets the sidebar width to zero.
+- `crates/component/src/icon.rs`: applies the runtime icon scale to SVG paint
+  transforms while preserving each icon's layout and hitbox.
+- `crates/component/src/theme/mod.rs`: stores the runtime icon scale outside
+  serialized theme files.
 - `Cargo.toml`: trims the upstream workspace to these two crates and pins
   references to the remaining Kit crates to the original Git revision.
 

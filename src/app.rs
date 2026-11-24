@@ -396,6 +396,7 @@ impl ConduitApp {
             &store.ui.dark_theme,
             cx,
         );
+        theme::apply_icon_size(store.ui.icon_size, cx);
         store.ui.light_theme = gpui_kit::component::Theme::global(cx)
             .light_theme
             .name

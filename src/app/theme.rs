@@ -281,6 +281,10 @@ pub(crate) fn apply_theme(mode: ThemeMode, light: &str, dark: &str, cx: &mut gpu
     }
 }
 
+pub(crate) fn apply_icon_size(size: crate::store::UiIconSize, cx: &mut gpui_kit::App) {
+    Theme::update(cx, |theme| theme.icon_scale = size.scale());
+}
+
 pub(super) fn theme_preview(name: &str, mode: ThemeMode, cx: &gpui_kit::App) -> Palette {
     let config = resolve_theme(name, mode, cx);
     if matches!(config.name.as_ref(), "Conduit Light" | "Conduit Dark") {

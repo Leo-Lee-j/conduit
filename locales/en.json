@@ -917,6 +917,8 @@
   "settings.appearance.font": "Font",
   "settings.appearance.interface_font_size": "Interface font size",
   "settings.appearance.12_20_px_default_16_scales_interface": "12–20 px; default 16. Scales interface text proportionally.",
+  "settings.appearance.functional_icon_size": "Functional icon size",
+  "settings.appearance.functional_icon_size_description": "Scale functional icons across the sidebar, toolbar, and other controls. Button hit areas and layout sizes stay unchanged.",
   "settings.appearance.font_size": "Font size",
   "settings.appearance.size": "Size",
   "settings.appearance.reset_only_the_interface_font_and_size": "Reset only the interface font and size; keep chat and code settings",

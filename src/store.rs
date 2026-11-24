@@ -18,6 +18,35 @@ pub enum AppearanceMode {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum UiIconSize {
+    Compact,
+    #[default]
+    Standard,
+    Large,
+}
+
+impl UiIconSize {
+    pub const ALL: [Self; 3] = [Self::Compact, Self::Standard, Self::Large];
+
+    pub const fn scale(self) -> f32 {
+        match self {
+            Self::Compact => 0.8,
+            Self::Standard => 1.0,
+            Self::Large => 1.2,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Compact => "80%",
+            Self::Standard => "100%",
+            Self::Large => "120%",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum NamingMode {
     /// Regenerate the title from the latest exchange after every turn.
     Latest,
@@ -64,6 +93,9 @@ pub struct UiSettings {
     /// Follow the system appearance or force light/dark mode.
     #[serde(default)]
     pub appearance: AppearanceMode,
+    /// Shared visual scale for functional interface icons.
+    #[serde(default)]
+    pub icon_size: UiIconSize,
     #[serde(default = "default_light_theme")]
     pub light_theme: String,
     #[serde(default = "default_dark_theme")]
@@ -269,6 +301,7 @@ impl Default for UiSettings {
             last_provider: None,
             performance_monitor: default_performance_monitor(),
             appearance: AppearanceMode::default(),
+            icon_size: UiIconSize::default(),
             light_theme: default_light_theme(),
             dark_theme: default_dark_theme(),
             background: Default::default(),
@@ -1656,6 +1689,22 @@ mod tests {
                 ..Default::default()
             };
             assert_eq!(settings.content_split_ratio(), 0.5);
+        }
+    }
+
+    #[test]
+    fn icon_size_defaults_for_existing_settings_and_roundtrips() {
+        let old: UiSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.icon_size, UiIconSize::Standard);
+
+        for size in UiIconSize::ALL {
+            let settings = UiSettings {
+                icon_size: size,
+                ..Default::default()
+            };
+            let encoded = serde_json::to_string(&settings).unwrap();
+            let restored: UiSettings = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(restored.icon_size, size);
         }
     }
 

@@ -155,6 +155,10 @@ pub struct Theme {
     pub dark_theme: Rc<ThemeConfig>,
 
     pub mode: ThemeMode,
+    /// Runtime scale for SVG icons; never serialized into user theme files.
+    #[serde(skip_serializing, skip_deserializing, default = "default_icon_scale")]
+    #[schemars(skip)]
+    pub icon_scale: f32,
     /// The font family for the application, default is `.SystemUIFont`.
     ///
     /// When the system font resolves to an installed fallback family instead
@@ -207,6 +211,10 @@ pub struct Theme {
     /// Semantic motion policy for styled components.
     #[serde(skip)]
     pub motion: MotionTokens,
+}
+
+fn default_icon_scale() -> f32 {
+    1.0
 }
 
 impl Default for Theme {
@@ -764,6 +772,7 @@ impl From<&ThemeColor> for Theme {
     fn from(colors: &ThemeColor) -> Self {
         Theme {
             mode: ThemeMode::default(),
+            icon_scale: default_icon_scale(),
             transparent: Hsla::transparent_black(),
             font_family: ".SystemUIFont".into(),
             font_size: px(16.),

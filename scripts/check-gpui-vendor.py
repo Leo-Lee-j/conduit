@@ -20,6 +20,8 @@ PATCHED = {
     "crates/component/src/setting/group.rs",
     "crates/component/src/setting/item.rs",
     "crates/component/src/setting/settings.rs",
+    "crates/component/src/icon.rs",
+    "crates/component/src/theme/mod.rs",
 }
 
 

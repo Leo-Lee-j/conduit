@@ -1,6 +1,7 @@
 //! Appearance settings.
 
 use super::*;
+use crate::store::UiIconSize;
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests;
@@ -227,6 +228,27 @@ enum FontTarget {
     Interface,
     Chat,
     Code,
+}
+
+fn icon_size_options(selected: UiIconSize, view: Entity<ConduitApp>, disabled: bool) -> AnyElement {
+    let mut options = h_flex().gap_1();
+    for (index, size) in UiIconSize::ALL.into_iter().enumerate() {
+        let view = view.clone();
+        options = options.child(
+            Button::new(("appearance-functional-icon-size", index))
+                .debug_selector(move || format!("appearance-functional-icon-size-{index}"))
+                .small()
+                .ghost()
+                .selected(size == selected)
+                .label(size.label())
+                .disabled(disabled)
+                .when(!disabled, |button| button.cursor_pointer())
+                .on_click(move |_, _, cx| {
+                    view.update(cx, |app, cx| app.set_ui_icon_size(size, cx));
+                }),
+        );
+    }
+    options.into_any_element()
 }
 
 fn theme_select_field(
@@ -581,9 +603,20 @@ impl ConduitApp {
             &self.store.ui.dark_theme,
             cx,
         );
+        super::super::theme::apply_icon_size(self.store.ui.icon_size, cx);
         // Theme changes reload font tokens. Restore both user choices afterward.
         self.apply_ui_font(cx);
         self.apply_code_font(cx);
+        cx.notify();
+    }
+
+    pub(in crate::app) fn set_ui_icon_size(&mut self, size: UiIconSize, cx: &mut Context<Self>) {
+        if !self.writable || self.closing || self.store.ui.icon_size == size {
+            return;
+        }
+        self.store.ui.icon_size = size;
+        super::super::theme::apply_icon_size(size, cx);
+        self.persist();
         cx.notify();
     }
 
@@ -756,6 +789,14 @@ impl ConduitApp {
             TypographyField::UiSize,
             view.clone(),
         );
+        let icon_view = view.clone();
+        let icon_size = SettingField::render(move |_, _, cx| {
+            icon_size_options(
+                icon_view.read(cx).store.ui.icon_size,
+                icon_view.clone(),
+                disabled,
+            )
+        });
         let chat_font = font_select_item(view.clone(), FontTarget::Chat, disabled);
         let chat_size = typography_field(
             "chat-font-size",
@@ -944,6 +985,20 @@ impl ConduitApp {
                         .description(settings_description(conduit::i18n::text_static("settings.appearance.12_20_px_default_16_scales_interface")))
                         .keywords([conduit::i18n::text_static("settings.appearance.application"), conduit::i18n::text_static("settings.appearance.interface"), conduit::i18n::text_static("settings.appearance.font_size"), conduit::i18n::text_static("settings.appearance.size"), "font", "size"])
                         .disabled(disabled),
+                    SettingItem::new(
+                        conduit::i18n::text_static("settings.appearance.functional_icon_size"),
+                        icon_size,
+                    )
+                    .description(settings_description(conduit::i18n::text_static(
+                        "settings.appearance.functional_icon_size_description",
+                    )))
+                    .keywords([
+                        conduit::i18n::text_static("settings.appearance.functional_icon_size"),
+                        "icon",
+                        "sidebar",
+                        "toolbar",
+                    ])
+                    .disabled(disabled),
                     font_settings_heading(FontTarget::Chat, disabled, view.clone()),
                     chat_font,
                     SettingItem::new(conduit::i18n::text_static("settings.appearance.font_size"), chat_size)
