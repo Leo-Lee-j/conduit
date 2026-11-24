@@ -1297,7 +1297,7 @@ impl ConduitApp {
             let mut codex_verified_bytes = 0u64;
             let mut emitted_sessions = 0usize;
             let mut warning_count = 0usize;
-            let mut skipped = 0usize;
+            let mut skipped: usize;
             // Parallel to `paths`: stamps of files read this run. They are written back
             // only for workspaces whose every batch merged without losing a record.
             let mut file_stamps: Vec<
